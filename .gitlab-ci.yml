@@ -6,7 +6,7 @@ pages:
   image: registry.cern.ch/docker.io/library/python:3.12
   script:
     - pip install --quiet numpy plotly uproot awkward vector
-    - python run_rowver.py dimuon_demo --no-page --data
+    - python run_rowver.py dimuon_demo
     - python -c "import page; page.viewer()"
     - mkdir -p public
     - mv viewer.html public/index.html

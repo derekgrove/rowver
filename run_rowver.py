@@ -1,13 +1,15 @@
 #!/usr/bin/env python
-"""Run a study: skim its files, then build its page.
+"""Run a study: skim its files, then write the data file the viewer opens.
 
 Everything a study produces lands in studies/<name>/, beside the fileset and config that
 defined it: <name>.pkl (the skim), <name>.rvr (columns + view), <name>.html (the page).
 
-    python run_rowver.py template                 skim and build the page
-    python run_rowver.py template --no-page       skim only, leave the pikl
-    python run_rowver.py template --no-skim       reuse the pikl, rebuild the page
-    python run_rowver.py template --data          also write <name>.rvr
+The .rvr is what you want almost always — drop it on viewer.html. The page is the same
+data with the whole viewer wrapped around it, twice the size, so it is asked for.
+
+    python run_rowver.py template                 skim, then write <name>.rvr
+    python run_rowver.py template --html          also build the standalone <name>.html
+    python run_rowver.py template --no-skim       reuse the pikl, rewrite the .rvr
     python run_rowver.py --list                  what studies exist
 """
 import argparse
@@ -29,8 +31,8 @@ def parse(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("study", nargs="?", help="a directory under studies/")
     p.add_argument("--list", action="store_true", help="list studies and exit")
     p.add_argument("--no-skim", action="store_true", help="reuse the existing pikl")
-    p.add_argument("--no-page", action="store_true", help="skim only, build no html")
-    p.add_argument("--data", action="store_true", help="also write a .rvr data file")
+    p.add_argument("--html", action="store_true",
+                   help="also build the standalone html page (about twice the .rvr's size)")
     p.add_argument("--viewer", action="store_true", help="also write the empty drop-target viewer")
     p.add_argument("--check", action="store_true", help="verify chunked == unchunked first")
     p.add_argument("--samples", help="comma-separated subset to put in the page")
@@ -116,9 +118,6 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {s:26s} {nrows(v):>9,}")
         print(f"  {'TOTAL':26s} {sum(nrows(v) for v in rows.values()):>9,}")
 
-    if args.no_page and not (args.data or args.viewer):
-        return 0
-
     if args.viewer:
         print("\nviewer:", page.viewer())
 
@@ -136,13 +135,18 @@ def main(argv: list[str] | None = None) -> int:
     if tabs:
         print(f"view.py: {len(tabs)} tabs — {', '.join(t['name'] for t in tabs)}")
 
-    if not args.no_page:
-        print("\npage:", page.export(rows, name, title=f"RowVer — {st['name']}",
-                                     labels=labels, dest=st["dir"],
-                                     weights=wcol, tabs=tabs, extra=extra))
-    if args.data:
-        print("data:", page.data(rows, name, labels=labels, dest=st["dir"],
-                                 weights=wcol, tabs=tabs, extra=extra))
+    print("\ndata:", page.data(rows, name, labels=labels, dest=st["dir"],
+                               weights=wcol, tabs=tabs, extra=extra))
+    # the page used to be rebuilt every run, so it could not fall behind the data. It can
+    # now: an old .html beside a fresh .rvr opens on the numbers from the previous skim.
+    stale = st["dir"] / f"{name}.html"
+    if not args.html and stale.exists():
+        print(f"  note: {stale.name} was NOT rebuilt — it still holds the data from the run "
+              f"that made it. Add --html to rebuild it, or delete it")
+    if args.html:
+        print("page:", page.export(rows, name, title=f"RowVer — {st['name']}",
+                                   labels=labels, dest=st["dir"],
+                                   weights=wcol, tabs=tabs, extra=extra))
     return 0
 
 
