@@ -337,7 +337,7 @@ label.event{display:flex;align-items:center;gap:6px;font-family:var(--mono);font
 #cftab td:first-child{color:var(--ink);font-weight:600}
 #cftab tr.cfrow{cursor:grab}
 #cftab tr.over td{border-top:2px solid var(--signal)}
-.grip{color:var(--ink-3);cursor:grab;margin-right:5px;letter-spacing:-1px}
+.grip{color:var(--ink-3);cursor:grab;margin-right:5px;font-size:calc(10px * var(--ts))}
 .popts{margin:0 0 6px;border-bottom:1px solid var(--rule-2);padding-bottom:6px}
 .popts > summary{font-family:var(--mono);font-size:calc(10px * var(--ts));letter-spacing:.14em;
   text-transform:uppercase;color:var(--ink-3);cursor:pointer;padding:2px 0;list-style:none}
@@ -383,7 +383,7 @@ label.event{display:flex;align-items:center;gap:6px;font-family:var(--mono);font
 .lockon{color:var(--ink-3);font-style:italic}
 .dz{color:#E8384F}
 .dzbtn{display:block;margin:7px 0;color:#E8384F;border-color:#E8384F}
-body[data-dirty] #saverow::after,body[data-dirty] #saveall::after{content:" ●";color:var(--warn)}
+body[data-dirty] #saverow::after,body[data-dirty] #saveall::after{content:" *";color:var(--warn)}
 #sampcount{color:var(--ink-2);letter-spacing:0;text-transform:none}
 .samplist{margin-top:9px;position:relative;z-index:0}
 .srow{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-bottom:5px}
@@ -862,7 +862,7 @@ summary.schead{cursor:pointer}
     <div class="stage">
       <div class="stickyhead" id="stickyhead">
         <div class="shrow"><button class="tbtn" id="raily" aria-expanded="false"
-            aria-label="cuts &amp; page setup" title="cuts &amp; page setup">☰</button>
+            aria-label="cuts &amp; page setup" title="cuts &amp; page setup">cuts</button>
           <div class="tabbar" id="tabbar"></div></div>
         <div class="readout" id="readout"></div>
       </div>
@@ -880,7 +880,7 @@ summary.schead{cursor:pointer}
             <span class="ssep"></span>
             <button class="chip" id="scolours" aria-pressed="false"
               title="set a colour per sample or group — it follows them into every plot,
-                     the cutflow and the table">🎨 colours</button></div>
+                     the cutflow and the table">colours</button></div>
           <div id="colpanel" class="colpanel" hidden></div>
         </details>
       </div>
@@ -970,7 +970,7 @@ summary.schead{cursor:pointer}
 <div class="bdrop" id="bld" hidden>
   <div class="panel builder" id="bldpanel" role="dialog" aria-modal="true" aria-label="plot builder">
     <div class="exhead"><span id="bldtitle">build plots</span>
-      <span><button class="tbtn" id="bldx">✕ cancel</button></span></div>
+      <span><button class="tbtn" id="bldx">cancel</button></span></div>
     <div id="bldstage"></div>
     <p class="pnote bldsay" id="bldsay"></p>
   </div>
@@ -979,7 +979,7 @@ summary.schead{cursor:pointer}
 <div class="bdrop" id="tblovl" hidden>
   <div class="panel tblbig" role="dialog" aria-modal="true" aria-label="expanded table cell">
     <div class="exhead"><span id="tblbigt"></span>
-      <span><button class="tbtn" id="tblbigx">✕ close</button></span></div>
+      <span><button class="tbtn" id="tblbigx">close</button></span></div>
     <div class="plotarea" id="plottbl"></div>
   </div>
 </div>
@@ -1650,7 +1650,7 @@ function buildUI(){
   // Ranges first, then the pick-a-value columns collected under their own heading —
   // a slider and a row of chips are different gestures and reading them interleaved is work.
   const one = i => ` <button class="tbtn rst" id="rst${i}"
-      title="this cut back to what the file was built with">↺</button>`;
+      title="this cut back to what the file was built with">reset</button>`;
   const chipCol = c => `<div class="grp"><div class="grp-lab"><span class="nm">${c.name}</span>
          <span class="vl" id="vv${META.cols.indexOf(c)}">${one(META.cols.indexOf(c))}</span></div>
        <div class="chips" id="ch${META.cols.indexOf(c)}">${c.vals.map((v, k) =>
@@ -1868,12 +1868,12 @@ function plotMarkup(p){
       <select data-key="vary" data-only="2d" ${two ? "" : "hidden"}>${opts(p.vary)}</select>
       <span class="vs" data-only="2d" ${two ? "" : "hidden"}>vs</span>
       <select data-key="varx">${opts(p.varx)}</select>
-      <button class="tbtn" data-act="reset" title="back to what this file says for this plot">↺</button>
+      <button class="tbtn" data-act="reset" title="back to what this file says for this plot">reset</button>
       <button class="tbtn kill" data-act="kill" ${PLOTS.length > 1 ? "" : "hidden"}>x</button>
       <span data-show="note" class="pflag" hidden></span>
       <span class="sp"></span>
       <button class="tbtn" data-act="cmtoggle" aria-pressed="false"
-              title="notes beside this plot">🗨</button>
+              title="notes beside this plot">notes</button>
     </div>
     <div class="pstage">
       <div class="plotarea" id="plot${p.id}"></div>
@@ -1898,12 +1898,12 @@ function plotMarkup(p){
         ${seg("span", [["p95","95%"],["p99","99%"],["full","full"]])}</span>
       <span class="sp"></span>
       <button class="tbtn" data-act="copyblk"
-              title="copy this block — every plot in it, exactly as it stands">⧉ copy</button>
+              title="copy this block — every plot in it, exactly as it stands">copy</button>
       <button class="tbtn" data-act="modify"
-              title="reopen the builder for this plot's sheet">✎ modify</button>
+              title="reopen the builder for this plot's sheet">modify</button>
     </div>
     <details class="popts" data-key="opts" ${p.opts ? "open" : ""}>
-      <summary>⚙ more options</summary>
+      <summary>more options</summary>
       <div class="optrow"><b>binning</b>
         <label data-only="dec" ${two && p.decouple ? "" : "hidden"}>y bins
                <input class="bin" type="range" min="5" max="200" step="1"
@@ -1969,7 +1969,7 @@ function plotMarkup(p){
         <label title="drawings and the comment travel in the .rvr, per plot"
                ><input type="checkbox" data-key="anno" ${p.anno !== false ? "checked" : ""}>
                show drawings &amp; comment</label>
-        <button class="tbtn" data-act="cmt">✎ comment</button>
+        <button class="tbtn" data-act="cmt">comment</button>
         <span data-only="an" ${p.mode !== "3d" && panelCount(p) === 1 ? "" : "hidden"}>
           ${seg("drawcol", [["#3D9BE9","blue"],["#E69F00","orange"],["#E8384F","red"],["#00A878","green"]])}
           <button class="tbtn" data-act="arrow"
@@ -2769,7 +2769,7 @@ function buildTabs(){
       `<span class="tab${i === TAB ? " on" : ""}">` +
       `<button class="tname" data-i="${i}"
           title="switch to this tab — double-click to rename, drag to reorder">${
-          (i === TAB ? !!TBL : !!(t.st && t.st.table)) ? "▦ " : ""}${esc(t.name)}</button>` +
+          (i === TAB ? !!TBL : !!(t.st && t.st.table)) ? "table · " : ""}${esc(t.name)}</button>` +
       (TABS.length > 1 ? `<button class="tx" data-i="${i}" title="close this tab">×</button>` : "") +
       `</span>`).join("")
     // no "+ table" here any more: a table is not a kind of tab, it is something a tab
@@ -4246,7 +4246,7 @@ function buildTables(){
       const name = k ? META.cols[cf.active[k-1]].name : null;
       const drag = name ? ` draggable="true" data-cut="${encodeURIComponent(name)}"` : "";
       return `<tr${drag}${name ? ' class="cfrow"' : ""}>` +
-             `<td>${name ? '<span class="grip">⠿</span> ' : ""}${st}</td>` +
+             `<td>${name ? '<span class="grip">drag</span> ' : ""}${st}</td>` +
              cf.gs.map(g => `<td>${fmt(r.by[g] || 0)}</td>`).join("") +
              `<td>${weighted ? fmt(r.w) : r.raw.toLocaleString()}</td>` +
              `<td>${(100 * r.raw / first).toFixed(2)}</td></tr>`;
@@ -5336,7 +5336,7 @@ function roverStart(){
 roverStart();
 
 // ——— unsaved-work honesty: tinkering NEVER rewrites the .rvr — only an export does.
-// The flag drives a ● on the save buttons and the leave-page warning.
+// The flag drives a * on the save buttons and the leave-page warning.
 let DIRTY = false;
 const LOCK = {cuts: false, plots: false, show: false};
 
@@ -5747,7 +5747,7 @@ function bldData(){
         <span class="vs">add:</span>
         <select data-addsrc="1"><option value="" selected>pick a sample or group…</option>
           ${srcOptGroups(null, "", false, true)}</select>
-        ${two ? `<span class="pnote">⚠ a 2D map is ONE distribution — every name in this
+        ${two ? `<span class="pnote">warning: a 2D map is ONE distribution — every name in this
             plot is <b>summed</b> into it</span>`
           : `<span class="pnote">to sum samples into one curve, group them in the
             <button class="lnk" data-flashband="1">Sample grouping band</button> —
@@ -5760,7 +5760,7 @@ function bldData(){
       <p class="pnote">no previews here — the cards above say what each plot will hold;
         the live preview and fine adjustments come on the style page</p></div></div>
     <div class="bldrow bldfoot"><button class="tbtn" id="bldst">style →</button>
-      <button class="tbtn hero" id="bldgo">${BLD.mode === "edit" ? "apply ✓" : "render ✓"}</button></div>`;
+      <button class="tbtn hero" id="bldgo">${BLD.mode === "edit" ? "apply" : "render"}</button></div>`;
   const st = $("bldstage");
   bldTray();
   $("bldst").onclick = () => bldGoto("style");
@@ -5821,7 +5821,7 @@ function bldStyle(){
       </div></div>
     <div class="bldpv"><div class="plotarea" id="plotbld"></div>
       <p class="pnote" id="bldpvcap"></p></div></div>
-    <div class="bldrow bldfoot"><button class="tbtn hero" id="bldgo">${BLD.mode === "edit" ? "apply ✓" : "render ✓"}</button></div>`;
+    <div class="bldrow bldfoot"><button class="tbtn hero" id="bldgo">${BLD.mode === "edit" ? "apply" : "render"}</button></div>`;
   const st = $("bldstage");
   st.querySelectorAll(".bldsent input[type=range]").forEach(r => r.oninput = () => {
     BLD.draft.specs[+r.dataset.i][r.dataset.k] = +r.value;
@@ -6539,7 +6539,7 @@ function tblDialMarkup(){
     ent("yield", "yield") + ent("metrics", "Figures of Merit (FOM)");
   TBL.plots.forEach((sp, k) => {
     out += ent(k, tblPlotLabel(sp),
-      `<span class="tsp"></span><button class="tbx" data-edit="${k}" title="edit this plot">✎</button>
+      `<span class="tsp"></span><button class="tbx" data-edit="${k}" title="edit this plot">edit</button>
        <button class="tbx" data-drop="${k}" title="drop this plot">×</button>`);
     if (TBLE === k) out += tblEditor(k);
   });
@@ -6556,7 +6556,7 @@ function tblDialMarkup(){
         ${full ? "" : `data-cyc="${i}"`}
         title="${full ? "drag to reorder — with all three up there is nothing to cycle to"
                       : "click to cycle this slot, drag to reorder"}"
-        ><span>${METLAB(k)}</span>${full ? "" : `<span class="tcyc">⟳</span>`}</button>`).join("");
+        ><span>${METLAB(k)}</span>${full ? "" : `<span class="tcyc">cycle</span>`}</button>`).join("");
   }
   out += `<h3 class="tdh">board</h3><span class="tsizes" id="tblsize">` +
     [[1, "1"], [2, "2×2"], [3, "3×3"], [4, "4×4"]].map(([n, t]) =>
@@ -6570,11 +6570,11 @@ function tblDialMarkup(){
   const nb = sheetPlan(PLOTS).length, at = tblAt();
   out += `<h3 class="tdh">place</h3>
     <span class="tsizes" id="tblmove">
-      <button data-v="-1" title="one block earlier"${at <= 0 ? " disabled" : ""}>▲</button>
-      <button data-v="1" title="one block later"${at >= nb ? " disabled" : ""}>▼</button>
+      <button data-v="-1" title="one block earlier"${at <= 0 ? " disabled" : ""}>up</button>
+      <button data-v="1" title="one block later"${at >= nb ? " disabled" : ""}>down</button>
     </span><span class="tplace">${at ? `after ${at} of ${nb}` : "top"}</span>
     <button class="tbtn" id="tblcopy"
-       title="copy this table — paste it into a tab that has none">⧉ copy table</button>
+       title="copy this table — paste it into a tab that has none">copy table</button>
     <button class="tbtn tdrop" id="tbldrop"
        title="take this table off the tab — its plots and cuts stay">remove table</button>`;
   return out;
@@ -6741,7 +6741,7 @@ function tblExpand(src, sum){
   TBLX = {src: src || null, sum: !!sum};
   $("tblovl").hidden = false;
   $("tblbigt").textContent = (sum ? "Σ background" : src) +
-    " — zoom and pan freely; ✕ throws the view away";
+    " — zoom and pan freely; close throws the view away";
   tblDrawBig();
 }
 
