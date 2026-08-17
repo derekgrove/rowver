@@ -61,7 +61,7 @@ h1{font-family:var(--mono);font-weight:600;font-size:calc(clamp(20px,3vw,29px) *
   margin:0;line-height:1.15}
 .brand{flex:none;min-width:0;align-self:center}
 .bname{font-family:var(--mono);font-weight:600;font-size:calc(clamp(25px,3.4vw,36px) * var(--tsb));
-  letter-spacing:-.02em;line-height:1;margin:0;color:var(--ink)}
+  letter-spacing:-.02em;line-height:1;margin:0;color:var(--hero-line)}
 .bby{font-family:var(--mono);font-size:calc(11px * var(--ts));letter-spacing:.17em;text-transform:uppercase;
   color:var(--ink-2);margin:6px 0 0;line-height:1}
 .bver{font-family:var(--mono);font-size:calc(11px * var(--ts));color:var(--ink-3);margin:5px 0 0;line-height:1}
@@ -171,7 +171,10 @@ label.event{display:flex;align-items:center;gap:6px;font-family:var(--mono);font
 .stage{display:flex;flex-direction:column;gap:11px}
 /* follows you down past the plots and settles back on the way up. Sticky resolves against
    the nearest scrolling ancestor, so nothing between here and <body> may set overflow. */
-.stickyhead{position:sticky;top:0;z-index:6;box-shadow:0 6px 16px -8px rgba(0,0,0,.45)}
+/* the radius is for the shadow only — nothing here paints — so it follows whichever child
+   is closing the bottom, the counts row or the tab row */
+.stickyhead{position:sticky;top:0;z-index:6;border-radius:0 0 3px 3px;
+  box-shadow:0 6px 16px -8px rgba(0,0,0,.45)}
 /* top-left corner is the cuts cap's now — see #raily */
 .tabbar{display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:6px 7px;
   background:var(--panel);border:1px solid var(--rule);border-bottom:0;border-radius:0 3px 0 0}
@@ -194,6 +197,13 @@ label.event{display:flex;align-items:center;gap:6px;font-family:var(--mono);font
 .tabbar .rofold{margin-left:10px}
 .readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--rule);
   border:1px solid var(--rule);border-radius:0 0 3px 3px;overflow:hidden}
+/* The counts row carries the bottom of the box — its border and its rounded corners — so
+   with the row away the tab row has to close itself or it ends on a cut edge. Set for
+   either reason the row can be away, folded or a table tab, by countsFold. The cap's own
+   [aria-expanded] rule lands later in this sheet, so an open cap keeps its --signal
+   border on all four sides. */
+.nocounts #raily{border-bottom:1px solid var(--rule);border-radius:3px 0 0 3px}
+.nocounts .tabbar{border-bottom:1px solid var(--rule);border-radius:0 3px 3px 0}
 @media (max-width:760px){.readout{grid-template-columns:repeat(2,1fr)}}
 .cell{background:var(--panel);padding:11px 10px;text-align:center}
 /* keys wrap rather than ellipsis — "weighted events x 400" and "background [4 of 5]" are
@@ -850,7 +860,7 @@ summary.schead{cursor:pointer}
     </div>
 
     <div class="stage">
-      <div class="stickyhead">
+      <div class="stickyhead" id="stickyhead">
         <div class="shrow"><button class="tbtn" id="raily" aria-expanded="false"
             aria-label="cuts &amp; page setup" title="cuts &amp; page setup">☰</button>
           <div class="tabbar" id="tabbar"></div></div>
@@ -4299,7 +4309,9 @@ function countsFold(){
   // goes with the bar on a table tab rather than offering to unfold something that would
   // not come back, and your fold survives the trip through that tab.
   const off = !!TBL;
-  $("readout").hidden = off || ROFOLD;
+  const away = off || ROFOLD;
+  $("readout").hidden = away;
+  $("stickyhead").classList.toggle("nocounts", away);   // the row above closes the box
   const b = $("rohide");
   if (b) b.hidden = off;
 }
