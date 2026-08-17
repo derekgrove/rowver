@@ -1,0 +1,18 @@
+{
+  "some_signal_sample": {
+    "files": {
+      "/path/to/your/signal/*.root": "Events"
+    },
+    "metadata": {
+      "isMC": true
+    }
+  },
+  "some_background_sample": {
+    "files": {
+      "/path/to/your/background/*.root": "Events"
+    },
+    "metadata": {
+      "isMC": true
+    }
+  }
+}

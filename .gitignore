@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# generated — CI rebuilds these from the committed .root; never commit them
+studies/*/*.pkl
+studies/*/*.rvr
+studies/*/*.html
+/viewer.html
+
+# build output — CI makes this, it never belongs in git
+/public/
