@@ -15,6 +15,8 @@ works.
 import gzip
 import importlib.util
 import pickle
+import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from types import ModuleType
@@ -25,6 +27,27 @@ import uproot
 
 PIKLS: Path = Path(__file__).with_name("pikls")
 STEP: int = 250_000
+BAR: int = 22          # characters of progress bar
+
+
+def progress(label: str, done: int, total: int, since: float, end: bool = False) -> None:
+    """One line saying a skim is alive, rewritten in place — a chunk can take minutes.
+
+    On a terminal it redraws; piped to a file or a CI log it prints once per sample, at
+    the end, because a log full of carriage returns helps nobody.
+    """
+    tty = sys.stderr.isatty()
+    if not tty and not end:
+        return
+    frac = done / total if total else 1.0
+    rate = done / max(time.time() - since, 1e-9)
+    bar = "#" * int(BAR * frac) + "." * (BAR - int(BAR * frac))
+    # READ, not kept: KEEP has not run on most of these yet, and the two differ
+    line = (f"  {label[:30]:<30} [{bar}] {frac:5.1%}  {done:>11,} read  "
+            f"{rate:>8,.0f}/s")
+    sys.stdout.flush()   # stdout block-buffers into a pipe; without this the bar jumps ahead
+    print(line if not tty else f"\r{line}", end="\n" if end or not tty else "",
+          file=sys.stderr, flush=True)
 
 def reject_masked(dict_key: str, values: np.ndarray) -> np.ndarray:
     """
@@ -108,7 +131,7 @@ def columns(skim_config: ModuleType, chunk: ak.Array) -> dict[str, np.ndarray]:
 
 def skim(skim_config: ModuleType, files: dict[str, str],
          step: int = STEP, metadata: dict | None = None,
-         threads: int = 0) -> dict[str, np.ndarray]:
+         threads: int = 0, label: str = "") -> dict[str, np.ndarray]:
     """
     Read one sample, keeping only the events that pass skim_config.KEEP.
 
@@ -120,13 +143,21 @@ def skim(skim_config: ModuleType, files: dict[str, str],
     `threads` above 0 hands uproot a thread pool for basket decompression, which it
     otherwise does on the calling thread — its default is a TrivialExecutor. Decompression
     is C and drops the GIL, so this is real parallelism inside one sample.
+
+    `label` non-empty reports progress against this sample's own total. The trees are
+    opened up front to know that total, which is the same one open per file the loop
+    below would do anyway — it does not cost a remote read.
     """
     assert files, "no files given"
 
     pool = uproot.ThreadPoolExecutor(threads) if threads else None
+    trees = {path: uproot.open(path)[tree] for path, tree in files.items()}
+    total = sum(t.num_entries for t in trees.values())
+    began, seen = time.time(), 0
+
     per_chunk = []
-    for path, tree in files.items():
-        ttree = uproot.open(path)[tree]
+    for path, ttree in trees.items():
+        tree = files[path]
         assert ttree.num_entries, f"{tree} in {path} is empty"
         for start in range(0, ttree.num_entries, step):
             lazy = {"virtual": True} if supports_virtual(ttree) else {}
@@ -137,6 +168,11 @@ def skim(skim_config: ModuleType, files: dict[str, str],
                 chunk = with_meta(skim_config.PREPARE, chunk, metadata or {})
             kept = chunk[with_meta(skim_config.KEEP, chunk, metadata or {})]
             per_chunk.append(columns(skim_config, kept))
+            seen = min(seen + step, total)
+            if label:
+                progress(label, seen, total, began)
+    if label:
+        progress(label, total, total, began, end=True)
 
     # stitch the chunks back together, one column at a time
     return {column_name: np.concatenate([chunk[column_name] for chunk in per_chunk])
@@ -173,8 +209,13 @@ def pikl(name: str, fileset: dict[str, dict[str, str]], skim_config: ModuleType,
             done = dict(pool.map(_one, work))
         columns_by_sample = {s: done[s] for s in fileset}      # fileset order, not finish order
     else:
-        columns_by_sample = {s: skim(skim_config, f, step, meta_of(s), threads)
-                             for s, f in fileset.items()}
+        # only the serial path reports progress: parallel workers cannot share one line,
+        # and interleaved bars from N processes are worse than silence
+        columns_by_sample = {}
+        for i, (sample, files) in enumerate(fileset.items(), 1):
+            columns_by_sample[sample] = skim(
+                skim_config, files, step, meta_of(sample), threads,
+                label=f"[{i}/{len(fileset)}] {sample}")
 
     # the "results" key is the shape load.py expects; keep the two in step
     where = Path(dest) if dest else PIKLS
