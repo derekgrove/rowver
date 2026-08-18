@@ -41,7 +41,10 @@ Each entry of cols:
     vals        [int] | null     the distinct values of a small integer column
     names       [str] | null     what each of those values means
 
-`regions`, the region map's partition, inside a tab's state:
+`regions`, the region map's partition, inside a tab's state. The map reads the TAB's
+cuts and the tab's luminosity — it is a picture of what the rail is showing, not of a
+frozen copy of it. (0.18.0 briefly gave it its own `pre` selection; a file carrying one
+still opens, the key is simply ignored.)
 
     at      int                 which block of the tab's stack the map is, like `table`
     view    "stack" | "ledger"  how a camp shows its samples
@@ -49,11 +52,6 @@ Each entry of cols:
     srcs    [str] | absent      the sources the map counts. An EMPTY list is a map nobody
                                 has filled yet; ABSENT means every source the page offers,
                                 so a file written before the tray reopens as it was
-    pre     {cuts, chips, lumi} the map's OWN preselection, keyed by column NAME, and the
-                                luminosity it was built at. The map deliberately does not
-                                read the rail's cuts: it is a statement about one fixed
-                                selection, and a slider moving underneath it would
-                                silently redefine every region on it
     root    node | null         null is one unsplit bar — the map before any cut
 
 Each node is either null (a leaf region) or one CUT and its two sides:

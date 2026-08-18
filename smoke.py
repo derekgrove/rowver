@@ -1942,17 +1942,22 @@ def region_tab(meta: dict) -> dict:
 
 
 def region_mask(meta: dict, columns: dict, st: dict):
-    """The MAP's own preselection as one boolean per event — keyed by column name, both
-    ends inclusive. Deliberately not the tab's cuts: the map does not read the rail."""
+    """The map's tab's cuts as one boolean per event — inclusive, a handle at its stop is
+    open. The map reads the rail like everything else on the page does."""
     import numpy as np
     keep = np.ones(meta["n"], bool)
-    pre = (st.get("regions") or {}).get("pre") or {}
-    for name, span in (pre.get("cuts") or {}).items():
-        if name in columns:
-            keep &= (columns[name] >= span[0]) & (columns[name] <= span[1])
-    for name, vals in (pre.get("chips") or {}).items():
-        if name in columns:
-            keep &= np.isin(columns[name], vals)
+    for i, span in (st.get("cuts") or {}).items():
+        col = meta["cols"][int(i)]
+        stop_lo, stop_hi = col["nice"] or col["lim"]
+        values = columns[col["name"]]
+        if span[0] > stop_lo:
+            keep &= values >= span[0]
+        if span[1] < stop_hi:
+            keep &= values <= span[1]
+    for i, vals in (st.get("chips") or {}).items():
+        col = meta["cols"][int(i)]
+        if len(vals) < len(col["vals"] or ()):
+            keep &= np.isin(columns[col["name"]], vals)
     return keep
 
 

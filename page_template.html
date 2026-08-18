@@ -754,7 +754,6 @@ canvas#rgncanvas:focus-visible{outline:2px solid var(--signal);outline-offset:-2
 .rgnnote{font-family:var(--mono);font-size:calc(11px * var(--ts));color:var(--ink-3);margin:8px 0 0}
 .rgntray{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 12px;
   border-bottom:1px solid var(--rule-2);min-height:38px}
-.rgnpre{background:var(--sunk)}
 .rgntray.over{background:var(--hero-bg);outline:2px dashed var(--signal);outline-offset:-3px}
 canvas#rgncanvas.over{outline:3px dashed var(--signal);outline-offset:-4px}
 .rgnchip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);
@@ -765,8 +764,6 @@ canvas#rgncanvas.over{outline:3px dashed var(--signal);outline-offset:-4px}
   font-size:calc(12px * var(--ts));padding:0 5px;line-height:1.4}
 .rgnx:hover{color:var(--warn)}
 .rgnmini{padding:1px 7px;font-size:calc(10px * var(--ts))}
-.rgnwarn{font-family:var(--mono);font-size:calc(10.5px * var(--ts));color:var(--warn);
-  border:1px solid var(--warn);border-radius:2px;padding:1px 6px}
 .rgnside.over{outline:2px dashed var(--signal);outline-offset:-3px}
 .rgnhint{font-family:var(--mono);font-size:calc(10.5px * var(--ts));color:var(--ink-3)}
 .rgntarget{font-family:var(--mono);font-size:calc(11px * var(--ts));color:var(--ink-3)}
@@ -4395,7 +4392,7 @@ function drawAll(){
   // The mask is the expensive part and every plot shares it, so it is computed once.
   MASK = mask();
   if (TBL) drawTable(MASK);
-  if (RGN) rgnDraw();
+  if (RGN) rgnDraw(MASK);
   PLOTS.forEach(p => drawOne(p, MASK));   // a table tab draws its board AND its plots
   report(totals(MASK));
   countsFold();
@@ -7121,7 +7118,6 @@ let RGNFS = null;  // where that camp lives in the SAVED tree. Camp nodes are re
                    // mask moves — this survives, because the partition does
 let RGNH = null;   // the hovered camp, posture too
 let RGNV = {x:0, y:0, k:1};   // the camera, posture
-let RGNSIG = null; // everything the counting depends on, so a rail slider costs nothing
 let RGNW = 1200, RGNH0 = 700; // the world the layout is computed in, = the canvas
 const RGN_TOP = 40;           // the strip the crumb and the buttons sit in
 
@@ -7235,118 +7231,11 @@ function rgnAllSrcs(){
   say("the map follows the Sample band again");
 }
 
-function rgnPre(){ return (RGN && RGN.pre) || {cuts:{}, chips:{}}; }
-
-function rgnLumiOdd(){
-  // A new tab opens at the factory ×1 while the rest of a study is usually at its real
-  // luminosity, and a map made there snapshots the 1. The numbers are then out by that
-  // factor and look like a bug in the map. Say it where the number is.
-  const mine = rgnLumi();
-  // the map's OWN tab is not "another tab": comparing against it would nag about the very
-  // difference the map exists to have
-  const others = TABS.map((t, i) => i === TAB ? null : (t.st || {}).lumi)
-                     .filter(l => l != null && l !== mine);
-  if (!others.length) return "";
-  const most = others.sort((a, b) =>
-    others.filter(v => v === b).length - others.filter(v => v === a).length)[0];
-  return `<span class="rgnwarn" title="this map is scaled to a different luminosity from ` +
-         `the other tabs in this file">other tabs are at &times;${fmt(most)}</span>`;
-}
-
 function rgnRootName(){
-  // the outer camp is not "all events" once a preselection decides which events those are
-  return rgnPreNames().length ? "all events passing preselection" : "all events";
-}
-
-function rgnLumi(){
-  // the map's own luminosity, snapshotted with its preselection. A rail slider must not
-  // silently rescale a map someone built.
-  const pre = rgnPre();
-  return pre.lumi != null ? pre.lumi : LUMI();
-}
-
-function rgnMask(){
-  // The map's OWN selection, and nothing else. It deliberately does not read the rail's
-  // cuts or the sample toggles: a region map is a statement about ONE fixed preselection,
-  // and a slider moving underneath it would silently redefine every region on it. What is
-  // on the map is the tray's business; which events are, is this.
-  const n = META.n, keep = new Uint8Array(n), pre = rgnPre();
-  const active = [];
-  for (const name of Object.keys(pre.cuts || {})){
-    const c = rgnColByName(name);
-    if (c) active.push([c, pre.cuts[name], null]);
-  }
-  for (const name of Object.keys(pre.chips || {})){
-    const c = rgnColByName(name);
-    if (c) active.push([c, null, new Set(pre.chips[name])]);
-  }
-  for (let r = 0; r < n; r++){
-    let ok = 1;
-    for (const [c, span, set] of active){
-      const x = D[c.name][r];
-      if (set ? !set.has(x) : (x < span[0] || x > span[1])){ ok = 0; break; }
-    }
-    keep[r] = ok;
-  }
-  return keep;
-}
-
-function rgnTakeCuts(){
-  // the rail as it stands, copied ONCE into the map. This is the gesture: set the
-  // preselection with the sliders you already know, then press this and it is frozen.
-  if (!RGN) return;
-  const pre = {cuts:{}, chips:{}, lumi:rgnLumi()};   // the CUTS: the map keeps its own ×
-  META.cols.forEach((c, i) => {
-    if (!narrowed(i)) return;
-    if (c.vals){ pre.chips[c.name] = [...S.chips[i]].sort((a, b) => a - b); return; }
-    const stops = bounds(c), [lo, hi] = cutRange(i);
-    // an open end is stored as its stop, not as Infinity: the file is JSON, and every
-    // event already lies inside the stops, so the two select the same events
-    pre.cuts[c.name] = [isFinite(lo) ? lo : stops[0], isFinite(hi) ? hi : stops[1]];
-  });
-  RGN.pre = pre;
-  RGNV = {x:0, y:0, k:0};
-  markDirty();
-  renderPlots();
-  drawAll();
-  const n = Object.keys(pre.cuts).length + Object.keys(pre.chips).length;
-  say(n ? `the map's preselection is this tab's ${n} cut${n > 1 ? "s" : ""}, frozen — ` +
-          `the rail no longer moves it`
-        : "this tab has no cuts to take — the map is every event");
-}
-
-function rgnClearPre(){
-  if (!RGN) return;
-  RGN.pre = {cuts:{}, chips:{}, lumi:LUMI()};
-  RGNV = {x:0, y:0, k:0};
-  markDirty(); renderPlots(); drawAll();
-  say("preselection cleared — the map is every event");
-}
-
-function rgnDropPre(name){
-  if (!RGN) return;
-  const pre = rgnPre();
-  delete (pre.cuts || {})[name];
-  delete (pre.chips || {})[name];
-  RGN.pre = pre;
-  markDirty(); renderPlots(); drawAll();
-}
-
-function rgnPreLabel(name){
-  // the cut written the way the cutflow writes it, so the map says what it selected
-  const c = rgnColByName(name), pre = rgnPre();
-  if (!c) return name;
-  if (pre.chips && pre.chips[name])
-    return `${name} = ${pre.chips[name].map(v => rgnValName(name, v)).join("/")}`;
-  const [lo, hi] = pre.cuts[name], stops = bounds(c);
-  if (lo <= stops[0]) return `${name} ≤ ${fmt(hi)}`;
-  if (hi >= stops[1]) return `${name} ≥ ${fmt(lo)}`;
-  return `${fmt(lo)} ≤ ${name} ≤ ${fmt(hi)}`;
-}
-
-function rgnPreNames(){
-  const pre = rgnPre();
-  return Object.keys(pre.cuts || {}).concat(Object.keys(pre.chips || {}));
+  // The tab's cuts ARE the selection — the map is a picture of whatever the rail is
+  // showing, not of a separate frozen copy of it. The rail already says what those cuts
+  // are, so the outer camp does not repeat them.
+  return "all events";
 }
 
 function rgnCol(i){ return META.cols[i]; }
@@ -7438,7 +7327,7 @@ function rgnCount(keep){
     n.y = new Float64Array(ns); n.n = new Int32Array(ns);
     n.kids.forEach(zero);
   })(root);
-  const weighted = WTD(), L = rgnLumi();
+  const weighted = WTD(), L = LUMI();
   for (let r = 0; r < META.n; r++){
     if (!keep[r]) continue;
     const si = byDs[D.__ds[r]];
@@ -7576,11 +7465,23 @@ function rgnLeaves(node){
   return out;
 }
 
-function rgnCut(node, cut){
+function rgnChain(cuts){
+  // Several edges on one column as ONE nested spec, each cut taking what the ones before
+  // it did not. Typing "0.7, 1" gives <0.7 | 0.7-1 | >=1 in a single press — the same tree
+  // three separate presses would have built, so nothing about the model moves.
+  let spec = null;
+  for (let i = cuts.length - 1; i >= 0; i--) spec = {cut:cuts[i], yes:null, no:spec};
+  return spec;
+}
+
+function rgnCut(node, cuts){
   // One cut turns a region into two: the predicate, and everything else. On a CAMP it
   // reaches every region inside it at once — cut the whole map on one variable and each
   // band already there splits into above and below, which is how a grid gets built.
   if (!node) return;
+  cuts = Array.isArray(cuts) ? cuts : [cuts];
+  if (!cuts.length) return;
+  const cut = cuts[0];
   const targets = rgnLeaves(node);
   if (!targets.length) return;
   if (targets.length > 1){
@@ -7595,15 +7496,21 @@ function rgnCut(node, cut){
                  `cut one region on its own to add another ${esc(cut.col)} band, ` +
                  `or broadcast a different column`);
   }
-  targets.forEach(t => { t.slot.obj[t.slot.key] = {cut, yes:null, no:null}; });
+  targets.forEach(t => { t.slot.obj[t.slot.key] = rgnChain(cuts); });
   // a single cut lands on its own "everything else" side, so pressing cut again extends
   // the band; a broadcast stays where it is, so it can be broadcast again
-  if (targets.length === 1)
-    RGNFS = {obj:targets[0].slot.obj[targets[0].slot.key], key:"no"};
+  if (targets.length === 1){
+    let last = targets[0].slot.obj[targets[0].slot.key];
+    while (last.no) last = last.no;          // the outermost "everything else" of the chain
+    RGNFS = {obj:last, key:"no"};
+  }
   markDirty();
   drawAll();
+  const many = cuts.length > 1 ? ` into ${cuts.length + 1} bands` : "";
   if (targets.length > 1)
-    say(`cut <b>${targets.length}</b> regions on ${esc(cut.col)}`);
+    say(`cut <b>${targets.length}</b> regions on ${esc(cut.col)}${many}`);
+  else if (cuts.length > 1)
+    say(`cut ${esc(cut.col)} at ${cuts.map(c => fmt(c.lt)).join(", ")}${many}`);
 }
 
 function rgnUncut(node){
@@ -7634,9 +7541,13 @@ function rgnCutFromControls(){
                  `${(col.names || col.vals).join(", ")}`);
     return rgnCut(target, {col:col.name, in:picked});
   }
-  const at = parseFloat(box.value);
-  if (!isFinite(at)) return say(`type a number to cut ${esc(col.name)} at`);
-  rgnCut(target, {col:col.name, lt:at});
+  // "0.7, 1" is two edges and three bands; one number is the plain single cut
+  const edges = [...new Set((box.value || "").split(/[,\s]+/)
+                   .filter(Boolean).map(parseFloat))].filter(isFinite).sort((a, b) => a - b);
+  if (!edges.length)
+    return say(`type a number to cut <b>${esc(col.name)}</b> at, ` +
+               `or several — <b>0.7, 1</b> makes three bands`);
+  rgnCut(target, edges.map(e => ({col:col.name, lt:e})));
 }
 
 /* ---------- the camera ---------- */
@@ -7952,23 +7863,15 @@ function rgnDrawOnly(){
   rgnPanel();
 }
 
-function rgnDraw(){
-  // rebuild the tree from the map's OWN mask, lay it out, then paint
+function rgnDraw(keep){
+  // rebuild the tree from the TAB's mask — the same events the plots and the board see
   if (!RGN) return;
   const cv = $("rgncanvas");
   const box = (cv && cv.getBoundingClientRect) ? cv.getBoundingClientRect() : null;
   RGNW = Math.max(420, (box && box.width) || 1200);
   RGNH0 = Math.max(320, (box && box.height) || 700);
-  // the rail moving cannot change what the map counts, so it must not pay to find out:
-  // one signature over everything the count DOES depend on, and a repaint when it holds
-  const sig = JSON.stringify([RGN.pre, RGN.srcs || null, RGN.root, WTD(), META.n]);
-  if (sig !== RGNSIG || !RGNT){
-    RGNSIG = sig;
-    rgnCount(rgnMask());
-    rgnLayout(RGNT, 0, 0, RGNW, Math.max(1, RGNH0 - RGN_TOP), 0, true);
-  } else {
-    rgnLayout(RGNT, 0, 0, RGNW, Math.max(1, RGNH0 - RGN_TOP), 0, true);
-  }
+  rgnCount(keep);
+  rgnLayout(RGNT, 0, 0, RGNW, Math.max(1, RGNH0 - RGN_TOP), 0, true);
   if (!RGNV.k || !isFinite(RGNV.k) || RGNV.k <= 0) rgnFitAll();
   RGNF = RGNFS ? rgnFindSlot(RGNFS.obj, RGNFS.key) : null;
   if (!RGNF) RGNFS = null;                 // its camp is gone: forget it rather than hold a ghost
@@ -8037,7 +7940,8 @@ function rgnStripMarkup(){
   return `<div class="rgnstrip">
     <span class="rgnlab">cut</span>
     <select id="rgncol" title="the column to cut on">${cols}</select>
-    <input id="rgnval" class="rgnnum" placeholder="at" title="a number, or values for a chip column">
+    <input id="rgnval" class="rgnnum" placeholder="at, or 0.7, 1"
+           title="one number cuts once; several — 0.7, 1 — make bands in one press. A chip column takes value names.">
     <button class="tbtn" id="rgncut" title="cut the focused region in two">cut</button>
     <span class="rgntarget" id="rgntarget"></span>
     <button class="tbtn" id="rgnuncut" title="remove what is inside the focused camp">uncut</button>
@@ -8056,22 +7960,7 @@ function rgnStripMarkup(){
       <button data-v="1" title="move this map down one block">▼</button>
     </span>
     <button class="tbtn tdrop" id="rgndrop" title="remove this map">remove</button>
-  </div>
-  <div class="rgntray rgnpre" id="rgnpre">
-    <span class="rgnlab">preselection</span>
-    ${rgnPreNames().map(nm => `<span class="rgnchip">${esc(rgnPreLabel(nm))}
-        <button class="rgnx" data-p="${esc(nm)}" title="drop this cut">×</button></span>`).join("")}
-    ${rgnPreNames().length ? "" :
-      `<span class="rgnhint">none — this map is every event, at &times;${fmt(rgnLumi())}</span>`}
-    <span class="rgnsp"></span>
-    <span class="rgnlab">weighted to</span>
-    <input id="rgnlumi" class="rgnnum" value="${rgnLumi()}"
-           title="the luminosity this map's yields are scaled to">
-    ${rgnLumiOdd()}
-    <button class="tbtn" id="rgntake" title="copy this tab's cuts onto the map and freeze them">take the tab's cuts</button>
-    ${rgnPreNames().length ? `<button class="tbtn" id="rgnclear" title="every event">clear</button>` : ""}
-  </div>
-`;
+  </div>`;
 }
 
 function rgnMarkup(){
@@ -8107,19 +7996,6 @@ function rgnWire(){
   // every control on the strip, and the canvas's own pointer and wheel handling
   rgnWireDrop($("rgncanvas"));
   rgnWireDrop($("rgnpanel"));
-  const lu = $("rgnlumi");
-  if (lu) lu.onchange = () => {
-    const v = parseFloat(lu.value);
-    if (!isFinite(v) || v <= 0){ lu.value = rgnLumi(); return say("a luminosity is a positive number"); }
-    RGN.pre = Object.assign(rgnPre(), {lumi:v});
-    markDirty(); renderPlots(); drawAll();
-    say(`this map is weighted to <b>&times;${fmt(v)}</b>`);
-  };
-  if ($("rgntake")) $("rgntake").onclick = () => rgnTakeCuts();
-  if ($("rgnclear")) $("rgnclear").onclick = () => rgnClearPre();
-  const pre = $("rgnpre");
-  if (pre && pre.querySelectorAll)
-    pre.querySelectorAll("[data-p]").forEach(b => b.onclick = () => rgnDropPre(b.dataset.p));
   const cut = $("rgncut");
   if (cut) cut.onclick = () => rgnCutFromControls();
   const un = $("rgnuncut");
@@ -8150,7 +8026,7 @@ function rgnWire(){
   const box = $("rgnval");
   if (col && box) col.onchange = () => {
     const c = rgnColByName(col.value);
-    box.placeholder = c && c.vals ? (c.names || c.vals).slice(0, 3).join(",") : "at";
+    box.placeholder = c && c.vals ? (c.names || c.vals).slice(0, 3).join(",") : "at, or 0.7, 1";
   };
   const cv = $("rgncanvas");
   if (!cv || !cv.addEventListener || !cv.getContext) return;
