@@ -713,6 +713,66 @@ summary.schead{cursor:pointer}
 .sheet [data-quad="2"]{grid-area:2/1} .sheet [data-quad="3"]{grid-area:2/2}
 .sheet[data-n="1"] .plotbox{grid-column:1/-1}
 .sheet .plotbox:not(:only-child) .plotarea{height:calc(430px * var(--tsb))}
+/* the region map: a canvas surface, its cut strip, and the focused camp beside it */
+.rgn{margin:14px 0;padding:0;overflow:hidden}
+.rgnstrip{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:9px 12px;
+  border-bottom:1px solid var(--rule-2)}
+.rgnlab{font-family:var(--sans);font-size:calc(9.5px * var(--ts));font-weight:600;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+.rgnsp{flex:1}
+.rgnnum{font-family:var(--mono);font-size:calc(12px * var(--ts));width:86px;color:var(--ink);
+  background:var(--panel);border:1px solid var(--rule);border-radius:2px;padding:4px 6px}
+.rgn select{font-family:var(--mono);font-size:calc(12px * var(--ts));color:var(--ink);
+  background:var(--panel);border:1px solid var(--rule);border-radius:2px;padding:4px 6px;
+  max-width:190px}
+.rgnbody{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:0;align-items:stretch}
+@media (max-width:1100px){.rgnbody{grid-template-columns:minmax(0,1fr)}}
+.rgnwrap{position:relative;background:var(--sunk);min-width:0}
+canvas#rgncanvas{display:block;width:100%;height:640px;cursor:grab;touch-action:none;outline:none}
+canvas#rgncanvas.empty{cursor:default;touch-action:auto}
+canvas#rgncanvas.drag{cursor:grabbing}
+canvas#rgncanvas:focus-visible{outline:2px solid var(--signal);outline-offset:-2px}
+.rgnkeys{margin:0;padding:5px 12px;font-family:var(--mono);font-size:calc(10.5px * var(--ts));
+  color:var(--ink-3);border-top:1px solid var(--rule-2)}
+.rgnkeys kbd{font-family:var(--mono);border:1px solid var(--rule);border-radius:2px;
+  padding:0 4px;background:var(--sunk);color:var(--ink-2);margin-right:2px}
+.rgnside{padding:12px 13px;border-left:1px solid var(--rule-2);min-width:0}
+@media (max-width:1100px){.rgnside{border-left:0;border-top:1px solid var(--rule-2)}}
+.rgnpath{font-family:var(--mono);font-size:calc(11.5px * var(--ts));color:var(--ink-2);
+  margin:0 0 4px;word-break:break-word}
+.rgnbig{font-family:var(--mono);font-weight:600;font-size:calc(25px * var(--tsb));
+  line-height:1.05;letter-spacing:-.02em}
+.rgnunit{font-family:var(--mono);font-size:calc(11px * var(--ts));color:var(--ink-3);margin:2px 0 0}
+.rgntbl{width:100%;border-collapse:collapse;font-family:var(--mono);
+  font-size:calc(11.5px * var(--ts));margin-top:9px}
+.rgntbl th{text-align:left;font-family:var(--sans);font-size:calc(9.5px * var(--ts));
+  font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);
+  padding:0 0 5px;border-bottom:1px solid var(--rule)}
+.rgntbl th.r,.rgntbl td.r{text-align:right}
+.rgntbl td{padding:3px 0;border-bottom:1px solid var(--rule-2)}
+.rgndot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
+.rgnnote{font-family:var(--mono);font-size:calc(11px * var(--ts));color:var(--ink-3);margin:8px 0 0}
+.rgntray{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 12px;
+  border-bottom:1px solid var(--rule-2);min-height:38px}
+.rgnpre{background:var(--sunk)}
+.rgntray.over{background:var(--hero-bg);outline:2px dashed var(--signal);outline-offset:-3px}
+canvas#rgncanvas.over{outline:3px dashed var(--signal);outline-offset:-4px}
+.rgnchip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);
+  font-size:calc(11.5px * var(--ts));background:var(--sunk);border:1px solid var(--rule);
+  border-radius:2px;padding:2px 3px 2px 8px}
+.rgnchip i{display:inline-block;width:8px;height:8px;border-radius:2px}
+.rgnx{background:none;border:0;color:var(--ink-3);cursor:pointer;font-family:var(--mono);
+  font-size:calc(12px * var(--ts));padding:0 5px;line-height:1.4}
+.rgnx:hover{color:var(--warn)}
+.rgnmini{padding:1px 7px;font-size:calc(10px * var(--ts))}
+.rgnwarn{font-family:var(--mono);font-size:calc(10.5px * var(--ts));color:var(--warn);
+  border:1px solid var(--warn);border-radius:2px;padding:1px 6px}
+.rgnside.over{outline:2px dashed var(--signal);outline-offset:-3px}
+.rgnhint{font-family:var(--mono);font-size:calc(10.5px * var(--ts));color:var(--ink-3)}
+.rgntarget{font-family:var(--mono);font-size:calc(11px * var(--ts));color:var(--ink-3)}
+.rgntarget b{color:var(--ink)}
+.rgnok{color:var(--casc);font-weight:600}
+.rgnbad{color:var(--warn);font-weight:600}
 </style>
 
 <div class="wrap">
@@ -887,6 +947,7 @@ summary.schead{cursor:pointer}
       <div id="plots"></div>
       <div class="addrow"><button class="tbtn addplot" id="addplot">+ plot</button>
         <button class="tbtn addplot" id="addtable">+ table</button>
+        <button class="tbtn addplot" id="addregions">+ region map</button>
         <button class="tbtn addplot" id="pasteblk" hidden>+ paste</button></div>
       <div class="panel" id="cutbox" hidden>
         <div class="exhead"><span>the selection on this page</span>
@@ -1806,6 +1867,7 @@ function buildUI(){
   };
   $("addplot").onclick = () => openBuilder();
   $("addtable").onclick = () => addTable();
+  if ($("addregions")) $("addregions").onclick = () => addRegions();
   $("pasteblk").onclick = () => pasteBlock();
   pasteBtn();
   $("raily").onclick = () => setDrawer($("rail").hidden);
@@ -2032,9 +2094,17 @@ function renderPlots(){
   // channel is a different thing again, added from the dial.
   PLOTS.forEach(drop);          // let plotly go before its divs are replaced
   const units = sheetUnits();
-  if (TBL) units.splice(tblAt(), 0, tableMarkup());
+  // the blocks that are not plots, spliced in at their own `at`. Lowest first and by a
+  // running offset, so two of them claiming one slot land in a stable order instead of
+  // swapping places every redraw.
+  const extra = [];
+  if (TBL) extra.push({at:tblAt(), html:tableMarkup()});
+  if (RGN) extra.push({at:rgnAt(), html:rgnMarkup()});
+  extra.sort((a, b) => a.at - b.at);
+  extra.forEach((e, i) => units.splice(Math.min(e.at + i, units.length), 0, e.html));
   $("plots").innerHTML = units.join("");
   if (TBL) tblWire();
+  if (RGN) rgnWire();
   PLOTS.forEach(bind);
 }
 
@@ -2610,7 +2680,8 @@ function collectState(){
           // the analysis is the tabs, plots, cuts, samples and how exports behave
           plots:PLOTS.map(({id, opts, ...rest}) => rest),
           // null, not absent: FACTORY must clear a table on the way into a plain tab
-          table:TBL ? JSON.parse(JSON.stringify(TBL)) : null};
+          table:TBL ? JSON.parse(JSON.stringify(TBL)) : null,
+          regions:RGN ? JSON.parse(JSON.stringify(RGN)) : null};
 }
 
 function defaultLayers(p){
@@ -2666,6 +2737,10 @@ function applyState(st, render = true){
   // only when the key is PRESENT: partial applies (a cuts reset, a lock) must not
   // touch the board, but FACTORY carries table:null and clears it
   if ("table" in st) TBL = st.table ? JSON.parse(JSON.stringify(st.table)) : null;
+  if ("regions" in st){
+    RGN = st.regions ? JSON.parse(JSON.stringify(st.regions)) : null;
+    RGNT = null; RGNH = null; RGNFS = null; RGNF = null; RGNV = {x:0, y:0, k:0};
+  }
 
   if ("rlabel" in st) $("rlabel").value = st.rlabel;
   // posture keys an older file may carry (sampopen, drawer, the fold family, ts,
@@ -4320,6 +4395,7 @@ function drawAll(){
   // The mask is the expensive part and every plot shares it, so it is computed once.
   MASK = mask();
   if (TBL) drawTable(MASK);
+  if (RGN) rgnDraw();
   PLOTS.forEach(p => drawOne(p, MASK));   // a table tab draws its board AND its plots
   report(totals(MASK));
   countsFold();
@@ -7027,6 +7103,1098 @@ function start(buf, source){
   if (window.history && "scrollRestoration" in history) history.scrollRestoration = "manual";
   const rest = () => { const l = mastLine(); if (l >= 0 && (window.scrollY || 0) < l) settleToLine(true); };
   if (window.requestAnimationFrame) requestAnimationFrame(rest); else rest();
+}
+
+/* ————— the region map: a BINARY partition of the events into mutually exclusive regions,
+   drawn as nested camps whose area is their yield. Every cut divides a region into a
+   predicate and EVERYTHING ELSE, so the two sides are exhaustive whatever the column
+   holds — a NaN, a value nobody anticipated — and no event can fall out of a partition.
+   That is why there is no leftover bin. RGN rides the state as the optional `regions`
+   key; the tree it draws is rebuilt from the same MASK the plots and the board use. ————— */
+
+let RGN  = null;   // the live tab's region map, or null
+let RGNT = null;   // the camp tree it last built — the panel and the battery read this
+let RGNF = null;   // the focused camp. Posture: which camp you are looking at is not
+                   // what the analysis IS, so it never reaches a .rvr
+let RGNFS = null;  // where that camp lives in the SAVED tree. Camp nodes are rebuilt on
+                   // every redraw, so holding the node itself loses focus each time the
+                   // mask moves — this survives, because the partition does
+let RGNH = null;   // the hovered camp, posture too
+let RGNV = {x:0, y:0, k:1};   // the camera, posture
+let RGNSIG = null; // everything the counting depends on, so a rail slider costs nothing
+let RGNW = 1200, RGNH0 = 700; // the world the layout is computed in, = the canvas
+const RGN_TOP = 40;           // the strip the crumb and the buttons sit in
+
+function rgnDefault(){
+  // opens as ONE unsplit bar — root null. There is no map to enter, only a bar that
+  // grows into one as you cut it.
+  const gs = groupNames();
+  return {at:0, view:"stack", sig:(gs.includes(S.fomn) ? S.fomn : gs[0]) || null,
+          bkg:(gs.includes(S.fomd) ? [S.fomd] : gs.slice(1)), srcs:[],
+          pre:{cuts:{}, chips:{}, lumi:LUMI()}, root:null};
+}
+
+function addRegions(){
+  // a map is something a TAB GAINS, like a board. One per tab: RGN is a single object and
+  // the controls are addressed by id, the same limit the board has.
+  if (RGN) return say("this tab already has a region map");
+  RGN = rgnDefault();
+  rgnFocus(null); RGNV = {x:0, y:0, k:0};
+  markDirty();
+  renderPlots();
+  drawAll();
+  const b = document.querySelector(".rgn");
+  if (b && b.scrollIntoView) b.scrollIntoView({behavior:"smooth", block:"nearest"});
+}
+
+function dropRegions(){
+  // and it has to be removable, or "+ region map" is a one-way door
+  if (!RGN) return;
+  RGN = null; RGNT = null; RGNH = null; rgnFocus(null);
+  markDirty();
+  renderPlots();
+  drawAll();
+  say("region map removed");
+}
+
+function rgnAt(){
+  // where the map sits in the stack, counted in blocks above it, like the board's `at`
+  return Math.max(0, Math.min(RGN && RGN.at || 0, sheetPlan(PLOTS).length));
+}
+
+function rgnMove(d){
+  if (!RGN) return;
+  RGN.at = Math.max(0, Math.min(rgnAt() + d, sheetPlan(PLOTS).length));
+  markDirty();
+  renderPlots();
+  drawAll();
+}
+
+function rgnFocus(n){
+  // one place sets focus, so the slot it is remembered by can never drift from the node
+  RGNF = n || null;
+  RGNFS = n ? {obj:n.slot.obj, key:n.slot.key} : null;
+}
+
+function rgnFindSlot(obj, key){
+  // the camp occupying one slot of the saved tree, after the camps have been rebuilt
+  let hit = null;
+  (function rec(n){
+    if (!n || hit) return;
+    if (n.slot.obj === obj && n.slot.key === key){ hit = n; return; }
+    n.kids.forEach(rec);
+  })(RGNT);
+  return hit;
+}
+
+function rgnSrcs(){
+  // What the map counts. ABSENT means every source the Sample band offers, so a file
+  // written before the map could pick its own reopens showing exactly what it showed
+  // then. A name that no longer resolves is dropped rather than counted as nothing.
+  if (!RGN || !RGN.srcs) return bldSources();
+  return RGN.srcs.filter(s => tblIdx(s).length);
+}
+
+function rgnAddSrc(name){
+  // a chip dropped from the band. ANY chip it offers: a group, a bundle, or a single
+  // sample even while it lives inside a group — tblIdx resolves all three
+  if (!RGN || !name || !tblIdx(name).length) return;
+  const now = rgnSrcs();
+  if (now.includes(name)) return say(`<b>${esc(name)}</b> is already on this map`);
+  // the FIRST sample gives the map something to frame, so the camera fits itself to it.
+  // Later ones must not: by then you have zoomed somewhere on purpose.
+  if (!now.length) RGNV = {x:0, y:0, k:0};
+  // a source naming a hidden sample would count nothing and look broken, so it turns on —
+  // the same rule a pasted block and a board cell apply
+  if (!srcShown(name)) srcEnable(name);
+  RGN.srcs = now.concat([name]);
+  markDirty();
+  renderPlots();
+  drawAll();
+  say(`added <b>${esc(name)}</b> to the map`);
+}
+
+function rgnDropSrc(name){
+  // and off again. The last one cannot go: a map of nothing has no area to divide.
+  if (!RGN) return;
+  RGN.srcs = rgnSrcs().filter(s => s !== name);
+  markDirty();
+  renderPlots();
+  drawAll();
+  say(`removed <b>${esc(name)}</b> from the map — its events leave every camp`);
+}
+
+function rgnAllSrcs(){
+  // back to following the Sample band, which is what absent means
+  if (!RGN) return;
+  if (!rgnSrcs().length) RGNV = {x:0, y:0, k:0};   // filling an empty map frames it too
+  delete RGN.srcs;
+  markDirty();
+  renderPlots();
+  drawAll();
+  say("the map follows the Sample band again");
+}
+
+function rgnPre(){ return (RGN && RGN.pre) || {cuts:{}, chips:{}}; }
+
+function rgnLumiOdd(){
+  // A new tab opens at the factory ×1 while the rest of a study is usually at its real
+  // luminosity, and a map made there snapshots the 1. The numbers are then out by that
+  // factor and look like a bug in the map. Say it where the number is.
+  const mine = rgnLumi();
+  // the map's OWN tab is not "another tab": comparing against it would nag about the very
+  // difference the map exists to have
+  const others = TABS.map((t, i) => i === TAB ? null : (t.st || {}).lumi)
+                     .filter(l => l != null && l !== mine);
+  if (!others.length) return "";
+  const most = others.sort((a, b) =>
+    others.filter(v => v === b).length - others.filter(v => v === a).length)[0];
+  return `<span class="rgnwarn" title="this map is scaled to a different luminosity from ` +
+         `the other tabs in this file">other tabs are at &times;${fmt(most)}</span>`;
+}
+
+function rgnRootName(){
+  // the outer camp is not "all events" once a preselection decides which events those are
+  return rgnPreNames().length ? "all events passing preselection" : "all events";
+}
+
+function rgnLumi(){
+  // the map's own luminosity, snapshotted with its preselection. A rail slider must not
+  // silently rescale a map someone built.
+  const pre = rgnPre();
+  return pre.lumi != null ? pre.lumi : LUMI();
+}
+
+function rgnMask(){
+  // The map's OWN selection, and nothing else. It deliberately does not read the rail's
+  // cuts or the sample toggles: a region map is a statement about ONE fixed preselection,
+  // and a slider moving underneath it would silently redefine every region on it. What is
+  // on the map is the tray's business; which events are, is this.
+  const n = META.n, keep = new Uint8Array(n), pre = rgnPre();
+  const active = [];
+  for (const name of Object.keys(pre.cuts || {})){
+    const c = rgnColByName(name);
+    if (c) active.push([c, pre.cuts[name], null]);
+  }
+  for (const name of Object.keys(pre.chips || {})){
+    const c = rgnColByName(name);
+    if (c) active.push([c, null, new Set(pre.chips[name])]);
+  }
+  for (let r = 0; r < n; r++){
+    let ok = 1;
+    for (const [c, span, set] of active){
+      const x = D[c.name][r];
+      if (set ? !set.has(x) : (x < span[0] || x > span[1])){ ok = 0; break; }
+    }
+    keep[r] = ok;
+  }
+  return keep;
+}
+
+function rgnTakeCuts(){
+  // the rail as it stands, copied ONCE into the map. This is the gesture: set the
+  // preselection with the sliders you already know, then press this and it is frozen.
+  if (!RGN) return;
+  const pre = {cuts:{}, chips:{}, lumi:rgnLumi()};   // the CUTS: the map keeps its own ×
+  META.cols.forEach((c, i) => {
+    if (!narrowed(i)) return;
+    if (c.vals){ pre.chips[c.name] = [...S.chips[i]].sort((a, b) => a - b); return; }
+    const stops = bounds(c), [lo, hi] = cutRange(i);
+    // an open end is stored as its stop, not as Infinity: the file is JSON, and every
+    // event already lies inside the stops, so the two select the same events
+    pre.cuts[c.name] = [isFinite(lo) ? lo : stops[0], isFinite(hi) ? hi : stops[1]];
+  });
+  RGN.pre = pre;
+  RGNV = {x:0, y:0, k:0};
+  markDirty();
+  renderPlots();
+  drawAll();
+  const n = Object.keys(pre.cuts).length + Object.keys(pre.chips).length;
+  say(n ? `the map's preselection is this tab's ${n} cut${n > 1 ? "s" : ""}, frozen — ` +
+          `the rail no longer moves it`
+        : "this tab has no cuts to take — the map is every event");
+}
+
+function rgnClearPre(){
+  if (!RGN) return;
+  RGN.pre = {cuts:{}, chips:{}, lumi:LUMI()};
+  RGNV = {x:0, y:0, k:0};
+  markDirty(); renderPlots(); drawAll();
+  say("preselection cleared — the map is every event");
+}
+
+function rgnDropPre(name){
+  if (!RGN) return;
+  const pre = rgnPre();
+  delete (pre.cuts || {})[name];
+  delete (pre.chips || {})[name];
+  RGN.pre = pre;
+  markDirty(); renderPlots(); drawAll();
+}
+
+function rgnPreLabel(name){
+  // the cut written the way the cutflow writes it, so the map says what it selected
+  const c = rgnColByName(name), pre = rgnPre();
+  if (!c) return name;
+  if (pre.chips && pre.chips[name])
+    return `${name} = ${pre.chips[name].map(v => rgnValName(name, v)).join("/")}`;
+  const [lo, hi] = pre.cuts[name], stops = bounds(c);
+  if (lo <= stops[0]) return `${name} ≤ ${fmt(hi)}`;
+  if (hi >= stops[1]) return `${name} ≥ ${fmt(lo)}`;
+  return `${fmt(lo)} ≤ ${name} ≤ ${fmt(hi)}`;
+}
+
+function rgnPreNames(){
+  const pre = rgnPre();
+  return Object.keys(pre.cuts || {}).concat(Object.keys(pre.chips || {}));
+}
+
+function rgnCol(i){ return META.cols[i]; }
+
+function rgnColByName(name){
+  const i = META.cols.findIndex(c => c.name === name);
+  return i >= 0 ? META.cols[i] : null;
+}
+
+function rgnValName(col, v){
+  // a categorical value written the way the chips write it
+  const c = rgnColByName(col);
+  if (!c || !c.vals) return String(v);
+  const at = c.vals.indexOf(+v);
+  return (c.names && at >= 0) ? c.names[at] : String(v);
+}
+
+/* ---------- the partition tree ---------- */
+
+function rgnFlatten(spec, holder, key){
+  // A chain of cuts on ONE column, as the slices it makes, in order. Binary underneath —
+  // each slice is "satisfies my cut and none before it" — but one ordered band on screen,
+  // which is the whole reason the slice direction flips per column and not per level.
+  const out = [];
+  let cur = spec, obj = holder, k = key;
+  while (cur && cur.cut && cur.cut.col === spec.cut.col){
+    out.push({cut:cur.cut, spec:cur.yes, obj:cur, key:"yes"});
+    obj = cur; k = "no"; cur = cur.no;
+  }
+  out.push({cut:null, spec:cur, obj:obj, key:k});   // everything the chain did not take
+  return out;
+}
+
+function rgnSliceName(slices, i){
+  // what a slice is called: the half-line it takes, or the values it admits
+  const col = slices[0].cut.col;
+  const cuts = slices.filter(s => s.cut).map(s => s.cut);
+  const mine = slices[i].cut;
+  if (mine && mine.in) return `${col} = ${mine.in.map(v => rgnValName(col, v)).join("/")}`;
+  if (!mine){
+    const last = cuts[cuts.length - 1];
+    return last.in ? `${col} other` : `${col} ≥ ${fmt(last.lt)}`;
+  }
+  const prev = i > 0 ? cuts[i - 1] : null;
+  return prev ? `${fmt(prev.lt)} ≤ ${col} < ${fmt(mine.lt)}`
+              : `${col} < ${fmt(mine.lt)}`;
+}
+
+function rgnTree(spec, holder, key, depth, parent, name){
+  // one camp per node. `slot` is where this camp's own contents live in the saved tree,
+  // so cutting or uncutting a camp is one assignment rather than a search.
+  const node = {name, depth, parent, kids:[], col:null, test:null,
+                slot:{obj:holder, key},
+                path:parent ? parent.path.concat([name]) : []};
+  if (spec && spec.cut){
+    node.col = spec.cut.col;
+    const slices = rgnFlatten(spec, holder, key);
+    slices.forEach((s, i) => {
+      const kid = rgnTree(s.spec, s.obj, s.key, depth + 1, node, rgnSliceName(slices, i));
+      kid.test = s.cut;                      // null on the slice that takes what is left
+      node.kids.push(kid);
+    });
+  }
+  return node;
+}
+
+function rgnPick(node, r){
+  // which slice of this camp one event falls in. The last slice has no test: it takes
+  // everything the others did not, which is what makes the split exhaustive.
+  const v = D[node.col][r];
+  for (const k of node.kids){
+    if (!k.test) return k;
+    if (k.test.in){ if (k.test.in.indexOf(v) >= 0) return k; }
+    else if (v < k.test.lt) return k;
+  }
+  return node.kids[node.kids.length - 1];
+}
+
+function rgnCount(keep){
+  // ONE pass: every kept event walks down the tree adding to every camp on its path, so a
+  // camp equals the sum of its pieces by construction rather than by a rounding that
+  // happens to agree. Pure arithmetic — no canvas, no DOM — so the battery can call it.
+  if (!RGN) return null;
+  const srcs = rgnSrcs(), ns = srcs.length;
+  const byDs = new Int32Array(META.datasets.length).fill(-1);
+  srcs.forEach((s, si) => tblIdx(s).forEach(i => { byDs[i] = si; }));
+  const root = rgnTree(RGN.root, RGN, "root", 0, null, rgnRootName());
+  (function zero(n){
+    n.y = new Float64Array(ns); n.n = new Int32Array(ns);
+    n.kids.forEach(zero);
+  })(root);
+  const weighted = WTD(), L = rgnLumi();
+  for (let r = 0; r < META.n; r++){
+    if (!keep[r]) continue;
+    const si = byDs[D.__ds[r]];
+    if (si < 0) continue;
+    const w = weighted ? D.weight[r] * L : 1;
+    let node = root;
+    for (;;){
+      node.y[si] += w; node.n[si] += 1;
+      if (!node.kids.length) break;
+      node = rgnPick(node, r);
+    }
+  }
+  RGNT = root;
+  return root;
+}
+
+const rgnY = n => n.y.reduce((a, v) => a + v, 0);
+const rgnN = n => n.n.reduce((a, v) => a + v, 0);
+
+function rgnSigY(n){
+  const i = rgnSrcs().indexOf(RGN.sig);
+  return i >= 0 ? n.y[i] : 0;
+}
+
+function rgnBkgY(n){
+  const srcs = rgnSrcs();
+  return (RGN.bkg || []).reduce((a, b) => a + (srcs.indexOf(b) >= 0 ? n.y[srcs.indexOf(b)] : 0), 0);
+}
+
+function rgnFloor(){ return RGN && RGN.floor != null ? RGN.floor : 1; }
+
+function rgnDim(n){ return rgnY(n) < rgnFloor(); }
+
+/* ---------- layout ---------- */
+
+//: the gutter shrinks with depth and the header with it, so the eye reads pieces inside a
+//: camp without any extra chrome. Both are capped by the node's own size below.
+//: a slice thinner than this in world units reads as a line rather than a block, and is
+//: lifted into the depleted strip instead of being drawn to scale
+const RGN_THIN = 8, RGN_STRIP = 30;
+const RGN_GAP  = [22, 12, 7, 4, 3, 2];
+const RGN_HEAD = [28, 21, 16, 13, 11, 10];
+
+function rgnLayout(node, x, y, w, h, d, horiz){
+  // Area is yield at every depth: within one camp a child's share of the AREA is exactly
+  // its share of the YIELD, because the gutter and the header come out of the space being
+  // shared before the share is worked out. Both are capped by the node's own size — a
+  // constant header is larger than the node itself a few levels down, which drives every
+  // child to zero area and destroys the invariant while the detail rule hides the damage.
+  node.rect = {x, y, w, h, d};
+  node.head = 0; node.gap = 0;
+  const live = node.kids.filter(k => rgnY(k) > 0);
+  if (!node.kids.length){ return; }
+  const dd = Math.min(d, RGN_GAP.length - 1);
+  const kn = Math.max(1, live.length);
+  let gap = Math.min(RGN_GAP[dd], w * .05, h * .05);
+  const head = Math.min(RGN_HEAD[dd], h * .22);
+  gap = Math.max(0, Math.min(gap, (horiz ? w - gap : h - head) / (2 * kn)));
+  node.head = head; node.gap = gap;
+  const ix = x + gap * .5, iy = y + head;
+  const iw = Math.max(0, w - gap), ih = Math.max(0, h - head - gap * .5);
+  const total = live.reduce((a, k) => a + rgnY(k), 0) || 1;
+  const span0 = (horiz ? iw : ih) - gap * (kn - 1);
+  // A region whose slice would be a few pixels thick reads as a line, not a block. Those
+  // are lifted OUT of the sharing into a strip at the end of the camp and listed by name,
+  // so the ones you can actually read keep their proportions. The price is stated plainly:
+  // a depleted region's rectangle is NOT its yield any more, which is why they are drawn
+  // apart, labelled, and left out of the area check rather than quietly rescaled.
+  const thin = Math.min(RGN_THIN, span0 * .06);
+  node.kids.forEach(k => { k.thin = false; });
+  let drawn = live.filter(k => span0 * rgnY(k) / total >= thin);
+  let sunk = live.filter(k => drawn.indexOf(k) < 0);
+  if (!drawn.length){ drawn = live; sunk = []; }      // all equally small: none is special
+  sunk.forEach(k => { k.thin = true; });
+  const strip = sunk.length ? Math.min(RGN_STRIP, span0 * .28) : 0;
+  const span = Math.max(1, span0 - (strip ? strip + gap : 0));
+  const share = drawn.reduce((a, k) => a + rgnY(k), 0) || 1;
+  node.strip = strip; node.stripHoriz = horiz;
+  let off = 0;
+  for (const k of node.kids){
+    const kh = (k.kids.length && k.col === node.col) ? horiz : !horiz;
+    if (rgnY(k) <= 0 || k.thin){ continue; }
+    const len = span * rgnY(k) / share;
+    if (horiz) rgnLayout(k, ix + off, iy, len, ih, d + 1, kh);
+    else       rgnLayout(k, ix, iy + off, iw, len, d + 1, kh);
+    off += len + gap;
+  }
+  // the depleted strip: equal slots, because their sizes are no longer their yields
+  if (strip){
+    let soff = off + (off ? gap : 0);
+    const each = strip / sunk.length;
+    sunk.forEach(k => {
+      if (horiz) rgnLayout(k, ix + soff, iy, each, ih, d + 1, !horiz);
+      else       rgnLayout(k, ix, iy + soff, iw, each, d + 1, !horiz);
+      soff += each;
+    });
+  }
+  node.kids.forEach(k => {
+    if (rgnY(k) > 0) return;
+    k.rect = {x:ix, y:iy, w:0, h:0, d:d + 1}; k.head = 0; k.gap = 0; k.thin = false;
+    rgnLayout(k, ix, iy, 0, 0, d + 1, horiz);
+  });
+}
+
+function rgnCheck(){
+  // The sum rule, measured and put ON SCREEN rather than asserted in a comment. Counts are
+  // integers and compare exactly; yields are floats and cannot, which is why the gate is
+  // the count. `leaves` is the property the binary rule buys: every event in exactly one
+  // region, so the regions ARE the root.
+  if (!RGNT) return null;
+  let worst = 0, leaves = 0, leafN = 0, camps = 0, dim = 0, area = 0, thin = 0;
+  (function rec(n){
+    camps++;
+    if (rgnDim(n)) dim++;
+    if (!n.kids.length){ leaves++; leafN += rgnN(n); return; }
+    worst = Math.max(worst, Math.abs(n.kids.reduce((a, k) => a + rgnN(k), 0) - rgnN(n)));
+    const live = n.kids.filter(k => rgnY(k) > 0 && !k.thin);
+    thin += n.kids.filter(k => k.thin).length;
+    const at = live.reduce((a, k) => a + k.rect.w * k.rect.h, 0);
+    const yt = live.reduce((a, k) => a + rgnY(k), 0);
+    if (at > 0 && yt > 0)
+      live.forEach(k => { area = Math.max(area,
+        Math.abs((k.rect.w * k.rect.h) / at - rgnY(k) / yt)); });
+    n.kids.forEach(rec);
+  })(RGNT);
+  return {camps, leaves, dim, worst, area, thin,
+          exact: worst === 0 && leafN === rgnN(RGNT), leafN, rootN: rgnN(RGNT)};
+}
+
+/* ---------- cutting ---------- */
+
+function rgnLeaves(node){
+  const out = [];
+  (function rec(n){ if (!n.kids.length) out.push(n); else n.kids.forEach(rec); })(node);
+  return out;
+}
+
+function rgnCut(node, cut){
+  // One cut turns a region into two: the predicate, and everything else. On a CAMP it
+  // reaches every region inside it at once — cut the whole map on one variable and each
+  // band already there splits into above and below, which is how a grid gets built.
+  if (!node) return;
+  const targets = rgnLeaves(node);
+  if (!targets.length) return;
+  if (targets.length > 1){
+    // Writing into the "everything else" side of a chain EXTENDS that chain rather than
+    // nesting inside it. On a single region that is the point — it is how a band grows.
+    // Broadcast over many, it would extend some and nest others from one press, so this
+    // one case says no rather than doing two different things at once.
+    const clash = targets.find(t => t.slot.key === "no" && t.slot.obj && t.slot.obj.cut &&
+                                    t.slot.obj.cut.col === cut.col);
+    if (clash)
+      return say(`those regions are already split by <b>${esc(cut.col)}</b> — ` +
+                 `cut one region on its own to add another ${esc(cut.col)} band, ` +
+                 `or broadcast a different column`);
+  }
+  targets.forEach(t => { t.slot.obj[t.slot.key] = {cut, yes:null, no:null}; });
+  // a single cut lands on its own "everything else" side, so pressing cut again extends
+  // the band; a broadcast stays where it is, so it can be broadcast again
+  if (targets.length === 1)
+    RGNFS = {obj:targets[0].slot.obj[targets[0].slot.key], key:"no"};
+  markDirty();
+  drawAll();
+  if (targets.length > 1)
+    say(`cut <b>${targets.length}</b> regions on ${esc(cut.col)}`);
+}
+
+function rgnUncut(node){
+  // and back again: whatever was inside this camp goes, the camp itself stays
+  if (!node) return;
+  if (!node.kids.length) return say("this region has nothing inside it to remove");
+  node.slot.obj[node.slot.key] = null;
+  RGNFS = {obj:node.slot.obj, key:node.slot.key};
+  markDirty();
+  drawAll();
+}
+
+function rgnCutFromControls(){
+  // the strip's own cut: a column, and either a threshold or a set of values
+  const sel = $("rgncol"), box = $("rgnval");
+  if (!sel || !box) return;
+  const col = rgnColByName(sel.value);
+  if (!col) return say("pick a column to cut on");
+  const target = RGNF || RGNT;
+  if (!target) return;
+  if (col.vals){
+    const picked = (box.value || "").split(",").map(s => s.trim()).filter(Boolean)
+      .map(s => { const at = (col.names || []).indexOf(s);
+                  return at >= 0 ? col.vals[at] : +s; })
+      .filter(v => col.vals.indexOf(v) >= 0);
+    if (!picked.length)
+      return say(`name one or more values of <b>${esc(col.name)}</b> — ` +
+                 `${(col.names || col.vals).join(", ")}`);
+    return rgnCut(target, {col:col.name, in:picked});
+  }
+  const at = parseFloat(box.value);
+  if (!isFinite(at)) return say(`type a number to cut ${esc(col.name)} at`);
+  rgnCut(target, {col:col.name, lt:at});
+}
+
+/* ---------- the camera ---------- */
+
+function rgnFit(rect){
+  // the whole landscape, clear of the strip the crumb and the buttons sit in
+  const availH = Math.max(40, RGNH0 - RGN_TOP);
+  const k = Math.min(RGNW / rect.w, availH / rect.h) * .985;
+  RGNV = {k, x:rect.x - (RGNW / k - rect.w) / 2,
+          y:rect.y - RGN_TOP / k - (availH / k - rect.h) / 2};
+}
+
+function rgnFitAll(){ rgnFit({x:0, y:0, w:RGNW, h:Math.max(1, RGNH0 - RGN_TOP)}); }
+
+function rgnFlyTo(rect){
+  // reduced motion means arrive, not travel — the same courtesy the rest of the page pays
+  if (!rect || rect.w <= 0) return;
+  if (matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches){
+    rgnFit(rect); rgnDrawOnly(); return;
+  }
+  const from = {...RGNV};
+  rgnFit(rect);
+  const to = {...RGNV};
+  RGNV = from;
+  const t0 = (window.performance || Date).now();
+  const step = () => {
+    const p = Math.min(1, ((window.performance || Date).now() - t0) / 380);
+    const e = p < .5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+    RGNV = {x:from.x + (to.x - from.x) * e, y:from.y + (to.y - from.y) * e,
+            k:from.k + (to.k - from.k) * e};
+    rgnDrawOnly();
+    if (p < 1 && window.requestAnimationFrame) requestAnimationFrame(step);
+  };
+  if (window.requestAnimationFrame) requestAnimationFrame(step); else { RGNV = to; rgnDrawOnly(); }
+}
+
+function rgnSibs(n){ return n.parent ? n.parent.kids.filter(k => rgnY(k) > 0) : [n]; }
+
+function rgnKey(e){
+  // the part of this that matters most: left and right jump between camps, up and down
+  // change level, enter flies there, escape shows the whole landscape
+  if (!RGN || !RGNT) return;
+  const n = RGNF || RGNT;
+  const k = e.key;
+  if (k === "Escape"){ rgnFocus(null); rgnFitAll(); rgnDrawOnly(); return true; }
+  if (k === "Enter"){ if (RGNF) rgnFlyTo(RGNF.rect); return true; }
+  if (k === "ArrowUp"){ if (n.parent){ rgnFocus(n.parent); rgnDrawOnly(); } return true; }
+  if (k === "ArrowDown"){
+    const live = n.kids.filter(c => rgnY(c) > 0);
+    if (live.length){ rgnFocus(live[0]); rgnDrawOnly(); }
+    return true;
+  }
+  if (k === "ArrowLeft" || k === "ArrowRight"){
+    const sib = rgnSibs(n), i = sib.indexOf(n);
+    if (i >= 0 && sib.length){
+      rgnFocus(sib[(i + (k === "ArrowRight" ? 1 : sib.length - 1)) % sib.length]);
+      rgnDrawOnly();
+    }
+    return true;
+  }
+  return false;
+}
+
+/* ---------- drawing ---------- */
+
+function rgnCtx(){
+  // the stub has no canvas, so every drawing path has to survive not having one. The
+  // arithmetic above does not, which is the whole reason it is kept separate.
+  const c = $("rgncanvas");
+  return (c && c.getContext) ? c.getContext("2d") : null;
+}
+
+function rgnInk(hex){
+  // dark ink on a light band, white on a dark one — white on the yellow was unreadable
+  const h = String(hex).replace("#", "");
+  if (h.length < 6) return "#FFFFFF";
+  const v = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255)
+    .map(c => c <= .03928 ? c / 12.92 : Math.pow((c + .055) / 1.055, 2.4));
+  return (.2126 * v[0] + .7152 * v[1] + .0722 * v[2]) > .38 ? "#0D141B" : "#FFFFFF";
+}
+
+const rgnFmt = v => v >= 1000 ? Math.round(v).toLocaleString("en-US")
+                  : v >= 10   ? v.toFixed(0)
+                  : v >= 1    ? v.toFixed(1)
+                  : v >= 0.01 ? v.toFixed(2)
+                  : v > 0     ? "<0.01" : "0";
+const rgnCampVal = n => rgnDim(n) && rgnY(n) > 0 ? "<" + rgnFloor() : rgnFmt(rgnY(n));
+
+function rgnClip(ctx, s, w){
+  let t = String(s);
+  if (ctx.measureText(t).width <= w) return t;
+  while (t.length > 1 && ctx.measureText(t + "…").width > w) t = t.slice(0, -1);
+  return t + "…";
+}
+
+function rgnRowsAll(n){
+  // every source the map carries, biggest first. Unlike rgnRows this keeps the empty
+  // ones: a source contributing nothing here is worth seeing, and is still removable.
+  const srcs = rgnSrcs();
+  return srcs.map((s, i) => ({src:s, y:n.y[i] || 0, n:n.n[i] || 0, col:tblCol(s)}))
+             .sort((a, b) => b.y - a.y);
+}
+
+function rgnRows(n){
+  // one row per source, biggest first, the empties dropped
+  const srcs = rgnSrcs();
+  return srcs.map((s, i) => ({src:s, y:n.y[i], n:n.n[i], col:tblCol(s)}))
+             .filter(r => r.y > 0).sort((a, b) => b.y - a.y);
+}
+
+const rgnOpen = (n, W, H) => n.kids.length > 0 && W > 92 && H > 64;
+
+function rgnFillOf(n, css){
+  return [css.lv1, css.lv2, css.lv3, css.block][Math.min(n.depth, 3)];
+}
+
+function rgnDrawHead(ctx, n, X, Y, W, head, css){
+  if (head < 11 || W < 64) return;
+  const fs = Math.min(12.5, Math.max(9, head * .52));
+  ctx.textBaseline = "middle";
+  ctx.font = `600 ${fs}px ${css.mono}`;
+  const val = rgnCampVal(n), wv = ctx.measureText(val).width;
+  ctx.fillStyle = css.ink3;
+  ctx.fillText(val, X + W - wv - 7, Y + head / 2);
+  ctx.fillStyle = css.ink2;
+  ctx.fillText(rgnClip(ctx, n.name, W - wv - 22), X + 7, Y + head / 2);
+}
+
+function rgnDrawDepleted(ctx, n, X, Y, W, H, css){
+  // drawn apart and hatched, because its size is no longer its yield
+  ctx.fillStyle = css.sunk;
+  ctx.fillRect(X, Y, W, H);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(X, Y, W, H); ctx.clip();
+  ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
+  for (let i = -H; i < W; i += 6){
+    ctx.beginPath(); ctx.moveTo(X + i, Y + H); ctx.lineTo(X + i + H, Y); ctx.stroke();
+  }
+  ctx.restore();
+  ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
+  ctx.strokeRect(X + .5, Y + .5, W - 1, H - 1);
+  const along = W >= H;
+  const label = `depleted · ${rgnClip(ctx, n.name, 1e4)} · ${rgnCampVal(n)}`;
+  ctx.fillStyle = css.ink3;
+  ctx.font = `10.5px ${css.mono}`;
+  if (along && W > 60 && H > 11){
+    ctx.textBaseline = "middle";
+    ctx.fillText(rgnClip(ctx, label, W - 8), X + 4, Y + H / 2);
+  } else if (!along && H > 60 && W > 11){
+    ctx.save();
+    ctx.translate(X + W / 2, Y + H - 4);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textBaseline = "middle";
+    ctx.fillText(rgnClip(ctx, label, H - 8), 0, 0);
+    ctx.restore();
+  }
+}
+
+function rgnDrawLeaf(ctx, n, X, Y, W, H, css){
+  // STACK is the default: the block is subdivided by source, so a source's yield is area
+  // as well as a number, and whatever is too thin to draw is listed above it instead —
+  // nothing is resized, the slivers keep their true area and just also get a number.
+  // LEDGER is the same numbers with no bands, for when composition is not the question.
+  ctx.fillStyle = rgnDim(n) ? css.dim : rgnFillOf(n, css);
+  ctx.fillRect(X, Y, W, H);
+  if (W > 2 && H > 2){
+    ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
+    ctx.strokeRect(X + .5, Y + .5, W - 1, H - 1);
+  }
+  const rows = rgnRows(n), tot = rgnY(n);
+  let cy = Y + 5;
+  ctx.textBaseline = "top";
+  if (W > 84 && H > 20){
+    ctx.font = `600 12px ${css.mono}`;
+    ctx.fillStyle = css.ink;
+    ctx.fillText(rgnClip(ctx, n.name, W - 12), X + 6, cy); cy += 13;
+  }
+  if (W > 84 && H > 34){
+    ctx.font = `600 13px ${css.mono}`;
+    ctx.fillStyle = css.ink;
+    ctx.fillText(rgnClip(ctx, rgnCampVal(n), W - 12), X + 6, cy); cy += 17;
+  }
+  if (tot <= 0 || !rows.length) return;
+  const ledger = RGN.view === "ledger";
+  const room = Math.max(0, Y + H - 5 - cy);
+  const thin = ledger ? rows : rows.filter(r => room * r.y / tot < 3);
+  if (W > 118 && thin.length && room > 14){
+    ctx.font = `11px ${css.mono}`;
+    for (const r of thin){
+      if (cy + 12 > Y + H - 4) break;
+      ctx.fillStyle = r.col;
+      ctx.fillRect(X + 6, cy + 3, 7, 7);
+      ctx.fillStyle = css.ink2;
+      const val = rgnFmt(r.y), wv = ctx.measureText(val).width;
+      ctx.fillText(rgnClip(ctx, r.src, W - wv - 30), X + 18, cy);
+      ctx.fillStyle = css.ink;
+      ctx.fillText(val, X + W - wv - 6, cy);
+      cy += 12;
+    }
+    cy += 2;
+  }
+  if (ledger) return;
+  const bandsH = Math.max(0, Y + H - 5 - cy);
+  if (bandsH < 6 || W < 26) return;
+  let off = 0;
+  for (const r of rows){
+    const bh = bandsH * r.y / tot;
+    ctx.fillStyle = r.col;
+    ctx.globalAlpha = rgnDim(n) ? .35 : .85;
+    ctx.fillRect(X + 4, cy + off, W - 8, Math.max(0.6, bh));
+    ctx.globalAlpha = 1;
+    if (bh > 12 && W > 116){
+      ctx.font = `10.5px ${css.mono}`;
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = rgnInk(r.col);
+      const val = rgnFmt(r.y), wv = ctx.measureText(val).width;
+      ctx.fillText(rgnClip(ctx, r.src, W - wv - 26), X + 9, cy + off + bh / 2);
+      ctx.fillText(val, X + W - wv - 9, cy + off + bh / 2);
+      ctx.textBaseline = "top";
+    }
+    off += bh;
+  }
+}
+
+function rgnDrawNode(ctx, n, css, CW, CH){
+  // a camp opens into its pieces only when there is room on screen for them — a
+  // screen-size rule, not a depth rule, so zooming out gives a landscape not confetti
+  const r = n.rect;
+  if (!r || r.w <= 0 || r.h <= 0) return;
+  const X = (r.x - RGNV.x) * RGNV.k, Y = (r.y - RGNV.y) * RGNV.k;
+  const W = r.w * RGNV.k, H = r.h * RGNV.k;
+  if (X > CW || Y > CH || X + W < 0 || Y + H < 0) return;
+  if (n.thin){ rgnDrawDepleted(ctx, n, X, Y, W, H, css); return; }
+  if (rgnOpen(n, W, H)){
+    ctx.fillStyle = rgnFillOf(n, css);
+    ctx.fillRect(X, Y, W, H);
+    ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
+    ctx.strokeRect(X + .5, Y + .5, W - 1, H - 1);
+    rgnDrawHead(ctx, n, X, Y, W, n.head * RGNV.k, css);
+    n.kids.forEach(k => rgnDrawNode(ctx, k, css, CW, CH));
+    return;
+  }
+  rgnDrawLeaf(ctx, n, X, Y, W, H, css);
+}
+
+function rgnZoomable(){
+  // An empty map has nothing to zoom, so the wheel is not ours to take: swallowing it
+  // there just traps the page's own scrolling under the cursor.
+  return !!(RGN && rgnSrcs().length);
+}
+
+function rgnPickAt(px, py){
+  let best = null;
+  (function rec(n){
+    const r = n.rect;
+    if (!r || r.w <= 0) return;
+    const X = (r.x - RGNV.x) * RGNV.k, Y = (r.y - RGNV.y) * RGNV.k;
+    const W = r.w * RGNV.k, H = r.h * RGNV.k;
+    if (px < X || py < Y || px > X + W || py > Y + H) return;
+    best = n;
+    if (rgnOpen(n, W, H)) n.kids.forEach(rec);
+  })(RGNT);
+  return best;
+}
+
+function rgnCss(){
+  const g = n => css(n);
+  return {mono:"ui-monospace, SFMono-Regular, Menlo, monospace",
+          ink:g("--ink"), ink2:g("--ink-2"), ink3:g("--ink-3"),
+          rule:g("--rule"), dim:g("--rule"), panel:g("--panel"), sunk:g("--sunk"),
+          lv1:g("--sunk"), lv2:g("--ground"), lv3:g("--panel"), block:g("--panel"),
+          bg:g("--sunk")};
+}
+
+function rgnDrawOnly(){
+  // repaint from the tree already built — panning and focusing must not re-bin every event
+  const ctx = rgnCtx();
+  if (!ctx || !RGNT) { rgnPanel(); return; }
+  const cv = $("rgncanvas");
+  const box = cv.getBoundingClientRect ? cv.getBoundingClientRect() : {width:RGNW, height:RGNH0};
+  const dpr = window.devicePixelRatio || 1;
+  const CW = box.width || RGNW, CH = box.height || RGNH0;
+  if (cv.width !== Math.round(CW * dpr) || cv.height !== Math.round(CH * dpr)){
+    cv.width = Math.round(CW * dpr); cv.height = Math.round(CH * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const css2 = rgnCss();
+  ctx.fillStyle = css2.bg;
+  ctx.fillRect(0, 0, CW, CH);
+  if (cv.classList) cv.classList.toggle("empty", !rgnZoomable());
+  if (!rgnSrcs().length){
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = css2.ink3;
+    ctx.font = `600 14px ${css2.mono}`;
+    ctx.fillText("this map has no samples on it yet", CW / 2, CH / 2 - 11);
+    ctx.font = `12px ${css2.mono}`;
+    ctx.fillText("drag a sample or a group onto it from the Sample band",
+                 CW / 2, CH / 2 + 11);
+    ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+    rgnPanel();
+    return;
+  }
+  rgnDrawNode(ctx, RGNT, css2, CW, CH);
+  for (const [n, w] of [[RGNH, 1], [RGNF, 2]]){
+    if (!n || !n.rect || n.rect.w <= 0) continue;
+    const r = n.rect;
+    ctx.strokeStyle = css2.ink; ctx.lineWidth = w;
+    if (w === 1) ctx.setLineDash([4, 3]);
+    ctx.strokeRect((r.x - RGNV.x) * RGNV.k - 1, (r.y - RGNV.y) * RGNV.k - 1,
+                   r.w * RGNV.k + 2, r.h * RGNV.k + 2);
+    ctx.setLineDash([]);
+  }
+  rgnPanel();
+}
+
+function rgnDraw(){
+  // rebuild the tree from the map's OWN mask, lay it out, then paint
+  if (!RGN) return;
+  const cv = $("rgncanvas");
+  const box = (cv && cv.getBoundingClientRect) ? cv.getBoundingClientRect() : null;
+  RGNW = Math.max(420, (box && box.width) || 1200);
+  RGNH0 = Math.max(320, (box && box.height) || 700);
+  // the rail moving cannot change what the map counts, so it must not pay to find out:
+  // one signature over everything the count DOES depend on, and a repaint when it holds
+  const sig = JSON.stringify([RGN.pre, RGN.srcs || null, RGN.root, WTD(), META.n]);
+  if (sig !== RGNSIG || !RGNT){
+    RGNSIG = sig;
+    rgnCount(rgnMask());
+    rgnLayout(RGNT, 0, 0, RGNW, Math.max(1, RGNH0 - RGN_TOP), 0, true);
+  } else {
+    rgnLayout(RGNT, 0, 0, RGNW, Math.max(1, RGNH0 - RGN_TOP), 0, true);
+  }
+  if (!RGNV.k || !isFinite(RGNV.k) || RGNV.k <= 0) rgnFitAll();
+  RGNF = RGNFS ? rgnFindSlot(RGNFS.obj, RGNFS.key) : null;
+  if (!RGNF) RGNFS = null;                 // its camp is gone: forget it rather than hold a ghost
+  RGNH = null;
+  rgnDrawOnly();
+}
+
+/* ---------- the panel and the strip ---------- */
+
+function rgnPanel(){
+  // the focused camp's full contents: every source, and under it every sample, weighted
+  // and raw, plus the sum rule's own answer
+  const box = $("rgnpanel");
+  if (!box || !RGNT) return;
+  const n = RGNF || RGNT;
+  const rows = rgnRowsAll(n);
+  const B = rgnBkgY(n), Sg = rgnSigY(n);
+  const chk = rgnCheck() || {};
+  const per = [];
+  for (const r of rows){
+    per.push(`<tr><td><span class="rgndot" style="background:${r.col}"></span>${esc(r.src)}</td>` +
+             `<td class="r">${rgnFmt(r.y)}</td><td class="r">${r.n.toLocaleString("en-US")}</td>` +
+             `<td class="r"><button class="rgnx" data-x="${esc(r.src)}"` +
+             ` title="take ${esc(r.src)} off this map">×</button></td></tr>`);
+  }
+  const crumb = [rgnRootName()].concat(n.path.slice()).map(esc).join(" › ");
+  const tgt = $("rgntarget");
+  if (tgt) tgt.innerHTML = n.kids.length && n !== RGNT
+    ? `<span class="rgnbad">${esc(n.name)} already has cuts inside it</span>`
+    : n.kids.length ? `cutting <b>everything</b> — click a region to cut just that one`
+                    : `cutting <b>${esc(n.name)}</b>`;
+  box.innerHTML =
+    `<p class="rgnpath">${crumb}</p>` +
+    `<div class="rgnbig">${rgnFmt(rgnY(n))}</div>` +
+    `<p class="rgnunit">${WTD() ? "weighted events" : "events"} · ` +
+    `${rgnN(n).toLocaleString("en-US")} raw` +
+    (n.parent ? ` · ${(100 * rgnY(n) / (rgnY(n.parent) || 1)).toFixed(1)}% of its camp` : "") +
+    `</p>` +
+    `<table class="rgntbl"><tr><th>sample</th><th class="r">yield</th><th class="r">raw</th>` +
+    `<th></th></tr>` +
+    per.join("") +
+    `<tr><td><b>total</b></td><td class="r"><b>${rgnFmt(rgnY(n))}</b></td>` +
+    `<td class="r"><b>${rgnN(n).toLocaleString("en-US")}</b></td><td></td></tr></table>` +
+    `<p class="rgnnote">drag a sample or a group onto the map from the Sample band` +
+    `${RGN.srcs ? ` · <button class="tbtn rgnmini" id="rgnall">every sample</button>` : ""}</p>` +
+    (rgnSrcs().length ? "" :
+      `<p class="rgnnote rgnbad">no samples on this map yet — drag one in</p>`) +
+    `<p class="rgnnote">${rgnDim(n) ? "under the floor — greyed, and not cut further. " : ""}` +
+    `S/B ${B > 0 ? (Sg / B).toFixed(4) : "—"}</p>` +
+    `<p class="rgnnote">${chk.leaves || 0} regions` +
+    `${chk.thin ? ` · <span class="rgnbad">${chk.thin} depleted, drawn apart and NOT to scale</span>` : ""} · ` +
+    `<span class="${chk.exact ? "rgnok" : "rgnbad"}">` +
+    `${chk.exact ? "every event in exactly one region, counts exact"
+                 : `SUM RULE BROKEN: ${chk.leafN} of ${chk.rootN}`}</span></p>`;
+  // the table is rebuilt on every paint, so its buttons are rewired with it
+  if (box.querySelectorAll){
+    box.querySelectorAll("[data-x]").forEach(b =>
+      b.onclick = () => rgnDropSrc(b.dataset.x));
+    if ($("rgnall")) $("rgnall").onclick = () => rgnAllSrcs();
+  }
+}
+
+function rgnStripMarkup(){
+  const cols = META.cols.map(c =>
+    `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+  return `<div class="rgnstrip">
+    <span class="rgnlab">cut</span>
+    <select id="rgncol" title="the column to cut on">${cols}</select>
+    <input id="rgnval" class="rgnnum" placeholder="at" title="a number, or values for a chip column">
+    <button class="tbtn" id="rgncut" title="cut the focused region in two">cut</button>
+    <span class="rgntarget" id="rgntarget"></span>
+    <button class="tbtn" id="rgnuncut" title="remove what is inside the focused camp">uncut</button>
+    <span class="rgnsp"></span>
+    <span class="rgnlab">show</span>
+    <span class="seg" id="rgnview">
+      <button data-v="stack" aria-pressed="${RGN.view !== "ledger"}">stack</button>
+      <button data-v="ledger" aria-pressed="${RGN.view === "ledger"}">ledger</button>
+    </span>
+    <span class="rgnlab">floor</span>
+    <input id="rgnfloor" class="rgnnum" value="${rgnFloor()}" title="a camp under this greys out and stops splitting">
+    <span class="rgnsp"></span>
+    <button class="tbtn" id="rgnfit" title="the whole landscape">fit</button>
+    <span class="tsizes" id="rgnmove">
+      <button data-v="-1" title="move this map up one block">▲</button>
+      <button data-v="1" title="move this map down one block">▼</button>
+    </span>
+    <button class="tbtn tdrop" id="rgndrop" title="remove this map">remove</button>
+  </div>
+  <div class="rgntray rgnpre" id="rgnpre">
+    <span class="rgnlab">preselection</span>
+    ${rgnPreNames().map(nm => `<span class="rgnchip">${esc(rgnPreLabel(nm))}
+        <button class="rgnx" data-p="${esc(nm)}" title="drop this cut">×</button></span>`).join("")}
+    ${rgnPreNames().length ? "" :
+      `<span class="rgnhint">none — this map is every event, at &times;${fmt(rgnLumi())}</span>`}
+    <span class="rgnsp"></span>
+    <span class="rgnlab">weighted to</span>
+    <input id="rgnlumi" class="rgnnum" value="${rgnLumi()}"
+           title="the luminosity this map's yields are scaled to">
+    ${rgnLumiOdd()}
+    <button class="tbtn" id="rgntake" title="copy this tab's cuts onto the map and freeze them">take the tab's cuts</button>
+    ${rgnPreNames().length ? `<button class="tbtn" id="rgnclear" title="every event">clear</button>` : ""}
+  </div>
+`;
+}
+
+function rgnMarkup(){
+  return `<div class="panel rgn">
+    ${rgnStripMarkup()}
+    <div class="rgnbody"><div class="rgnwrap"><canvas id="rgncanvas"></canvas>
+      <p class="rgnkeys"><kbd>←</kbd><kbd>→</kbd> camps <kbd>↑</kbd><kbd>↓</kbd> level
+        <kbd>enter</kbd> fly <kbd>esc</kbd> fit · drag to pan, wheel to zoom</p></div>
+      <div class="rgnside" id="rgnpanel"></div></div>
+  </div>`;
+}
+
+function rgnWireDrop(el){
+  // the map takes what the Sample band's chips carry, exactly as a board cell does
+  if (!el || !el.addEventListener) return;
+  const hasSrc = e => e.dataTransfer &&
+    Array.from(e.dataTransfer.types || []).includes("text/rowver-src");
+  el.ondragover = e => {
+    if (!hasSrc(e)) return;
+    e.preventDefault(); e.stopPropagation();
+    if (el.classList) el.classList.add("over");
+  };
+  el.ondragleave = () => { if (el.classList) el.classList.remove("over"); };
+  el.ondrop = e => {
+    if (!hasSrc(e)) return;
+    e.preventDefault(); e.stopPropagation();
+    if (el.classList) el.classList.remove("over");
+    rgnAddSrc(e.dataTransfer.getData("text/rowver-src"));
+  };
+}
+
+function rgnWire(){
+  // every control on the strip, and the canvas's own pointer and wheel handling
+  rgnWireDrop($("rgncanvas"));
+  rgnWireDrop($("rgnpanel"));
+  const lu = $("rgnlumi");
+  if (lu) lu.onchange = () => {
+    const v = parseFloat(lu.value);
+    if (!isFinite(v) || v <= 0){ lu.value = rgnLumi(); return say("a luminosity is a positive number"); }
+    RGN.pre = Object.assign(rgnPre(), {lumi:v});
+    markDirty(); renderPlots(); drawAll();
+    say(`this map is weighted to <b>&times;${fmt(v)}</b>`);
+  };
+  if ($("rgntake")) $("rgntake").onclick = () => rgnTakeCuts();
+  if ($("rgnclear")) $("rgnclear").onclick = () => rgnClearPre();
+  const pre = $("rgnpre");
+  if (pre && pre.querySelectorAll)
+    pre.querySelectorAll("[data-p]").forEach(b => b.onclick = () => rgnDropPre(b.dataset.p));
+  const cut = $("rgncut");
+  if (cut) cut.onclick = () => rgnCutFromControls();
+  const un = $("rgnuncut");
+  if (un) un.onclick = () => rgnUncut(RGNF || RGNT);
+  const fit = $("rgnfit");
+  if (fit) fit.onclick = () => { rgnFitAll(); rgnDrawOnly(); };
+  const drop = $("rgndrop");
+  if (drop) drop.onclick = () => dropRegions();
+  const mv = $("rgnmove");
+  if (mv && mv.querySelectorAll)
+    mv.querySelectorAll("button").forEach(b => b.onclick = () => rgnMove(+b.dataset.v));
+  const view = $("rgnview");
+  if (view && view.querySelectorAll)
+    view.querySelectorAll("button").forEach(b => b.onclick = () => {
+      RGN.view = b.dataset.v;
+      view.querySelectorAll("button").forEach(o =>
+        o.setAttribute("aria-pressed", o === b));
+      markDirty(); rgnDrawOnly();
+    });
+  const fl = $("rgnfloor");
+  if (fl) fl.onchange = () => {
+    const v = parseFloat(fl.value);
+    RGN.floor = isFinite(v) && v >= 0 ? v : 1;
+    fl.value = RGN.floor;
+    markDirty(); rgnDrawOnly();
+  };
+  const col = $("rgncol");
+  const box = $("rgnval");
+  if (col && box) col.onchange = () => {
+    const c = rgnColByName(col.value);
+    box.placeholder = c && c.vals ? (c.names || c.vals).slice(0, 3).join(",") : "at";
+  };
+  const cv = $("rgncanvas");
+  if (!cv || !cv.addEventListener || !cv.getContext) return;
+  cv.addEventListener("mousemove", e => {
+    const r = cv.getBoundingClientRect();
+    const h = rgnPickAt(e.clientX - r.left, e.clientY - r.top);
+    if (h !== RGNH){ RGNH = h; rgnDrawOnly(); }
+  });
+  cv.addEventListener("mouseleave", () => { RGNH = null; rgnDrawOnly(); });
+  cv.addEventListener("click", e => {
+    const r = cv.getBoundingClientRect();
+    rgnFocus(rgnPickAt(e.clientX - r.left, e.clientY - r.top));
+    rgnDrawOnly();
+  });
+  cv.addEventListener("dblclick", e => {
+    const r = cv.getBoundingClientRect();
+    const n = rgnPickAt(e.clientX - r.left, e.clientY - r.top);
+    if (n){ rgnFocus(n); rgnFlyTo(n.rect); }
+  });
+  cv.addEventListener("wheel", e => {
+    if (!rgnZoomable()) return;          // let the page scroll under the cursor instead
+    e.preventDefault();
+    const r = cv.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+    const wx = RGNV.x + px / RGNV.k, wy = RGNV.y + py / RGNV.k;
+    RGNV.k = Math.max(.12, Math.min(80, RGNV.k * Math.exp(-e.deltaY * .0016)));
+    RGNV.x = wx - px / RGNV.k; RGNV.y = wy - py / RGNV.k;
+    rgnDrawOnly();
+  }, {passive:false});
+  let drag = null;
+  cv.addEventListener("pointerdown", e => {
+    if (!rgnZoomable()) return;
+    drag = {x:e.clientX, y:e.clientY, vx:RGNV.x, vy:RGNV.y};
+    if (cv.setPointerCapture) cv.setPointerCapture(e.pointerId);
+    cv.classList.add("drag");
+  });
+  cv.addEventListener("pointermove", e => {
+    if (!drag) return;
+    RGNV.x = drag.vx - (e.clientX - drag.x) / RGNV.k;
+    RGNV.y = drag.vy - (e.clientY - drag.y) / RGNV.k;
+    rgnDrawOnly();
+  });
+  cv.addEventListener("pointerup", () => { drag = null; cv.classList.remove("drag"); });
+  cv.tabIndex = 0;
+  cv.addEventListener("keydown", e => { if (rgnKey(e)) e.preventDefault(); });
 }
 
 (async function(){

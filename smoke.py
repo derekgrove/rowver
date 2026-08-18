@@ -1664,7 +1664,11 @@ def run(html: str, rowver: str | None = None, probe: str = "") -> str:
           "    drawTable(MASK);"
           "    if (!TBLY.hists) return 'the plot channel made no histograms';"
           "    var h9 = TBLY.hists.out[ts9[0]];"
-          "    if (!h9 || h9.length !== TBL.plots[0].nb) return 'the mini has the wrong bins';"
+          # an integer column gets one bin per value, which overrides nb — the same rule
+          # the page draws by, so the expectation has to be computed the same way
+          "    var ib9 = intBins(TBL.plots[0].varx, true);"
+          "    var wb9 = ib9 ? ib9.nb : TBL.plots[0].nb;"
+          "    if (!h9 || h9.length !== wb9) return 'the mini has the wrong bins';"
           "    var t9 = TBLY.hists.tot, o9 = TBLY.hists.out[tb9];"
           "    for (var q9 = 0; q9 < t9.length; q9++)"
           "      if (Math.abs(t9[q9] - o9[q9]) > 1e-9) return 'the \\u03a3 mini is not the shelf summed';"
@@ -1837,6 +1841,31 @@ TABLE_PROBE = (
     "  met:tblMets(), cellN:cn9, shelfN:TBLY.bn});"
 )
 
+#: Enter the tab the FILE carries a partition on and report what the MAP itself computed,
+#: so the counts pinned below are checked against the page's own arithmetic as well as
+#: against numpy's. The leaves come back in tree order — the predicate side before its
+#: complement — which is the order the pins are written in.
+REGION_PROBE = (
+    "\nvar gr9 = -1;"
+    "\nfor (var i9 = 0; i9 < TABS.length; i9++)"
+    "  if (TABS[i9].st && TABS[i9].st.regions) gr9 = i9;"
+    "\nif (gr9 < 0) return 'the file no longer carries a region map tab';"
+    "\nswitchTab(gr9);"
+    "\nif (!RGN) return 'the map tab did not come up as a region map';"
+    "\ntry { drawAll(); } catch(e){ return 'the map THREW: ' + e.message; }"
+    "\nif (!RGNT) return 'the map built no tree';"
+    "\nvar lv9 = [];"
+    "\n(function rec(n){ if (!n.kids.length){ lv9.push(rgnN(n)); return; } n.kids.forEach(rec); })(RGNT);"
+    "\nvar ck9 = rgnCheck();"
+    "\nif (!ck9) return 'the map reported no checks';"
+    # the map must survive a state round trip like everything else the page saves
+    "\nvar rt9 = JSON.stringify(collectState().regions) === JSON.stringify(RGN);"
+    "\nreturn 'REGIONS OK ' + JSON.stringify({counts:lv9, total:rgnN(RGNT),"
+    "  leaves:ck9.leaves, camps:ck9.camps, exact:!!ck9.exact, worst:ck9.worst,"
+    "  area:ck9.area, at:RGN.at, view:RGN.view, board_at:(TBL ? TBL.at : null),"
+    "  roundtrip:rt9});"
+)
+
 #: The frozen files and exactly what the version that wrote them read out. The sha means
 #: the bytes may never change; the counts mean a future page must still READ them
 #: identically — exact integers, the only comparison that catches a silent misread.
@@ -1875,6 +1904,25 @@ GOLDEN = {
                   "cellN": {"signal": 989, "ZZ": 453, "MC \u00b7 ZZ\u21922e2mu": 296},
                   "shelfN": 749},
     },
+    #: the region map's partition: a binary tree of cuts inside a tab's state. `regions`
+    #: is recomputed from the columns in Python below — never read back off the page.
+    "golden_0.18.0_regions.rvr": {
+        "sha256": "215e53eefbed5f343701a5570d41f72b62f215176eff56a11f3841ba792247bc",
+        "rowver": 4, "n": 23263, "datasets": 4, "tabs": 2, "tab": 0,
+        "made_by": "0.18.0", "weights": "weight", "shown": 2313,
+        "regions": {
+            # depth first, the predicate side before its complement. The ORDER is the
+            # tree's, so a reader that rearranges a saved partition goes red here.
+            "counts": [3, 343, 186, 320, 0, 575, 886],
+            "total": 2313, "leaves": 7,
+            # one empty region, on purpose: `M4L < 0` takes nothing, and a zero-area
+            # child is exactly where a layout engine breaks
+            "empty": 1,
+            "shape": ("(channel in [0] ? (M4L<110 ? . : (M4L<140 ? (MZ2<30 ? . : .)"
+                      " : .)) : (channel in [1] ? (M4L<0 ? . : .) : .))"),
+            "at": 1, "view": "stack", "board_at": 0,
+        },
+    },
     #: the reason v4 exists — no weights column at all. Every pinned number here is an
     #: integer the page reaches without ever touching a weight.
     "golden_0.13.0_data.rvr": {
@@ -1883,6 +1931,55 @@ GOLDEN = {
         "made_by": "0.13.0", "weights": None, "shown": 21911,
     },
 }
+
+
+def region_tab(meta: dict) -> dict:
+    """The saved state of the tab that carries a partition, or {} if none does."""
+    for saved in meta.get("tabs") or []:
+        if (saved.get("state") or {}).get("regions"):
+            return saved["state"]
+    return {}
+
+
+def region_mask(meta: dict, columns: dict, st: dict):
+    """The MAP's own preselection as one boolean per event — keyed by column name, both
+    ends inclusive. Deliberately not the tab's cuts: the map does not read the rail."""
+    import numpy as np
+    keep = np.ones(meta["n"], bool)
+    pre = (st.get("regions") or {}).get("pre") or {}
+    for name, span in (pre.get("cuts") or {}).items():
+        if name in columns:
+            keep &= (columns[name] >= span[0]) & (columns[name] <= span[1])
+    for name, vals in (pre.get("chips") or {}).items():
+        if name in columns:
+            keep &= np.isin(columns[name], vals)
+    return keep
+
+
+def region_walk(node, columns: dict, here) -> list:
+    """Every leaf region's raw count, depth first, the predicate side before its complement."""
+    if node is None:
+        return [int(here.sum())]
+    cut = node["cut"]
+    values = columns[cut["col"]]
+    if "in" in cut:
+        import numpy as np
+        took = here & np.isin(values, cut["in"])
+    else:
+        took = here & (values < cut["lt"])
+    # the other side is the COMPLEMENT, never a second comparison — that is what makes a
+    # partition exhaustive whatever the column holds, NaN included
+    return (region_walk(node["yes"], columns, took)
+            + region_walk(node["no"], columns, here & ~took))
+
+
+def region_shape(node) -> str:
+    """The tree's structure as one line, so a rearranged partition cannot pass on counts."""
+    if node is None:
+        return "."
+    cut = node["cut"]
+    said = f"{cut['col']} in {cut['in']}" if "in" in cut else f"{cut['col']}<{cut['lt']:g}"
+    return f"({said} ? {region_shape(node['yes'])} : {region_shape(node['no'])})"
 
 
 def golden() -> str:
@@ -1928,6 +2025,51 @@ def golden() -> str:
                        for k, v in want["table"].items() if got.get(k) != v}
                 return f"{name}: the board reads differently: {bad}"
             note = f", board {got['rows']}x{got['cols']} on {got['channel']}"
+        if "regions" in want:
+            pin = want["regions"]
+            st = region_tab(meta)
+            if not st:
+                return f"{name}: no tab carries a partition any more"
+            rg = st["regions"]
+            columns = page.read(f)[1]
+            counts = region_walk(rg["root"], columns, region_mask(meta, columns, st))
+            shape = region_shape(rg["root"])
+            if counts != pin["counts"]:
+                return (f"{name}: the regions read {counts} against the pinned "
+                        f"{pin['counts']}")
+            # the property the binary rule buys, and the whole reason there is no leftover
+            if sum(counts) != pin["total"]:
+                return (f"{name}: the leaf regions hold {sum(counts):,} of the "
+                        f"{pin['total']:,} events the tab keeps — a partition lost events")
+            for key, got_v in (("leaves", len(counts)),
+                               ("empty", sum(1 for c in counts if c == 0)),
+                               ("shape", shape),
+                               ("at", rg.get("at")), ("view", rg.get("view")),
+                               ("board_at", (st.get("table") or {}).get("at"))):
+                if got_v != pin[key]:
+                    return f"{name}: regions {key} is {got_v!r}, pinned {pin[key]!r}"
+            # and now the page's own arithmetic, against the very same integers
+            t = run(str(here / "viewer.html"), str(f), probe=REGION_PROBE)
+            if not t.startswith("REGIONS OK "):
+                return f"{name}: the region map — {t}"
+            said = json.loads(t[len("REGIONS OK "):])
+            if said["counts"] != counts:
+                return (f"{name}: the MAP reads {said['counts']} where numpy reads "
+                        f"{counts} — the page and the file disagree")
+            if not said["exact"] or said["worst"] != 0:
+                return (f"{name}: the map's own sum rule is broken — worst "
+                        f"|children-parent| = {said['worst']} on raw counts")
+            # area is the yield at every depth, or the picture is lying about the numbers
+            if said["area"] > 1e-9:
+                return (f"{name}: a camp's share of the AREA differs from its share of "
+                        f"the yield by {said['area']:.2e} — area is not events")
+            if not said["roundtrip"]:
+                return f"{name}: the partition did not survive collectState"
+            for key in ("leaves", "at", "view", "board_at"):
+                if said[key] != pin[key]:
+                    return f"{name}: the map says {key}={said[key]!r}, pinned {pin[key]!r}"
+            note = (f", {len(counts)} regions summing to {sum(counts):,} exactly"
+                    f", area=events to {said['area']:.0e}{note}")
         out.append(f"{name} ok — {want['n']:,} events, shown={want['shown']}{note}")
     return "; ".join(out)
 

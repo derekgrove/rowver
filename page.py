@@ -19,7 +19,11 @@ META:
     weights     str | false      name of the weights column, or false for unweighted data
     w_offset    int              its byte offset, whenever weights is a name
 
-    tabs        [{name, state}]  optional: how each tab opens
+    tabs        [{name, state}]  optional: how each tab opens — a state may carry an
+                                 optional `regions` key, the region map's partition. It
+                                 rides INSIDE the state, so the format did not move: a
+                                 reader that knows nothing of it opens the file and shows
+                                 no map. See the `regions` note below.
     tab         int              optional: which tab the page opens on
     grouping    {group, sub, order}   optional: sample to group, page-global
     colour      {name: hex}      optional: colours chosen by hand
@@ -36,6 +40,35 @@ Each entry of cols:
     p95, p99    float            percentiles, for the default drawn range
     vals        [int] | null     the distinct values of a small integer column
     names       [str] | null     what each of those values means
+
+`regions`, the region map's partition, inside a tab's state:
+
+    at      int                 which block of the tab's stack the map is, like `table`
+    view    "stack" | "ledger"  how a camp shows its samples
+    sig     str                 the group that is S; bkg [str] is what B sums
+    srcs    [str] | absent      the sources the map counts. An EMPTY list is a map nobody
+                                has filled yet; ABSENT means every source the page offers,
+                                so a file written before the tray reopens as it was
+    pre     {cuts, chips, lumi} the map's OWN preselection, keyed by column NAME, and the
+                                luminosity it was built at. The map deliberately does not
+                                read the rail's cuts: it is a statement about one fixed
+                                selection, and a slider moving underneath it would
+                                silently redefine every region on it
+    root    node | null         null is one unsplit bar — the map before any cut
+
+Each node is either null (a leaf region) or one CUT and its two sides:
+
+    {"cut": {"col": name, "lt": x} | {"col": name, "in": [v, ...]},
+     "yes": node, "no": node}
+
+`yes` is what satisfies the predicate and `no` is EVERYTHING ELSE — the complement, never
+a second comparison. That is the whole guarantee: the two sides of a cut are mutually
+exclusive and exhaustive whatever the data holds, including a NaN or a value no one
+anticipated, so no event can fall out of a partition and there is no leftover to store.
+A many-binned variable is a chain of cuts down the `no` side; the page draws a chain on
+one column as a single camp with its slices in order. `col` is a column NAME, not the
+index the cuts use, so a re-skim that reorders columns fails loudly instead of quietly
+repointing every cut at the wrong variable.
 
 Two rules a writer must follow. Every f8 offset is a multiple of 8 and every i4 offset a
 multiple of 4, because a browser refuses a typed array on a misaligned offset — writing
@@ -55,7 +88,7 @@ from plotly.offline import get_plotlyjs
 
 TEMPLATE: Path = Path(__file__).with_name("page_template.html")
 PAGES: Path = Path(__file__).with_name("pages")
-VERSION: str = "0.17.4"   # the tool, shown on every page it builds; bump when the page changes
+VERSION: str = "0.18.0"   # the tool, shown on every page it builds; bump when the page changes
 ROWVER: int = 4           # .rvr format version, which moves separately
 READS: tuple = (4,)       # v2 and v3 are gone: their weights were undeclared
 MAX_MB: int = 40
@@ -79,11 +112,11 @@ PER_PLOT = {"varx", "vary", "mode", "nb", "nby", "decouple", "compare",
 #: settings the whole tab shares
 SHARED = {"wt", "cms", "rlabel", "theme", "scale", "show", "sampopen", "syst", "cflog",
           "ts", "cutorder", "cutopen", "catopen", "cmsopen", "exp", "cntopen", "expopen",
-          "fomopen", "drawer", "expcuts", "table"}
+          "fomopen", "drawer", "expcuts", "table", "regions"}
 
 #: the tab settings a view.py carries through untouched
 TAB_KEYS = ("lumi", "cms", "exp", "rlabel", "wt", "syst", "scale",
-            "expcuts", "cutorder", "cflog", "table")
+            "expcuts", "cutorder", "cflog", "table", "regions")
 
 #: names that exist only in smoke.py's DOM stub, so a page using one passes the battery
 #: and then dies in a real browser
