@@ -19,14 +19,29 @@ META:
     weights     str | false      name of the weights column, or false for unweighted data
     w_offset    int              its byte offset, whenever weights is a name
 
+    NOTE  a plot's `cmt` is its note and is saved; `cmton`, whether that note is on
+          screen, is NOT — it is posture. A saved one is accepted and ignored, and the
+          notes button wears a mark instead when a plot has something to read.
+
     tabs        [{name, state}]  optional: how each tab opens — a state may carry an
                                  optional `regions` key, the region map's partition. It
                                  rides INSIDE the state, so the format did not move: a
                                  reader that knows nothing of it opens the file and shows
                                  no map. See the `regions` note below.
     tab         int              optional: which tab the page opens on
+
+`lumis`, inside a tab's state: {group or subgroup name: luminosity in fb^-1}. A dataset is
+scaled by its SUBGROUP's entry if it has one, else its GROUP's, else the tab's `lumi`. The
+key is optional and an absent or empty map means every group follows `lumi`, so a file
+written before it opens unchanged. The page reports a YIELD everywhere and names a
+luminosity only in the Counting section — with groups at different luminosities there is
+no single number a plot axis could honestly carry.
     grouping    {group, sub, order}   optional: sample to group, page-global
     colour      {name: hex}      optional: colours chosen by hand
+    style       {name: id}       optional: a second channel beside colour — a dash pattern
+                                 on a 1D curve and a hatch on a filled area, so one sample
+                                 reads the same way in both. Absent means every source is
+                                 solid. ids: dash, dot, dashdot, hatch, back, cross, dots
     made_by     str              optional: the RowVer version that wrote the file
     title, path str              optional: for the masthead
 
@@ -53,6 +68,16 @@ still opens, the key is simply ignored.)
                                 has filled yet; ABSENT means every source the page offers,
                                 so a file written before the tray reopens as it was
     root    node | null         null is one unsplit bar — the map before any cut
+    grid    {vars, exhaustive} | absent
+                                optional: the DECLARATION a partition was built from, and
+                                a recipe only — `root` is what the map draws. The two are
+                                compared on screen, so hand-cutting after applying a grid
+                                is reported rather than silently making the dict a lie.
+                                `vars` is ordered, first is the outermost split; each is
+                                {col, bands}, bands being cut points [x, ...] or value
+                                groups [[v, ...], ...]. `exhaustive` false means only the
+                                bounded bands are regions and each open tail stays one
+                                leaf; true splits every band by the next variable.
 
 Each node is either null (a leaf region) or one CUT and its two sides:
 
@@ -86,7 +111,7 @@ from plotly.offline import get_plotlyjs
 
 TEMPLATE: Path = Path(__file__).with_name("page_template.html")
 PAGES: Path = Path(__file__).with_name("pages")
-VERSION: str = "0.18.0"   # the tool, shown on every page it builds; bump when the page changes
+VERSION: str = "0.22.0"   # the tool, shown on every page it builds; bump when the page changes
 ROWVER: int = 4           # .rvr format version, which moves separately
 READS: tuple = (4,)       # v2 and v3 are gone: their weights were undeclared
 MAX_MB: int = 40
@@ -105,15 +130,20 @@ PER_PLOT = {"varx", "vary", "mode", "nb", "nby", "decouple", "compare",
             "norm", "span", "layer", "layer2", "opts", "view", "cmpmode",
             "xauto", "xmin", "xmax", "yauto", "ymin", "ymax", "zauto", "zmin", "zmax",
             "cmt", "anno", "drawcol", "draw",
-            "sheet", "quad", "merge", "cmton", "lines"}
+            "sheet", "quad", "merge", "lines",
+            #: accepted and IGNORED since 0.21.0. Whether a note is on screen is posture:
+            #: a file full of noted plots used to open with every one of them squashed by
+            #: the docked panel. Still allowed here so an older view.py keeps building.
+            "cmton"}
 
 #: settings the whole tab shares
 SHARED = {"wt", "cms", "rlabel", "theme", "scale", "show", "sampopen", "syst", "cflog",
+          "lumis",
           "ts", "cutorder", "cutopen", "catopen", "cmsopen", "exp", "cntopen", "expopen",
           "fomopen", "drawer", "expcuts", "table", "regions"}
 
 #: the tab settings a view.py carries through untouched
-TAB_KEYS = ("lumi", "cms", "exp", "rlabel", "wt", "syst", "scale",
+TAB_KEYS = ("lumi", "lumis", "cms", "exp", "rlabel", "wt", "syst", "scale",
             "expcuts", "cutorder", "cflog", "table", "regions")
 
 #: names that exist only in smoke.py's DOM stub, so a page using one passes the battery

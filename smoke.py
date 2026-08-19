@@ -610,25 +610,28 @@ def run(html: str, rowver: str | None = None, probe: str = "") -> str:
           "  nk.mode = kmd; renderPlots(); drawAll();"
           "  NOTE = outn9 + 'outside';"
           "}"
-          # Whether a plot's notes are OPEN is part of how it is meant to be presented, so
-          # it travels in the file with the text. cmton already rode along in the plot
-          # spec; this pins it, since a state key that nothing asserts is a key that can
-          # be dropped by the next refactor without anything going red.
+          # Whether a plot's notes are OPEN is POSTURE as of 0.21.0, not part of the
+          # analysis: a file full of noted plots opened with every note docked and every
+          # plot squashed. The text is saved, the panel is not, and the button wears a
+          # mark instead. This pins the inversion — a saved cmton must not reopen anything.
           "\nvar CMT = 'skipped';"
           "\nif (PLOTS[0]){"
           "  var kc9 = PLOTS[0].cmt, ko9 = PLOTS[0].cmton;"
           "  PLOTS[0].cmt = 'a stored comment'; PLOTS[0].cmton = true;"
           "  var s9c = collectState().plots[0];"
           "  if (s9c.cmt !== 'a stored comment') return 'a comment did not reach the state';"
-          "  if (s9c.cmton !== true) return 'notes left OPEN were not recorded as open';"
-          "  PLOTS[0].cmton = false;"
-          "  if (collectState().plots[0].cmton !== false)"
-          "    return 'notes left CLOSED were not recorded as closed';"
-          # and the state must come BACK as it went out, panel included
-          "  applyState(collectState(), false);"
-          "  if (PLOTS[0].cmton !== false) return 'a closed notes panel reopened on reload';"
-          "  PLOTS[0].cmt = kc9; PLOTS[0].cmton = ko9; renderPlots(); drawAll();"
-          "  CMT = 'kept';"
+          "  if ('cmton' in s9c) return 'an open notes panel reached the saved state';"
+          # a file written before the change carries cmton:true; it must be ignored
+          "  var st9c = collectState();"
+          "  st9c.plots[0].cmton = true;"
+          "  applyState(st9c, false);"
+          "  if (PLOTS[0].cmton) return 'a saved cmton reopened the notes on load';"
+          "  if (PLOTS[0].cmt !== 'a stored comment') return 'the note text was lost on load';"
+          "  PLOTS[0].cmt = kc9; PLOTS[0].cmton = ko9;"
+          # applyState mints fresh plot objects with fresh ids, so the DOM has to be
+          # rebuilt behind it or every later probe reaches for a div that is gone
+          "  renderPlots(); drawAll();"
+          "  CMT = 'text saved, panel posture';"
           "}"
           # Copy/paste a BLOCK — the unit the builder makes and the page lays out, one
           # solo plot or one sheet of them. What must be true: the copy is by VALUE (a
@@ -1002,7 +1005,7 @@ def run(html: str, rowver: str | None = None, probe: str = "") -> str:
           "\ndrawAll();"
           "\nDR = 'ok';"
           "\nvar RO = 'skipped';"
-          "\nif (DOC.rohide && DOC.readout){""  if (ROFOLD) return 'the counts bar boots folded';""  if (DOC.readout.hidden) return 'the counts bar boots hidden';""  DOC.rohide.onclick();""  if (!ROFOLD || !DOC.readout.hidden) return 'the handle did not fold the counts';""  if (DOC.tabbar.innerHTML.indexOf('rofold') < 0)""    return 'the fold handle does not ride in the tab row';""  if (DOC.tabbar.innerHTML.indexOf('counts') < 0)""    return 'the folded handle lost its label';""  var st = JSON.stringify(collectState());""  if (st.indexOf('ROFOLD') >= 0 || st.indexOf('rofold') >= 0)""    return 'a fold reached the saved state';""  DOC.rohide.onclick();""  if (ROFOLD || DOC.readout.hidden) return 'the counts did not come back';""  RO = 'ok';""}"
+          "\nif (DOC.rohide && DOC.readout){""  if (!ROFOLD) return 'the counts bar boots open';""  if (!DOC.readout.hidden) return 'the counts bar boots shown';""  DOC.rohide.onclick();""  if (ROFOLD || DOC.readout.hidden) return 'the handle did not unfold the counts';""  if (DOC.tabbar.innerHTML.indexOf('rofold') < 0)""    return 'the fold handle does not ride in the tab row';""  if (DOC.tabbar.innerHTML.indexOf('counts') < 0)""    return 'the folded handle lost its label';""  var st = JSON.stringify(collectState());""  if (st.indexOf('ROFOLD') >= 0 || st.indexOf('rofold') >= 0)""    return 'a fold reached the saved state';""  DOC.rohide.onclick();""  if (!ROFOLD || !DOC.readout.hidden) return 'the counts did not fold again';""  RO = 'boots folded';""}"
           # the builder shell: opens over the page, Escape closes exactly once, the ✕
           # cancels, and a closed builder ignores keys. Guarded so pre-redesign pages skip.
           "\nvar BS = 'skipped';"
@@ -1715,7 +1718,7 @@ def run(html: str, rowver: str | None = None, probe: str = "") -> str:
           "  closeTab(TAB);"
           "  switchTab(tabHome);"
           "  if (TBL) return 'closing the tab that held the table left TBL set';"
-          "  if (DOC.readout.hidden) return 'the counts bar did not come back off the table';"
+          "  DOC.rohide.onclick();""  if (DOC.readout.hidden) return 'the counts bar did not come back off the table';""  DOC.rohide.onclick();"
           "  if (!DOC.fomnwarn.hidden || !DOC.fomdwarn.hidden)"
           "    return 'the FOM warning stayed up after the table went';"
           "  if (JSON.stringify(collectState().show) !== keepShow9)"
@@ -1858,11 +1861,19 @@ REGION_PROBE = (
     "\n(function rec(n){ if (!n.kids.length){ lv9.push(rgnN(n)); return; } n.kids.forEach(rec); })(RGNT);"
     "\nvar ck9 = rgnCheck();"
     "\nif (!ck9) return 'the map reported no checks';"
+    # The rectangle map's area claim is WITHIN a camp; the bubble view's is across every
+    # circle. Asserting the wrong one of the two is asserting nothing.
+    "\nvar bb9 = (RGN.view === 'bubble') ? rgnBubbleCheck() : null;"
+    "\nvar area9 = bb9 ? bb9.area : ck9.area;"
+    "\nvar akind9 = bb9 ? 'circle area over the whole map' : 'camp area within its parent';"
     # the map must survive a state round trip like everything else the page saves
     "\nvar rt9 = JSON.stringify(collectState().regions) === JSON.stringify(RGN);"
     "\nreturn 'REGIONS OK ' + JSON.stringify({counts:lv9, total:rgnN(RGNT),"
     "  leaves:ck9.leaves, camps:ck9.camps, exact:!!ck9.exact, worst:ck9.worst,"
-    "  area:ck9.area, at:RGN.at, view:RGN.view, board_at:(TBL ? TBL.at : null),"
+    "  area:area9, areaKind:akind9, at:RGN.at, view:RGN.view,"
+    "  board_at:(TBL ? TBL.at : null),"
+    "  lumis:(S.lumis || null), style:(S.style || null),"
+    "  scaled:(bb9 ? bb9.scaled : null), penned:(bb9 ? bb9.shelf : null),"
     "  roundtrip:rt9});"
 )
 
@@ -1922,6 +1933,31 @@ GOLDEN = {
                       " : .)) : (channel in [1] ? (M4L<0 ? . : .) : .))"),
             "at": 1, "view": "stack", "board_at": 0,
         },
+    },
+    #: 0.22.0's keys, all optional, all in one file: the grid a partition was DECLARED
+    #: from, the bubble layout's switches, a floor watching named samples with `all`, a
+    #: per-group luminosity, and the style channel. `lumis` is the dangerous one — a
+    #: reader that ignores it still produces plausible yields, just wrong ones, so what is
+    #: pinned is a yield that no single luminosity could give.
+    "golden_0.22.0_grid.rvr": {
+        "sha256": "8d585b09da9674d3f46cf1e06fe609c23a73173e245891dd50dd5f0c7c639713",
+        "rowver": 4, "n": 23263, "datasets": 4, "tabs": 2, "tab": 0,
+        "made_by": "0.22.0", "weights": "weight", "shown": 2313,
+        "regions": {
+            "counts": [3, 529, 213, 107, 3, 329, 151, 92, 886],
+            "total": 2313, "leaves": 9, "empty": 0,
+            "shape": ("(channel in [0] ? (M4L<110 ? . : (M4L<140 ? . : (M4L<170 ? . : .)))"
+                      " : (channel in [1] ? (M4L<110 ? . : (M4L<140 ? . : (M4L<170 ? . :"
+                      " .))) : .))"),
+            "at": 0, "view": "bubble", "board_at": None,
+        },
+        #: what the per-group luminosity does, as yields the tab's own lumi of 1 cannot
+        #: reach: signal at 3.0 and ZZ at 7.0, the loose sample left at the tab's
+        "lumis": {"signal": 3.0, "ZZ": 7.0},
+        "yields": {"signal": 0.935690, "ZZ": 4.466608, "MC \u00b7 ZZ\u21922e2mu": 0.571064},
+        "style": {"signal": "dash", "ZZ": "cross", "MC \u00b7 ZZ\u21922e2mu": "dots"},
+        "grid": {"declared": 4, "vars": ["channel", "M4L"], "exhaustive": False,
+                 "floorsrcs": ["signal", "ZZ"], "floormode": "all", "axes": True},
     },
     #: the reason v4 exists — no weights column at all. Every pinned number here is an
     #: integer the page reaches without ever touching a weight.
@@ -2064,12 +2100,21 @@ def golden() -> str:
             if not said["exact"] or said["worst"] != 0:
                 return (f"{name}: the map's own sum rule is broken — worst "
                         f"|children-parent| = {said['worst']} on raw counts")
-            # area is the yield at every depth, or the picture is lying about the numbers
+            # area is the yield, or the picture is lying about the numbers. Which area
+            # depends on the view, and the probe says which one it measured.
             if said["area"] > 1e-9:
-                return (f"{name}: a camp's share of the AREA differs from its share of "
-                        f"the yield by {said['area']:.2e} — area is not events")
+                return (f"{name}: {said['areaKind']} differs from its share of the yield "
+                        f"by {said['area']:.2e} — area is not events")
             if not said["roundtrip"]:
                 return f"{name}: the partition did not survive collectState"
+            # the 0.22.0 keys: a reader that drops one still opens the file and still
+            # produces numbers, so each is asserted rather than assumed
+            if "lumis" in want and said["lumis"] != want["lumis"]:
+                return (f"{name}: the per-group luminosity read {said['lumis']} against "
+                        f"the pinned {want['lumis']}")
+            if "style" in want and said["style"] != want["style"]:
+                return (f"{name}: the style channel read {said['style']} against the "
+                        f"pinned {want['style']}")
             for key in ("leaves", "at", "view", "board_at"):
                 if said[key] != pin[key]:
                     return f"{name}: the map says {key}={said[key]!r}, pinned {pin[key]!r}"

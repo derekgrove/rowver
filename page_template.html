@@ -175,6 +175,10 @@ label.event{display:flex;align-items:center;gap:6px;font-family:var(--mono);font
    is closing the bottom, the counts row or the tab row */
 .stickyhead{position:sticky;top:0;z-index:6;border-radius:0 0 3px 3px;
   box-shadow:0 6px 16px -8px rgba(0,0,0,.45)}
+/* With the counts away this is just a tab row, but a block still spans the page — so it
+   kept a full-width sticky shadow over everything below and swallowed every click that
+   landed in the empty part of it. Shrink it to what it actually contains. */
+.stickyhead.nocounts{width:max-content;max-width:100%}
 /* top-left corner is the cuts cap's now — see #raily */
 .tabbar{display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:6px 7px;
   background:var(--panel);border:1px solid var(--rule);border-bottom:0;border-radius:0 3px 0 0}
@@ -290,6 +294,8 @@ label.event{display:flex;align-items:center;gap:6px;font-family:var(--mono);font
    it is findable when you want to dismiss them and unobtrusive when you do not */
 .tbtn[data-act="cmtoggle"]{opacity:.5;transition:opacity .12s,background .12s}
 .tbtn[data-act="cmtoggle"]:hover{opacity:1}
+.tbtn[data-act="cmtoggle"].hasnote{opacity:1;color:var(--warn);border-color:var(--warn);
+  font-weight:600}
 .tbtn[data-act="cmtoggle"][aria-pressed="true"]{opacity:1;background:var(--signal);
   border-color:var(--signal);color:#fff}
 /* temporary: the v4 weights note on the landing screen. Delete the block and its markup
@@ -732,12 +738,20 @@ canvas#rgncanvas{display:block;width:100%;height:640px;cursor:grab;touch-action:
 canvas#rgncanvas.empty{cursor:default;touch-action:auto}
 canvas#rgncanvas.drag{cursor:grabbing}
 canvas#rgncanvas:focus-visible{outline:2px solid var(--signal);outline-offset:-2px}
+/* Inside this box the wheel zooms the map instead of scrolling the page. That is a real
+   mode change and it was invisible, so the box says so while the pointer is in it. */
+canvas#rgncanvas:not(.empty):hover{outline:3px solid var(--signal);outline-offset:-3px}
 .rgnkeys{margin:0;padding:5px 12px;font-family:var(--mono);font-size:calc(10.5px * var(--ts));
   color:var(--ink-3);border-top:1px solid var(--rule-2)}
 .rgnkeys kbd{font-family:var(--mono);border:1px solid var(--rule);border-radius:2px;
   padding:0 4px;background:var(--sunk);color:var(--ink-2);margin-right:2px}
 .rgnside{padding:12px 13px;border-left:1px solid var(--rule-2);min-width:0}
 @media (max-width:1100px){.rgnside{border-left:0;border-top:1px solid var(--rule-2)}}
+.rgncut{display:block;font-family:var(--mono);font-size:calc(11px * var(--ts));
+  color:var(--ink-2);background:var(--sunk);border-left:2px solid var(--rule);
+  border-radius:0 2px 2px 0;padding:1px 6px;margin:0 0 2px}
+.rgnopen{background:var(--warn);border-color:var(--warn);color:#fff;font-weight:600;width:100%}
+.rgnopen:hover{filter:brightness(1.08)}
 .rgnpath{font-family:var(--mono);font-size:calc(11.5px * var(--ts));color:var(--ink-2);
   margin:0 0 4px;word-break:break-word}
 .rgnbig{font-family:var(--mono);font-weight:600;font-size:calc(25px * var(--tsb));
@@ -768,8 +782,54 @@ canvas#rgncanvas.over{outline:3px dashed var(--signal);outline-offset:-4px}
 .rgnhint{font-family:var(--mono);font-size:calc(10.5px * var(--ts));color:var(--ink-3)}
 .rgntarget{font-family:var(--mono);font-size:calc(11px * var(--ts));color:var(--ink-3)}
 .rgntarget b{color:var(--ink)}
+.rgnw{background:none;border:0;color:var(--rule);cursor:pointer;font-family:var(--mono);
+  font-size:calc(13px * var(--ts));padding:0 2px}
+.rgnw:hover{color:var(--ink-3)}
+.rgnw.on{color:var(--warn)}
 .rgnok{color:var(--casc);font-weight:600}
 .rgnbad{color:var(--warn);font-weight:600}
+.lumirow{display:grid;grid-template-columns:minmax(0,1fr) 74px;gap:6px;align-items:center;
+  margin:3px 0}
+.lumin{font-family:var(--mono);font-size:calc(10.5px * var(--ts));color:var(--ink-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lumin.sub{padding-left:12px;color:var(--ink-3)}
+.rgngrid{border-top:1px solid var(--rule-2);padding:12px}
+.rgngrid summary{font-family:var(--sans);font-size:calc(9.5px * var(--ts));font-weight:600;
+  letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);cursor:pointer;
+  list-style:none;padding:2px 0}
+.rgngrid summary::-webkit-details-marker{display:none}
+.rgngrid summary::before{content:"\25B8 ";color:var(--ink-3)}
+.rgngrid[open] summary::before{content:"\25BE "}
+pre.rgndoc{background:var(--panel);border:1px solid var(--rule);border-radius:7px;
+  padding:12px 14px;margin:10px 0 0;font-family:var(--mono);
+  font-size:calc(12px * var(--ts));line-height:1.95;overflow-x:auto;white-space:pre}
+.rgndoc .gp{color:var(--ink-3);user-select:text;-webkit-user-select:text}
+.rgndoc .gv{color:var(--ink);background:var(--sunk);border-bottom:1.5px solid var(--rule);
+  border-radius:3px;padding:0 4px;outline:none;min-width:1.5ch;display:inline-block}
+.rgndoc .gv:focus{border-bottom-color:var(--signal);background:var(--ground)}
+.rgndoc .gv.bad{border-bottom-color:var(--warn)}
+.rgngrow{display:grid;grid-template-columns:118px minmax(0,1fr) auto;gap:10px;
+  align-items:start;padding:8px 0;border-bottom:1px solid var(--rule-2)}
+.rgngnm{font-family:var(--mono);font-size:calc(11.5px * var(--ts));font-weight:600;cursor:grab}
+.rgngnm i{display:block;font-style:normal;font-weight:400;
+  font-size:calc(9.5px * var(--ts));color:var(--ink-3)}
+.rgngb{font-family:var(--mono);font-size:calc(10.5px * var(--ts));color:var(--ink-2);
+  background:var(--sunk);border:1px solid var(--rule-2);border-radius:4px;padding:1px 6px;
+  margin:0 4px 4px 0;display:inline-block}
+.rgngb.tail{opacity:.5;font-style:italic}
+.rgngb.on{border-color:var(--signal);color:var(--ink);font-weight:600}
+.rgngb.over,.rgngrow.over{outline:2px dashed var(--signal);outline-offset:2px}
+.rgngx{border:0;background:none;color:var(--ink-3);cursor:pointer;padding:0 0 0 4px}
+.rgngx:hover{color:var(--warn)}
+.rgngt{font-family:var(--mono);font-size:calc(10.5px * var(--ts));border:1px solid var(--rule);
+  border-radius:4px;padding:1px 6px;margin:0 4px 4px 0;cursor:pointer;background:var(--panel);
+  color:var(--ink-2);display:inline-block}
+.rgngt.used{opacity:.55;background:var(--sunk)}
+.rgngt.here{border-color:var(--signal);color:var(--ink);font-weight:600}
+.rgngt i{font-style:normal;font-size:calc(8.5px * var(--ts));color:var(--ink-3);
+  margin-left:3px;vertical-align:super}
+.rgnghint{font-family:var(--sans);font-size:calc(9px * var(--ts));font-weight:600;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);margin-right:6px}
 </style>
 
 <div class="wrap">
@@ -840,7 +900,12 @@ canvas#rgncanvas.over{outline:3px dashed var(--signal);outline-offset:-4px}
           <button data-v="raw" aria-pressed="false">raw</button></div></div>
       <div class="grp" id="grplumi"><div class="grp-lab"><span class="nm">luminosity</span>
         <span class="vl" id="lumiv">×1</span></div>
-        <div class="numrow"><input id="lumi" value="1" placeholder="1"></div></div>
+        <div class="numrow"><input id="lumi" value="1" placeholder="1"></div>
+        <p class="pnote">what every group is scaled by unless it says otherwise below.
+          Nothing else on the page repeats it: a number on screen is a yield.</p></div>
+      <div class="grp" id="grplumis"><div class="grp-lab"><span class="nm">per group</span>
+        <span class="vl" id="lumisum">×1</span></div>
+        <div id="lumirows"></div></div>
       
       </details>
       <div id="cutlist"></div>
@@ -1052,6 +1117,15 @@ let TABS = [];   // every view this page holds: {name, st: its latest state, fil
 let TAB  = 0;    // which one is live — S, PLOTS and FILE always belong to TABS[TAB]
 const D = {};
 let SUMW = 0;   // every weight in the file, cuts and samples ignored
+let SUMWDS = null;   // and the same per dataset, so a per-group luminosity can scale it
+
+function sumwScaled(){
+  // every weight in the file, each dataset at its own luminosity
+  if (!SUMWDS) return SUMW * LUMI();
+  let a = 0;
+  for (let i = 0; i < SUMWDS.length; i++) a += SUMWDS[i] * LUMI(i);
+  return a;
+}
 let WCOL = "weight";   // the weights column's name, or null when the file has none
 const $ = id => document.getElementById(id);
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -1085,7 +1159,10 @@ function unpack(buf){
                                 : new Int32Array(buf, c.offset, n);
   D.__ds = new Int32Array(buf, META.ds_offset, n);
   // with no weights every event counts once, so the file total IS the event count
-  SUMW = 0; if (WCOL){ for (const v of D.weight) SUMW += v; } else SUMW = n;
+  SUMW = 0;
+  SUMWDS = new Float64Array(META.datasets.length);
+  if (WCOL){ for (let i = 0; i < n; i++){ SUMW += D.weight[i]; SUMWDS[D.__ds[i]] += D.weight[i]; } }
+  else { SUMW = n; for (let i = 0; i < n; i++) SUMWDS[D.__ds[i]] += 1; }
   if (META.bytes !== buf.byteLength)
     throw new Error(`blob is ${buf.byteLength} B, expected ${META.bytes}`);
 }
@@ -1114,7 +1191,7 @@ function binned(v, w, keep, lo, hi, nb, weighted, logb, oflow){
   for (let i = 0; i < v.length; i++){
     if (!keep[i]) continue;
     const x = v[i];
-    const ww = weighted ? w[i]*LUMI() : 1;
+    const ww = weighted ? w[i]*LUMI(D.__ds[i]) : 1;
     if (x > hi){ over++; overW += ww; } else if (x < lo){ under++; underW += ww; }
     let b = e.on ? (x > 0 ? Math.floor((Math.log10(x) - e.a)*e.s) : -1)
                  : Math.floor((x - e.a)*e.s);
@@ -1145,7 +1222,7 @@ function binned2D(vx, vy, w, keep, lox, hix, nbx, loy, hiy, nby, weighted, lbx, 
       if (by < 0) by = 0; else if (by >= nby) by = nby-1;
     }
     kept++;
-    h[by*nbx + bx] += weighted ? w[i]*LUMI() : 1;
+    h[by*nbx + bx] += weighted ? w[i]*LUMI(D.__ds[i]) : 1;
   }
   return {h, kept};
 }
@@ -1251,6 +1328,37 @@ function inGroup(g){
   return out;
 }
 
+function buildLumis(){
+  // One box per group and subgroup. Empty means "follow the default", which is why the
+  // key is absent rather than written: a file nobody has touched here opens unchanged.
+  const box = $("lumirows");
+  if (!box) return;
+  const names = lumiNames();
+  const m = S.lumis || {};
+  box.innerHTML = names.length
+    ? names.map(x =>
+        `<div class="numrow lumirow"><span class="lumin${x.sub ? " sub" : ""}"` +
+        ` title="${esc(x.name)}">${esc(x.name)}</span>` +
+        `<input data-lumi="${esc(x.name)}" value="${m[x.name] != null ? esc(m[x.name]) : ""}"` +
+        ` placeholder="${esc(fmt(S.lumi || 1))}"></div>`).join("")
+    : `<p class="pnote">group some samples and each group can take its own.</p>`;
+  const set = lumiSet();
+  if ($("lumisum"))
+    $("lumisum").textContent = set.length ? `Σ ${fmt(lumiSum())} over ${set.length}` : "none set";
+  if (box.querySelectorAll) box.querySelectorAll("[data-lumi]").forEach(el => {
+    el.oninput = () => {
+      const v = parseFloat(el.value);
+      S.lumis = S.lumis || {};
+      if (el.value.trim() === "" || !isFinite(v) || v <= 0) delete S.lumis[el.dataset.lumi];
+      else S.lumis[el.dataset.lumi] = v;
+      if (!Object.keys(S.lumis).length) delete S.lumis;
+      buildLumis();
+      markDirty();
+      draw();
+    };
+  });
+}
+
 function subNames(g){
   // Subgroups present in one group, in dataset order. A subgroup is a bulk toggle, not a
   // curve — the group is what draws, so this only shapes the panel.
@@ -1330,6 +1438,70 @@ function bundleOf(sg){
   return META.datasets.map((d, i) => S.sub[i] === sg ? d : null).filter(Boolean);
 }
 
+//: A second channel beside colour. Six colours run out fast once the background is broken
+//: into its subgroups, and two neighbouring pinks are indistinguishable in a pie. A style
+//: is a dash pattern on a 1D curve and a hatch on a filled area, so the same sample reads
+//: the same way in both.
+const STYLES = [
+  {id:"solid", name:"solid",       dash:"solid"},
+  {id:"dash",  name:"dashed",      dash:"dash"},
+  {id:"dot",   name:"dotted",      dash:"dot"},
+  {id:"dashdot", name:"dash-dot",  dash:"dashdot"},
+  {id:"hatch", name:"hatched //",  dash:"longdash"},
+  {id:"back",  name:"hatched \\\\", dash:"longdashdot"},
+  {id:"cross", name:"cross-hatch", dash:"dot"},
+  {id:"dots",  name:"dotted fill", dash:"dot"}
+];
+
+function srcStyle(name){
+  return ((S.style || {})[name]) || "solid";
+}
+
+function setStyle(name, id){
+  S.style = S.style || {};
+  if (id && id !== "solid") S.style[name] = id; else delete S.style[name];
+  if (!Object.keys(S.style).length) delete S.style;
+  markDirty();
+  buildColours();
+  drawAll();
+}
+
+const DASH = {solid:"solid", dash:"dash", dot:"dot", dashdot:"dashdot",
+              hatch:"longdash", back:"longdashdot", cross:"dot", dots:"dot"};
+
+function stylePattern(ctx, hex, id){
+  // A canvas pattern for a filled area: the colour underneath, the style scratched on top
+  // in a darker shade of itself so it reads on any background.
+  if (!id || id === "solid" || !ctx.createPattern) return hex;
+  const key = id + hex;
+  STYLEPAT = STYLEPAT || {};
+  if (STYLEPAT[key]) return STYLEPAT[key];
+  const S8 = 8;
+  const cv = document.createElement("canvas");
+  if (!cv || !cv.getContext) return hex;
+  cv.width = S8; cv.height = S8;
+  const c = cv.getContext("2d");
+  if (!c) return hex;
+  c.fillStyle = hex; c.fillRect(0, 0, S8, S8);
+  c.strokeStyle = rgnInk(hex) === "#FFFFFF" ? "rgba(255,255,255,.55)" : "rgba(0,0,0,.42)";
+  c.fillStyle = c.strokeStyle;
+  c.lineWidth = 1.6;
+  if (id === "hatch" || id === "cross" || id === "dash" || id === "dashdot"){
+    c.beginPath(); c.moveTo(-2, S8 + 2); c.lineTo(S8 + 2, -2); c.stroke();
+  }
+  if (id === "back" || id === "cross"){
+    c.beginPath(); c.moveTo(-2, -2); c.lineTo(S8 + 2, S8 + 2); c.stroke();
+  }
+  if (id === "dot" || id === "dots"){
+    c.beginPath(); c.arc(S8 / 2, S8 / 2, 1.5, 0, 2 * Math.PI); c.fill();
+  }
+  const pat = ctx.createPattern(cv, "repeat");
+  STYLEPAT[key] = pat || hex;
+  return STYLEPAT[key];
+}
+
+let STYLEPAT = null;   // patterns are per canvas context, so they are rebuilt with it
+
 function gcol(g){ return colours()[g]; }
 
 // NINETEEN, so that AUTO can take the twentieth cell and the grid is two even rows of ten
@@ -1393,6 +1565,11 @@ function colPanel(){
                 : cur ? "assigned automatically" : "not set — its samples differ"} — click to change"
         >${chosen ? "" : "auto"}</button>
       <span class="colnm" title="${esc(name)}">${esc(name)}</span>
+      <select class="colsty" data-sty="${encodeURIComponent(name)}"
+              title="a second channel beside the colour: a dash on a curve, a hatch on an area">
+        ${STYLES.map(s => `<option value="${s.id}"` +
+            `${srcStyle(name) === s.id ? " selected" : ""}>${esc(s.name)}</option>`).join("")}
+      </select>
       ${chosen ? `<button class="chip colx" data-colx="${encodeURIComponent(name)}"
         title="back to the automatic colour">×</button>` : ""}
       ${open ? `<div class="colgrid">` +
@@ -1415,6 +1592,9 @@ function colPanel(){
     col("groups", groupNames()) +
     col("bundles", subs) +
     col("samples", META.datasets.slice());
+  el.querySelectorAll("[data-sty]").forEach(s => s.onchange = () => {
+    setStyle(decodeURIComponent(s.dataset.sty), s.value);
+  });
   el.querySelectorAll("[data-colpick]").forEach(b => b.onclick = () => {
     const n = decodeURIComponent(b.dataset.colpick);
     COLOPEN = COLOPEN === n ? null : n;      // one open at a time, so the panel stays short
@@ -1662,7 +1842,7 @@ function buildSamples(){
   wireSamples($("dslist"));
   if ($("colpanel") && !$("colpanel").hidden) colPanel();   // keep the swatches in step
   if (BLD.open && BLD.stage === "data") bldTray();
-  fillFom();
+  fillFom();  buildLumis();       // a group that appears in the band appears here too
 }
 
 function bandFlash(){
@@ -1789,6 +1969,7 @@ function buildUI(){
     const v = parseFloat($("lumi").value);
     S.lumi = isFinite(v) && v > 0 ? v : 1;
     $("lumiv").textContent = "×" + fmt(S.lumi);
+    buildLumis();          // the placeholders and the sum both follow the default
     draw();
   };
   $("cuts").onclick = () => { $("cuttext").value = cutText(); $("cutbox").hidden = false;
@@ -2215,7 +2396,7 @@ function bind(p){
       if (e.key === "Escape" && cb.blur){ e.stopPropagation(); cb.blur(); }
     };
     box.querySelector('[data-act="cmtoggle"]').onclick = () => {
-      const shown = p.cmton === undefined ? !!p.cmt : p.cmton;
+      const shown = !!p.cmton;
       p.cmton = !shown;
       updateCmt(p);
       if (!shown && !p.cmt) editCmt(p);
@@ -2669,13 +2850,17 @@ function collectState(){
           show:Object.fromEntries(META.datasets.map((d, i) => [d, S.show[i] !== false])),
           fomn:S.fomn, fomd:S.fomd,
           wt:S.wt, cms:S.cms, exp:S.exp, lumi:S.lumi, syst:S.syst, cflog:S.cflog,
+          lumis:(S.lumis && Object.keys(S.lumis).length
+                 ? JSON.parse(JSON.stringify(S.lumis)) : null),
           cutorder:S.cutorder.slice(),
           scale:+$("scale").value,
           rlabel:$("rlabel").value, expcuts:$("expcuts").checked,
           // the page's POSTURE — focused tab, open drawer and folds, theme, text
           // size — is deliberately not collected: a file records the analysis, and
           // the analysis is the tabs, plots, cuts, samples and how exports behave
-          plots:PLOTS.map(({id, opts, ...rest}) => rest),
+          // `cmton` is posture — whether a note is on screen is not what the analysis IS,
+          // and saving it is what made every noted plot open squashed
+          plots:PLOTS.map(({id, opts, cmton, ...rest}) => rest),
           // null, not absent: FACTORY must clear a table on the way into a plain tab
           table:TBL ? JSON.parse(JSON.stringify(TBL)) : null,
           regions:RGN ? JSON.parse(JSON.stringify(RGN)) : null};
@@ -2744,6 +2929,10 @@ function applyState(st, render = true){
   // theme) are deliberately not read — the page opens folded, on its own defaults
   if ("expcuts" in st) $("expcuts").checked = !!st.expcuts;
   if ("lumi" in st){ $("lumi").value = st.lumi; $("lumiv").textContent = "×" + fmt(st.lumi); }
+  // absent and empty are the same thing here: every group follows the default
+  S.lumis = (st.lumis && Object.keys(st.lumis).length)
+    ? JSON.parse(JSON.stringify(st.lumis)) : undefined;
+  if (!S.lumis) delete S.lumis;
   if ("scale" in st){ $("scale").value = st.scale; $("scv").textContent = st.scale + "×"; }
   pressSeg("segwt", S.wt); pressSeg("segcms", S.cms); pressSeg("segsyst", S.syst);
   pressSeg("segcflog", S.cflog); pressSeg("segts", S.ts); pressSeg("segexp", S.exp);
@@ -2755,7 +2944,13 @@ function applyState(st, render = true){
   if (st.plots){
     // a copy per spec: newPlot assigns shallowly, so without it a plot's nested fields
     // (titles) stay shared with the stored state and edits write back into FILE or a tab
-    PLOTS = st.plots.map(spec => newPlot(JSON.parse(JSON.stringify(spec))));
+    // a file written before this carries cmton:true; it is posture now, so it is dropped
+    // on the way in rather than reopening every note
+    PLOTS = st.plots.map(spec => {
+      const s = JSON.parse(JSON.stringify(spec));
+      delete s.cmton;
+      return newPlot(s);
+    });
     // newPlot mints fresh ids, so the divs on the page now belong to nobody. At boot there
     // are none yet and start() renders; any later call has to rebuild them here.
     if (render && $("plots").innerHTML) renderPlots();
@@ -2787,6 +2982,9 @@ function initTabs(){
   TAB = Math.max(0, Math.min(META.tab | 0, TABS.length - 1));
   FILE = TABS[TAB].file;
   S.colour = META.colour ? JSON.parse(JSON.stringify(META.colour)) : {};
+  if (META.style && Object.keys(META.style).length)
+    S.style = JSON.parse(JSON.stringify(META.style));
+  else delete S.style;
   if (META.grouping) applyGrouping(META.grouping);
   else liftGrouping();
 }
@@ -3096,6 +3294,8 @@ function tabCutReport(tb){
   if (st.fomn && st.fomd)
     lines.push(`#   FOM = (${JSON.stringify(st.fomn)}, ${JSON.stringify(st.fomd)})`);
   if (st.lumi != null) lines.push(`#   LUMI = ${st.lumi}`);
+  if (st.lumis && Object.keys(st.lumis).length)
+    lines.push(`#   LUMIS = ${JSON.stringify(st.lumis)}`);
   if (lines.length === 1) lines.push("#   (nothing cut)");
   return lines;
 }
@@ -3324,11 +3524,13 @@ function optScore(pt, ctx){
       if (rg ? (x < rg[0] || x > rg[1]) : !pt.chips[i].has(x)){ ok = 0; break; }
     }
     if (!ok) continue;
-    const w = WCOL ? D.weight[r0] : 1;
+    // the luminosity goes in HERE, not on the totals: b2 is a sum of SQUARED weights, and
+    // pulling one L outside it is only right while every sample shares that L
+    const w = (WCOL ? D.weight[r0] : 1) * LUMI(D.__ds[r0]);
     if (role.b){ bw += w; bw2 += w * w; }
     for (const k of role.s) sw[k] += w;
   }
-  return {s: sw.map(v => v * LUMI()), b: bw * LUMI(), b2: bw2 * LUMI() * LUMI()};
+  return {s: sw, b: bw, b2: bw2};
 }
 
 function optEval(ctx, pt, mv, live){
@@ -3607,6 +3809,8 @@ function tunedMeta(){
       // it wears belong to the sample, not to whichever tab you happened to be on. A tab's
       // state carrying it would mean "+ new" arriving with every colour reset.
       colour: JSON.parse(JSON.stringify(S.colour || {})),
+      style: (S.style && Object.keys(S.style).length)
+             ? JSON.parse(JSON.stringify(S.style)) : null,
       tabs: TABS.map(t => ({name: t.name, state: t.st}))});
   delete m.state;
   delete m.path;
@@ -3777,7 +3981,7 @@ function totals(keep){
     const di = D.__ds[r];
     if (!keep[r] || !S.show[di]) continue;
     kept++;
-    const ww = weighted ? D.weight[r]*LUMI() : 1;
+    const ww = weighted ? D.weight[r]*LUMI(di) : 1;
     sw += ww;
     const g = S.group[di];
     if (!g) continue;
@@ -3861,10 +4065,64 @@ const WTD  = () => WCOL !== null && S.wt === "w";
 // Weighting is a property of the FILE first and the toggle second, so a file with no
 // weights can never scale an event however the state was saved. Luminosity rides the same
 // predicate: with nothing to scale, a lumi of 400 must not multiply a raw count.
-const LUMI = () => (WTD() ? (S.lumi || 1) : 1);
+let LUMITAB = null;   // one luminosity per DATASET, rebuilt whenever grouping or a lumi moves
+
+function lumiFor(name){
+  // what a group or subgroup is scaled by: its own entry, or the tab's default
+  const m = S.lumis || {};
+  return (name != null && m[name] != null && isFinite(m[name])) ? m[name] : (S.lumi || 1);
+}
+
+function lumiTable(){
+  // A subgroup wins over its group, which wins over the tab. Resolved once into an array
+  // rather than looked up per event: the counting loops run over every row in the file.
+  const out = new Float64Array(META.datasets.length);
+  const m = S.lumis || {};
+  for (let i = 0; i < META.datasets.length; i++){
+    const sg = S.sub ? S.sub[i] : null, g = S.group ? S.group[i] : null;
+    out[i] = (sg != null && m[sg] != null && isFinite(m[sg])) ? m[sg]
+           : (g != null && m[g] != null && isFinite(m[g])) ? m[g]
+           : (S.lumi || 1);
+  }
+  LUMITAB = out;
+  return out;
+}
+
+function lumiNames(){
+  // every group and subgroup that can carry one, groups first, in the band's own order
+  const out = [];
+  groupNames().forEach(g => {
+    out.push({name:g, sub:false});
+    (typeof subNames === "function" ? subNames(g) : []).forEach(s => out.push({name:s, sub:true}));
+  });
+  return out;
+}
+
+function lumiSet(){
+  // only the ones actually TYPED. A group following the default has not declared its own
+  // luminosity, and a subgroup inherits its group's — summing either would count the same
+  // luminosity several times over and report a total nobody meant.
+  const m = S.lumis || {};
+  return Object.keys(m).filter(k => isFinite(m[k]) && m[k] > 0);
+}
+
+function lumiSum(){
+  // the plain sum of those. Two groups genuinely at the same luminosity are counted twice,
+  // which is what a plain sum is and what was asked for.
+  const set = lumiSet();
+  const m = S.lumis || {};
+  return set.length ? set.reduce((a, k) => a + m[k], 0) : (S.lumi || 1);
+}
+
+//: the luminosity that scales ONE dataset. Everything that counts takes the dataset it is
+//: counting, so groups can sit at different luminosities without any loop branching.
+const LUMI = di => !WTD() ? 1
+  : (di == null ? (S.lumi || 1) : (LUMITAB || lumiTable())[di]);
 // What the numbers ARE, in words. With no weights column there is no weighted/raw
 // distinction to draw, so the page stops drawing one: they are just events.
-const EVLAB = () => (!WCOL ? "events" : WTD() ? "weighted events" : "raw events");
+//: The page reports a YIELD. What scaled it lives in Counting and nowhere else, so no
+//: number on screen has to carry a luminosity around with it to be read.
+const EVLAB = () => (!WCOL ? "events" : WTD() ? "yield" : "raw events");
 // The axis TITLE names the quantity, so it is the one piece of plot type that should read
 // at a glance from across a desk: full ink, a step above its own tick labels.
 const TFONT = () => ({family:MONO, size:pf(12), color:css("--ink")});
@@ -4066,13 +4324,18 @@ function updateCmt(p){
   if (!cb) return;
   if (cb.value !== (p.cmt || "")) cb.value = p.cmt || "";
   const wrap = cb.closest ? cb.closest(".cmtwrap") : cb;
-  const shown = p.anno !== false && (p.cmton === undefined ? !!p.cmt : p.cmton);
+  // A saved note no longer opens itself. Docking the panel takes width off the plot, so a
+  // file full of noted plots opened with every one of them squashed. Whether the panel is
+  // UP is posture now — the button just says a note exists.
+  const shown = p.anno !== false && !!p.cmton;
   const was = !wrap.hidden;
   wrap.hidden = !shown;
   // the button says whether the notes are up, so it can be found to put them away
   const btn = document.querySelector(
       `.plotbox[data-id="${p.id}"] [data-act="cmtoggle"]`);
   if (btn && btn.setAttribute) btn.setAttribute("aria-pressed", shown ? "true" : "false");
+  // and it wears a mark whenever there is something to read, open or not
+  if (btn && btn.classList) btn.classList.toggle("hasnote", !!(p.cmt || "").trim());
   // The panel is a column of the stage, so showing it takes width off the plot. Plotly's
   // responsive flag watches the WINDOW and never hears about this, so the plot has to be
   // told to re-measure or it keeps its old pixels and overflows its half of the row.
@@ -4250,7 +4513,7 @@ function yTitle(p){
   // naming it would be a lie. "Sw" and "events" are the words the colour bar already uses.
   if (p && p.norm === "shape") return "normalised area";
   if (!WTD()) return "events";
-  return S.lumi && S.lumi !== 1 ? `weighted events (x ${fmt(S.lumi)})` : "weighted events (unscaled)";
+  return "yield";
 }
 
 let MASK = null;
@@ -4291,7 +4554,7 @@ function cutflow(){
   for (let r = 0; r < META.n; r++){
     const di = D.__ds[r];
     if (S.show[di] === false) continue;
-    const ww = weighted ? D.weight[r] * LUMI() : 1, g = S.group[di];
+    const ww = weighted ? D.weight[r] * LUMI(di) : 1, g = S.group[di];
     for (let step = 0; ; step++){
       const acc = rows[step];
       acc.raw++; acc.w += ww;
@@ -4366,8 +4629,7 @@ function buildTables(){
     xaxis:{...ax, tickangle:-25, automargin:true},
     yaxis:{...ax, type: S.cflog === "lin" ? "linear" : "log",
            ...(S.cflog !== "lin" && decades >= 1 ? logAxis() : {}),
-           title:{text: weighted ? `weighted events @ ${fmt(S.lumi)} fb<sup>-1</sup>`
-                                 : EVLAB(), font:TFONT()}},
+           title:{text: EVLAB(), font:TFONT()}},
     legend:{orientation:"h", y:1.14, x:0, font:{family:MONO, size:pf(10), color:css("--ink-2")}},
     plot_bgcolor:panel, paper_bgcolor:panel, uirevision:"cf"
     // no edits: the cutflow keeps no title state, so an edit would silently revert — and
@@ -4389,6 +4651,9 @@ function countsFold(){
 }
 
 function drawAll(){
+  // Grouping, subgrouping and any one luminosity can all have moved since the last draw,
+  // and every count below reads the resolved table, so it is rebuilt first.
+  lumiTable();
   // The mask is the expensive part and every plot shares it, so it is computed once.
   MASK = mask();
   if (TBL) drawTable(MASK);
@@ -4531,7 +4796,9 @@ function draw1D(p, keep){
 
   const out = [];
   ERRFALL = 0;
-  const push = (nm, h, h2, cnt, colour, width, dash) => {
+  const push = (nm, h, h2, cnt, colour, width, dash, styleOf) => {
+    // the style channel: the same sample reads the same way here and on the map
+    if (dash === undefined && styleOf) dash = DASH[srcStyle(styleOf)] || "solid";
     let k = 1; if (shape){ let s = 0; for (const y of h) s += y; if (s) k = 1/s; }
     const up = [], dn = [];
     if (p.err !== "off")
@@ -4556,15 +4823,17 @@ function draw1D(p, keep){
       const lab2 = isMerge ? mLabel(p, label)
                  : a.on === a.total ? label : `${label} [${a.on} of ${a.total}]`;
       push(lab2, a.h, a.h2, a.n,
-           (isMerge && mColour(p, label, C)) || tblCol(label), 3);
+           (isMerge && mColour(p, label, C)) || tblCol(label), 3, undefined, label);
     }
   } else {
-    for (const t of traces) push(t.dn, t.b.h, t.b.h2, t.b.n, C["#" + t.di], 2);
+    for (const t of traces)
+      push(t.dn, t.b.h, t.b.h2, t.b.n, C["#" + t.di], 2, undefined, t.dn);
     for (const g of groupNames())
-      if (agg[g]) push(gLabel(g), agg[g].h, agg[g].h2, agg[g].n, C[g], 3);
+      if (agg[g]) push(gLabel(g), agg[g].h, agg[g].h2, agg[g].n, C[g], 3, undefined, g);
     const gset = new Set(groupNames());
     for (const g of Object.keys(agg))
-      if (!gset.has(g)) push(mLabel(p, g), agg[g].h, agg[g].h2, agg[g].n, mColour(p, g, C), 3);
+      if (!gset.has(g))
+        push(mLabel(p, g), agg[g].h, agg[g].h2, agg[g].n, mColour(p, g, C), 3, undefined, g);
   }
 
   // (S - B) / sqrt(sigma_S^2 + sigma_B^2) per bin, against the figure-of-merit groups
@@ -5186,11 +5455,11 @@ function report(t){
 
   // the headline follows the weighted/raw toggle, and so does the total under it
   const weighted = WTD();
-  // every cell names what its number counts — a bare 36.199 says nothing on its own
-  const at = weighted ? ` @ ${fmt(S.lumi)} fb<sup>−1</sup>` : "";
-  const cells = [cell(EVLAB() + at,
+  // The luminosity is not repeated here: it is a Counting setting, and a group may not
+  // even share one with its neighbour, so a single number in this label could only lie.
+  const cells = [cell(EVLAB(),
                       weighted ? fmt(t.sw) : t.kept.toLocaleString(),
-                      (weighted ? fmt(SUMW*LUMI()) : META.n.toLocaleString()) + " total",
+                      (weighted ? fmt(sumwScaled()) : META.n.toLocaleString()) + " total",
                       null,
                       WCOL ? "weighted = Σw × L over every shown sample passing the cuts&#10;"
                              + "raw = the plain event count"
@@ -5200,10 +5469,10 @@ function report(t){
     // surviving events, so a cut that empties a group still reports it as empty.
     if (!members(g).some(i => S.show[i] !== false)) continue;
     const a = t.by[g];
-    cells.push(cell(`${gLabel(g)} events${at}`, a ? fmt(a.w) : "–",
+    cells.push(cell(`${gLabel(g)} yield`, a ? fmt(a.w) : "–",
                     a ? "± " + fmt(Math.sqrt(a.w2)) : "no events pass the cuts", gcol(g),
                     "yield = Σw × L over the group's shown members passing the cuts&#10;" +
-                    "± = √(Σw²) × L — the MC statistical error " +
+                    "± = √(Σw²) — the MC statistical error " +
                     "(reduces to √N when every w = 1)"));
   }
   const nu = t.by[S.fomn], de = t.by[S.fomd];
@@ -5213,8 +5482,8 @@ function report(t){
                     "Σw(S) / Σw(B) — the luminosity cancels"));
     cells.push(cell("S / √(B+σ²)", fmt(nu.w/Math.sqrt(de.w + de.w2)),
                     "σ = ± " + fmt(Math.sqrt(de.w2)), null,
-                    "σ² = Σw²(B) × L² — B's MC-statistical variance&#10;" +
-                    "so this cell is S / √(B + Σw²(B)), everything at L"));
+                    "σ² = Σw²(B) — B's MC-statistical variance&#10;" +
+                    "so this cell is S / √(B + Σw²(B))"));
     const f = +S.syst || 0;
     const z = zbi(nu.w, de.w, de.w2, f);
     cells.push(cell("Z binomial", isFinite(z) ? fmt(z) : "–",
@@ -6145,7 +6414,9 @@ function bldDrag(){
    `table` key and the whole board repaints from the same MASK the plots use. ————— */
 
 let COLOPEN = null; // which colour row has its palette open — posture, never saved
-let ROFOLD = false; // the counts bar folded away. Posture, like the drawer and the rail
+let ROFOLD = true;  // the counts bar starts FOLDED — it is a big block of numbers above
+                    // everything you are actually working on. Posture, like the drawer and
+                    // the rail, so it is never written into a .rvr
                     // folds: it says how you are looking at the file, not what the
                     // analysis is, so it never reaches a .rvr.
 let CLIP = null;   // a copied block of plot specs, page-wide and never saved
@@ -6366,9 +6637,10 @@ function tblCompute(keep){
   names.forEach(s => tblIdx(s).forEach(i => byDs[i].push(acc[s])));
   for (let r = 0; r < META.n; r++){
     if (!keep[r]) continue;
-    const list = byDs[D.__ds[r]];
+    const di = D.__ds[r];
+    const list = byDs[di];
     if (!list.length) continue;
-    const ww = weighted ? D.weight[r]*LUMI() : 1;
+    const ww = weighted ? D.weight[r]*LUMI(di) : 1;
     for (const a of list){ a.w += ww; a.w2 += ww*ww; a.n++; }
   }
   let b = 0, b2 = 0, bn = 0;
@@ -7325,17 +7597,19 @@ function rgnCount(keep){
   const root = rgnTree(RGN.root, RGN, "root", 0, null, rgnRootName());
   (function zero(n){
     n.y = new Float64Array(ns); n.n = new Int32Array(ns);
+    n.y2 = new Float64Array(ns);      // Sum w^2, so an exported yield carries its own error
     n.kids.forEach(zero);
   })(root);
-  const weighted = WTD(), L = LUMI();
+  const weighted = WTD();
   for (let r = 0; r < META.n; r++){
     if (!keep[r]) continue;
-    const si = byDs[D.__ds[r]];
+    const di = D.__ds[r];
+    const si = byDs[di];
     if (si < 0) continue;
-    const w = weighted ? D.weight[r] * L : 1;
+    const w = weighted ? D.weight[r] * LUMI(di) : 1;
     let node = root;
     for (;;){
-      node.y[si] += w; node.n[si] += 1;
+      node.y[si] += w; node.n[si] += 1; node.y2[si] += w * w;
       if (!node.kids.length) break;
       node = rgnPick(node, r);
     }
@@ -7359,7 +7633,42 @@ function rgnBkgY(n){
 
 function rgnFloor(){ return RGN && RGN.floor != null ? RGN.floor : 1; }
 
-function rgnDim(n){ return rgnY(n) < rgnFloor(); }
+function rgnWatchSrc(name){
+  // add or remove one sample from the set the floor is about
+  if (!RGN) return;
+  const now = (RGN.floorsrcs || []).slice();
+  const at = now.indexOf(name);
+  if (at >= 0) now.splice(at, 1); else now.push(name);
+  if (now.length) RGN.floorsrcs = now; else delete RGN.floorsrcs;
+  markDirty();
+  drawAll();
+  say(now.length
+    ? `the floor now watches <b>${now.map(esc).join(", ")}</b>`
+    : "the floor is back on each region's total");
+}
+
+function rgnFloorSrcs(){
+  // Which samples the floor is actually about. Absent means the region's TOTAL, which is
+  // the old behaviour; naming some means "I only care whether THESE are thin" — a region
+  // with 400 background events and no signal is not interesting, and the total hid that.
+  if (!RGN || !RGN.floorsrcs || !RGN.floorsrcs.length) return null;
+  const live = rgnSrcs();
+  return RGN.floorsrcs.filter(s => live.indexOf(s) >= 0);
+}
+
+const rgnFloorMode = () => (RGN && RGN.floormode === "all") ? "all" : "any";
+
+function rgnDim(n){
+  const want = rgnFloorSrcs();
+  if (!want || !want.length) return rgnY(n) < rgnFloor();
+  const srcs = rgnSrcs(), f = rgnFloor();
+  const thin = want.map(s => {
+    const i = srcs.indexOf(s);
+    return (i < 0 ? 0 : (n.y[i] || 0)) < f;
+  });
+  // any: one thin sample is enough to set the region aside. all: every one must be.
+  return rgnFloorMode() === "all" ? thin.every(Boolean) : thin.some(Boolean);
+}
 
 /* ---------- layout ---------- */
 
@@ -7432,6 +7741,354 @@ function rgnLayout(node, x, y, w, h, d, horiz){
   });
 }
 
+/* ---------- bubbles: one circle per region, area = yield, globally ---------- */
+
+//: The nested map is proportional WITHIN a camp — across camps the chrome and the depleted
+//: strip make a region's rectangle mean nothing absolute. A circle is sized from the yield
+//: itself, so two bubbles anywhere on the map compare directly. Circles cannot tile, so the
+//: gaps between them are honest emptiness rather than area belonging to anybody.
+
+const RGN_PACK = 0.52;      // of the world the circles may fill; the rest is the gaps
+const rgnLogR = () => !!(RGN && RGN.logr);
+
+function rgnRadius(y, total){
+  // Area is the yield — unless you ask for log area, which lifts the small regions into
+  // view at the price of the one invariant this view exists for. It is a deliberate,
+  // announced trade, not a default.
+  if (y <= 0) return 0;
+  return rgnLogR() ? Math.log1p(y / Math.max(total, 1e-12) * 1e4) : Math.sqrt(y / total);
+}
+let RGNSHELF = null;        // the EMPTY regions, parked on the right
+let RGNPEN = null;          // the ones UNDER THE FLOOR, parked on the left — a different
+                            // thing from empty, so a different place and its own caption
+let RGNAXES = null;         // the declared grid's axes, when the partition came from one
+const RGN_MINR = 3;         // a region with events is never smaller than this in world units
+const RGN_GHOST = 5;        // an EMPTY region's ring, which is not to scale and is drawn so
+
+function rgnBubbleOrder(root){
+  // every region in tree order, so siblings land next to each other and a camp still reads
+  // as a cluster even though nothing is nested any more
+  const out = [];
+  (function rec(n){ if (!n.kids.length){ out.push(n); return; } n.kids.forEach(rec); })(root);
+  return out;
+}
+
+//: a pen is four circles wide, never more — 503 empty regions made a wall of dots that
+//: ate a third of the map. Collapsed it shows a few rows and a "…"; opened it scrolls.
+const RGN_PEN_COLS = 4, RGN_PEN_SHUT = 3;
+let RGNPENOPEN = {left:false, right:false};   // posture: never saved
+let RGNPENSCROLL = {left:0, right:0};
+
+function rgnPenPlan(list, H, side){
+  // how tall the pen is, how many rows it will show, and whether it has more to give
+  if (!list.length) return {w:0, cols:0, rows:0, more:0, open:false};
+  const CELL = 24, CAP = 20;
+  const open = !!RGNPENOPEN[side];
+  const fits = Math.max(1, Math.floor((H - CAP - 16) / CELL));
+  const need = Math.ceil(list.length / RGN_PEN_COLS);
+  const rows = open ? Math.min(need, fits) : Math.min(need, RGN_PEN_SHUT);
+  return {w:Math.max(116, RGN_PEN_COLS * CELL + 12), cols:RGN_PEN_COLS,
+          rows:rows, need:need, more:Math.max(0, need - rows), open:open};
+}
+
+function rgnPenPlace(list, side, plan, ghost){
+  // A pen is PINNED to the canvas, not laid into the world: it is an index, and an index
+  // that slides away when you pan and grows when you zoom is not an index. Only the rows
+  // on show get a circle; the rest are reachable by opening it and scrolling.
+  const CELL = 24, CAP = 20;
+  const first = plan.open ? Math.round(RGNPENSCROLL[side] || 0) : 0;
+  list.forEach((n, i) => {
+    const row = Math.floor(i / plan.cols) - first, col = i % plan.cols;
+    n.bub = row < 0 || row >= plan.rows
+      ? {pin:true, side:side, hidden:true, r:0, ghost:ghost, shelf:true}
+      : {pin:true, side:side, px:12 + col * CELL, py:CAP + 14 + row * CELL,
+         r:8, ghost:ghost, shelf:true};
+  });
+}
+
+function rgnPenUnder(px, py, CW){
+  // which pen the pointer is in, if any
+  return [RGNSHELF, RGNPEN].find(s => {
+    if (!s) return false;
+    const x0 = s.side === "left" ? 0 : CW - s.w;
+    return px >= x0 && px <= x0 + s.w;
+  }) || null;
+}
+
+function rgnPinAt(b, CW){
+  // where a pinned circle actually lands, in screen pixels
+  return {X:b.side === "left" ? b.px : CW - b.px, Y:b.py, R:b.r};
+}
+
+function rgnBubbleRects(root){
+  // Every bubble carries the square around itself, because the camera flies to rectangles;
+  // an internal camp has no circle of its own and gets the box round its pieces, so arrow
+  // keys and the panel keep working. Shared by both layouts — two copies of this drifted
+  // once already.
+  rgnBubbleOrder(root).forEach(n => {
+    if (!n.bub) return;
+    n.head = 0; n.gap = 0; n.thin = false;
+    if (n.bub.pin){ n.rect = null; return; }   // pinned: nowhere for the camera to go
+    n.rect = {x:n.bub.x - n.bub.r, y:n.bub.y - n.bub.r,
+              w:n.bub.r * 2, h:n.bub.r * 2, d:n.depth};
+  });
+  (function box(n){
+    if (!n.kids.length){
+      if (!n.rect) { n.rect = {x:0, y:0, w:0, h:0, d:n.depth}; n.head = 0; n.gap = 0; }
+      return;
+    }
+    n.kids.forEach(box);
+    const k2 = n.kids.filter(c => c.rect && c.rect.w > 0);
+    n.head = 0; n.gap = 0; n.thin = false;
+    if (!k2.length){ n.rect = {x:0, y:0, w:0, h:0, d:n.depth}; return; }
+    const ax = Math.min(...k2.map(c => c.rect.x)), ay = Math.min(...k2.map(c => c.rect.y));
+    const bx = Math.max(...k2.map(c => c.rect.x + c.rect.w));
+    const by = Math.max(...k2.map(c => c.rect.y + c.rect.h));
+    n.rect = {x:ax, y:ay, w:bx - ax, h:by - ay, d:n.depth};
+  })(root);
+  return root;
+}
+
+function rgnLeafCells(root){
+  // For every leaf, which band it took along each DECLARED variable. A camp at depth d IS
+  // the chain for variable d, and its kids are that variable's bands in order — so the
+  // path of kid indices IS the leaf's coordinates in the grid. A leaf that stopped short
+  // is a tail nobody subdivided, and gets no cell.
+  const vars = (RGN && RGN.grid && RGN.grid.vars) || [];
+  if (!vars.length) return null;
+  const at = new Map();
+  (function rec(n, idx){
+    if (!n.kids.length){ at.set(n, idx.length === vars.length ? idx : null); return; }
+    n.kids.forEach((k, i) => rec(k, idx.concat([i])));
+  })(root, []);
+  return at;
+}
+
+function rgnAxesLayout(root, W, H){
+  // THE grid, drawn as a grid: the first variable across, the second down, anything after
+  // that clustered inside each cell. Radius still comes from the absolute yield and every
+  // circle shares one scale, so area is the yield exactly as in the cloud — but now a row
+  // is a row, and you can read along one.
+  const vars = RGN.grid.vars;
+  const at = rgnLeafCells(root);
+  if (!at) return null;
+  const pick = rgnAxesPick(), AX = pick[0], AY = vars.length > 1 ? pick[1] : pick[0];
+  const innerIdx = [];
+  for (let d = 0; d < vars.length; d++)
+    if (d !== AX && !(vars.length > 1 && d === AY)) innerIdx.push(d);
+  const leaves = rgnBubbleOrder(root);
+  const aside = n => rgnY(n) <= 0 || rgnDim(n);
+  const cells = leaves.filter(n => !aside(n) && at.get(n));
+  const tails = leaves.filter(n => !aside(n) && !at.get(n));
+  const empty = leaves.filter(n => rgnY(n) <= 0);
+  const under = leaves.filter(n => rgnY(n) > 0 && rgnDim(n));
+  leaves.forEach(n => { n.bub = null; });
+
+  // A band nobody landed in costs a whole column or row of blank canvas. Collapsing them
+  // is the default: the axis stops being uniform, which is why the labels stay on it.
+  const colUsed = {}, rowUsed = {};
+  cells.forEach(n => {
+    const ix = at.get(n);
+    colUsed[ix[AX]] = 1;
+    if (vars.length > 1) rowUsed[ix[AY]] = 1;
+  });
+  const allCols = vars[AX].bands.length + 1;
+  const allRows = vars.length > 1 ? vars[AY].bands.length + 1 : 1;
+  const keepC = [], keepR = [];
+  for (let i = 0; i < allCols; i++) if (colUsed[i] || RGN.keepdead) keepC.push(i);
+  for (let i = 0; i < allRows; i++) if (rowUsed[i] || RGN.keepdead) keepR.push(i);
+  if (!keepC.length) keepC.push(0);
+  if (!keepR.length) keepR.push(0);
+  const cAt = {}, rAt = {};
+  keepC.forEach((v, i) => { cAt[v] = i; });
+  keepR.forEach((v, i) => { rAt[v] = i; });
+  const ncol = keepC.length;
+  const nrow = keepR.length;
+  // EVERY variable past the second shares the cell, as one mixed-radix index laid out in a
+  // little grid. Taking only the first two silently stacked regions that differ in the
+  // third on top of each other.
+  const inner = innerIdx.map(d => vars[d]);
+  const radix = inner.map(v => v.bands.length + 1);
+  const innerN = radix.reduce((a, b) => a * b, 1);
+  const icol = Math.ceil(Math.sqrt(innerN));
+  const irow = Math.ceil(innerN / icol);
+  const innerAt = ix => {
+    let f = 0;
+    for (let d = 0; d < radix.length; d++) f = f * radix[d] + (ix[innerIdx[d]] || 0);
+    return f;
+  };
+
+  // room for the axis labels, the shelf, and a lane for tails
+  const PADT = 26, LANE = tails.length ? 40 : 0;
+  const rp = rgnPenPlan(empty, H, "right"), lp = rgnPenPlan(under, H, "left");
+  const shelfW = Math.min(W * .3, rp.w), penW = Math.min(W * .3, lp.w);
+  const PADL = 96 + (penW ? penW + 18 : 0);
+  const gw = Math.max(60, W - shelfW - (shelfW ? 18 : 0) - PADL);
+  const gh = Math.max(60, H - PADT - LANE);
+  const cw = gw / ncol, ch = gh / nrow;
+  const sw = cw / icol, sh = ch / irow;
+
+  const total = cells.concat(tails).reduce((a, n) => a + rgnY(n), 0) || 1;
+  const raw = n => rgnRadius(rgnY(n), total);
+  // one scale for every circle, chosen so the biggest just fits its slot: shared scale is
+  // what keeps two circles anywhere on the map directly comparable
+  let k = Infinity;
+  cells.forEach(n => { if (raw(n) > 0) k = Math.min(k, Math.min(sw, sh) * .46 / raw(n)); });
+  tails.forEach(n => { if (raw(n) > 0) k = Math.min(k, Math.min(cw, LANE) * .42 / raw(n)); });
+  if (!isFinite(k)) k = 1;
+
+  cells.forEach(n => {
+    const ix = at.get(n);
+    const c = cAt[ix[AX]], r = vars.length > 1 ? rAt[ix[AY]] : 0;
+    const f = innerAt(ix), p = f % icol, q = Math.floor(f / icol);
+    n.bub = {x:PADL + c * cw + (p + .5) * sw, y:PADT + r * ch + (q + .5) * sh,
+             r:Math.max(RGN_MINR, raw(n) * k), ghost:false, shelf:false};
+  });
+  // the tails: real regions the grid has no cell for, in their own lane under it
+  tails.forEach((n, i) => {
+    n.bub = {x:PADL + (i + .5) * Math.min(cw, gw / Math.max(1, tails.length)),
+             y:PADT + gh + LANE / 2, r:Math.max(RGN_MINR, raw(n) * k),
+             ghost:false, shelf:false};
+  });
+  RGNSHELF = empty.length ? {side:"right", w:shelfW, n:empty.length, plan:rp,
+                             label:`${empty.length} empty`} : null;
+  RGNPEN = under.length ? {side:"left", w:penW, n:under.length, plan:lp,
+                           label:`${under.length} under the floor`} : null;
+  if (empty.length) rgnPenPlace(empty, "right", rp, true);
+  if (under.length) rgnPenPlace(under, "left", lp, false);
+  // what the axes are called, in world units so they pan and zoom with the map
+  RGNAXES = {x0:PADL, y0:PADT, cw:cw, ch:ch, ncol:ncol, nrow:nrow, gh:gh, lane:LANE,
+             cols:keepC.map(i => rgnAxisBands(vars[AX])[i]),
+             rows:vars.length > 1 ? keepR.map(i => rgnAxisBands(vars[AY])[i]) : [""],
+             xname:vars[AX].col, yname:vars.length > 1 ? vars[AY].col : "",
+             dropped:(allCols - ncol) + (allRows - nrow),
+             inner:inner.map(v => v.col).join(" × ")};
+  return rgnBubbleRects(root);
+}
+
+function rgnAxisBands(v){
+  // short band labels for an axis — the column already says which variable it is
+  if (rgnGridIsSet(v.bands))
+    return v.bands.map(b => b.slice().sort((a, c) => a - c).join("/")).concat(["other"]);
+  const e = v.bands.slice().sort((a, c) => a - c);
+  const out = ["< " + fmt(e[0])];
+  for (let i = 0; i < e.length - 1; i++) out.push(fmt(e[i]) + "–" + fmt(e[i + 1]));
+  return out.concat(["≥ " + fmt(e[e.length - 1])]);
+}
+
+function rgnBubbleLayout(root, W, H){
+  // Radius from the yield: r = sqrt(y / total) * R, so pi*r^2 is exactly proportional to y.
+  // Placement is a deterministic outward spiral in tree order — no randomness, so the same
+  // partition always draws the same picture and the battery can pin it.
+  // The free cloud is the default — circles packed until they touch. The declared grid is
+  // a choice, and only offered when the partition actually came from a dict.
+  RGNAXES = null;
+  if (RGN && RGN.axes && RGN.grid && rgnGridVars().length && rgnGridFresh() === true){
+    const got = rgnAxesLayout(root, W, H);
+    if (got) return got;
+  }
+  const leaves = rgnBubbleOrder(root);
+  // Empty and under-the-floor regions are set ASIDE rather than packed into the landscape.
+  // They are the ones you are not looking at, they carry no area worth comparing, and mixed
+  // into the cloud they are just litter over the regions that survived.
+  const empty = leaves.filter(n => rgnY(n) <= 0);
+  const under = leaves.filter(n => rgnY(n) > 0 && rgnDim(n));
+  const live = leaves.filter(n => rgnY(n) > 0 && !rgnDim(n));
+  leaves.forEach(n => { n.bub = null; });
+
+  // empty right, under-the-floor left, the cloud between them. They are different things:
+  // one has no events, the other has too few to trust, and penning them together said
+  // neither.
+  const rp = rgnPenPlan(empty, H, "right"), lp = rgnPenPlan(under, H, "left");
+  const shelfW = Math.min(W * .3, rp.w), penW = Math.min(W * .3, lp.w);
+  const liveW = Math.max(80, W - shelfW - penW - (shelfW ? 20 : 0) - (penW ? 20 : 0));
+
+  const total = live.reduce((a, n) => a + rgnY(n), 0);
+  const R = total > 0 ? Math.sqrt(liveW * H * RGN_PACK / Math.PI) : 0;
+  const rawR = n => rgnRadius(rgnY(n), total);
+  const placed = [];
+  const fits = (x, y, r) => {
+    for (const q of placed){
+      const dx = x - q.x, dy = y - q.y, rr = r + q.r + 1.5;
+      if (dx * dx + dy * dy < rr * rr) return false;
+    }
+    return true;
+  };
+  const put = (n, r) => {
+    // The spiral has to be able to LEAVE the cloud. Stepping by the circle's own radius
+    // means a small one exhausts its search still inside a large neighbour and lands on
+    // the fallback — which, when the fallback was the origin, stacked every tiny circle
+    // on top of the biggest one, in the middle of the map.
+    let cloud = 0;
+    for (const q of placed) cloud = Math.max(cloud, Math.sqrt(q.x * q.x + q.y * q.y) + q.r);
+    const reach = cloud + 2 * r + 6, K = 4000;
+    const step = Math.max(1.2, r * .35, reach / Math.sqrt(K));
+    for (let k = 0; k < K; k++){
+      const a = k * 2.39996323, rad = step * Math.sqrt(k);
+      const x = rad * Math.cos(a), y = rad * Math.sin(a);
+      if (fits(x, y, r)){
+        placed.push({x:x, y:y, r:r});
+        n.bub = {x:x, y:y, r:r, ghost:false, shelf:false};
+        return;
+      }
+    }
+    placed.push({x:reach, y:0, r:r});          // clear of everything, never the middle
+    n.bub = {x:reach, y:0, r:r, ghost:false, shelf:false};
+  };
+  // under log area the raw radii are not fractions of R, so they are normalised to the
+  // same footprint before packing
+  const rmax = live.reduce((a, n) => Math.max(a, rawR(n)), 0) || 1;
+  const norm = rgnLogR() ? (R * 0.42) / rmax : R;
+  live.forEach(n => put(n, Math.max(RGN_MINR, norm * rawR(n))));
+
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  live.forEach(n => {
+    x0 = Math.min(x0, n.bub.x - n.bub.r); x1 = Math.max(x1, n.bub.x + n.bub.r);
+    y0 = Math.min(y0, n.bub.y - n.bub.r); y1 = Math.max(y1, n.bub.y + n.bub.r);
+  });
+  const sw = Math.max(1, x1 - x0), sh = Math.max(1, y1 - y0);
+  const k = live.length ? Math.min(liveW / sw, H / sh) : 1;
+  const ox = penW ? penW + 20 : 0;
+  live.forEach(n => {
+    n.bub.x = (n.bub.x - x0) * k + (liveW - sw * k) / 2 + ox;
+    n.bub.y = (n.bub.y - y0) * k + (H - sh * k) / 2;
+    n.bub.r *= k;
+  });
+
+  RGNSHELF = empty.length ? {side:"right", w:shelfW, n:empty.length, plan:rp,
+                             label:`${empty.length} empty`} : null;
+  RGNPEN = under.length ? {side:"left", w:penW, n:under.length, plan:lp,
+                           label:`${under.length} under the floor`} : null;
+  if (empty.length) rgnPenPlace(empty, "right", rp, true);
+  if (under.length) rgnPenPlace(under, "left", lp, false);
+
+  return rgnBubbleRects(root);
+}
+
+function rgnBubbleCheck(){
+  // The claim this view makes, measured: a circle's share of all the circle area is its
+  // share of the yield. Unlike the nested map this is a GLOBAL statement, which is the
+  // whole reason the view exists — so it is checked globally.
+  if (!RGNT) return null;
+  const live = rgnBubbleOrder(RGNT).filter(n => rgnY(n) > 0 && n.bub && !n.bub.shelf);
+  // A circle held up to the minimum radius is NOT to scale. It is left out of the claim AND
+  // out of the totals the claim divides by — leaving its inflated area in the denominator
+  // made every honest circle look wrong.
+  const drawn = live.filter(n => n.bub.r > RGN_MINR + 1e-9);
+  const floored = live.length - drawn.length;
+  const ta = drawn.reduce((a, n) => a + Math.PI * n.bub.r * n.bub.r, 0);
+  const ty = drawn.reduce((a, n) => a + rgnY(n), 0);
+  let worst = 0;
+  if (ta > 0 && ty > 0) drawn.forEach(n => {
+    worst = Math.max(worst, Math.abs(Math.PI * n.bub.r * n.bub.r / ta - rgnY(n) / ty));
+  });
+  const scaled = drawn.length;
+  const shelf = rgnBubbleOrder(RGNT).filter(n => n.bub && n.bub.shelf);
+  return {bubbles:live.length, scaled:scaled, area:worst, floored:floored, log:rgnLogR(),
+          shelf:shelf.length, ghosts:shelf.filter(n => rgnY(n) <= 0).length,
+          under:shelf.filter(n => rgnY(n) > 0).length};
+}
+
 function rgnCheck(){
   // The sum rule, measured and put ON SCREEN rather than asserted in a comment. Counts are
   // integers and compare exactly; yields are floats and cannot, which is why the gate is
@@ -7459,11 +8116,6 @@ function rgnCheck(){
 
 /* ---------- cutting ---------- */
 
-function rgnLeaves(node){
-  const out = [];
-  (function rec(n){ if (!n.kids.length) out.push(n); else n.kids.forEach(rec); })(node);
-  return out;
-}
 
 function rgnChain(cuts){
   // Several edges on one column as ONE nested spec, each cut taking what the ones before
@@ -7474,80 +8126,83 @@ function rgnChain(cuts){
   return spec;
 }
 
-function rgnCut(node, cuts){
-  // One cut turns a region into two: the predicate, and everything else. On a CAMP it
-  // reaches every region inside it at once — cut the whole map on one variable and each
-  // band already there splits into above and below, which is how a grid gets built.
-  if (!node) return;
-  cuts = Array.isArray(cuts) ? cuts : [cuts];
-  if (!cuts.length) return;
-  const cut = cuts[0];
-  const targets = rgnLeaves(node);
-  if (!targets.length) return;
-  if (targets.length > 1){
-    // Writing into the "everything else" side of a chain EXTENDS that chain rather than
-    // nesting inside it. On a single region that is the point — it is how a band grows.
-    // Broadcast over many, it would extend some and nest others from one press, so this
-    // one case says no rather than doing two different things at once.
-    const clash = targets.find(t => t.slot.key === "no" && t.slot.obj && t.slot.obj.cut &&
-                                    t.slot.obj.cut.col === cut.col);
-    if (clash)
-      return say(`those regions are already split by <b>${esc(cut.col)}</b> — ` +
-                 `cut one region on its own to add another ${esc(cut.col)} band, ` +
-                 `or broadcast a different column`);
-  }
-  targets.forEach(t => { t.slot.obj[t.slot.key] = rgnChain(cuts); });
-  // a single cut lands on its own "everything else" side, so pressing cut again extends
-  // the band; a broadcast stays where it is, so it can be broadcast again
-  if (targets.length === 1){
-    let last = targets[0].slot.obj[targets[0].slot.key];
-    while (last.no) last = last.no;          // the outermost "everything else" of the chain
-    RGNFS = {obj:last, key:"no"};
-  }
-  markDirty();
-  drawAll();
-  const many = cuts.length > 1 ? ` into ${cuts.length + 1} bands` : "";
-  if (targets.length > 1)
-    say(`cut <b>${targets.length}</b> regions on ${esc(cut.col)}${many}`);
-  else if (cuts.length > 1)
-    say(`cut ${esc(cut.col)} at ${cuts.map(c => fmt(c.lt)).join(", ")}${many}`);
+
+
+
+
+/* ---------- the grid: a whole partition declared at once ---------- */
+
+//: The grid is a shortcut, not a second model. `rgnGridSpec` emits exactly the tree that
+//: broadcasting each variable in turn would build, which is why the battery gates the two
+//: against each other rather than trusting either. DOM-free and canvas-free, like the rest
+//: of the core, so smoke can call it.
+
+const rgnGridIsSet = b => Array.isArray(b[0]);
+
+function rgnGridInterior(bands){
+  // which bands are DECLARED rather than the open tails around them: a number axis
+  // declares what lies between its cut points, a set axis declares its groups
+  const n = bands.length + 1, out = {};
+  if (rgnGridIsSet(bands)) for (let i = 0; i < n - 1; i++) out[i] = 1;
+  else for (let i = 1; i < n - 1; i++) out[i] = 1;
+  return out;
 }
 
-function rgnUncut(node){
-  // and back again: whatever was inside this camp goes, the camp itself stays
-  if (!node) return;
-  if (!node.kids.length) return say("this region has nothing inside it to remove");
-  node.slot.obj[node.slot.key] = null;
-  RGNFS = {obj:node.slot.obj, key:node.slot.key};
-  markDirty();
-  drawAll();
+const rgnGridWidth = (bands, ex) =>
+  ex ? bands.length + 1 : (rgnGridIsSet(bands) ? bands.length : Math.max(0, bands.length - 1));
+
+function rgnGridCuts(col, bands){
+  // one variable as the binary cuts that make its bands, in order
+  if (rgnGridIsSet(bands))
+    return bands.map(g => ({col:col, in:g.slice().sort((a, b) => a - b)}));
+  return bands.slice().sort((a, b) => a - b).map(e => ({col:col, lt:e}));
 }
 
-function rgnCutFromControls(){
-  // the strip's own cut: a column, and either a threshold or a set of values
-  const sel = $("rgncol"), box = $("rgnval");
-  if (!sel || !box) return;
-  const col = rgnColByName(sel.value);
-  if (!col) return say("pick a column to cut on");
-  const target = RGNF || RGNT;
-  if (!target) return;
-  if (col.vals){
-    const picked = (box.value || "").split(",").map(s => s.trim()).filter(Boolean)
-      .map(s => { const at = (col.names || []).indexOf(s);
-                  return at >= 0 ? col.vals[at] : +s; })
-      .filter(v => col.vals.indexOf(v) >= 0);
-    if (!picked.length)
-      return say(`name one or more values of <b>${esc(col.name)}</b> — ` +
-                 `${(col.names || col.vals).join(", ")}`);
-    return rgnCut(target, {col:col.name, in:picked});
+function rgnGridSlots(spec){
+  // one position per band of a chain, in the order the map draws them
+  const out = [];
+  let cur = spec;
+  while (cur){
+    out.push({obj:cur, key:"yes"});
+    if (!cur.no){ out.push({obj:cur, key:"no"}); break; }
+    cur = cur.no;
   }
-  // "0.7, 1" is two edges and three bands; one number is the plain single cut
-  const edges = [...new Set((box.value || "").split(/[,\s]+/)
-                   .filter(Boolean).map(parseFloat))].filter(isFinite).sort((a, b) => a - b);
-  if (!edges.length)
-    return say(`type a number to cut <b>${esc(col.name)}</b> at, ` +
-               `or several — <b>0.7, 1</b> makes three bands`);
-  rgnCut(target, edges.map(e => ({col:col.name, lt:e})));
+  return out;
+}
+
+function rgnGridSpec(grid){
+  // The whole dict as a partition. Exhaustive, every band is split by the next variable.
+  // Otherwise only the DECLARED bands are, so each open tail stays one leaf and the
+  // leftover is a handful of shallow regions instead of most of the grid.
+  const vars = (grid && grid.vars || []).filter(v => v.col && v.bands && v.bands.length);
+  if (!vars.length) return null;
+  const ex = !!(grid && grid.exhaustive);
+  const build = d => {
+    if (d === vars.length) return null;
+    const root = rgnChain(rgnGridCuts(vars[d].col, vars[d].bands));
+    const inner = rgnGridInterior(vars[d].bands);
+    rgnGridSlots(root).forEach((s, i) => {
+      if (ex || inner[i]) s.obj[s.key] = build(d + 1);
+    });
+    return root;
+  };
+  return build(0);
+}
+
+function rgnGridCount(grid){
+  // how many regions this dict declares, before a single event is counted
+  const vars = (grid && grid.vars || []).filter(v => v.col && v.bands && v.bands.length);
+  if (!vars.length) return 0;
+  const ex = !!(grid && grid.exhaustive);
+  return vars.reduce((a, v) => a * rgnGridWidth(v.bands, ex), 1);
+}
+
+function rgnGridFresh(){
+  // Is the tree on screen still the one this dict builds? The dict is a recipe, `root` is
+  // the truth, and the two are compared rather than assumed — hand-cut the map after
+  // applying a grid and the panel says so instead of quietly lying about what made it.
+  if (!RGN || !RGN.grid) return null;
+  return JSON.stringify(RGN.root) === JSON.stringify(rgnGridSpec(RGN.grid));
 }
 
 /* ---------- the camera ---------- */
@@ -7560,7 +8215,31 @@ function rgnFit(rect){
           y:rect.y - RGN_TOP / k - (availH / k - rect.h) / 2};
 }
 
-function rgnFitAll(){ rgnFit({x:0, y:0, w:RGNW, h:Math.max(1, RGNH0 - RGN_TOP)}); }
+function rgnFitAll(){
+  // Fit to what is DRAWN, not to the nominal world: a packed cloud is scaled to a box it
+  // then overhangs, and the shelf sits past its right edge, so fitting the rectangle cut
+  // the bottom row off. Everything with a rectangle counts, the shelf included.
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  if (RGNT) (function rec(n){
+    const b = n.bub;
+    if (b && b.r > 0 && !b.pin){
+      x0 = Math.min(x0, b.x - b.r); x1 = Math.max(x1, b.x + b.r);
+      y0 = Math.min(y0, b.y - b.r); y1 = Math.max(y1, b.y + b.r);
+    } else if (!rgnIsBubble() && n.rect && n.rect.w > 0){
+      x0 = Math.min(x0, n.rect.x); x1 = Math.max(x1, n.rect.x + n.rect.w);
+      y0 = Math.min(y0, n.rect.y); y1 = Math.max(y1, n.rect.y + n.rect.h);
+    }
+    n.kids.forEach(rec);
+  })(RGNT);
+
+  if (RGNAXES){
+    x0 = Math.min(x0, 0); y0 = Math.min(y0, 0);   // the axis labels live left of and above
+  }
+  if (!isFinite(x0) || x1 <= x0 || y1 <= y0)
+    return rgnFit({x:0, y:0, w:RGNW, h:Math.max(1, RGNH0 - RGN_TOP)});
+  const m = 8;
+  rgnFit({x:x0 - m, y:y0 - m, w:(x1 - x0) + 2 * m, h:(y1 - y0) + 2 * m});
+}
 
 function rgnFlyTo(rect){
   // reduced motion means arrive, not travel — the same courtesy the rest of the page pays
@@ -7572,12 +8251,23 @@ function rgnFlyTo(rect){
   rgnFit(rect);
   const to = {...RGNV};
   RGNV = from;
+  // Interpolate the CENTRE the camera is looking at, and the zoom geometrically. x and y
+  // are the world point at the canvas's top-left corner, so tweening those linearly swings
+  // the view out through a corner on the way — which is the lurch, not the zoom.
+  const cv0 = $("rgncanvas");
+  const bb = (cv0 && cv0.getBoundingClientRect) ? cv0.getBoundingClientRect()
+                                                : {width:RGNW, height:RGNH0};
+  const CW0 = bb.width || RGNW, CH0 = bb.height || RGNH0;
+  const mid = v => ({x:v.x + CW0 / 2 / v.k, y:v.y + CH0 / 2 / v.k});
+  const m0 = mid(from), m1 = mid(to);
+  const lk0 = Math.log(from.k), lk1 = Math.log(to.k);
   const t0 = (window.performance || Date).now();
   const step = () => {
     const p = Math.min(1, ((window.performance || Date).now() - t0) / 380);
     const e = p < .5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-    RGNV = {x:from.x + (to.x - from.x) * e, y:from.y + (to.y - from.y) * e,
-            k:from.k + (to.k - from.k) * e};
+    const k = Math.exp(lk0 + (lk1 - lk0) * e);
+    const cx = m0.x + (m1.x - m0.x) * e, cy = m0.y + (m1.y - m0.y) * e;
+    RGNV = {k:k, x:cx - CW0 / 2 / k, y:cy - CH0 / 2 / k};
     rgnDrawOnly();
     if (p < 1 && window.requestAnimationFrame) requestAnimationFrame(step);
   };
@@ -7793,6 +8483,506 @@ function rgnDrawNode(ctx, n, css, CW, CH){
   rgnDrawLeaf(ctx, n, X, Y, W, H, css);
 }
 
+/* ---------- drawing the bubbles ---------- */
+
+const rgnIsBubble = () => !!(RGN && RGN.view === "bubble");
+
+function rgnWedges(n){
+  // one wedge per source with any yield, biggest first, as angles that sum to a full turn
+  const rows = rgnRows(n), tot = rgnY(n);
+  if (tot <= 0) return [];
+  let a = -Math.PI / 2;                       // start at twelve o'clock
+  return rows.map(r => {
+    const span = 2 * Math.PI * r.y / tot;
+    const w = {row:r, a0:a, a1:a + span, mid:a + span / 2, span:span};
+    a += span;
+    return w;
+  });
+}
+
+function rgnSegHits(x0, y0, x1, y1, cx, cy, r){
+  // does a leader line pass through a circle: distance from the segment to its centre
+  const dx = x1 - x0, dy = y1 - y0;
+  const L = dx * dx + dy * dy;
+  let s = L ? ((cx - x0) * dx + (cy - y0) * dy) / L : 0;
+  s = Math.max(0, Math.min(1, s));
+  const px = x0 + s * dx - cx, py = y0 + s * dy - cy;
+  return px * px + py * py < r * r;
+}
+
+const rgnBoxHits = (a, b) =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+function rgnBoxCirc(box, c){
+  // nearest point of the box to the centre, which is the standard box/circle test
+  const nx = Math.max(box.x, Math.min(c.x, box.x + box.w));
+  const ny = Math.max(box.y, Math.min(c.y, box.y + box.h));
+  return (nx - c.x) * (nx - c.x) + (ny - c.y) * (ny - c.y) < c.r * c.r;
+}
+
+const RGN_LEAD_PAD = 7;      // clear space kept around a label, in screen px
+//: where on the radius a leader starts. Touching the rim reads as a line grazing the
+//: circle rather than as a pointer at the slice it names.
+const RGN_LEAD_IN = 0.66;
+const RGN_LEAD_MAX = 190;    // no label is worth a line longer than this
+
+function rgnPlaceLeaders(ctx, reqs, circles, css, CW, CH){
+  // A label goes in the shortest reach of EMPTY canvas it can find: candidates are swept
+  // outward from the slice's own direction, and the first one that clears every circle,
+  // every label already placed and both the line and the edge of the view wins. Placing
+  // them per bubble cannot do this — a neighbour's circle is not visible from inside it —
+  // so every leader on the canvas is placed in one pass, biggest yield first.
+  ctx.font = `10.5px ${css.mono}`;
+  ctx.textBaseline = "middle";
+  const boxes = [];
+  reqs.sort((a, b) => b.y - a.y);
+  for (const q of reqs){
+    const label = `${q.src} ${rgnFmt(q.y)}`;
+    const w = ctx.measureText(label).width + 15, h = 13;
+    let put = null;
+    // outward in distance first, so the SHORTEST line that works is the one taken
+    for (let d = 12; d <= RGN_LEAD_MAX && !put; d += 7){
+      for (let step = 0; step <= 14 && !put; step++){
+        for (const sign of (step ? [1, -1] : [1])){
+          const a = q.mid + sign * step * 0.11;
+          const ex = q.cx + Math.cos(a) * (q.r + d), ey = q.cy + Math.sin(a) * (q.r + d);
+          const right = Math.cos(a) >= 0;
+          const box = {x:right ? ex + 4 : ex - 4 - w, y:ey - h / 2, w:w, h:h};
+          if (box.x < 2 || box.y < 2 || box.x + box.w > CW - 2 || box.y + box.h > CH - 2) continue;
+          const pad = {x:box.x - RGN_LEAD_PAD, y:box.y - RGN_LEAD_PAD,
+                       w:box.w + 2 * RGN_LEAD_PAD, h:box.h + 2 * RGN_LEAD_PAD};
+          if (boxes.some(o => rgnBoxHits(pad, o))) continue;
+          if (RGNINLINE.some(o => rgnBoxHits(pad, o))) continue;
+          if (q.insp){
+            // inside the inspector's panel: the only things to avoid are its own circle
+            // and the labels already placed on it
+            if (RGNINSP && (box.x < RGNINSP.box.x || box.y < RGNINSP.box.y ||
+                box.x + box.w > RGNINSP.box.x + RGNINSP.box.w ||
+                box.y + box.h > RGNINSP.box.y + RGNINSP.box.h)) continue;
+            if (rgnBoxCirc(pad, {x:q.cx, y:q.cy, r:q.r + 4})) continue;
+          } else {
+            if (circles.some(c => rgnBoxCirc(pad, c))) continue;
+            if (RGNINSP && rgnBoxHits(pad, RGNINSP.box)) continue;
+          }
+          // The line must not cut through anything — EXCEPT the circle it comes out of,
+          // which it necessarily starts on. Testing against that one rejects every
+          // candidate and silently places nothing at all.
+          const sx = q.cx + Math.cos(q.mid) * q.r * RGN_LEAD_IN,
+                sy = q.cy + Math.sin(q.mid) * q.r * RGN_LEAD_IN;
+          if (!q.insp && circles.some(c => Math.abs(c.x - q.cx) > .01 || Math.abs(c.y - q.cy) > .01
+                                ? rgnSegHits(sx, sy, ex, ey, c.x, c.y, c.r - 0.5) : false)) continue;
+          if (boxes.some(o => rgnSegHits(sx, sy, ex, ey, o.x + o.w / 2, o.y + o.h / 2,
+                                         Math.min(o.w, o.h) / 2))) continue;
+          put = {box:box, ex:ex, ey:ey, sx:sx, sy:sy, right:right};
+          break;
+        }
+      }
+    }
+    // nowhere honest to put it: leave it off rather than print it over something. The
+    // panel lists every sample either way, so nothing is lost but the line.
+    if (!put) continue;
+    boxes.push(put.box);
+    if (RGNLEADPUT) RGNLEADPUT.boxes.push({x:put.box.x, y:put.box.y, w:put.box.w, h:put.box.h,
+                                           sx:put.sx, sy:put.sy, ex:put.ex, ey:put.ey,
+                                           src:q.src});
+    ctx.strokeStyle = css.ink3; ctx.lineWidth = 1;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(put.sx, put.sy);
+    ctx.lineTo(put.ex, put.ey);
+    ctx.lineTo(put.right ? put.box.x - 2 : put.box.x + put.box.w + 2, put.ey);
+    ctx.stroke();
+    ctx.restore();
+    rgnLabelBox(ctx, put.box, css);
+    ctx.fillStyle = q.col;
+    ctx.fillRect(put.right ? put.box.x + 3 : put.box.x + put.box.w - 9, put.ey - 3, 6, 6);
+    ctx.fillStyle = css.ink;
+    ctx.textAlign = "left";
+    ctx.fillText(label, put.right ? put.box.x + 12 : put.box.x + 2, put.ey);
+  }
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
+}
+
+function rgnLabelBox(ctx, box, css){
+  // a filled plate under a name, so it reads at full contrast over any wedge colour
+  ctx.fillStyle = css.panel;
+  ctx.globalAlpha = .93;
+  ctx.fillRect(box.x, box.y, box.w, box.h);
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = css.rule;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(box.x + .5, box.y + .5, box.w - 1, box.h - 1);
+}
+
+function rgnDrawInspector(ctx, n, X, Y, R, css, CW, CH){
+  // One penned region, blown up: the wedges, the total, and the slice names on plates.
+  // It sits on its own opaque panel — the map underneath is covered, so its labels have
+  // somewhere to go instead of dodging circles that are no longer visible there.
+  const wedges = rgnWedges(n);
+  // square: same margin every side, so the labels have the same room whichever way a
+  // wedge points and the card does not read as a letterbox
+  const pad = Math.min(120, Math.max(78, R * .9));
+  const side = (R + pad) * 2;
+  const box = {x:Math.max(2, X - R - pad), y:Math.max(2, Y - R - pad), w:side, h:side};
+  RGNINSP = {x:X, y:Y, r:R, box:box};
+  ctx.fillStyle = css.bg;
+  ctx.globalAlpha = .97;
+  ctx.fillRect(box.x, box.y, box.w, box.h);
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
+  ctx.strokeRect(box.x + .5, box.y + .5, box.w - 1, box.h - 1);
+  wedges.forEach(w => {
+    ctx.fillStyle = stylePattern(ctx, w.row.col, srcStyle(w.row.src));
+    ctx.beginPath(); ctx.moveTo(X, Y); ctx.arc(X, Y, R, w.a0, w.a1); ctx.closePath(); ctx.fill();
+  });
+  ctx.strokeStyle = css.ink3; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(X, Y, R, 0, 2 * Math.PI); ctx.stroke();
+  ctx.lineWidth = 1;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = `600 ${Math.max(10, R * .2)}px ${css.mono}`;
+  ctx.lineJoin = "round"; ctx.lineWidth = 3.5; ctx.strokeStyle = css.bg;
+  ctx.strokeText(rgnCampVal(n), X, Y - 6);
+  ctx.fillStyle = css.ink;
+  ctx.fillText(rgnCampVal(n), X, Y - 6);
+  ctx.lineWidth = 1;
+  // the cuts, exactly as a circle in the cloud shows them — a penned region is still a
+  // region, and "which one am I looking at" is the first thing you ask of it
+  ctx.font = `9.5px ${css.mono}`;
+  let lines = rgnCutsOf(n).map(c => rgnCutText(c));
+  const room = Math.floor((R * 1.4) / 12);
+  if (lines.length > room && room > 0)
+    lines = lines.slice(0, Math.max(1, room - 1)).concat([`+ ${lines.length - room + 1} more`]);
+  if (lines.length){
+    const nw = lines.reduce((a, s) => Math.max(a, ctx.measureText(s).width), 0);
+    const bw = nw + 12, bh = lines.length * 12 + 6, by = Y + 4;
+    ctx.fillStyle = css.bg;
+    ctx.globalAlpha = .9;
+    ctx.fillRect(X - bw / 2, by, bw, bh);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
+    ctx.strokeRect(X - bw / 2 + .5, by + .5, bw - 1, bh - 1);
+    ctx.fillStyle = css.ink2;
+    ctx.textBaseline = "top";
+    lines.forEach((s, i) => ctx.fillText(s, X, by + 4 + i * 12));
+  }
+  ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+  wedges.forEach(w => RGNLEAD.push({cx:X, cy:Y, r:R, mid:w.mid, insp:true,
+                                    src:w.row.src, y:w.row.y, col:w.row.col}));
+}
+
+function rgnDrawBubble(ctx, n, css, CW, CH){
+  const b = n.bub;
+  if (!b || b.r <= 0) return;
+  if (b.pin && b.hidden) return;      // scrolled out of its pen
+  let X, Y, R;
+  if (b.pin){ const q = rgnPinAt(b, CW); X = q.X; Y = q.Y; R = q.R; }
+  else { X = (b.x - RGNV.x) * RGNV.k; Y = (b.y - RGNV.y) * RGNV.k; R = b.r * RGNV.k; }
+  if (X + R < -80 || Y + R < -80 || X - R > CW + 80 || Y - R > CH + 80) return;
+  if (b.pin && n === RGNF){
+    // A pinned circle cannot be zoomed into — it is fixed. So focusing one draws it PROPERLY
+    // beside its pen instead: same wedges, same names, at a size you can actually read.
+    const IR = Math.min(120, Math.max(72, Math.min(CW, CH) * .2));
+    const pad = Math.min(120, Math.max(78, IR * .9));
+    const half = IR + pad;                       // a square, so it reads as a card
+    const ix = b.side === "left" ? Math.min(CW - half - 10, (RGNPEN ? RGNPEN.w : 0) + half + 14)
+                                 : Math.max(half + 10, CW - (RGNSHELF ? RGNSHELF.w : 0) - half - 14);
+    // clear of the pen's own caption, so it sits IN the view rather than clipped at the top
+    const iy = Math.min(CH - half - 10, Math.max(half + 10, 96));
+    rgnDrawInspector(ctx, n, ix, iy, IR, css, CW, CH);
+    // and a line from the pen's dot to the blow-up, so it is obvious which one it is
+    ctx.strokeStyle = css.ink3; ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(X, Y); ctx.lineTo(ix + (b.side === "left" ? -IR : IR), iy);
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  if (b.shelf && !b.ghost){
+    // under the floor: still shows what it is made of, but at a fixed size, off the map
+    const ws = rgnWedges(n);
+    ctx.globalAlpha = .5;
+    ws.forEach(w => {
+      ctx.fillStyle = stylePattern(ctx, w.row.col, srcStyle(w.row.src));
+      ctx.beginPath(); ctx.moveTo(X, Y); ctx.arc(X, Y, R, w.a0, w.a1); ctx.closePath(); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(X, Y, R, 0, 2 * Math.PI); ctx.stroke();
+    return;
+  }
+  if (b.ghost){
+    // an empty region: a fixed ring, dashed, because its size is not its yield
+    ctx.strokeStyle = css.ink3; ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.arc(X, Y, R, 0, 2 * Math.PI); ctx.stroke();
+    ctx.setLineDash([]);
+    if (R > 26 && !b.shelf){
+      ctx.fillStyle = css.ink3;
+      ctx.font = `10px ${css.mono}`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("empty", X, Y);
+      ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+    }
+    return;
+  }
+  const wedges = rgnWedges(n);
+  const dim = rgnDim(n);
+  // Names are drawn for the bubble you are LOOKING at and nowhere else. Across a whole
+  // landscape the colours and the panel's legend already say which sample is which, and
+  // a name on every slice is noise over the shapes you are trying to compare.
+  const focused = (n === RGNF);
+  if (R < 2.5){
+    ctx.fillStyle = wedges.length ? wedges[0].row.col : css.ink3;
+    ctx.globalAlpha = dim ? .4 : .9;
+    ctx.beginPath(); ctx.arc(X, Y, Math.max(1, R), 0, 2 * Math.PI); ctx.fill();
+    ctx.globalAlpha = 1;
+    return;
+  }
+  ctx.globalAlpha = dim ? .45 : 1;
+  wedges.forEach(w => {
+    ctx.fillStyle = stylePattern(ctx, w.row.col, srcStyle(w.row.src));
+    ctx.beginPath();
+    ctx.moveTo(X, Y);
+    ctx.arc(X, Y, R, w.a0, w.a1);
+    ctx.closePath();
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(X, Y, R, 0, 2 * Math.PI); ctx.stroke();
+  if (R < 22) return;
+
+  // The region's own total, set straight on the pie with a halo rather than on a disc. A
+  // disc punched a hole in the very area that encodes the yield, and only bubbles over
+  // 22px got one — so the ink meant different things at different sizes.
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const big = Math.min(15, Math.max(9, R * .18));
+  const val = rgnClip(ctx, rgnCampVal(n), R * 1.3);
+  ctx.font = `600 ${big}px ${css.mono}`;
+  const cw = ctx.measureText(val).width;
+  ctx.lineJoin = "round"; ctx.lineWidth = 3.5; ctx.strokeStyle = css.bg;
+  ctx.strokeText(val, X, Y - (R > 46 ? 6 : 0));
+  ctx.fillStyle = css.ink;
+  ctx.fillText(val, X, Y - (R > 46 ? 6 : 0));
+  let nw = 0, nh = 0;
+  let lines = [];
+  if (R > 46 && focused && !n.kids.length){
+    // Every cut, stacked under the total. "5 cuts" told you how many there were and not
+    // one of them — and this is the region you have chosen to look at.
+    ctx.font = `9.5px ${css.mono}`;
+    lines = rgnCutsOf(n).map(c => rgnCutText(c));
+    const room = Math.floor((R * 1.5) / 12);
+    if (lines.length > room && room > 0)
+      lines = lines.slice(0, Math.max(1, room - 1)).concat([`+ ${lines.length - room + 1} more`]);
+    nw = lines.reduce((a, s) => Math.max(a, ctx.measureText(s).width), 0);
+    nh = lines.length * 12;
+    const bw = nw + 12, bh = nh + 6, by = Y + 6;
+    // a plate, because these sit over whichever wedges happen to be behind them
+    ctx.fillStyle = css.bg;
+    ctx.globalAlpha = .9;
+    ctx.fillRect(X - bw / 2, by, bw, bh);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
+    ctx.strokeRect(X - bw / 2 + .5, by + .5, bw - 1, bh - 1);
+    ctx.fillStyle = css.ink2;
+    ctx.textBaseline = "top";
+    lines.forEach((s, i) => ctx.fillText(s, X, by + 4 + i * 12));
+    ctx.textBaseline = "middle";
+  }
+  ctx.lineWidth = 1;
+  // what the centre text occupies, so a wedge label cannot be printed on top of it
+  const mid = {x:X - Math.max(cw, nw) / 2 - 9, y:Y - big / 2 - 12,
+               w:Math.max(cw, nw) + 18, h:big + nh + 24};
+  ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+  if (R < 40 || !focused) return;
+
+  // a wedge wide enough carries its own number; the rest get leader lines
+  const inside = [];
+  ctx.textBaseline = "middle";
+  ctx.font = `10.5px ${css.mono}`;
+  wedges.forEach(w => {
+    const chord = 2 * R * .72 * Math.sin(Math.min(w.span, Math.PI) / 2);
+    const label = `${w.row.src} ${rgnFmt(w.row.y)}`;
+    const lw = ctx.measureText(label).width;
+    if (chord < 13 || lw > R * .52) return;
+    const lx = X + Math.cos(w.mid) * R * .72, ly = Y + Math.sin(w.mid) * R * .72;
+    const box = {x:lx - lw / 2 - 5, y:ly - 8, w:lw + 10, h:16};
+    // the total owns the middle, and a name already printed owns its own plate — either
+    // way this one is not drawn here, and falls through to a leader instead
+    if (rgnBoxHits(box, mid)) return;
+    if (RGNINLINE.some(o => rgnBoxHits(box, o))) return;
+    RGNINLINE.push(box);
+    rgnLabelBox(ctx, box, css);
+    ctx.fillStyle = css.ink;
+    ctx.textAlign = "center";
+    ctx.fillText(label, lx, ly);
+    inside.push(w);
+  });
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
+  if (R > 34 && !b.shelf && focused) wedges.forEach(w => {
+    if (inside.indexOf(w) >= 0) return;
+    RGNLEAD.push({cx:X, cy:Y, r:R, mid:w.mid, src:w.row.src, y:w.row.y, col:w.row.col});
+  });
+}
+
+function rgnDrawAxes(ctx, css, CW, CH){
+  // the declared bands, named along the top and down the side, in world units so they pan
+  // and zoom with everything else
+  const a = RGNAXES;
+  const X = x => (x - RGNV.x) * RGNV.k, Y = y => (y - RGNV.y) * RGNV.k;
+  ctx.strokeStyle = css.rule2 || css.rule;
+  ctx.lineWidth = 1;
+  ctx.globalAlpha = .55;
+  for (let c = 0; c <= a.ncol; c++){
+    const x = X(a.x0 + c * a.cw);
+    if (x < -20 || x > CW + 20) continue;
+    ctx.beginPath(); ctx.moveTo(x + .5, Y(a.y0)); ctx.lineTo(x + .5, Y(a.y0 + a.gh)); ctx.stroke();
+  }
+  for (let r = 0; r <= a.nrow; r++){
+    const y = Y(a.y0 + r * a.ch);
+    if (y < -20 || y > CH + 20) continue;
+    ctx.beginPath(); ctx.moveTo(X(a.x0), y + .5); ctx.lineTo(X(a.x0 + a.ncol * a.cw), y + .5); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  const fs = Math.max(8, Math.min(12, 10 * RGNV.k));
+  ctx.font = `600 ${fs}px ${css.mono}`;
+  ctx.fillStyle = css.ink2;
+  ctx.textBaseline = "bottom"; ctx.textAlign = "center";
+  a.cols.forEach((nm, c) => {
+    const x = X(a.x0 + (c + .5) * a.cw);
+    if (x > -60 && x < CW + 60)
+      ctx.fillText(rgnClip(ctx, nm, a.cw * RGNV.k - 6), x, Y(a.y0) - 5);
+  });
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  a.rows.forEach((nm, r) => {
+    const y = Y(a.y0 + (r + .5) * a.ch);
+    if (y > -30 && y < CH + 30)
+      ctx.fillText(rgnClip(ctx, nm, 88 * RGNV.k), X(a.x0) - 7, y);
+  });
+  ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+  ctx.font = `${Math.max(7.5, fs - 2)}px ${css.mono}`;
+  ctx.fillStyle = css.ink3;
+  ctx.fillText(`${a.xname} across` + (a.yname ? ` · ${a.yname} down` : "") +
+               (a.inner ? ` · each cell: ${a.inner}` : ""), X(a.x0), Y(a.y0) - 5 - fs - 3);
+  if (a.lane){
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    ctx.fillStyle = css.ink3;
+    ctx.fillText("no cell", X(a.x0) - 7, Y(a.y0 + a.gh + a.lane / 2));
+  }
+  ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+}
+
+function rgnDrawShelf(ctx, css, CW, CH, s){
+  // the set-aside regions live behind their own rule, captioned and PINNED, so they are
+  // plainly an index rather than part of the landscape you are panning around
+  const X = (s.x - RGNV.x) * RGNV.k, Y = (s.y - RGNV.y) * RGNV.k;
+  const W = s.w * RGNV.k, H = s.h * RGNV.k;
+  if (X > CW || X + W < 0) return;
+  ctx.fillStyle = css.panel;
+  ctx.globalAlpha = .45;
+  ctx.fillRect(X, Y, W, H);
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
+  // the rule goes on the side facing the map, so each pen reads as walled off from it
+  const rx = s.side === "left" ? X + W - .5 : X + .5;
+  ctx.beginPath(); ctx.moveTo(rx, Y); ctx.lineTo(rx, Y + H); ctx.stroke();
+  if (W < 54) return;
+  ctx.fillStyle = css.ink3;
+  ctx.font = `600 10px ${css.mono}`;
+  ctx.textBaseline = "top";
+  ctx.fillText(rgnClip(ctx, s.label, W - 16), X + 8, Y + 6);
+  ctx.textBaseline = "alphabetic";
+  const pl = s.plan;
+  if (!pl) return;
+  const CELL = 24, top = 20 + 14, bodyH = pl.rows * CELL;
+  if (!pl.open && pl.more){
+    // the handle: how many rows are not on show, and where to click for them
+    const hy = top + bodyH + 4;
+    s.hit = {x:X + 6, y:hy, w:W - 12, h:16};
+    ctx.fillStyle = css.sunk;
+    ctx.fillRect(s.hit.x, s.hit.y, s.hit.w, s.hit.h);
+    ctx.strokeStyle = css.rule;
+    ctx.strokeRect(s.hit.x + .5, s.hit.y + .5, s.hit.w - 1, s.hit.h - 1);
+    ctx.fillStyle = css.ink2;
+    ctx.font = `600 10px ${css.mono}`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(`… ${pl.more * RGN_PEN_COLS} more`, s.hit.x + s.hit.w / 2,
+                 s.hit.y + s.hit.h / 2);
+    ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+  } else if (pl.open){
+    const hy = top + bodyH + 4;
+    s.hit = {x:X + 6, y:hy, w:W - 12, h:16};
+    ctx.fillStyle = css.sunk;
+    ctx.fillRect(s.hit.x, s.hit.y, s.hit.w, s.hit.h);
+    ctx.strokeStyle = css.rule;
+    ctx.strokeRect(s.hit.x + .5, s.hit.y + .5, s.hit.w - 1, s.hit.h - 1);
+    ctx.fillStyle = css.ink2;
+    ctx.font = `600 10px ${css.mono}`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("close", s.hit.x + s.hit.w / 2, s.hit.y + s.hit.h / 2);
+    ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+    if (pl.need > pl.rows){
+      // a bar on the map-facing edge, showing where in the pile you are
+      const bx = s.side === "left" ? X + W - 5 : X + 2;
+      const frac = pl.rows / pl.need;
+      const off = (RGNPENSCROLL[s.side] || 0) / pl.need;
+      ctx.fillStyle = css.rule;
+      ctx.fillRect(bx, top, 3, bodyH);
+      ctx.fillStyle = css.ink3;
+      ctx.fillRect(bx, top + off * bodyH, 3, Math.max(12, frac * bodyH));
+    }
+  }
+}
+
+let RGNLEAD = [];      // leader requests, collected while the circles are drawn
+let RGNINLINE = [];    // slice names already printed inside a circle, so nothing lands on one
+let RGNINSP = null;    // the blown-up penned region, when one is focused
+let RGNLEADPUT = null; // where they ended up, so the claim "nothing overlaps" is testable
+
+function rgnDrawBubbles(ctx, css, CW, CH){
+  // circles first, labels second, because a label has to know about every circle and not
+  // only its own — which is exactly what the one-bubble-at-a-time version could not do
+  RGNLEAD = [];
+  RGNINLINE = [];
+  RGNINSP = null;
+  const order = rgnBubbleOrder(RGNT);
+  if (RGNAXES) rgnDrawAxes(ctx, css, CW, CH);
+  order.filter(n => !(n.bub && n.bub.pin)).forEach(n => rgnDrawBubble(ctx, n, css, CW, CH));
+  // the pens go on TOP, so the map slides under them instead of through them
+  rgnDrawShelf(ctx, css, CW, CH, RGNSHELF);
+  rgnDrawShelf(ctx, css, CW, CH, RGNPEN);
+  order.filter(n => n.bub && n.bub.pin).forEach(n => rgnDrawBubble(ctx, n, css, CW, CH));
+  const circles = [];
+  order.forEach(n => {
+    if (!n.bub || n.bub.r <= 0 || n.bub.pin) return;
+    const X = (n.bub.x - RGNV.x) * RGNV.k, Y = (n.bub.y - RGNV.y) * RGNV.k;
+    const R = n.bub.r * RGNV.k;
+    if (X + R < -200 || Y + R < -200 || X - R > CW + 200 || Y - R > CH + 200) return;
+    circles.push({x:X, y:Y, r:R + 4});      // the buffer that keeps labels off the glass
+  });
+  RGNLEADPUT = {circles:circles, boxes:[], asked:RGNLEAD.length};
+  if (RGNLEAD.length) rgnPlaceLeaders(ctx, RGNLEAD, circles, css, CW, CH);
+}
+
+function rgnPickBubble(px, py){
+  // nearest circle containing the point; the ghosts are pickable too, so an empty region
+  // you declared can still be inspected
+  let hit = null, best = 1e18;
+  const cv = $("rgncanvas");
+  const box = (cv && cv.getBoundingClientRect) ? cv.getBoundingClientRect() : {width:RGNW};
+  rgnBubbleOrder(RGNT).forEach(n => {
+    const b = n.bub;
+    if (!b || b.r <= 0) return;
+    if (b.pin && b.hidden) return;
+    let X, Y, R;
+    if (b.pin){ const q = rgnPinAt(b, box.width || RGNW); X = q.X; Y = q.Y; R = q.R; }
+    else { X = (b.x - RGNV.x) * RGNV.k; Y = (b.y - RGNV.y) * RGNV.k; R = b.r * RGNV.k; }
+    const d = (px - X) * (px - X) + (py - Y) * (py - Y);
+    if (d <= Math.max(R, 6) * Math.max(R, 6) && d < best){ best = d; hit = n; }
+  });
+  return hit;
+}
+
 function rgnZoomable(){
   // An empty map has nothing to zoom, so the wheel is not ours to take: swallowing it
   // there just traps the page's own scrolling under the cursor.
@@ -7800,6 +8990,7 @@ function rgnZoomable(){
 }
 
 function rgnPickAt(px, py){
+  if (rgnIsBubble()) return rgnPickBubble(px, py);
   let best = null;
   (function rec(n){
     const r = n.rect;
@@ -7817,7 +9008,8 @@ function rgnCss(){
   const g = n => css(n);
   return {mono:"ui-monospace, SFMono-Regular, Menlo, monospace",
           ink:g("--ink"), ink2:g("--ink-2"), ink3:g("--ink-3"),
-          rule:g("--rule"), dim:g("--rule"), panel:g("--panel"), sunk:g("--sunk"),
+          rule:g("--rule"), rule2:g("--rule-2"), dim:g("--rule"),
+          panel:g("--panel"), sunk:g("--sunk"),
           lv1:g("--sunk"), lv2:g("--ground"), lv3:g("--panel"), block:g("--panel"),
           bg:g("--sunk")};
 }
@@ -7834,6 +9026,7 @@ function rgnDrawOnly(){
     cv.width = Math.round(CW * dpr); cv.height = Math.round(CH * dpr);
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  STYLEPAT = null;      // a pattern belongs to the context that made it
   const css2 = rgnCss();
   ctx.fillStyle = css2.bg;
   ctx.fillRect(0, 0, CW, CH);
@@ -7850,14 +9043,22 @@ function rgnDrawOnly(){
     rgnPanel();
     return;
   }
-  rgnDrawNode(ctx, RGNT, css2, CW, CH);
+  if (rgnIsBubble()) rgnDrawBubbles(ctx, css2, CW, CH);
+  else rgnDrawNode(ctx, RGNT, css2, CW, CH);
   for (const [n, w] of [[RGNH, 1], [RGNF, 2]]){
     if (!n || !n.rect || n.rect.w <= 0) continue;
     const r = n.rect;
     ctx.strokeStyle = css2.ink; ctx.lineWidth = w;
     if (w === 1) ctx.setLineDash([4, 3]);
-    ctx.strokeRect((r.x - RGNV.x) * RGNV.k - 1, (r.y - RGNV.y) * RGNV.k - 1,
-                   r.w * RGNV.k + 2, r.h * RGNV.k + 2);
+    if (rgnIsBubble() && n.bub && n.bub.r > 0){
+      ctx.beginPath();
+      ctx.arc((n.bub.x - RGNV.x) * RGNV.k, (n.bub.y - RGNV.y) * RGNV.k,
+              n.bub.r * RGNV.k + 3, 0, 2 * Math.PI);
+      ctx.stroke();
+    } else {
+      ctx.strokeRect((r.x - RGNV.x) * RGNV.k - 1, (r.y - RGNV.y) * RGNV.k - 1,
+                     r.w * RGNV.k + 2, r.h * RGNV.k + 2);
+    }
     ctx.setLineDash([]);
   }
   rgnPanel();
@@ -7871,7 +9072,8 @@ function rgnDraw(keep){
   RGNW = Math.max(420, (box && box.width) || 1200);
   RGNH0 = Math.max(320, (box && box.height) || 700);
   rgnCount(keep);
-  rgnLayout(RGNT, 0, 0, RGNW, Math.max(1, RGNH0 - RGN_TOP), 0, true);
+  if (rgnIsBubble()) rgnBubbleLayout(RGNT, RGNW, Math.max(1, RGNH0 - RGN_TOP));
+  else rgnLayout(RGNT, 0, 0, RGNW, Math.max(1, RGNH0 - RGN_TOP), 0, true);
   if (!RGNV.k || !isFinite(RGNV.k) || RGNV.k <= 0) rgnFitAll();
   RGNF = RGNFS ? rgnFindSlot(RGNFS.obj, RGNFS.key) : null;
   if (!RGNF) RGNFS = null;                 // its camp is gone: forget it rather than hold a ghost
@@ -7890,31 +9092,40 @@ function rgnPanel(){
   const rows = rgnRowsAll(n);
   const B = rgnBkgY(n), Sg = rgnSigY(n);
   const chk = rgnCheck() || {};
+  const bub = rgnIsBubble() ? rgnBubbleCheck() : null;
   const per = [];
   for (const r of rows){
-    per.push(`<tr><td><span class="rgndot" style="background:${r.col}"></span>${esc(r.src)}</td>` +
-             `<td class="r">${rgnFmt(r.y)}</td><td class="r">${r.n.toLocaleString("en-US")}</td>` +
-             `<td class="r"><button class="rgnx" data-x="${esc(r.src)}"` +
+    // one number per row: weighted or not, it is THE yield. The raw count is what the
+    // yield's statistics rest on, so it stays reachable on hover rather than being lost.
+    const watched = (RGN.floorsrcs || []).indexOf(r.src) >= 0;
+    per.push(`<tr title="${r.n.toLocaleString("en-US")} raw events">` +
+             `<td><span class="rgndot" style="background:${r.col}"></span>${esc(r.src)}</td>` +
+             `<td class="r">${rgnFmt(r.y)}</td>` +
+             `<td class="r"><button class="rgnw${watched ? " on" : ""}" data-w="${esc(r.src)}"` +
+             ` title="${watched ? "stop applying the floor to" : "apply the floor to"} ` +
+             `${esc(r.src)} only">◦</button>` +
+             `<button class="rgnx" data-x="${esc(r.src)}"` +
              ` title="take ${esc(r.src)} off this map">×</button></td></tr>`);
   }
-  const crumb = [rgnRootName()].concat(n.path.slice()).map(esc).join(" › ");
-  const tgt = $("rgntarget");
-  if (tgt) tgt.innerHTML = n.kids.length && n !== RGNT
-    ? `<span class="rgnbad">${esc(n.name)} already has cuts inside it</span>`
-    : n.kids.length ? `cutting <b>everything</b> — click a region to cut just that one`
-                    : `cutting <b>${esc(n.name)}</b>`;
+  const cuts = rgnCutsOf(n);
+  const crumb = cuts.length
+    ? cuts.map(c => `<span class="rgncut">${esc(rgnCutText(c))}</span>`).join("")
+    : `<span class="rgncut">${esc(rgnRootName())}</span>`;
   box.innerHTML =
-    `<p class="rgnpath">${crumb}</p>` +
+    `<div class="rgnpath">${crumb}</div>` +
     `<div class="rgnbig">${rgnFmt(rgnY(n))}</div>` +
-    `<p class="rgnunit">${WTD() ? "weighted events" : "events"} · ` +
-    `${rgnN(n).toLocaleString("en-US")} raw` +
+    `<p class="rgnunit" title="${rgnN(n).toLocaleString("en-US")} raw events">` +
+    `${WTD() ? "weighted yield" : "raw yield"}` +
     (n.parent ? ` · ${(100 * rgnY(n) / (rgnY(n.parent) || 1)).toFixed(1)}% of its camp` : "") +
     `</p>` +
-    `<table class="rgntbl"><tr><th>sample</th><th class="r">yield</th><th class="r">raw</th>` +
-    `<th></th></tr>` +
+    `<table class="rgntbl"><tr><th>sample</th>` +
+    `<th class="r">${WTD() ? "weighted yield" : "raw yield"}</th><th></th></tr>` +
     per.join("") +
-    `<tr><td><b>total</b></td><td class="r"><b>${rgnFmt(rgnY(n))}</b></td>` +
-    `<td class="r"><b>${rgnN(n).toLocaleString("en-US")}</b></td><td></td></tr></table>` +
+    `<tr title="${rgnN(n).toLocaleString("en-US")} raw events">` +
+    `<td><b>total</b></td><td class="r"><b>${rgnFmt(rgnY(n))}</b></td><td></td></tr></table>` +
+    (RGNF && rgnCutsOf(RGNF).length
+      ? `<p class="rgnnote"><button class="tbtn rgnopen" id="rgnnewtab">` +
+        `open a new tab with these cuts</button></p>` : "") +
     `<p class="rgnnote">drag a sample or a group onto the map from the Sample band` +
     `${RGN.srcs ? ` · <button class="tbtn rgnmini" id="rgnall">every sample</button>` : ""}</p>` +
     (rgnSrcs().length ? "" :
@@ -7922,38 +9133,658 @@ function rgnPanel(){
     `<p class="rgnnote">${rgnDim(n) ? "under the floor — greyed, and not cut further. " : ""}` +
     `S/B ${B > 0 ? (Sg / B).toFixed(4) : "—"}</p>` +
     `<p class="rgnnote">${chk.leaves || 0} regions` +
-    `${chk.thin ? ` · <span class="rgnbad">${chk.thin} depleted, drawn apart and NOT to scale</span>` : ""} · ` +
+    `${chk.thin ? ` · <span class="rgnbad">${chk.thin} depleted, drawn apart and NOT to scale</span>` : ""}` +
+    (rgnIsBubble() && bub
+      ? (bub.log
+          ? ` · <span class="rgnbad">log area — sizes are NOT the yield, only its order</span>`
+          : ` · ${bub.scaled} circles, area = yield to ${bub.area.toExponential(0)}`) +
+        `${bub.ghosts ? ` · <span class="rgnbad">${bub.ghosts} empty, penned right</span>` : ""}` +
+        `${bub.under ? ` · <span class="rgnbad">${bub.under} under the floor, penned left` +
+          `</span>` : ""}` +
+        `${bub.floored ? ` · <span class="rgnbad">${bub.floored} too small to draw, held ` +
+          `up to a minimum and NOT to scale — zoom in</span>` : ""}`
+      : "") + ` · ` +
     `<span class="${chk.exact ? "rgnok" : "rgnbad"}">` +
     `${chk.exact ? "every event in exactly one region, counts exact"
                  : `SUM RULE BROKEN: ${chk.leafN} of ${chk.rootN}`}</span></p>`;
+  rgnGridStatus();
   // the table is rebuilt on every paint, so its buttons are rewired with it
   if (box.querySelectorAll){
     box.querySelectorAll("[data-x]").forEach(b =>
       b.onclick = () => rgnDropSrc(b.dataset.x));
+    box.querySelectorAll("[data-w]").forEach(b =>
+      b.onclick = () => rgnWatchSrc(b.dataset.w));
     if ($("rgnall")) $("rgnall").onclick = () => rgnAllSrcs();
+    if ($("rgnnewtab")) $("rgnnewtab").onclick = () => rgnOpenTab();
   }
 }
 
+/* ---------- the grid panel: the dict, and the only way to write it ---------- */
+
+let RGNGA = {};        // per variable, the group a token click lands in. Posture, never saved.
+let RGNGOPEN = null;   // whether the dict fold is down. null = decide from whether one exists
+let RGNGT = [];        // the tokens the document was last drawn from
+
+function rgnGridCols(){
+  // the catalogue the editor validates against: the file's own columns
+  const out = {};
+  META.cols.forEach(c => { out[c.name] = {vals:c.vals || null, names:c.names || null}; });
+  return out;
+}
+
+function rgnGridVars(){ return (RGN && RGN.grid && RGN.grid.vars) || []; }
+const rgnGridEx = () => !!(RGN && RGN.grid && RGN.grid.exhaustive);
+
+function rgnGridInit(){
+  if (RGN && !RGN.grid) RGN.grid = {vars:[], exhaustive:false};
+}
+
+function rgnGridPy(s){
+  // even a grid set from a file cannot emit a document that will not parse
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, " ");
+}
+
+function rgnGridTokens(){
+  // ONE emitter. The copied text and the editable slots are two consumers of this list, so
+  // what you select can never disagree with what the map would build.
+  const out = [], p = s => out.push({t:"p", s:s});
+  p("REGIONS = {\n");
+  rgnGridVars().forEach((v, i) => {
+    p('    "');
+    out.push({t:"v", s:rgnGridPy(v.col), k:"col", i:i});
+    p('": [');
+    v.bands.forEach((b, j) => {
+      if (j) p(", ");
+      if (rgnGridIsSet(v.bands)){
+        p("{");
+        b.forEach((x, m) => { if (m) p(", "); out.push({t:"v", s:String(x), k:"val", i:i, j:j, m:m}); });
+        p("}");
+      } else out.push({t:"v", s:String(b), k:"edge", i:i, j:j});
+    });
+    p("],\n");
+  });
+  p("}\nEXHAUSTIVE = " + (rgnGridEx() ? "True" : "False"));
+  return out;
+}
+
+const rgnGridText = () => rgnGridTokens().map(t => t.s).join("");
+
+function rgnGridBands(v){
+  // how each band reads, and whether it is one of the regions the dict declares
+  const inner = rgnGridInterior(v.bands), ex = rgnGridEx();
+  let names;
+  if (rgnGridIsSet(v.bands)){
+    names = v.bands.map(b => v.col + " = " + b.slice().sort((a, c) => a - c).join("/"))
+                   .concat([v.col + " other"]);
+  } else {
+    const e = v.bands.slice().sort((a, c) => a - c);
+    names = [v.col + " < " + fmt(e[0])];
+    for (let i = 0; i < e.length - 1; i++)
+      names.push(fmt(e[i]) + " ≤ " + v.col + " < " + fmt(e[i + 1]));
+    names.push(v.col + " ≥ " + fmt(e[e.length - 1]));
+  }
+  return names.map((n, i) => ({name:n, declared:ex || !!inner[i]}));
+}
+
+function rgnGridProblems(){
+  // overlap on a number axis is unwritable and a value cannot be claimed twice, so what is
+  // left to report is repeats, strays, and an axis that declares nothing at all
+  const bad = [], seen = {}, cols = rgnGridCols(), ex = rgnGridEx();
+  rgnGridVars().forEach(v => {
+    if (seen[v.col]) bad.push(`${v.col} is declared twice`);
+    seen[v.col] = 1;
+    if (!cols[v.col]) bad.push(`${v.col} is not a column in this file`);
+    if (!v.bands.length) return bad.push(`${v.col} has no bands`);
+    if (!ex && !rgnGridWidth(v.bands, false))
+      bad.push(`${v.col} declares no bounded band — add another cut point`);
+    if (rgnGridIsSet(v.bands)){
+      const used = {};
+      v.bands.forEach(b => {
+        if (!b.length) bad.push(`${v.col} has an empty group`);
+        b.forEach(x => {
+          if (used[x]) bad.push(`${v.col}: ${x} is in two groups at once`);
+          used[x] = 1;
+          const vals = cols[v.col] && cols[v.col].vals;
+          if (vals && vals.indexOf(x) < 0) bad.push(`${v.col}: ${x} is not a value it takes`);
+        });
+      });
+    } else {
+      const e = v.bands.slice().sort((a, c) => a - c);
+      for (let i = 1; i < e.length; i++)
+        if (e[i] === e[i - 1]) bad.push(`${v.col}: repeated cut point ${fmt(e[i])}`);
+    }
+  });
+  return bad;
+}
+
+function rgnGridCommit(n, raw){
+  // one slot, validated against the model it is going into. A refusal restores the old text
+  // rather than leaving something half-typed that the copy would emit.
+  const tk = RGNGT[n];
+  if (!tk) return false;
+  const v = rgnGridVars()[tk.i], s = String(raw).trim(), cols = rgnGridCols();
+  if (tk.k === "col"){
+    if (!s) { rgnGridDelVar(tk.i); return true; }
+    // a name carrying a quote would break the document it is written into
+    if (!/^[A-Za-z_][A-Za-z0-9_ .-]*$/.test(s)) return say(`<b>${esc(s)}</b> is not a column name`), false;
+    if (rgnGridVars().some((o, k) => k !== tk.i && o.col === s))
+      return say(`<b>${esc(s)}</b> is already declared`), false;
+    v.col = s;
+    if (cols[s] && cols[s].vals && !rgnGridIsSet(v.bands)) v.bands = [[cols[s].vals[0]]];
+    if (cols[s] && !cols[s].vals && rgnGridIsSet(v.bands)) v.bands = [0, 1];
+  } else if (tk.k === "edge"){
+    if (!s) { rgnGridDelBand(tk.i, tk.j); return true; }
+    const x = parseFloat(s);
+    if (!isFinite(x)) return say(`<b>${esc(s)}</b> is not a number`), false;
+    if (v.bands.some((b, k) => k !== tk.j && b === x))
+      return say(`${esc(v.col)} already cuts at ${fmt(x)}`), false;
+    v.bands[tk.j] = x;
+    v.bands.sort((a, c) => a - c);
+  } else {
+    if (!s) { rgnGridDelVal(tk.i, tk.j, tk.m); return true; }
+    const x = parseFloat(s);
+    if (!isFinite(x)) return say(`<b>${esc(s)}</b> is not a value`), false;
+    const vals = cols[v.col] && cols[v.col].vals;
+    if (vals && vals.indexOf(x) < 0)
+      return say(`${esc(v.col)} never takes ${fmt(x)} — it takes ${vals.join(", ")}`), false;
+    if (v.bands.some((b, k) => k !== tk.j && b.indexOf(x) >= 0))
+      return say(`${fmt(x)} is already in another group of ${esc(v.col)}`), false;
+    v.bands[tk.j][tk.m] = x;
+    v.bands[tk.j].sort((a, c) => a - c);
+  }
+  markDirty();
+  return true;
+}
+
+function rgnGridAddVar(col){
+  const name = col || ($("rgngnew") ? $("rgngnew").value.trim() : "");
+  if (!name) return say("name a column to add");
+  rgnGridInit();
+  if (rgnGridVars().some(v => v.col === name)) return say(`<b>${esc(name)}</b> is already declared`);
+  const c = rgnGridCols()[name];
+  if (!c) return say(`<b>${esc(name)}</b> is not a column in this file`);
+  RGN.grid.vars.push({col:name, bands:c.vals ? [[c.vals[0]]] : [0, 1]});
+  if ($("rgngnew")) $("rgngnew").value = "";
+  markDirty(); rgnGridDraw();
+}
+
+function rgnGridAddBand(i){
+  const v = rgnGridVars()[i];
+  if (!v) return;
+  if (rgnGridIsSet(v.bands)){
+    const vals = (rgnGridCols()[v.col] || {}).vals || [], used = {};
+    v.bands.forEach(b => b.forEach(x => { used[x] = 1; }));
+    const free = vals.filter(x => !used[x]);
+    if (!free.length) return say(`${esc(v.col)} has no values left to group`);
+    v.bands.push([free[0]]);
+    RGNGA[i] = v.bands.length - 1;
+  } else {
+    const e = v.bands.slice().sort((a, c) => a - c);
+    v.bands.push(e.length ? e[e.length - 1] + 1 : 1);
+    v.bands.sort((a, c) => a - c);
+  }
+  markDirty(); rgnGridDraw();
+}
+
+function rgnGridActive(i, j){
+  // clicking the group you are already in leaves it, so "nothing selected" is reachable
+  if (RGNGA[i] === j) delete RGNGA[i]; else RGNGA[i] = j;
+  rgnGridDraw();
+}
+
+function rgnGridClearActive(){
+  if (!Object.keys(RGNGA).length) return false;
+  RGNGA = {}; rgnGridDraw(); return true;
+}
+
+function rgnGridMoveVal(i, x, to){
+  // a value belongs to exactly one group, so moving it out is part of moving it in — which
+  // is why overlap stays unwritable even though the groups are rearrangeable
+  const v = rgnGridVars()[i];
+  if (!v || !rgnGridIsSet(v.bands) || to == null || !v.bands[to]) return;
+  v.bands = v.bands.map(b => b.filter(y => y !== x));
+  v.bands[to].push(x);
+  v.bands[to].sort((a, c) => a - c);
+  const keep = [];
+  v.bands.forEach((b, j) => { if (b.length) keep.push(b); else if (RGNGA[i] > j) RGNGA[i]--; });
+  v.bands = keep;
+  if (!v.bands.length) return rgnGridDelVar(i);
+  if (RGNGA[i] >= v.bands.length) RGNGA[i] = v.bands.length - 1;
+  markDirty(); rgnGridDraw();
+}
+
+function rgnGridMoveBand(i, from, to){
+  const v = rgnGridVars()[i];
+  if (!v || from === to || !v.bands[from] || !v.bands[to]) return;
+  const b = v.bands.splice(from, 1)[0];
+  v.bands.splice(to, 0, b);
+  if (!rgnGridIsSet(v.bands)) v.bands.sort((a, c) => a - c);
+  RGNGA[i] = to;
+  markDirty(); rgnGridDraw();
+}
+
+function rgnGridMoveVar(from, to){
+  // the first variable is the outermost split, so this is the picture's own axis order
+  const vs = rgnGridVars();
+  if (from === to || !vs[from] || !vs[to]) return;
+  vs.splice(to, 0, vs.splice(from, 1)[0]);
+  RGNGA = {};
+  markDirty(); rgnGridDraw();
+}
+
+function rgnGridDelVar(i){ rgnGridVars().splice(i, 1); RGNGA = {}; markDirty(); rgnGridDraw(); }
+
+function rgnGridDelBand(i, j){
+  const v = rgnGridVars()[i];
+  v.bands.splice(j, 1);
+  if (!v.bands.length) return rgnGridDelVar(i);
+  if (RGNGA[i] >= v.bands.length) RGNGA[i] = v.bands.length - 1;
+  markDirty(); rgnGridDraw();
+}
+
+function rgnGridDelVal(i, j, m){
+  const v = rgnGridVars()[i];
+  v.bands[j].splice(m, 1);
+  if (!v.bands[j].length) return rgnGridDelBand(i, j);
+  markDirty(); rgnGridDraw();
+}
+
+function rgnGridApply(){
+  // the dict becomes the partition. It REPLACES what is there, which is what lets the panel
+  // compare the two afterwards and say honestly whether the picture is still the recipe.
+  if (!RGN) return;
+  const bad = rgnGridProblems();
+  if (bad.length) return say(esc(bad[0]));
+  const n = rgnGridCount(RGN.grid);
+  if (!n) return say("this dict declares no regions yet");
+  RGN.root = rgnGridSpec(RGN.grid);
+  rgnFocus(null);
+  markDirty();
+  drawAll();
+  say(`applied — <b>${n}</b> region${n === 1 ? "" : "s"}` +
+      (rgnGridEx() ? "" : ", plus the leftover"));
+}
+
+function rgnGridMarkup(){
+  // a file that already carries a dict opens showing it: a fold you have to find is a
+  // feature nobody knows is there
+  const shown = RGNGOPEN == null ? rgnGridVars().length > 0 : RGNGOPEN;
+  return `<details class="rgngrid" id="rgngrid"${shown ? " open" : ""}>` +
+    `<summary>declare a grid of regions${rgnGridVars().length
+      ? ` — ${rgnGridVars().map(v => esc(v.col)).join(" × ")}` : ""}</summary>
+    <pre class="rgndoc" id="rgngdoc"></pre>
+    <div class="rgnstrip" style="border:0;padding:9px 0">
+      <button class="tbtn" id="rgngadd">+ variable</button>
+      <input id="rgngnew" class="rgnnum" style="width:130px" list="rgngcols"
+             placeholder="column" title="a column of this file">
+      <datalist id="rgngcols"></datalist>
+      <button class="tbtn" id="rgngex" title="whether the open tails count as regions too"
+              aria-pressed="false">exhaustive: off</button>
+      <span class="rgnsp"></span>
+      <span class="rgntarget" id="rgngout"></span>
+      <button class="tbtn" id="rgngcopy" title="the dict, as Python, on your clipboard">copy</button>
+      <button class="tbtn hero" id="rgngapply" title="build this partition">apply</button>
+    </div>
+    <div id="rgngrows"></div></details>`;
+}
+
+function rgnGridDraw(){
+  // the document and the controls, both from the model, never from what is on screen
+  const doc = $("rgngdoc");
+  if (!doc || !RGN) return;
+  RGNGT = rgnGridTokens();
+  doc.innerHTML = RGNGT.map((tk, n) => tk.t === "p"
+    ? `<span class="gp">${esc(tk.s)}</span>`
+    : `<span class="gv" contenteditable="plaintext-only" data-n="${n}">${esc(tk.s)}</span>`).join("");
+  const ex = rgnGridEx();
+  if ($("rgngex")){
+    $("rgngex").textContent = ex ? "exhaustive: on" : "exhaustive: off";
+    $("rgngex").setAttribute("aria-pressed", ex);
+  }
+  if ($("rgngcols"))
+    $("rgngcols").innerHTML = META.cols.map(c => `<option value="${esc(c.name)}">`).join("");
+  const cols = rgnGridCols();
+  if ($("rgngrows")) $("rgngrows").innerHTML = rgnGridVars().map((v, i) => {
+    const act = RGNGA[i];                 // undefined is a real state: no group is being edited
+    const chips = rgnGridBands(v).map((b, j) => {
+      const own = rgnGridIsSet(v.bands) ? j < v.bands.length : true;
+      const tag = (rgnGridIsSet(v.bands) && own)
+        ? ` draggable="true" data-gpick="${i}" data-gj="${j}"` : "";
+      return `<span class="rgngb${b.declared ? "" : " tail"}` +
+             `${(rgnGridIsSet(v.bands) && own && j === act) ? " on" : ""}"${tag}>${esc(b.name)}` +
+             (rgnGridIsSet(v.bands) && own
+               ? ` <button class="rgngx" data-gdel="${i}" data-gj="${j}">×</button>` : "") +
+             `</span>`;
+    }).join("");
+    let toks = "";
+    if (rgnGridIsSet(v.bands) && cols[v.col] && cols[v.col].vals){
+      const where = {};
+      v.bands.forEach((b, j) => b.forEach(x => { where[x] = j; }));
+      toks = `<div><span class="rgnghint">${act == null
+        ? "drag onto a group, or click one to edit it" : "click a value to move it here"}</span>` +
+        cols[v.col].vals.map(x =>
+          `<span class="rgngt${where[x] != null ? " used" : ""}` +
+          `${where[x] === act ? " here" : ""}" draggable="true" data-tdrag="${i}" data-x="${x}">` +
+          `${rgnValName(v.col, x)}${where[x] != null ? `<i>${where[x] + 1}</i>` : ""}</span>`).join("") +
+        `</div>`;
+    }
+    return `<div class="rgngrow" data-rdrop="${i}">` +
+      `<div class="rgngnm" draggable="true" data-rdrag="${i}">${esc(v.col)}` +
+      `<i>${rgnGridIsSet(v.bands) ? "value groups" : "cut points"} · ` +
+      `${rgnGridWidth(v.bands, ex)} declared</i></div>` +
+      `<div>${chips}${toks}</div>` +
+      `<div><button class="tbtn rgnmini" data-gup="${i}" title="outward">▲</button> ` +
+      `<button class="tbtn rgnmini" data-gdown="${i}" title="inward">▼</button> ` +
+      `<button class="tbtn rgnmini" data-gband="${i}">+ band</button> ` +
+      `<button class="tbtn rgnmini" data-gvdel="${i}">×</button></div></div>`;
+  }).join("");
+  rgnGridStatus();
+}
+
+function rgnOptVis(){
+  // these belong to the bubbles and mean nothing under stack or ledger, so they are not
+  // offered there; the axis picker only matters once the grid layout is actually on
+  const o = $("rgnopt"), a = $("rgnaxpick");
+  if (o) o.hidden = !rgnIsBubble();
+  if (a){
+    a.hidden = !(rgnIsBubble() && RGN && RGN.axes && rgnGridVars().length);
+    if (!a.hidden && a.querySelectorAll){
+      const v = rgnGridVars(), xy = rgnAxesPick();
+      const b = a.querySelectorAll("button");
+      if (b[0]) b[0].textContent = "x: " + (v[xy[0]] ? v[xy[0]].col : "—");
+      if (b[1]) b[1].textContent = "y: " + (v[xy[1]] ? v[xy[1]].col : "—");
+    }
+  }
+}
+
+function rgnAxesPick(){
+  // which declared variable runs across and which runs down. The dict's order is only the
+  // default — the picture you want is not always the order you typed.
+  const n = rgnGridVars().length;
+  if (!n) return [0, 0];
+  let ax = Math.min(Math.max(0, RGN.axcol == null ? 0 : RGN.axcol), n - 1);
+  let ay = n > 1 ? Math.min(Math.max(0, RGN.axrow == null ? 1 : RGN.axrow), n - 1) : ax;
+  if (n > 1 && ay === ax) ay = (ax + 1) % n;
+  return [ax, ay];
+}
+
+function rgnGridStatus(){
+  // only the readout, because it depends on RGN.root and so must refresh on every redraw —
+  // rebuilding the document there would yank the caret out of a slot mid-word
+  const out = $("rgngout");
+  if (!out || !RGN) return;
+  const bad = rgnGridProblems(), n = rgnGridCount(RGN.grid), fresh = rgnGridFresh();
+  out.innerHTML = !rgnGridVars().length
+    ? `add a variable to start a dict`
+    : bad.length ? `<span class="rgnbad">${esc(bad[0])}</span>`
+    : `<b>${n}</b> region${n === 1 ? "" : "s"}${rgnGridEx() ? "" : " + leftover"}` +
+      (fresh === true ? ` · <span class="rgnok">this is the map</span>`
+       : fresh === false ? ` · <span class="rgnbad">the map has been cut by hand since</span>` : "");
+}
+
+function rgnGridWire(){
+  const doc = $("rgngdoc");
+  if (!doc || !doc.addEventListener) return;
+  // anything that is not a value slot cannot be typed into, pasted into or dragged into
+  ["beforeinput", "paste", "drop", "cut"].forEach(ev => doc.addEventListener(ev, e => {
+    const el = e.target && e.target.closest ? e.target.closest(".gv") : null;
+    if (!el) e.preventDefault();
+  }));
+  doc.addEventListener("focusout", e => {
+    const el = e.target.closest && e.target.closest(".gv");
+    if (!el) return;
+    if (!rgnGridCommit(+el.dataset.n, el.textContent)) el.classList.add("bad");
+    rgnGridDraw();
+  });
+  doc.addEventListener("keydown", e => {
+    const el = e.target.closest && e.target.closest(".gv");
+    if (!el) return;
+    if (e.key === "Enter"){ e.preventDefault(); el.blur(); }
+    if (e.key === "Escape"){ e.preventDefault(); rgnGridDraw(); }
+  });
+  const rows = $("rgngrows");
+  if (rows) rows.addEventListener("click", e => {
+    const hit = s => e.target.closest && e.target.closest(`[data-${s}]`);
+    let el;
+    if ((el = hit("gdel"))) rgnGridDelBand(+el.dataset.gdel, +el.dataset.gj);
+    else if ((el = hit("gpick"))) rgnGridActive(+el.dataset.gpick, +el.dataset.gj);
+    else if ((el = hit("tdrag"))){
+      const i = +el.dataset.tdrag;
+      if (RGNGA[i] == null) say("click a group to edit it, or drag the value onto one");
+      else rgnGridMoveVal(i, +el.dataset.x, RGNGA[i]);
+    }
+    else if ((el = hit("gband"))) rgnGridAddBand(+el.dataset.gband);
+    else if ((el = hit("gvdel"))) rgnGridDelVar(+el.dataset.gvdel);
+    else if ((el = hit("gup"))) rgnGridMoveVar(+el.dataset.gup, +el.dataset.gup - 1);
+    else if ((el = hit("gdown"))) rgnGridMoveVar(+el.dataset.gdown, +el.dataset.gdown + 1);
+  });
+  if (rows){
+    const DT = "text/rowver-grid";
+    rows.addEventListener("dragstart", e => {
+      const g = e.target.closest && e.target.closest("[data-tdrag]");
+      const b = e.target.closest && e.target.closest("[data-gpick]");
+      const r = e.target.closest && e.target.closest("[data-rdrag]");
+      const load = g ? {kind:"val", i:+g.dataset.tdrag, x:+g.dataset.x}
+                : b ? {kind:"band", i:+b.dataset.gpick, j:+b.dataset.gj}
+                : r ? {kind:"var", i:+r.dataset.rdrag} : null;
+      if (!load) return;
+      e.dataTransfer.setData(DT, JSON.stringify(load));
+      e.dataTransfer.effectAllowed = "move";
+    });
+    rows.addEventListener("dragover", e => {
+      if (!Array.from(e.dataTransfer.types || []).includes(DT)) return;
+      e.preventDefault();
+    });
+    rows.addEventListener("drop", e => {
+      let load = null;
+      try { load = JSON.parse(e.dataTransfer.getData(DT) || "null"); } catch (err){ return; }
+      if (!load) return;
+      e.preventDefault();
+      const b = e.target.closest && e.target.closest("[data-gpick]");
+      const r = e.target.closest && e.target.closest("[data-rdrop]");
+      if (load.kind === "val" && b && +b.dataset.gpick === load.i)
+        rgnGridMoveVal(load.i, load.x, +b.dataset.gj);
+      else if (load.kind === "band" && b && +b.dataset.gpick === load.i)
+        rgnGridMoveBand(load.i, load.j, +b.dataset.gj);
+      else if (load.kind === "var" && r) rgnGridMoveVar(load.i, +r.dataset.rdrop);
+    });
+  }
+  const fold = $("rgngrid");
+  if (fold && fold.addEventListener)
+    fold.addEventListener("toggle", () => { RGNGOPEN = !!fold.open; });
+  if ($("rgngopen")) $("rgngopen").onclick = () => {
+    if (!fold) return;
+    RGNGOPEN = !fold.open;
+    fold.open = RGNGOPEN;
+    if (RGNGOPEN && fold.scrollIntoView) fold.scrollIntoView({behavior:"smooth", block:"nearest"});
+  };
+  if ($("rgngadd")) $("rgngadd").onclick = () => rgnGridAddVar();
+  if ($("rgngnew")) $("rgngnew").addEventListener("keydown", e => {
+    if (e.key === "Enter") rgnGridAddVar();
+  });
+  if ($("rgngex")) $("rgngex").onclick = () => {
+    rgnGridInit();
+    RGN.grid.exhaustive = !RGN.grid.exhaustive;
+    markDirty(); rgnGridDraw();
+  };
+  if ($("rgngapply")) $("rgngapply").onclick = () => rgnGridApply();
+  if ($("rgngcopy")) $("rgngcopy").onclick = () => {
+    if (navigator.clipboard) navigator.clipboard.writeText(rgnGridText());
+    say("the dict is on your clipboard");
+  };
+  // Where a click LANDED has to be decided while it is still landing: the rows handler
+  // re-draws, which detaches the clicked node, so by the bubble phase closest() finds
+  // nothing and every selection would immediately clear itself.
+  let inRows = false;
+  document.addEventListener("click",
+    e => { inRows = !!(e.target.closest && e.target.closest("#rgngrows")); }, true);
+  document.addEventListener("click", () => { if (!inRows) rgnGridClearActive(); });
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Escape") return;
+    if (e.target.closest && e.target.closest(".gv")) return;
+    if (rgnGridClearActive()) e.preventDefault();
+  });
+}
+
+function rgnBinName(n){
+  // a region's path as one identifier: what Combine wants for a bin, and what a human can
+  // still read back to the cuts that made it
+  const raw = ["Bin"].concat(n.path).join("_");
+  return raw.replace(/[^A-Za-z0-9_]+/g, "_").replace(/_+/g, "_").replace(/_$/, "");
+}
+
+function rgnFlat(){
+  // Every LEAF region, every source, as {bin: {process: {nominal: [raw, yield, error]}}}.
+  // The error is sqrt(Sum w^2) — the MC statistical error on that yield, which is the
+  // third number the datacard builder expects beside the count and the yield.
+  if (!RGNT) return {};
+  const srcs = rgnSrcs();
+  const out = {};
+  (function rec(n){
+    if (n.kids.length){ n.kids.forEach(rec); return; }
+    const bin = {};
+    srcs.forEach((s, i) => {
+      // a process contributing nothing here is still declared, so every bin has the same
+      // process list and a datacard built from this does not go ragged
+      bin[s] = {nominal:[n.n[i] || 0, n.y[i] || 0, Math.sqrt(n.y2 ? n.y2[i] : 0)]};
+    });
+    out[rgnBinName(n)] = bin;
+  })(RGNT);
+  return out;
+}
+
+function rgnExportJson(){
+  const flat = rgnFlat();
+  const bins = Object.keys(flat).length;
+  if (!bins) return say("this map has no regions to export");
+  const name = (META.title || "regions").replace(/\.(rvr|html)$/, "") + "_flattened.json";
+  download(JSON.stringify(flat, null, 1), name, "application/json");
+  say(`exported <b>${bins}</b> region${bins === 1 ? "" : "s"} × ${rgnSrcs().length} ` +
+      `process${rgnSrcs().length === 1 ? "" : "es"} to <b>${esc(name)}</b>`);
+}
+
+function rgnCutsOf(node){
+  // Every constraint that makes this region, root to leaf, as {col, lo, hi} for a number
+  // axis or {col, vals} for a chip one. A camp is a chain on ONE column, so the band a
+  // child took is bounded by the cut before it and its own — which is where both edges of
+  // an interval come from. A leaf only ever knew its LAST cut, which is why the panel used
+  // to name one variable for a region defined by five.
+  const out = [];
+  (function up(n){
+    if (!n || !n.parent) return;
+    up(n.parent);
+    const p = n.parent, i = p.kids.indexOf(n);
+    if (i < 0) return;
+    if (n.test && n.test.in){
+      out.push({col:p.col, vals:n.test.in.slice()});
+    } else if (!n.test){
+      // the tail of the chain: everything the earlier cuts did not take
+      const taken = p.kids.filter(k => k.test).map(k => k.test);
+      if (taken.length && taken[0].in){
+        const used = {};
+        taken.forEach(c => c.in.forEach(v => { used[v] = 1; }));
+        const col = rgnColByName(p.col);
+        out.push({col:p.col, vals:(col && col.vals || []).filter(v => !used[v])});
+      } else if (taken.length){
+        out.push({col:p.col, lo:taken[taken.length - 1].lt, hi:null});
+      }
+    } else {
+      const before = p.kids.slice(0, i).filter(k => k.test && k.test.lt != null);
+      out.push({col:p.col, lo:before.length ? before[before.length - 1].test.lt : null,
+                hi:n.test.lt});
+    }
+  })(node);
+  return out;
+}
+
+function rgnCutText(c){
+  // one constraint, written the way the map's own bands are: lo <= x < hi
+  if (c.vals) return `${c.col} = ${c.vals.map(v => rgnValName(c.col, v)).join(" / ")}`;
+  if (c.lo == null) return `${c.col} < ${fmt(c.hi)}`;
+  if (c.hi == null) return `${c.col} ≥ ${fmt(c.lo)}`;
+  return `${fmt(c.lo)} ≤ ${c.col} < ${fmt(c.hi)}`;
+}
+
+function rgnOpenTab(){
+  // A region is a set of cuts, so it can BE a tab. Copies the tab it came from, so the
+  // new one keeps the samples, the grouping and the luminosity rather than opening at the
+  // factory x1 — then drops the map and applies the region's own cuts.
+  const n = RGNF;
+  if (!n) return say("focus a region first — click one");
+  const cuts = rgnCutsOf(n);
+  if (!cuts.length) return say("that is the whole selection — it has no cuts of its own");
+  // Built as a STATE and applied, not poked into S: the rail keeps chips as Sets and reads
+  // its ranges through its own controls, so assigning S.cuts by hand changed nothing that
+  // mask() ever looked at — the tab opened wide open and kept every event in the file.
+  const st = JSON.parse(JSON.stringify(TABS[TAB].st));
+  delete st.regions;
+  st.cuts = Object.assign({}, st.cuts);
+  st.chips = Object.assign({}, st.chips);
+  cuts.forEach(c => {
+    const i = META.cols.findIndex(k => k.name === c.col);
+    if (i < 0) return;
+    const col = META.cols[i];
+    if (c.vals){
+      const was = st.chips[i];
+      // intersect with whatever the tab already allowed, so this narrows and never widens
+      st.chips[i] = was ? c.vals.filter(v => was.indexOf(v) >= 0) : c.vals.slice();
+    } else {
+      const b = bounds(col), was = st.cuts[i];
+      // the rail's handles are INCLUSIVE at both ends; the region's band is half-open, so
+      // the upper handle steps just inside it
+      const lo = c.lo == null ? b[0] : c.lo;
+      const hi = c.hi == null ? b[1]
+               : (col.kind === "i4" ? c.hi - 1 : c.hi - Math.max(1e-9, Math.abs(c.hi) * 1e-12));
+      st.cuts[i] = was ? [Math.max(lo, was[0]), Math.min(hi, was[1])] : [lo, hi];
+    }
+  });
+  newTab(true);
+  TABS[TAB].name = n.path.length ? n.path[n.path.length - 1].slice(0, 22) : "region";
+  TABS[TAB].st = st;
+  applyState(st);
+  RGN = null; RGNT = null; rgnFocus(null);
+  storeTab();
+  buildTabs();
+  renderPlots();
+  drawAll();
+  markDirty();
+  say(`opened <b>${esc(TABS[TAB].name)}</b> with ${cuts.length} cut` +
+      `${cuts.length === 1 ? "" : "s"} applied`);
+}
+
 function rgnStripMarkup(){
-  const cols = META.cols.map(c =>
-    `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
   return `<div class="rgnstrip">
-    <span class="rgnlab">cut</span>
-    <select id="rgncol" title="the column to cut on">${cols}</select>
-    <input id="rgnval" class="rgnnum" placeholder="at, or 0.7, 1"
-           title="one number cuts once; several — 0.7, 1 — make bands in one press. A chip column takes value names.">
-    <button class="tbtn" id="rgncut" title="cut the focused region in two">cut</button>
-    <span class="rgntarget" id="rgntarget"></span>
-    <button class="tbtn" id="rgnuncut" title="remove what is inside the focused camp">uncut</button>
+    <button class="tbtn" id="rgngopen"
+            title="the regions are declared as a dict — this is where">regions…</button>
     <span class="rgnsp"></span>
     <span class="rgnlab">show</span>
     <span class="seg" id="rgnview">
-      <button data-v="stack" aria-pressed="${RGN.view !== "ledger"}">stack</button>
+      <button data-v="stack" aria-pressed="${RGN.view !== "ledger" && RGN.view !== "bubble"}">stack</button>
       <button data-v="ledger" aria-pressed="${RGN.view === "ledger"}">ledger</button>
+      <button data-v="bubble" aria-pressed="${RGN.view === "bubble"}">bubbles</button>
+    </span>
+    <span class="seg" id="rgnopt" title="how the bubbles are laid out and sized"
+          ${RGN.view === "bubble" ? "" : "hidden"}>
+      <button data-o="axes" aria-pressed="${!!RGN.axes}"
+              title="lay the circles out on the declared grid's axes">grid</button>
+      <button data-o="logr" aria-pressed="${!!RGN.logr}"
+              title="log area — lifts tiny regions into view, and stops area being the yield">log</button>
+    </span>
+    <span class="tsizes" id="rgnaxpick" hidden>
+      <button data-ax="col" title="which variable runs across">x</button>
+      <button data-ax="row" title="which variable runs down">y</button>
     </span>
     <span class="rgnlab">floor</span>
-    <input id="rgnfloor" class="rgnnum" value="${rgnFloor()}" title="a camp under this greys out and stops splitting">
+    <input id="rgnfloor" class="rgnnum" value="${rgnFloor()}"
+           title="a region under this is greyed and penned to the left">
+    <span class="seg" id="rgnfmode" title="whether ONE watched sample under the floor is enough">
+      <button data-f="any" aria-pressed="${rgnFloorMode() !== "all"}">any</button>
+      <button data-f="all" aria-pressed="${rgnFloorMode() === "all"}">all</button>
+    </span>
+    <span class="rgntarget" id="rgnfwatch"></span>
     <span class="rgnsp"></span>
+    <button class="tbtn" id="rgnjson"
+            title="every region and process as JSON — the flattened format a datacard takes">json</button>
     <button class="tbtn" id="rgnfit" title="the whole landscape">fit</button>
     <span class="tsizes" id="rgnmove">
       <button data-v="-1" title="move this map up one block">▲</button>
@@ -7970,6 +9801,7 @@ function rgnMarkup(){
       <p class="rgnkeys"><kbd>←</kbd><kbd>→</kbd> camps <kbd>↑</kbd><kbd>↓</kbd> level
         <kbd>enter</kbd> fly <kbd>esc</kbd> fit · drag to pan, wheel to zoom</p></div>
       <div class="rgnside" id="rgnpanel"></div></div>
+    ${rgnGridMarkup()}
   </div>`;
 }
 
@@ -7994,12 +9826,13 @@ function rgnWireDrop(el){
 
 function rgnWire(){
   // every control on the strip, and the canvas's own pointer and wheel handling
+  rgnGridDraw();
+  rgnGridWire();
+  rgnOptVis();
   rgnWireDrop($("rgncanvas"));
   rgnWireDrop($("rgnpanel"));
-  const cut = $("rgncut");
-  if (cut) cut.onclick = () => rgnCutFromControls();
-  const un = $("rgnuncut");
-  if (un) un.onclick = () => rgnUncut(RGNF || RGNT);
+  const js = $("rgnjson");
+  if (js) js.onclick = () => rgnExportJson();
   const fit = $("rgnfit");
   if (fit) fit.onclick = () => { rgnFitAll(); rgnDrawOnly(); };
   const drop = $("rgndrop");
@@ -8010,23 +9843,63 @@ function rgnWire(){
   const view = $("rgnview");
   if (view && view.querySelectorAll)
     view.querySelectorAll("button").forEach(b => b.onclick = () => {
+      const was = RGN.view;
       RGN.view = b.dataset.v;
       view.querySelectorAll("button").forEach(o =>
         o.setAttribute("aria-pressed", o === b));
-      markDirty(); rgnDrawOnly();
+      markDirty();
+      // bubbles and the nested map are different LAYOUTS, not different paints, so the
+      // geometry has to be rebuilt and the camera refitted rather than merely repainted
+      rgnOptVis();
+      if ((was === "bubble") !== (RGN.view === "bubble")){ RGNV = {x:0, y:0, k:0}; drawAll(); }
+      else rgnDrawOnly();
+    });
+  const pick = $("rgnaxpick");
+  if (pick && pick.querySelectorAll)
+    pick.querySelectorAll("button").forEach(b => b.onclick = () => {
+      const n = rgnGridVars().length;
+      if (!n) return;
+      const xy = rgnAxesPick(), which = b.dataset.ax === "col" ? 0 : 1;
+      // step to the next declared variable, stepping over the one the other axis holds
+      let v = xy[which];
+      for (let i = 0; i < n; i++){
+        v = (v + 1) % n;
+        if (n < 2 || v !== xy[1 - which]) break;
+      }
+      RGN[which ? "axrow" : "axcol"] = v;
+      markDirty();
+      RGNV = {x:0, y:0, k:0};
+      drawAll();
+    });
+  const fm = $("rgnfmode");
+  if (fm && fm.querySelectorAll)
+    fm.querySelectorAll("button").forEach(b => b.onclick = () => {
+      RGN.floormode = b.dataset.f;
+      if (RGN.floormode === "any") delete RGN.floormode;      // absent is the default
+      fm.querySelectorAll("button").forEach(o =>
+        o.setAttribute("aria-pressed", o === b));
+      markDirty(); drawAll();
+    });
+  const opt = $("rgnopt");
+  if (opt && opt.querySelectorAll)
+    opt.querySelectorAll("button").forEach(b => b.onclick = () => {
+      const k = b.dataset.o;
+      RGN[k] = !RGN[k];
+      if (!RGN[k]) delete RGN[k];               // absent is the default, so it stays absent
+      b.setAttribute("aria-pressed", !!RGN[k]);
+      rgnOptVis();
+      markDirty();
+      RGNV = {x:0, y:0, k:0};                   // a different layout wants a fresh frame
+      drawAll();
     });
   const fl = $("rgnfloor");
   if (fl) fl.onchange = () => {
     const v = parseFloat(fl.value);
     RGN.floor = isFinite(v) && v >= 0 ? v : 1;
     fl.value = RGN.floor;
-    markDirty(); rgnDrawOnly();
-  };
-  const col = $("rgncol");
-  const box = $("rgnval");
-  if (col && box) col.onchange = () => {
-    const c = rgnColByName(col.value);
-    box.placeholder = c && c.vals ? (c.names || c.vals).slice(0, 3).join(",") : "at, or 0.7, 1";
+    // the floor decides which regions are PENNED, and that is a layout, not a repaint —
+    // redrawing only recoloured them and left them sitting in the cloud
+    markDirty(); drawAll();
   };
   const cv = $("rgncanvas");
   if (!cv || !cv.addEventListener || !cv.getContext) return;
@@ -8038,7 +9911,16 @@ function rgnWire(){
   cv.addEventListener("mouseleave", () => { RGNH = null; rgnDrawOnly(); });
   cv.addEventListener("click", e => {
     const r = cv.getBoundingClientRect();
-    rgnFocus(rgnPickAt(e.clientX - r.left, e.clientY - r.top));
+    const px = e.clientX - r.left, py = e.clientY - r.top;
+    const pen = [RGNSHELF, RGNPEN].find(s => s && s.hit &&
+      px >= s.hit.x && px <= s.hit.x + s.hit.w && py >= s.hit.y && py <= s.hit.y + s.hit.h);
+    if (pen){
+      RGNPENOPEN[pen.side] = !RGNPENOPEN[pen.side];
+      RGNPENSCROLL[pen.side] = 0;
+      drawAll();
+      return;
+    }
+    rgnFocus(rgnPickAt(px, py));
     rgnDrawOnly();
   });
   cv.addEventListener("dblclick", e => {
@@ -8048,6 +9930,17 @@ function rgnWire(){
   });
   cv.addEventListener("wheel", e => {
     if (!rgnZoomable()) return;          // let the page scroll under the cursor instead
+    const r0 = cv.getBoundingClientRect();
+    const over = rgnPenUnder(e.clientX - r0.left, e.clientY - r0.top, r0.width);
+    if (over && over.plan && over.plan.open && over.plan.need > over.plan.rows){
+      // the wheel belongs to the pen the pointer is in, not to the camera
+      e.preventDefault();
+      const max = over.plan.need - over.plan.rows;
+      RGNPENSCROLL[over.side] = Math.max(0, Math.min(max,
+        (RGNPENSCROLL[over.side] || 0) + (e.deltaY > 0 ? 1 : -1)));
+      drawAll();
+      return;
+    }
     e.preventDefault();
     const r = cv.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
     const wx = RGNV.x + px / RGNV.k, wy = RGNV.y + py / RGNV.k;
