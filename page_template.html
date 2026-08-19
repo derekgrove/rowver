@@ -5722,7 +5722,15 @@ function resizePlots(){
   if (!(Plotly.Plots && Plotly.Plots.resize)) return;
   PLOTS.forEach(p => {
     const d = document.getElementById("plot" + p.id);
-    if (d && d._fullLayout) Plotly.Plots.resize(d);
+    if (!d || !d._fullLayout) return;
+    // The left margin is CHOSEN FROM THE WIDTH, and a resize is precisely when the width
+    // changed. Plotly.Plots.resize re-measures the container but keeps the layout it was
+    // given, so the margin stayed at the old width's value until some later, unrelated
+    // redraw corrected it — the plots jumping once, on the next thing you clicked.
+    const want = leftMargin(p);
+    if (Plotly.relayout && d._fullLayout.margin && d._fullLayout.margin.l !== want)
+      Plotly.relayout(d, {"margin.l": want});
+    Plotly.Plots.resize(d);
   });
   const cf = document.getElementById("cutflow");
   if (cf && cf._fullLayout) Plotly.Plots.resize(cf);
