@@ -11,6 +11,8 @@ pages:
     - mkdir -p public
     - mv viewer.html public/index.html
     - cp studies/dimuon_demo/dimuon_demo.rvr public/dimuon_demo.rvr
+    - cp remote/console.html public/console.html
+    - cp remote/quickstart.rvr public/quickstart.rvr
   artifacts:
     paths:
       - public

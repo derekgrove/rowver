@@ -134,6 +134,8 @@ multiple of 4, because a browser refuses a typed array on a misaligned offset â€
 all floats before all ints guarantees it. And bool is stored as i4, since numpy cannot
 take a percentile of a bool and a two-value chip picker is the right control anyway.
 """
+from __future__ import annotations
+
 import base64
 import fnmatch
 import gzip
@@ -143,11 +145,17 @@ import re
 from pathlib import Path
 
 import numpy as np
-from plotly.offline import get_plotlyjs
+
+
+def get_plotlyjs() -> str:
+    # LAZY on purpose (2026-08-20): only the html-baking paths need plotly, and the
+    # remote helper imports this module on cluster nodes that have none
+    from plotly.offline import get_plotlyjs as _g
+    return _g()
 
 TEMPLATE: Path = Path(__file__).with_name("page_template.html")
 PAGES: Path = Path(__file__).with_name("pages")
-VERSION: str = "0.30.0"   # the tool, shown on every page it builds; bump when the page changes
+VERSION: str = "0.31.0"   # the tool, shown on every page it builds; bump when the page changes
 ROWVER: int = 4           # .rvr format version, which moves separately
 READS: tuple = (4,)       # v2 and v3 are gone: their weights were undeclared
 MAX_MB: int = 40

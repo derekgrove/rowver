@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RowVer remote console</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--sunk:#1c2129;--rule:#30363d;--ink:#e6edf3;
+  --ink2:#9aa4b2;--ink3:#6a7480;--blue:#4BA3DA;--orange:#F08C43;--bad:#e5534b;
+  --ok:#4BC98B;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+*{box-sizing:border-box}
+[hidden]{display:none !important}
+body{margin:0;background:var(--bg);color:var(--ink);font:13px var(--mono);padding:18px}
+h1{font-size:20px;margin:0 0 2px}
+h1 span{color:var(--blue)}
+.sub{color:var(--ink3);margin:0 0 14px}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:4px;
+  padding:12px 14px;margin:0 0 14px}
+.card h2{font-size:13px;margin:0 0 8px;color:var(--blue);text-transform:uppercase;
+  letter-spacing:.08em}
+.hint{color:var(--ink3);font-size:11.5px;margin:6px 0 0;line-height:1.5}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+input,select{background:var(--sunk);border:1px solid var(--rule);color:var(--ink);
+  font:12.5px var(--mono);padding:6px 8px;border-radius:3px}
+input:focus{outline:1px solid var(--blue)}
+input[type=checkbox]{accent-color:var(--blue);margin:0}
+button{background:var(--sunk);border:1px solid var(--rule);color:var(--ink);
+  font:12px var(--mono);padding:6px 10px;border-radius:3px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button.go{background:var(--blue);border-color:var(--blue);color:#08131c;font-weight:600}
+button.mini{padding:2px 7px;font-size:11px}
+.seg{display:inline-flex}
+.seg button{border-radius:0}
+.seg button:first-child{border-radius:3px 0 0 3px}
+.seg button:last-child{border-radius:0 3px 3px 0}
+.seg button[aria-pressed="true"]{background:var(--blue);border-color:var(--blue);
+  color:#08131c;font-weight:600}
+table{border-collapse:collapse;width:100%;margin-top:8px}
+th,td{text-align:left;padding:4px 9px;border-bottom:1px solid var(--rule);
+  font-size:12px;white-space:nowrap}
+th{color:var(--ink2);font-weight:600}
+td.num,th.num{text-align:right}
+.wrap{max-height:320px;overflow-y:auto;overflow-x:hidden;border:1px solid var(--rule);
+  border-radius:3px;margin-top:8px}
+/* the split list: names in ONE horizontally scrollable pane, everything else in stable
+   columns beside it — spacing independent of name length (Derek, 2026-08-20) */
+.split{display:flex;align-items:flex-start;min-width:0}
+.srail{flex:0 0 auto;border-right:1px solid var(--rule)}
+.srail .srow{padding:0 8px}
+.snames{overflow-x:auto;overflow-y:hidden;flex:1 1 auto;min-width:0;
+  border-right:1px solid var(--rule)}
+.snames>div{width:max-content;min-width:100%}
+.sinfo{flex:0 0 auto}
+.srow{height:26px;line-height:25px;white-space:nowrap;padding:0 9px;font-size:12px;
+  border-bottom:1px solid var(--rule)}
+.srow.head{color:var(--ink2);font-weight:600;position:sticky;top:0;background:var(--panel)}
+.cell{display:inline-block;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
+.cell.num{text-align:right}
+.crumb{color:var(--blue);cursor:pointer}
+.crumb:hover{text-decoration:underline}
+.dir{color:var(--blue);cursor:pointer}
+.err{color:var(--bad);white-space:pre-wrap;margin:8px 0 0;font-size:12px}
+.okline{color:var(--ok)}
+.warn{color:var(--orange)}
+#banner{border:1px solid var(--bad);background:#2a1517;color:var(--ink);border-radius:4px;
+  padding:10px 14px;margin:0 0 14px;display:none}
+#banner code{color:var(--orange)}
+.stat{display:inline-block;margin-right:22px}
+.stat b{color:var(--ink2);font-weight:600;display:block;font-size:10.5px;
+  text-transform:uppercase;letter-spacing:.06em}
+.bar{height:6px;background:var(--sunk);border:1px solid var(--rule);border-radius:3px;
+  margin:8px 0 4px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--blue);transition:width .3s}
+.basketrow{display:flex;gap:8px;align-items:center;padding:3px 0;border-bottom:1px dotted var(--rule)}
+.basketrow span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag{background:var(--sunk);border:1px solid var(--rule);border-radius:3px;
+  padding:1px 6px;font-size:10.5px;color:var(--ink2)}
+.branchpick{cursor:pointer}
+.branchpick:hover{color:var(--blue)}
+a{color:var(--blue)}
+details{margin:2px 0}
+summary{cursor:pointer;color:var(--ink2)}
+/* the one waiting animation: three dots that grow and shrink in order (Derek, R7) */
+.dots{display:inline-block;vertical-align:baseline}
+.dots i{display:inline-block;width:5px;height:5px;border-radius:50%;
+  background:currentColor;margin:0 1.5px;animation:dots 0.9s infinite ease-in-out}
+.dots i:nth-child(2){animation-delay:.15s}
+.dots i:nth-child(3){animation-delay:.3s}
+@keyframes dots{0%,60%,100%{transform:scale(.55);opacity:.35}
+  30%{transform:scale(1.25);opacity:1}}
+/* the live build json pane */
+.buildwrap{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.buildleft{flex:1 1 480px;min-width:0}
+.livecard{flex:1 1 380px;min-width:320px;border:1px solid var(--rule);border-radius:3px;
+  background:var(--sunk);padding:8px 10px}
+.livecard .lhead{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+#livejson{margin:0;max-height:440px;overflow:auto;font:11.5px/1.5 var(--mono);
+  white-space:pre;color:var(--ink)}
+.jnote{color:var(--ink3);user-select:none}
+.jexp{color:var(--blue);cursor:pointer;user-select:none}
+.jexp:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<h1><span>RowVer</span> remote console</h1>
+<p class="sub">search DAS, browse eos, inspect branches, build .rvr files through the local helper — every number live</p>
+
+<div id="banner"></div>
+
+<div class="card"><h2>helper</h2><div id="status">checking…</div>
+  <p class="hint" style="margin-top:8px">no proxy? no problem! test building a .rvr file
+  with CMS open data here: <button class="go mini" id="qsgo"
+    title="fills the basket with one public 2016 NanoAOD file from eospublic (anonymous
+ — no grid proxy involved), two flat branches and a cut, and builds it. Replaces
+ whatever is in the basket.">build the open-data quickstart</button></p>
+</div>
+
+<div class="card"><h2>1 · source</h2>
+  <div class="row">
+    <span class="seg">
+      <button id="mdas" aria-pressed="true" title="dataset NAME search through DBS — the service DAS itself queries">CMS DAS</button>
+      <button id="meos" aria-pressed="false" title="browse eos directories through xrootd">eos</button>
+    </span>
+    <input id="srcin" size="56">
+    <button class="go" id="srcgo">search</button>
+    <input id="srcfilter" size="15" placeholder="filter shown" autocomplete="off">
+    <span id="srcbusy"></span>
+  </div>
+  <p class="hint" id="srchint"></p>
+  <div class="hint" id="crumbs"></div>
+  <div class="err" id="srcerr"></div>
+  <div class="row" id="pickbar" style="margin-top:8px" hidden>
+    <span id="pickcount" class="tag"></span>
+    <button class="mini" id="pickall">all</button>
+    <button class="mini" id="picknone">none</button>
+    <button class="mini" id="pickfirst">first</button>
+    <input id="pickn" size="3" value="5" title="how many the “first” button ticks — sampling a big dataset">
+    <label>tree <input id="picktree" size="12" value="Events"
+      title="the TTree every selected file is read with — check a file's “trees” if unsure"></label>
+    <button class="go mini" id="pickadd">add selected to build</button>
+  </div>
+  <div class="wrap" id="srclist" hidden></div>
+  <div id="treebox" hidden>
+    <p class="hint" id="treefile"></p>
+    <div class="wrap" id="treewrap"><table id="treeout"></table></div>
+  </div>
+  <div id="branchbox" hidden>
+    <div class="row" style="margin-top:8px">
+      <span class="tag" id="branchhead"></span>
+      <input id="branchfilter" size="24" placeholder="filter branches" autocomplete="off">
+    </div>
+    <p class="hint">click a branch name to add it to the build’s column list</p>
+    <div class="wrap" id="branchwrap"><table id="branchout"></table></div>
+  </div>
+</div>
+
+<div class="card"><h2>2 · build</h2>
+ <div class="buildwrap">
+ <div class="buildleft">
+  <div id="basket"><p class="hint">nothing selected yet — add datasets, files, or a file subset from the source panel</p></div>
+  <div class="row" style="margin-top:10px">
+    <label>columns <input id="cols" size="52" placeholder="click branches in the source browser to add columns"></label>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <label>cut <input id="cut" size="34" placeholder="optional numpy expression over the columns"></label>
+    <label>weights <input id="wcol" size="10" placeholder="optional"></label>
+    <label>title <input id="title" size="14" value="console"></label>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button class="go" id="buildgo">build .rvr</button>
+    <button id="datalessgo" title="the 1 kB study-identity file: drop it on viewer.html and THIS build runs on demand">download data-less .rvr</button>
+    <span id="buildstate"></span>
+  </div>
+  <div id="dash" hidden>
+    <div class="row" style="margin-top:8px"><span class="tag">overall</span>
+      <span id="dashfiles" class="hint" style="margin:0"></span></div>
+    <div class="bar"><i id="dashall"></i></div>
+    <div class="row"><span class="tag">this file</span>
+      <span id="dashfile" class="hint" style="margin:0"></span></div>
+    <div class="bar"><i id="dashcur"></i></div>
+    <div id="dashphase" class="hint" style="margin-top:6px"></div>
+    <div style="margin-top:8px">
+      <span class="stat"><b>elapsed</b><span id="m_el">–</span></span>
+      <span class="stat"><b>on the wire</b><span id="m_wire">–</span></span>
+      <span class="stat"><b>avg rate</b><span id="m_avg">–</span></span>
+      <span class="stat"><b>now</b><span id="m_inst">–</span></span>
+      <span class="stat"><b>entries read</b><span id="m_read">–</span></span>
+      <span class="stat"><b>kept by cut</b><span id="m_kept">–</span></span>
+      <span class="stat"><b>wire / disk</b><span id="m_frac">–</span></span>
+      <span class="stat"><b>ETA</b><span id="m_eta">–</span></span>
+    </div>
+    <p class="hint" title="sampled per 500k-entry chunk; “now” is the change between 0.5 s
+    polls; ETA is an estimate from files done (the home network varies ~4x); wire/disk
+    counts only the files opened so far">every number is monitoring uproot’s own byte meter.</p>
+  </div>
+  <div class="err" id="builderr"></div>
+  <div id="builddone" hidden></div>
+  <p class="hint">the built file is a normal .rvr — drop it on <code>viewer.html</code>. The
+  data-less variant carries only the spec; dropping it makes the page ask this same helper
+  to build (and cache) the real thing.</p>
+ </div>
+ <div class="livecard">
+  <div class="lhead"><span class="tag">live build json</span>
+    <button class="mini" id="livecopy">copy json</button>
+    <span class="hint" style="margin:0">exactly what “build .rvr” sends</span></div>
+  <div id="liveprob"></div>
+  <pre id="livejson"></pre>
+  <p class="hint">DAS entries resolve through the redirector at build time — each listed
+  file url already names the redirector it will use. Long file lists are collapsed for
+  reading (click to expand); the copy button always carries the complete json.</p>
+ </div>
+ </div>
+</div>
+
+<div class="card"><h2>3 · activity — cache and build history</h2>
+  <div class="row"><button id="actgo">refresh</button></div>
+  <div id="actout"></div>
+</div>
+
+<script>
+"use strict";
+const BASE = "http://127.0.0.1:8271";
+const START_CMD = "python3 remote/helper.py";   // from a clone of the repo
+const REDIRECTOR = "root://cmsxrootd.fnal.gov/";   // what the helper resolves DAS entries through
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+                          .replace(/"/g,"&quot;");
+//: auto unit roll-up, everywhere a size renders: >=1000 of a unit moves up one
+//: (4144.8 MB -> 4.14 GB). PB included just to be safe (Derek, R7).
+const fmtSize = b => {
+  if (b == null || !isFinite(b) || b < 0) return "";
+  const u = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let i = 0;
+  while (b >= 1000 && i < u.length - 1){ b /= 1000; i++; }
+  const t = i === 0 ? String(Math.round(b))
+    : b >= 100 ? b.toFixed(0) : b >= 10 ? b.toFixed(1) : b.toFixed(2);
+  return t + " " + u[i];
+};
+const fmtMB = m => fmtSize(m * 1e6);
+const ago = s => s<90 ? s+" s" : s<5400 ? Math.round(s/60)+" min" : Math.round(s/3600)+" h";
+//: the one waiting animation (Derek, R7): three dots growing and shrinking in order
+const dots = label => `${esc(label)} <span class="dots"><i></i><i></i><i></i></span>`;
+
+//: per-endpoint timeout budgets, seconds — no query may spin forever. /trees and
+//: /branches open remote files and a COLD helper pays the ~60 s xrootd handshake
+//: there, hence the long leash; everything else is metadata or an immediate answer.
+const BUDGET = {"/ping": 5, "/datasets": 45, "/datasetinfo": 45, "/files": 60,
+                "/ls": 45, "/trees": 240, "/branches": 240, "/build": 30,
+                "/status": 15, "/dataless": 60, "/cache": 15, "/metrics": 15};
+
+async function api(path, body){
+  const ep = path.split("?")[0];
+  const budget = BUDGET[ep] || 30;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), budget * 1000);
+  const opt = {signal: ctl.signal};
+  if (body){
+    opt.method = "POST";
+    opt.headers = {"Content-Type": "application/json"};
+    opt.body = JSON.stringify(body);
+  }
+  try{
+    const r = await fetch(BASE+path, opt);
+    const ct = r.headers.get("Content-Type") || "";
+    if (ct.indexOf("json") < 0) return r;
+    const j = await r.json();
+    if (j && j.error) throw new Error(j.error);
+    return j;
+  } catch(e){
+    if (e.name === "AbortError")
+      throw new Error(`${ep} gave no answer in ${budget} s — the helper may be stuck ` +
+        `or the network slow` +
+        (ep === "/trees" || ep === "/branches"
+          ? " (even beyond the cold ~60 s first open)" : "") +
+        ". Try the same action again, or restart the helper.");
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// the wrong-LFN trap (LOG R0): a bad name looks exactly like a dead network
+function explain(msg){
+  if (/Operation expired|Redirect limit/i.test(msg))
+    return msg + "\n(a WRONG file name or LFN produces exactly this — a redirector keeps " +
+           "searching until timeout. Check the name before blaming the network.)";
+  if (/No protocols left to try/i.test(msg))
+    return msg + "\n(this usually means the CA dir, not the proxy — the helper sets both, " +
+           "so if you see it here the proxy file itself is likely gone or expired.)";
+  return msg;
+}
+
+/* ---------- status ---------- */
+let UP = false;
+async function status(){
+  try{
+    const p = await api("/ping");
+    UP = true;
+    $("banner").style.display = "none";
+    const left = p.proxy && p.proxy.seconds_left;
+    const anon = /^none/.test((p.proxy && p.proxy.subject) || "");
+    const cn = ((p.proxy && p.proxy.subject) || "").split("/CN=")[1] || "?";
+    const days = left != null ? (left/86400).toFixed(1) : "?";
+    const hs = p.handshake && p.handshake.done
+      ? `<span class="okline">warm</span> (first open ${p.handshake.first_open_s}s)`
+      : `<span class="warn">cold</span> — first open pays the ~60 s xrootd handshake`;
+    const jobs = Object.entries(p.jobs || {});
+    const live = jobs.filter(([,ph]) => ph !== "done" && ph !== "error").length;
+    $("status").innerHTML =
+      `<span class="stat"><b>helper</b>v${esc(p.version)} · port ${p.port} · up ${ago(p.uptime_s)}</span>` +
+      `<span class="stat"><b>proxy</b>` +
+      (anon
+        ? `<span class="warn">none — anonymous, public data only</span>`
+        : `${esc(cn)} · ` + (left != null && left > 0
+          ? `${left < 86400 ? '<span class="warn">' : '<span class="okline">'}${days} days left</span>`
+          : `<span class="err">EXPIRED — renew it: voms-proxy-init -voms cms</span>`)) +
+      `</span>` +
+      `<span class="stat"><b>xrootd</b>${hs}</span>` +
+      `<span class="stat"><b>jobs</b>${jobs.length} known, ${live} running</span>`;
+  } catch(e){
+    UP = false;
+    $("status").textContent = "not answering";
+    $("banner").style.display = "block";
+    $("banner").innerHTML = `<b>no helper on 127.0.0.1:8271.</b> ` +
+      `Get it from a clone of the repo — <code>git clone ` +
+      `https://gitlab.cern.ch/dgrove/rowver</code> — then either:<br>` +
+      `<b>recommended · on a cluster node</b> (credentials, CAs and eos already ` +
+      `live there): <code>python3 remote/helper.py</code> on the node, ` +
+      `<code>ssh -L 8271:localhost:8271 &lt;cluster-host&gt;</code> from here.<br>` +
+      `<b>or locally</b>: <code>python3 -m pip install --user numpy uproot ` +
+      `fsspec-xrootd</code>, a grid proxy for CMS data (public open data needs ` +
+      `none), then <code>${esc(START_CMD)}</code>.<br>` +
+      `If Firefox asks to allow local network access for this page, allow it — ` +
+      `the page talks only to 127.0.0.1. Then this page comes alive by itself.`;
+  }
+}
+status();
+setInterval(status, 15000);
+
+/* ---------- 1: source — DAS and eos, two sides of the same coin ---------- */
+//: ONE panel, a toggle flipping the page (Derek, 2026-08-20). Shared everywhere:
+//: search/filter, the split list (names scroll in one pane, buttons in stable columns),
+//: trees, branches, add-to-basket, and file-subset selection with checkboxes. DAS keeps
+//: its extra info query (file count / events / size).
+let MODE = "das";
+//: the DAS default is a REAL query (Derek 2026-08-20): Run 3 ttbar NanoAOD, exactly one
+//: wildcard, verified against the live /datasets endpoint to return rows sub-second
+const DAS_DEFAULT = "/TTto2L2Nu_TuneCP5_13p6TeV_powheg-pythia8/Run3Summer22NanoAODv12*/NANOAODSIM";
+const EOS_DEFAULT = (typeof localStorage !== "undefined" &&
+  localStorage.getItem("rowver_eos_path")) || "";
+const REMEMBER = {das: DAS_DEFAULT, eos: EOS_DEFAULT};
+const VIEWS = {das: null, eos: null};   // what each mode last showed, so the toggle flips pages
+const DASINFO = {};                     // dataset -> {files, events, bytes}
+
+const HINTS = {
+  das: `Dataset NAME search is DBS, proxy-authenticated — the same service DAS queries
+  (rucio would add replica location, not names). Wildcards: <code>*</code> anywhere in the
+  /primary/campaign/TIER shape. “info” = files/events/size; “files” opens the file list for
+  subset picking; “add” takes the whole dataset (the helper resolves files at build time,
+  smallest first).`,
+  eos: `Directories through xrootd on cmseos. Click a directory to descend, “trees” to
+  inspect a file, the checkboxes to build from a subset of files.`,
+};
+
+function setMode(m){
+  // an emptied field falls back to the mode's default rather than remembering blank
+  if ($("srcin").value.trim()) REMEMBER[MODE] = $("srcin").value;
+  MODE = m;
+  $("mdas").setAttribute("aria-pressed", m === "das");
+  $("meos").setAttribute("aria-pressed", m === "eos");
+  $("srcin").value = REMEMBER[m];
+  $("srcin").placeholder = m === "das" ? DAS_DEFAULT : "/store/user/your_eos_dir";
+  $("srcgo").textContent = m === "das" ? "search" : "list";
+  $("srchint").innerHTML = HINTS[m];
+  $("srcerr").textContent = "";
+  $("srcfilter").value = "";     // a filter typed for one source is stale on the other
+  renderSrc();
+}
+$("mdas").onclick = () => setMode("das");
+$("meos").onclick = () => setMode("eos");
+
+async function go(){
+  const v = $("srcin").value.trim();
+  $("srcerr").textContent = "";
+  if (!v) return;
+  $("srcbusy").innerHTML = dots(MODE === "das" ? "searching" : "listing");
+  try{
+    if (MODE === "das"){
+      const names = await api("/datasets?pattern=" + encodeURIComponent(v));
+      VIEWS.das = {kind: "dsets", names: names};
+    } else {
+      const got = await api("/ls?eos=" + encodeURIComponent(v));
+      got.files.forEach(f => { f.checked = false; });
+      VIEWS.eos = {kind: "eos", path: got.path, dirs: got.dirs, files: got.files};
+      REMEMBER.eos = got.path;
+      try{ localStorage.setItem("rowver_eos_path", got.path); } catch(e){}
+      $("srcin").value = got.path;
+    }
+    renderSrc();
+  } catch(e){
+    $("srcerr").textContent = explain(e.message) +
+      (MODE === "das" && /HTTP|Bad Request|400/.test(e.message)
+        ? "\n(the pattern must look like /primary*/campaign*/TIER)" : "");
+  }
+  $("srcbusy").textContent = "";
+}
+$("srcgo").onclick = go;
+$("srcin").addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+$("srcfilter").oninput = () => renderSrc();
+
+//: the split list: an optional checkbox rail, ONE horizontally scrollable pane holding
+//: every name, and stable info/button columns beside it. All three are ordinary columns
+//: of fixed-height rows inside one vertically scrolled wrap, so they stay aligned with
+//: no script. Head cells ride in each column so the offset matches.
+function splitList(head, rows){
+  const cell = c => `<span class="cell${c.num ? " num" : ""}"` +
+                    ` style="width:${c.w}px">${c.t}</span>`;
+  const rail = rows.some(r => r.rail != null);
+  return `<div class="split">` +
+    (rail
+      ? `<div class="srail"><div class="srow head"></div>` +
+        rows.map(r => `<div class="srow">${r.rail || ""}</div>`).join("") + `</div>`
+      : "") +
+    `<div class="snames"><div>` +
+      `<div class="srow head">${head.name}</div>` +
+      rows.map(r => `<div class="srow">${r.name}</div>`).join("") +
+    `</div></div>` +
+    `<div class="sinfo">` +
+      `<div class="srow head">${head.cells.map(cell).join("")}</div>` +
+      rows.map(r => `<div class="srow">${r.cells.map(cell).join("")}</div>`).join("") +
+    `</div></div>`;
+}
+
+const lastName = p => p.split("/").filter(Boolean).pop() || p;
+
+function pickable(view){
+  return view && view.files && view.files.length ? view.files : null;
+}
+
+function renderSrc(){
+  const view = VIEWS[MODE];
+  const f = $("srcfilter").value.trim().toLowerCase();
+  const match = s => !f || s.toLowerCase().indexOf(f) >= 0;
+  $("crumbs").innerHTML = "";
+  $("pickbar").hidden = true;
+  if (!view){ $("srclist").hidden = true; return; }
+  $("srclist").hidden = false;
+  let html = "";
+
+  if (view.kind === "dsets"){
+    const names = view.names.filter(match);
+    html = splitList(
+      {name: `dataset (${names.length}${f ? " of " + view.names.length : ""})`,
+       cells: [{t:"files", w:52, num:1}, {t:"events", w:105, num:1},
+               {t:"size", w:84, num:1}, {t:"", w:22}, {t:"", w:170}]},
+      names.map(n => {
+        const s = DASINFO[n] || {};
+        return {name: esc(n), cells: [
+          {t: s.files != null ? s.files : "·", w:52, num:1},
+          {t: s.events != null ? s.events.toLocaleString("en-US") : "·", w:105, num:1},
+          {t: s.bytes != null ? fmtSize(s.bytes) : "·", w:84, num:1},
+          {t: "", w:22},
+          {t: `<button class="mini" data-info="${esc(n)}">info</button> ` +
+              `<button class="mini" data-dfiles="${esc(n)}">files</button> ` +
+              `<button class="mini" data-addds="${esc(n)}">add</button>`, w:170}]};
+      }));
+  }
+
+  if (view.kind === "files"){       // one DAS dataset opened to its files
+    $("crumbs").innerHTML = `<span class="crumb" data-back="1">← results</span> · ` +
+      `${esc(view.label)} · ${view.files.length} files, smallest first`;
+    const rows = view.files.map((x, i) => ({x, i})).filter(r => match(r.x.name));
+    html = splitList(
+      {name: `file (${rows.length}${f ? " of " + view.files.length : ""})`,
+       cells: [{t:"size", w:84, num:1}, {t:"events", w:105, num:1},
+               {t:"", w:22}, {t:"", w:66}]},
+      rows.map(r => ({
+        rail: `<input type="checkbox" data-ck="${r.i}"${r.x.checked ? " checked" : ""}>`,
+        name: esc(r.x.name),
+        cells: [{t: fmtSize(r.x.size), w:84, num:1},
+                {t: r.x.events != null ? r.x.events.toLocaleString("en-US") : "", w:105, num:1},
+                {t: "", w:22},
+                {t: `<button class="mini" data-trees="${r.i}">trees</button>`, w:66}]})));
+    pickbarDraw(view);
+  }
+
+  if (view.kind === "eos"){
+    const parts = view.path.split("/").filter(Boolean);
+    $("crumbs").innerHTML = "/" + parts.map((p, i) =>
+      `<span class="crumb" data-up="${i}">${esc(p)}</span>`).join("/");
+    const dirs = view.dirs.filter(match);
+    const rows = view.files.map((x, i) => ({x, i})).filter(r => match(r.x.name));
+    html = splitList(
+      {name: `${dirs.length} dir${dirs.length === 1 ? "" : "s"} · ${rows.length} file` +
+             `${rows.length === 1 ? "" : "s"}${f ? " (filtered)" : ""}`,
+       cells: [{t:"size", w:84, num:1}, {t:"", w:22}, {t:"", w:66}]},
+      dirs.map(d => ({
+        rail: view.files.length ? "" : null,
+        name: `<span class="dir" data-dir="${esc(d)}">${esc(d)}/</span>`,
+        cells: [{t:"", w:84, num:1}, {t:"", w:22}, {t:"", w:66}]}))
+      .concat(rows.map(r => ({
+        rail: `<input type="checkbox" data-ck="${r.i}"${r.x.checked ? " checked" : ""}>`,
+        name: esc(r.x.name),
+        cells: [{t: fmtSize(r.x.size), w:84, num:1},
+                {t: "", w:22},
+                {t: `<button class="mini" data-trees="${r.i}">trees</button>`, w:66}]}))));
+    if (view.files.length) pickbarDraw(view);
+  }
+
+  $("srclist").innerHTML = html;
+}
+
+function pickbarDraw(view){
+  const files = pickable(view);
+  if (!files) return;
+  $("pickbar").hidden = false;
+  const n = files.filter(x => x.checked).length;
+  $("pickcount").textContent = `${n} of ${files.length} selected`;
+}
+
+$("crumbs").onclick = e => {
+  const b = e.target.closest("[data-back]");
+  if (b){ VIEWS.das = VIEWS.das && VIEWS.das.parent || VIEWS.das; renderSrc(); return; }
+  const c = e.target.closest("[data-up]");
+  if (c){
+    const parts = VIEWS.eos.path.split("/").filter(Boolean);
+    $("srcin").value = "/" + parts.slice(0, +c.dataset.up + 1).join("/");
+    go();
+  }
+};
+
+$("srclist").onclick = async e => {
+  const view = VIEWS[MODE];
+  const inf = e.target.closest("[data-info]");
+  if (inf){
+    inf.innerHTML = dots("");
+    try{
+      DASINFO[inf.dataset.info] = await api(
+        "/datasetinfo?dataset=" + encodeURIComponent(inf.dataset.info));
+    } catch(err){ $("srcerr").textContent = explain(err.message); }
+    renderSrc();
+    renderLive();
+    return;
+  }
+  const df = e.target.closest("[data-dfiles]");
+  if (df){
+    df.innerHTML = dots("");
+    try{
+      const rows = await api("/files?dataset=" + encodeURIComponent(df.dataset.dfiles));
+      rows.sort((a, b) => (a.size || 0) - (b.size || 0));   // smallest first, like limit
+      VIEWS.das = {kind: "files", label: df.dataset.dfiles, parent: VIEWS.das,
+                   files: rows.map(r => ({url: r.url, name: lastName(r.url),
+                                          size: r.size, events: r.events,
+                                          checked: false}))};
+      renderSrc();
+    } catch(err){ $("srcerr").textContent = explain(err.message); renderSrc(); }
+    return;
+  }
+  const ad = e.target.closest("[data-addds]");
+  if (ad) return addDataset(ad.dataset.addds);
+  const d = e.target.closest("[data-dir]");
+  if (d){
+    $("srcin").value = view.path.replace(/\/$/, "") + "/" + d.dataset.dir;
+    return go();
+  }
+  const t = e.target.closest("[data-trees]");
+  if (t) return trees(view.files[+t.dataset.trees].url);
+};
+
+$("srclist").onchange = e => {
+  const ck = e.target.closest("[data-ck]");
+  if (!ck) return;
+  VIEWS[MODE].files[+ck.dataset.ck].checked = ck.checked;
+  pickbarDraw(VIEWS[MODE]);
+};
+
+function pickSet(fn){
+  const files = pickable(VIEWS[MODE]);
+  if (!files) return;
+  fn(files);
+  renderSrc();
+}
+$("pickall").onclick = () => pickSet(fs => fs.forEach(x => { x.checked = true; }));
+$("picknone").onclick = () => pickSet(fs => fs.forEach(x => { x.checked = false; }));
+$("pickfirst").onclick = () => pickSet(fs => {
+  const n = Math.max(1, +$("pickn").value || 1);
+  fs.forEach((x, i) => { x.checked = i < n; });
+});
+$("pickadd").onclick = async () => {
+  const view = VIEWS[MODE];
+  const files = pickable(view);
+  if (!files) return;
+  const sel = files.filter(x => x.checked);
+  if (!sel.length){ $("srcerr").textContent = "no files ticked — select some first"; return; }
+  $("srcerr").textContent = "";
+  let tree = $("picktree").value.trim() || "Events";
+  if (view.kind === "eos"){
+    // NEVER default 'Events' against a custom ntuple (Derek's live failure, R9): the
+    // tree is checked against the first selected file's actual inventory. A lone
+    // physics tree is adopted (and shown in the tree box); several demand a pick.
+    $("srcbusy").innerHTML = dots("checking the tree against the file");
+    try{
+      const got = await api("/trees?file=" + encodeURIComponent(sel[0].url));
+      const names = got.trees.map(t => t.name);
+      if (names.indexOf(tree) < 0){
+        const phys = names.filter(n => n !== "EventCount");
+        if (phys.length === 1){
+          tree = phys[0];
+          $("picktree").value = tree;      // the adoption is visible, not silent
+        } else {
+          $("srcbusy").textContent = "";
+          $("srcerr").textContent = `tree “${tree}” is not in ${sel[0].name} — its trees: ` +
+            `${names.join(", ")}. Pick one: “trees” on a file, then “use for subset”.`;
+          return;
+        }
+      }
+    } catch(e){
+      $("srcbusy").textContent = "";
+      $("srcerr").textContent = explain(e.message);
+      return;
+    }
+    $("srcbusy").textContent = "";
+  }
+  addSubset(view.kind === "files" ? view.label : view.path,
+            tree, sel.map(x => x.url), files.length);
+};
+
+async function trees(url){
+  $("treebox").hidden = false;
+  $("treefile").innerHTML = esc(url) +
+    " — " + dots("listing trees with uproot, this can take a moment, please be patient");
+  try{
+    const got = await api("/trees?file=" + encodeURIComponent(url));
+    $("treefile").textContent = url;
+    $("treeout").innerHTML = `<tr><th>tree (${got.trees.length})</th><th class="num">entries</th><th></th></tr>` +
+      got.trees.map((t,i) => `<tr><td>${esc(t.name)}</td>` +
+        `<td class="num">${t.entries == null ? "?" : t.entries.toLocaleString("en-US")}</td>` +
+        `<td><button class="mini" data-br="${i}">branches</button> ` +
+        `<button class="mini" data-addf="${i}">add file+tree</button> ` +
+        `<button class="mini" data-usetree="${i}" title="put this name in the subset tree box">use for subset</button></td></tr>`).join("");
+    $("treeout").onclick = e => {
+      const b = e.target.closest("[data-br]");
+      if (b) branches(url, got.trees[+b.dataset.br].name);
+      const a = e.target.closest("[data-addf]");
+      if (a) addFile(url, got.trees[+a.dataset.addf].name);
+      const u = e.target.closest("[data-usetree]");
+      if (u) $("picktree").value = got.trees[+u.dataset.usetree].name;
+    };
+  } catch(e){ $("treefile").innerHTML = `<span class="err">${esc(explain(e.message))}</span>`; }
+}
+
+let BRANCHES = [];
+async function branches(url, tree){
+  $("branchbox").hidden = false;
+  $("branchfilter").value = "";     // a filter typed for another tree is stale here
+  $("branchhead").innerHTML = dots(`${tree} — reading the branch inventory with uproot`);
+  try{
+    const got = await api(`/branches?file=${encodeURIComponent(url)}&tree=${encodeURIComponent(tree)}`);
+    BRANCHES = got.branches;
+    $("branchhead").textContent =
+      `${tree} · ${got.entries.toLocaleString("en-US")} entries · ${got.branches.length} branches`;
+    drawBranches();
+  } catch(e){ $("branchhead").textContent = explain(e.message); }
+}
+function drawBranches(){
+  const f = $("branchfilter").value.trim().toLowerCase();
+  const rows = BRANCHES.filter(b => !f || b.name.toLowerCase().indexOf(f) >= 0);
+  $("branchout").innerHTML = `<tr><th>branch (${rows.length})</th><th>type</th></tr>` +
+    rows.slice(0, 400).map(b =>
+      `<tr><td class="branchpick" data-b="${esc(b.name)}">${esc(b.name)}</td>` +
+      `<td>${esc(b.type)}</td></tr>`).join("") +
+    (rows.length > 400 ? `<tr><td colspan="2">… ${rows.length-400} more — filter to see them</td></tr>` : "");
+  $("branchout").onclick = e => {
+    const b = e.target.closest("[data-b]");
+    if (!b) return;
+    const cur = $("cols").value.trim();
+    if (cur.split(/[\s,]+/).indexOf(b.dataset.b) >= 0) return;
+    $("cols").value = cur ? cur + ", " + b.dataset.b : b.dataset.b;
+  };
+}
+$("branchfilter").oninput = drawBranches;
+
+/* ---------- 2: build ---------- */
+const BASKET = [];
+function addDataset(name){
+  BASKET.push({kind:"dataset", dataset:name, tree:"Events", limit:3});
+  drawBasket();
+}
+function addFile(url, tree){
+  BASKET.push({kind:"file", url:url, tree:tree});
+  drawBasket();
+}
+function addSubset(label, tree, urls, total){
+  //: a chosen subset stays EXPLICIT: the basket (and the spec, and the data-less .rvr)
+  //: carries the url list, never "the dataset minus something"
+  BASKET.push({kind:"subset", label:label, tree:tree, urls:urls, total:total});
+  drawBasket();
+}
+//: which storage side a basket row came from — the columns hint and the parked
+//: mixed-source refusal both read it
+const srcOf = b => b.kind === "dataset" ? "das"
+  : ((b.url || (b.urls && b.urls[0]) || "").indexOf("cmseos") >= 0 ? "eos" : "das");
+
+function colsPlaceholder(){
+  //: context-aware (Derek, R7): NanoAOD names only make sense for DAS sources; a custom
+  //: eos ntuple carries its own — the honest suggestion there is the branch browser
+  const kinds = new Set(BASKET.map(srcOf));
+  if (kinds.has("eos"))
+    return "click branches on a file in the source browser — custom ntuples carry their own names";
+  if (kinds.has("das"))
+    return "MET_pt, nMuon, genWeight — or click branches in the source browser";
+  return "click branches in the source browser to add columns";
+}
+
+function drawBasket(){
+  $("cols").placeholder = colsPlaceholder();
+  renderLive();
+  if (!BASKET.length){
+    $("basket").innerHTML = `<p class="hint">nothing selected yet — add datasets, files, or a file subset from the source panel</p>`;
+    return;
+  }
+  $("basket").innerHTML = BASKET.map((b,i) => `<div class="basketrow">` +
+    (b.kind === "dataset"
+      ? `<span title="${esc(b.dataset)}">${esc(b.dataset)}</span>` +
+        `<span class="tag">DAS · tree ${esc(b.tree)} · smallest ` +
+        `<input data-lim="${i}" value="${b.limit}" size="2" style="padding:1px 4px"> files</span>`
+      : b.kind === "subset"
+      ? `<span title="${esc(b.label)}\n${esc(b.urls.join("\n"))}">${esc(b.label)}</span>` +
+        `<span class="tag">${b.urls.length} of ${b.total} files · tree ${esc(b.tree)}</span>`
+      : `<span title="${esc(b.url)}">${esc(b.url.split("/").pop())}</span>` +
+        `<span class="tag">eos · tree ${esc(b.tree)}</span>`) +
+    `<button class="mini" data-del="${i}">×</button></div>`).join("");
+  $("basket").onclick = e => {
+    const d = e.target.closest("[data-del]");
+    if (d){ BASKET.splice(+d.dataset.del, 1); drawBasket(); }
+  };
+  $("basket").onchange = e => {
+    const l = e.target.closest("[data-lim]");
+    if (l){ BASKET[+l.dataset.lim].limit = Math.max(1, +l.value || 1); renderLive(); }
+  };
+}
+//: ONE spec builder. strict (the build/dataless path) throws on problems; lenient (the
+//: live json pane) returns the same object plus the problem list — so what the pane
+//: shows is by construction exactly what POST /build receives.
+function buildSpec(strict){
+  const problems = [];
+  if (!BASKET.length) problems.push("the basket is empty — add a dataset or a file first");
+  const cols = $("cols").value.split(/[\s,]+/).filter(Boolean);
+  if (!cols.length) problems.push("no columns — click branches or name at least one");
+  const kinds = new Set(BASKET.map(srcOf));
+  if (kinds.size > 1)
+    problems.push("mixed CMS-DAS and eos sources in one build is parked (TO_DO) — " +
+                  "their trees carry different columns; build them separately for now");
+  const fileset = {};
+  BASKET.forEach(b => {
+    if (b.kind === "dataset"){
+      const short = b.dataset.split("/")[1].slice(0, 40) + " · " + b.dataset.split("/")[2].split("-")[0];
+      fileset[short] = {dataset:b.dataset, tree:b.tree, limit:b.limit};
+    } else if (b.kind === "subset"){
+      const short = (b.label.startsWith("/store")
+        ? lastName(b.label) : (b.label.split("/")[1] || b.label)).slice(0, 40) +
+        ` · ${b.urls.length} of ${b.total}`;
+      const entry = fileset[short] = fileset[short] || {files:{}};
+      b.urls.forEach(u => { entry.files[u] = b.tree; });
+    } else {
+      const short = b.url.split("/").pop().replace(/\.root$/,"").slice(0, 48) +
+                    (b.tree === "Events" ? "" : " · " + b.tree);
+      const entry = fileset[short] = fileset[short] || {files:{}};
+      entry.files[b.url] = b.tree;
+    }
+  });
+  const branches = {};
+  cols.forEach(c => { branches[c] = c; });
+  const w = $("wcol").value.trim();
+  if (w && cols.indexOf(w) < 0)
+    problems.push(`weights ${w} is not one of the columns`);
+  const out = {
+    title: $("title").value.trim() || "console",
+    fileset: fileset,
+    branches: branches,
+    weights: w || null,
+    start: START_CMD,
+    tabs: [{name: $("title").value.trim() || "console",
+            view: {lumi: 1, shown: ["*"],
+                   plots: [{varx: cols[0] || "x", nb: 40, logy: true, span: "p99"}]}}],
+  };
+  const cut = $("cut").value.trim();
+  if (cut) out.cut = cut;
+  if (strict && problems.length) throw new Error(problems.join("\n"));
+  return {spec: out, problems: problems};
+}
+function spec(){ return buildSpec(true).spec; }
+
+/* ---------- the live build json (Derek, R7): the spec, rendered as it grows ---------- */
+const JEXP = new Set();          // fileset entries whose file list the user expanded
+const JCOLLAPSE = 6;             // a files map longer than this starts collapsed
+
+function jsonHtml(sp){
+  //: the REAL object, hand-laid-out to match JSON.stringify(sp, null, 1) — with two
+  //: reading aids that stay OUT of a text selection (user-select:none): grey
+  //: annotations on DAS entries (redirector + known counts) and the collapsed
+  //: placeholder for long file lists. Expanded text highlights and copies as valid
+  //: json; the copy button always carries the whole thing.
+  const shift = (v, pad) => JSON.stringify(v, null, 1)
+    .split("\n").map((l, i) => (i ? pad : "") + l).join("\n");
+  const out = ["{"];
+  const keys = Object.keys(sp);
+  keys.forEach((k, ki) => {
+    const comma = ki < keys.length - 1 ? "," : "";
+    if (k !== "fileset"){
+      out.push(` ${esc(JSON.stringify(k))}: ${esc(shift(sp[k], " "))}${comma}`);
+      return;
+    }
+    const names = Object.keys(sp.fileset);
+    if (!names.length){ out.push(` "fileset": {}${comma}`); return; }
+    out.push(` "fileset": {`);
+    names.forEach((n, i) => {
+      const e = sp.fileset[n];
+      const c2 = i < names.length - 1 ? "," : "";
+      if (e.dataset){
+        const known = DASINFO[e.dataset];
+        out.push(`  ${esc(JSON.stringify(n))}: ${esc(shift(e, "  "))}${c2}` +
+          `<span class="jnote">  // resolves via ${esc(REDIRECTOR)} at build time` +
+          (known && known.files != null ? ` — ${known.files} files in DAS` : "") +
+          (e.limit ? `, smallest ${e.limit} used` : "") + `</span>`);
+        return;
+      }
+      const urls = Object.keys(e.files || {});
+      const open = JEXP.has(n) || urls.length <= JCOLLAPSE;
+      out.push(`  ${esc(JSON.stringify(n))}: {`);
+      if (open){
+        out.push(`   "files": {`);
+        urls.forEach((u, j) => out.push(`    ${esc(JSON.stringify(u))}: ` +
+          `${esc(JSON.stringify(e.files[u]))}${j < urls.length - 1 ? "," : ""}`));
+        out.push(`   }` + (urls.length > JCOLLAPSE
+          ? ` <span class="jexp" data-jx="${esc(n)}">[–] collapse</span>` : ""));
+      } else {
+        out.push(`   "files": {` +
+          `<span class="jexp" data-jx="${esc(n)}"> … ${urls.length} files — click to expand </span>}`);
+      }
+      out.push(`  }${c2}`);
+    });
+    out.push(` }${comma}`);
+  });
+  out.push("}");
+  return out.join("\n");
+}
+
+function renderLive(){
+  const box = $("livejson");
+  if (!box) return;
+  const got = buildSpec(false);
+  $("liveprob").innerHTML = got.problems.map(p =>
+    `<div class="warn">· ${esc(p)}</div>`).join("");
+  box.innerHTML = jsonHtml(got.spec);
+}
+$("livejson").onclick = e => {
+  const x = e.target.closest("[data-jx]");
+  if (!x) return;
+  const n = x.dataset.jx;
+  if (JEXP.has(n)) JEXP.delete(n); else JEXP.add(n);
+  renderLive();
+};
+$("livecopy").onclick = async () => {
+  const txt = JSON.stringify(buildSpec(false).spec, null, 1);
+  try{ await navigator.clipboard.writeText(txt); }
+  catch(e){
+    const ta = document.createElement("textarea");
+    ta.value = txt;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+  $("livecopy").textContent = "copied";
+  setTimeout(() => { $("livecopy").textContent = "copy json"; }, 1200);
+};
+["cols", "cut", "wcol", "title"].forEach(id => {
+  $(id).addEventListener("input", renderLive);
+});
+function dash(s, prev){
+  // every value here is a helper-measured counter; the page only takes differences
+  const cur = s.current || {};
+  const curFrac = cur.entries_total ? cur.entries_read / cur.entries_total : 0;
+  const allFrac = s.total_files ? (s.done_files + curFrac) / s.total_files : 0;
+  $("dashall").style.width = Math.round(100 * allFrac) + "%";
+  $("dashcur").style.width = Math.round(100 * curFrac) + "%";
+  $("dashfiles").textContent = `${s.done_files}/${s.total_files} files` +
+    (allFrac ? ` · ${Math.round(100 * allFrac)}%` : "");
+  $("dashfile").textContent = cur.file
+    ? `${cur.file} — ${(cur.entries_read || 0).toLocaleString("en-US")}` +
+      (cur.entries_total ? ` of ${cur.entries_total.toLocaleString("en-US")} entries` : "") +
+      (cur.wire_MB ? ` · ${fmtMB(cur.wire_MB)} wire` : "") +
+      (cur.file_MB ? ` of a ${fmtMB(cur.file_MB)} file` : "")
+    : "waiting for the first file…";
+  $("dashphase").innerHTML = s.phase === "opening" && /handshake/.test(s.note || "")
+    ? `<span class="warn">${esc(s.note)}</span>`
+    : esc((s.phase || "") + (s.note ? " — " + s.note : ""));
+  $("m_el").textContent = s.elapsed_s != null ? s.elapsed_s + " s" : "–";
+  $("m_wire").textContent = s.wire_MB != null ? fmtMB(s.wire_MB) : "–";
+  const avg = s.elapsed_s > 0 ? s.wire_MB / s.elapsed_s : null;
+  $("m_avg").textContent = avg != null ? avg.toFixed(2) + " MB/s" : "–";
+  let inst = null;
+  if (prev && s.elapsed_s > prev.elapsed_s)
+    inst = (s.wire_MB - prev.wire_MB) / (s.elapsed_s - prev.elapsed_s);
+  $("m_inst").textContent = inst != null ? inst.toFixed(2) + " MB/s" : "–";
+  $("m_read").textContent = (s.entries_read || 0).toLocaleString("en-US");
+  $("m_kept").textContent = (s.entries_kept || 0).toLocaleString("en-US");
+  $("m_frac").textContent = s.disk_MB_seen > 0
+    ? (100 * s.wire_MB / s.disk_MB_seen).toFixed(3) + " %" : "–";
+  $("m_eta").textContent = allFrac > 0.02 && s.elapsed_s
+    ? "~" + Math.round(s.elapsed_s * (1 - allFrac) / allFrac) + " s" : "–";
+}
+
+async function build(){
+  $("builderr").textContent = "";
+  $("builddone").hidden = true;
+  let sp;
+  try{ sp = spec(); } catch(e){ $("builderr").textContent = e.message; return; }
+  $("dash").hidden = false;
+  $("buildstate").innerHTML = dots("requesting");
+  let prev = null;
+  try{
+    const job = await api("/build", sp);
+    for (;;){
+      const s = await api("/status?job=" + job.job);
+      if (s.phase === "done") break;
+      if (s.phase === "error") throw new Error(s.error);
+      $("buildstate").textContent = "";
+      dash(s, prev);
+      prev = s;
+      await new Promise(r => setTimeout(r, 500));
+    }
+    $("dashall").style.width = "100%";
+    $("dashcur").style.width = "100%";
+    $("buildstate").textContent = job.cached
+      ? "served from cache — section 3 keeps its ORIGINAL build's measurements"
+      : "done";
+    $("builddone").hidden = false;
+    $("builddone").innerHTML =
+      `<a href="${BASE}/fetch?job=${job.job}">download ${esc(sp.title)}.rvr</a>` +
+      ` — then drop it on viewer.html · ` +
+      `<span class="hint" style="display:inline">job ${job.job}` +
+      `${job.cached ? " · cache HIT" : " · cache miss, built fresh"} — per-file numbers in section 3</span>`;
+    activity();
+  } catch(e){
+    $("builderr").textContent = explain(e.message);
+    $("buildstate").textContent = "failed";
+  }
+}
+$("buildgo").onclick = build;
+$("datalessgo").onclick = async () => {
+  $("builderr").textContent = "";
+  let sp;
+  try{ sp = spec(); } catch(e){ $("builderr").textContent = e.message; return; }
+  $("buildstate").innerHTML = dots("writing the data-less file");
+  try{
+    const r = await api("/dataless", sp);
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = sp.title + ".rvr";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    $("buildstate").textContent = "";
+  } catch(e){ $("builderr").textContent = explain(e.message); $("buildstate").textContent = ""; }
+};
+
+/* ---------- 3: activity ---------- */
+async function activity(){
+  try{
+    const cache = await api("/cache");
+    const mets = await api("/metrics");
+    let html = `<h2 style="margin-top:10px">cache</h2>`;
+    html += cache.length
+      ? `<div class="wrap"><table><tr><th>file</th><th class="num">size</th>` +
+        `<th class="num">age</th><th>measured</th></tr>` +
+        cache.map(c => `<tr><td>${esc(c.name)}</td><td class="num">${fmtSize(c.MB*1e6)}</td>` +
+          `<td class="num">${ago(c.age_s)}</td><td>${c.metrics ? "yes" : ""}</td></tr>`).join("") +
+        `</table></div>`
+      : `<p class="hint">no cached builds yet</p>`;
+    html += `<details class="hist" style="margin-top:14px"><summary>build history ` +
+      `(${mets.length} build${mets.length === 1 ? "" : "s"}, every number measured)</summary>`;
+    if (!mets.length) html += `<p class="hint">no builds measured yet</p>`;
+    else html += `<div class="wrap"><table><tr><th>build</th><th class="num">datasets</th>` +
+      `<th class="num">files</th><th class="num">events kept</th><th class="num">files on disk</th>` +
+      `<th class="num">on the wire</th><th class="num">fraction</th><th class="num">seconds</th>` +
+      `<th class="num">.rvr</th></tr>` +
+      mets.map((m,i) => {
+        const disk = (m.per_file || []).reduce((a,f) => a + (f.file_MB || 0), 0);
+        const frac = disk ? (100*m.wire_MB/disk) : null;
+        return `<tr><td>${esc(m.title || m.spec_sha)}</td>` +
+          `<td class="num">${m.datasets}</td><td class="num">${m.files}</td>` +
+          `<td class="num">${(m.events_kept||0).toLocaleString("en-US")}</td>` +
+          `<td class="num">${fmtSize(disk*1e6)}</td>` +
+          `<td class="num">${fmtMB(m.wire_MB)}</td>` +
+          `<td class="num">${frac == null ? "?" : (frac < 0.1 ? frac.toFixed(3) : frac.toFixed(2))}%</td>` +
+          `<td class="num">${m.load_seconds}</td><td class="num">${fmtMB(m.rvr_MB)}</td></tr>` +
+          `<tr><td colspan="9"><details><summary>per file</summary><table>` +
+          (m.per_file || []).map(f => `<tr><td>${esc(f.dataset)}</td>` +
+            `<td class="num">${(f.entries||0).toLocaleString("en-US")} ev</td>` +
+            `<td class="num">${fmtSize((f.file_MB||0)*1e6)} file</td><td class="num">${fmtSize((f.wire_MB||0)*1e6)} wire</td>` +
+            `<td class="num">${f.seconds} s</td></tr>`).join("") +
+          `</table></details></td></tr>`;
+      }).join("") + `</table></div>`;
+    html += `</details>`;
+    $("actout").innerHTML = html;
+  } catch(e){
+    $("actout").innerHTML = `<p class="err">${esc(e.message)}</p>`;
+  }
+}
+$("actgo").onclick = activity;
+activity();
+
+/* ---------- the one-click open-data quickstart (Derek, R9) ---------- */
+//: "no proxy? no problem" — anonymous eospublic reads; the helper is the only
+//: prerequisite (TLS trust + CORS wall off even public storage from a browser).
+$("qsgo").onclick = () => {
+  BASKET.length = 0;
+  BASKET.push({kind: "subset", label: "CMS open data 2016G DoubleMuon",
+               tree: "Events", total: 1, urls: [
+    "root://eospublic.cern.ch//eos/opendata/cms/Run2016G/DoubleMuon/NANOAOD/" +
+    "UL2016_MiniAODv2_NanoAODv9-v2/2430000/" +
+    "4E3A26DE-E53B-A844-8048-36376617AE8D.root"]});
+  $("cols").value = "MET_pt, nMuon";
+  $("cut").value = "nMuon >= 2";
+  $("wcol").value = "";
+  $("title").value = "quickstart";
+  drawBasket();
+  build();
+};
+
+$("srcfilter").value = "";   // boot empty, whatever the browser restored (Derek, R7)
+$("branchfilter").value = "";
+setMode("das");
+drawBasket();
+</script>
+</body>
+</html>

@@ -858,6 +858,11 @@ pre.rgndoc{background:var(--panel);border:1px solid var(--rule);border-radius:7p
     <p class="hint" id="demorow">see a demo, CMS open data:
       <button class="tbtn hero" id="demo">the dimuon spectrum</button>
       <span id="demonote" hidden>— back soon</span></p>
+    <p class="hint">no proxy? no problem! test building a .rvr file with CMS open data
+      here: <button class="tbtn hero" id="qsgo"
+      title="a one-click remote build: two flat branches of a public 2016 NanoAOD file
+ on eospublic, read anonymously through your local helper — the one thing it needs
+ running">build the open-data quickstart</button></p>
     <div id="dlwrap" hidden>
       <div class="dlbar" id="dlbar"><i id="dlfill"></i></div>
       <p class="hint" id="dltext"></p>
@@ -5097,8 +5102,16 @@ async function remoteLoad(meta, name){
       ping = await (await /*net-ok*/fetch(`${base}/ping`, {signal: ctl.signal})).json();
       clearTimeout(t);
     } catch (e){
-      throw new Error(`no helper answered on 127.0.0.1:${sum.port} — start it with ` +
-                      `<code>${esc(sum.start)}</code> and drop the file again`);
+      throw new Error(`no helper answered on 127.0.0.1:${sum.port}. Get it: ` +
+        `<code>git clone https://gitlab.cern.ch/dgrove/rowver</code> — then either ` +
+        `<b>(recommended)</b> run it where your credentials already live, on a ` +
+        `cluster node: <code>python3 remote/helper.py</code> there, plus ` +
+        `<code>ssh -L ${sum.port}:localhost:8271 &lt;cluster-host&gt;</code> from ` +
+        `this machine — or locally: <code>python3 -m pip install --user numpy ` +
+        `uproot fsspec-xrootd</code>, then <code>${esc(sum.start)}</code> (a grid ` +
+        `proxy is only needed for private CMS data; open data works without). If ` +
+        `Firefox asks to allow local network access for this page, allow it — the ` +
+        `page talks only to 127.0.0.1. Then try again.`);
     }
     bar(-1, `helper up (proxy expires ${ping.proxy_expires}) — requesting the build…`);
     const job = await (await /*net-ok*/fetch(`${base}/build`, {
@@ -10345,6 +10358,28 @@ function rgnWire(){
       try { await fromFile(e.target.files[0]); }
       catch(err){ fail(err.message); }
     });
+    // "no proxy? no problem": the one-click open-data build. The same spec a
+    // quickstart data-less .rvr carries, baked in, fed straight to the remote path —
+    // anonymous eospublic reads, so the helper is the ONLY prerequisite (TLS trust
+    // and CORS wall off even public storage from a browser; measured, remote study).
+    const QUICKSTART = {
+      title: "quickstart",
+      fileset: {"CMS open data 2016G DoubleMuon": {files: {
+        ["root://eospublic.cern.ch//eos/opendata/cms/Run2016G/DoubleMuon/NANOAOD/" +
+         "UL2016_MiniAODv2_NanoAODv9-v2/2430000/" +
+         "4E3A26DE-E53B-A844-8048-36376617AE8D.root"]: "Events"}}},
+      branches: {MET_pt: "MET_pt", nMuon: "nMuon"},
+      weights: null,
+      cut: "nMuon >= 2",
+      start: "python3 remote/helper.py",
+      tabs: [{name: "quickstart",
+              view: {lumi: 1, shown: ["*"],
+                     plots: [{varx: "MET_pt", nb: 40, logy: true, span: "p99"}]}}],
+    };
+    if ($("qsgo")) $("qsgo").onclick = async () => {
+      try { await remoteLoad({remote: QUICKSTART}, "quickstart.rvr"); }
+      catch(err){ fail(err.message); }
+    };
     // A demo goes live only when its .rvr has been reviewed ON the deployed page, and it
     // needs a served page: file:// has nowhere to fetch the demo file from.
     const DEMOS = {demo: true};
