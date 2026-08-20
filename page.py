@@ -155,7 +155,7 @@ def get_plotlyjs() -> str:
 
 TEMPLATE: Path = Path(__file__).with_name("page_template.html")
 PAGES: Path = Path(__file__).with_name("pages")
-VERSION: str = "0.31.0"   # the tool, shown on every page it builds; bump when the page changes
+VERSION: str = "0.32.0"   # the tool, shown on every page it builds; bump when the page changes
 ROWVER: int = 4           # .rvr format version, which moves separately
 READS: tuple = (4,)       # v2 and v3 are gone: their weights were undeclared
 MAX_MB: int = 40

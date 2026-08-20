@@ -858,11 +858,15 @@ pre.rgndoc{background:var(--panel);border:1px solid var(--rule);border-radius:7p
     <p class="hint" id="demorow">see a demo, CMS open data:
       <button class="tbtn hero" id="demo">the dimuon spectrum</button>
       <span id="demonote" hidden>— back soon</span></p>
-    <p class="hint">no proxy? no problem! test building a .rvr file with CMS open data
-      here: <button class="tbtn hero" id="qsgo"
-      title="a one-click remote build: two flat branches of a public 2016 NanoAOD file
- on eospublic, read anonymously through your local helper — the one thing it needs
- running">build the open-data quickstart</button></p>
+    <p class="hint">Want to build a .rvr from CMS storage — DAS datasets, eos files,
+      or a subset of either? <button class="tbtn hero" id="bldlink"
+      title="the builder: browse DAS or eos, inspect branches, select events, and
+ build .rvr files through a small local helper (the page explains how to start one)">open the builder</button></p>
+    <p class="hint">no proxy? no problem! learn to build one with CMS open data —
+      the builder opens pre-filled, with orange notes walking you through every step:
+      <button class="tbtn hero" id="qsgo"
+      title="the guided open-data mode: no credentials needed, the example is public
+ 2016 NanoAOD on eospublic">start the guided open-data build</button></p>
     <div id="dlwrap" hidden>
       <div class="dlbar" id="dlbar"><i id="dlfill"></i></div>
       <p class="hint" id="dltext"></p>
@@ -10358,28 +10362,14 @@ function rgnWire(){
       try { await fromFile(e.target.files[0]); }
       catch(err){ fail(err.message); }
     });
-    // "no proxy? no problem": the one-click open-data build. The same spec a
-    // quickstart data-less .rvr carries, baked in, fed straight to the remote path —
-    // anonymous eospublic reads, so the helper is the ONLY prerequisite (TLS trust
-    // and CORS wall off even public storage from a browser; measured, remote study).
-    const QUICKSTART = {
-      title: "quickstart",
-      fileset: {"CMS open data 2016G DoubleMuon": {files: {
-        ["root://eospublic.cern.ch//eos/opendata/cms/Run2016G/DoubleMuon/NANOAOD/" +
-         "UL2016_MiniAODv2_NanoAODv9-v2/2430000/" +
-         "4E3A26DE-E53B-A844-8048-36376617AE8D.root"]: "Events"}}},
-      branches: {MET_pt: "MET_pt", nMuon: "nMuon"},
-      weights: null,
-      cut: "nMuon >= 2",
-      start: "python3 remote/helper.py",
-      tabs: [{name: "quickstart",
-              view: {lumi: 1, shown: ["*"],
-                     plots: [{varx: "MET_pt", nb: 40, logy: true, span: "p99"}]}}],
-    };
-    if ($("qsgo")) $("qsgo").onclick = async () => {
-      try { await remoteLoad({remote: QUICKSTART}, "quickstart.rvr"); }
-      catch(err){ fail(err.message); }
-    };
+    // The builder ships beside the deployed page (console.html); from a local clone
+    // it lives at remote/console.html. Both CTAs navigate there — the guided one adds
+    // ?guided, which pre-fills the open-data example and turns on the orange
+    // walk-through notes (Derek, R10: teach by doing, not a magic button).
+    const consoleAt = () => (location.protocol === "file:"
+      ? "remote/console.html" : "console.html");
+    if ($("bldlink")) $("bldlink").onclick = () => { location.href = consoleAt(); };
+    if ($("qsgo")) $("qsgo").onclick = () => { location.href = consoleAt() + "?guided"; };
     // A demo goes live only when its .rvr has been reviewed ON the deployed page, and it
     // needs a served page: file:// has nowhere to fetch the demo file from.
     const DEMOS = {demo: true};

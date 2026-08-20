@@ -79,6 +79,16 @@ td.num,th.num{text-align:right}
 a{color:var(--blue)}
 details{margin:2px 0}
 summary{cursor:pointer;color:var(--ink2)}
+/* guided open-data mode: every .guide note is ORANGE (Derek's spec) and exists ONLY
+   when the body carries .guided — the normal builder stays clean */
+.guide{display:none;color:var(--orange);font-size:12px;line-height:1.55;margin:8px 0 0}
+body.guided .guide{display:block}
+.guide b{color:var(--orange)}
+#guidecard{border-color:var(--orange)}
+#guidecard h2{color:var(--orange)}
+#getstarted pre{background:var(--sunk);border:1px solid var(--rule);border-radius:3px;
+  padding:8px 10px;margin:6px 0;overflow-x:auto;font-size:12px;line-height:1.6}
+#getstarted b{display:block;margin-top:10px}
 /* the one waiting animation: three dots that grow and shrink in order (Derek, R7) */
 .dots{display:inline-block;vertical-align:baseline}
 .dots i{display:inline-block;width:5px;height:5px;border-radius:50%;
@@ -104,7 +114,38 @@ summary{cursor:pointer;color:var(--ink2)}
 <h1><span>RowVer</span> remote console</h1>
 <p class="sub">browse DAS or eos, inspect branches, select events, and build .rvr files</p>
 
-<div id="banner"></div>
+<div id="banner" hidden></div>
+
+<div class="card" id="guidecard" hidden><h2>guided · build a study from CMS Open Data</h2>
+  <p class="guide" style="margin-top:0">Welcome! This walks you through building a real
+  <b>.rvr</b> study file from public CMS Open Data — <b>no grid proxy, no credentials</b>.
+  The only moving part is the <b>helper</b>: a tiny daemon on your machine (or reached
+  over an ssh tunnel) that reads just the branches you pick from CERN's public storage,
+  because a browser cannot speak to grid storage by itself. Everything below has been
+  filled in for you — read the orange notes, then press <b>build .rvr</b>. Prefer the
+  shortcut? <button class="mini" id="gbuild"
+  style="border-color:var(--orange);color:var(--orange)">or just build it for me</button></p>
+</div>
+
+<div class="card" id="getstarted" hidden><h2>no helper answered — get one running (two ways)</h2>
+  <b>recommended · on a cluster node (one terminal, top to bottom; substitute your
+  username/host — examples: username@cmslpc-el9.fnal.gov, username@lxplus.cern.ch):</b>
+  <pre>ssh -L 8271:localhost:8271 username@cmslpc-el9.fnal.gov
+git clone https://gitlab.cern.ch/dgrove/rowver
+python3 -m pip install --user numpy uproot fsspec-xrootd
+cd rowver &amp;&amp; python3 remote/helper.py</pre>
+  <b>or on this machine:</b>
+  <pre>git clone https://gitlab.cern.ch/dgrove/rowver
+python3 -m pip install --user numpy uproot fsspec-xrootd
+cd rowver &amp;&amp; python3 remote/helper.py</pre>
+  <p class="hint">A grid proxy is only needed for private CMS data — open data works
+  without one. Firefox may ask permission for this page to access your local network
+  (it talks only to 127.0.0.1) — allow it.</p>
+  <p class="guide">Open data needs <b>no proxy</b>: just start the helper with either
+  recipe and this page takes over from there.</p>
+  <div class="row" style="margin-top:8px"><button class="go" id="recheck">check again</button>
+  <span class="hint" style="margin:0">this page flips into the builder the moment the helper answers (it checks every few seconds by itself)</span></div>
+</div>
 
 <div class="card"><h2>helper</h2><div id="status">checking…</div>
   <p class="hint" style="margin-top:8px">no proxy? no problem! test building a .rvr file
@@ -114,7 +155,7 @@ summary{cursor:pointer;color:var(--ink2)}
  whatever is in the basket.">build the open-data quickstart</button></p>
 </div>
 
-<div class="card"><h2>1 · source</h2>
+<div class="card" id="c_source"><h2>1 · source</h2>
   <div class="row">
     <span class="seg">
       <button id="mdas" aria-pressed="true" title="dataset NAME search through DBS — the service DAS itself queries">CMS DAS</button>
@@ -143,6 +184,12 @@ summary{cursor:pointer;color:var(--ink2)}
     <p class="hint" id="treefile"></p>
     <div class="wrap" id="treewrap"><table id="treeout"></table></div>
   </div>
+  <p class="guide" id="gsource">The open-data file is already in the build basket below —
+  it lives on CERN's public eos (<b>eospublic</b>), so its address starts with
+  <code>root://eospublic.cern.ch//eos/opendata/…</code>. Open data is not in CMS DAS and
+  needs no credentials. The branch inventory of the file is opening underneath: those
+  are the per-event quantities inside it — clicking a name adds it as a column. We
+  pre-picked <b>MET_pt</b> and <b>nMuon</b> for you.</p>
   <div id="branchbox" hidden>
     <div class="row" style="margin-top:8px">
       <span class="tag" id="branchhead"></span>
@@ -153,7 +200,7 @@ summary{cursor:pointer;color:var(--ink2)}
   </div>
 </div>
 
-<div class="card"><h2>2 · build</h2>
+<div class="card" id="c_build"><h2>2 · build</h2>
  <div class="buildwrap">
  <div class="buildleft">
   <div id="basket"><p class="hint">nothing selected yet — add datasets, files, or a file subset from the source panel</p></div>
@@ -165,6 +212,9 @@ summary{cursor:pointer;color:var(--ink2)}
     <label>weights <input id="wcol" size="10" placeholder="optional"></label>
     <label>title <input id="title" size="14" value="console"></label>
   </div>
+  <p class="guide">Ready: pressing <b>build .rvr</b> asks the helper to read JUST the
+  two picked branches (about 0.4 MB of the 66 MB file) for every event passing the cut,
+  and to pack them into a page-ready .rvr. Watch the live meters below while it runs.</p>
   <div class="row" style="margin-top:10px">
     <button class="go" id="buildgo">build .rvr</button>
     <button id="datalessgo" title="the 1 kB study-identity file: drop it on viewer.html and THIS build runs on demand">download data-less .rvr</button>
@@ -211,7 +261,7 @@ summary{cursor:pointer;color:var(--ink2)}
  </div>
 </div>
 
-<div class="card"><h2>3 · activity — cache and build history</h2>
+<div class="card" id="c_act"><h2>3 · activity — cache and build history</h2>
   <div class="row"><button id="actgo">refresh</button></div>
   <div id="actout"></div>
 </div>
@@ -291,11 +341,20 @@ function explain(msg){
 
 /* ---------- status ---------- */
 let UP = false;
+function flip(){
+  // no helper -> the get-started options LEAD and the builder waits; the moment a
+  // helper answers, the page flips into the builder (Derek's home->builder->options->
+  // building path). The helper card stays put in both states.
+  $("getstarted").hidden = UP;
+  ["c_source", "c_build", "c_act"].forEach(id => { $(id).hidden = !UP; });
+  if (GUIDED) $("guidecard").hidden = false;
+  if (UP) guidedGo();
+}
 async function status(){
   try{
     const p = await api("/ping");
     UP = true;
-    $("banner").style.display = "none";
+    flip();
     const left = p.proxy && p.proxy.seconds_left;
     const anon = /^none/.test((p.proxy && p.proxy.subject) || "");
     const cn = ((p.proxy && p.proxy.subject) || "").split("/CN=")[1] || "?";
@@ -318,9 +377,10 @@ async function status(){
       `<span class="stat"><b>jobs</b>${jobs.length} known, ${live} running</span>`;
   } catch(e){
     UP = false;
-    $("status").textContent = "not answering";
-    $("banner").style.display = "block";
-    $("banner").innerHTML = `<b>no helper on 127.0.0.1:8271.</b> ` +
+    flip();
+    $("status").textContent = "not answering — see the two recipes above";
+    $("banner").hidden = true;
+    void `<b>no helper on 127.0.0.1:8271.</b> ` +
       `Get it from a clone of the repo — <code>git clone ` +
       `https://gitlab.cern.ch/dgrove/rowver</code> — then either:<br>` +
       `<b>recommended · on a cluster node</b> (credentials, CAs and eos already ` +
@@ -334,7 +394,8 @@ async function status(){
   }
 }
 status();
-setInterval(status, 15000);
+setInterval(status, 5000);   // the flip should feel immediate once the helper starts
+$("recheck").onclick = status;
 
 /* ---------- 1: source — DAS and eos, two sides of the same coin ---------- */
 //: ONE panel, a toggle flipping the page (Derek, 2026-08-20). Shared everywhere:
@@ -940,7 +1001,13 @@ async function build(){
       `<a href="${BASE}/fetch?job=${job.job}">download ${esc(sp.title)}.rvr</a>` +
       ` — then drop it on viewer.html · ` +
       `<span class="hint" style="display:inline">job ${job.job}` +
-      `${job.cached ? " · cache HIT" : " · cache miss, built fresh"} — per-file numbers in section 3</span>`;
+      `${job.cached ? " · cache HIT" : " · cache miss, built fresh"} — per-file numbers in section 3</span>` +
+      (GUIDED ? `<p class="guide">That's it — you built a real study file. The download
+      link above saves <b>${esc(sp.title)}.rvr</b>; drop it on the
+      <a href="./" style="color:var(--orange)">RowVer page</a> and it opens as an
+      interactive study (plots, cuts, the region map). A data-less variant of the same
+      spec — the tiny file that rebuilds this on any machine with a helper — is one
+      click away: “download data-less .rvr”.</p>` : "");
     activity();
   } catch(e){
     $("builderr").textContent = explain(e.message);
@@ -1011,23 +1078,40 @@ async function activity(){
 $("actgo").onclick = activity;
 activity();
 
-/* ---------- the one-click open-data quickstart (Derek, R9) ---------- */
+/* ---------- the open-data quickstart (Derek, R9/R10) ---------- */
 //: "no proxy? no problem" — anonymous eospublic reads; the helper is the only
 //: prerequisite (TLS trust + CORS wall off even public storage from a browser).
-$("qsgo").onclick = () => {
+const QS_URL = "root://eospublic.cern.ch//eos/opendata/cms/Run2016G/DoubleMuon/NANOAOD/" +
+    "UL2016_MiniAODv2_NanoAODv9-v2/2430000/4E3A26DE-E53B-A844-8048-36376617AE8D.root";
+function quickstartFill(){
   BASKET.length = 0;
   BASKET.push({kind: "subset", label: "CMS open data 2016G DoubleMuon",
-               tree: "Events", total: 1, urls: [
-    "root://eospublic.cern.ch//eos/opendata/cms/Run2016G/DoubleMuon/NANOAOD/" +
-    "UL2016_MiniAODv2_NanoAODv9-v2/2430000/" +
-    "4E3A26DE-E53B-A844-8048-36376617AE8D.root"]});
+               tree: "Events", total: 1, urls: [QS_URL]});
   $("cols").value = "MET_pt, nMuon";
   $("cut").value = "nMuon >= 2";
   $("wcol").value = "";
   $("title").value = "quickstart";
   drawBasket();
-  build();
-};
+}
+$("qsgo").onclick = () => { quickstartFill(); build(); };
+
+//: GUIDED mode (?guided, Derek R10): the home page's "no proxy? no problem" lands
+//: here — the builder pre-filled with the open-data example and orange step notes
+//: explaining each stage. Teaching by doing: the user presses build themselves
+//: (the intro card keeps "or just build it for me" as the shortcut).
+const GUIDED = new URLSearchParams(location.search).has("guided");
+let GUIDESTARTED = false;
+function guidedGo(){
+  if (!GUIDED || GUIDESTARTED || !UP) return;
+  GUIDESTARTED = true;
+  quickstartFill();
+  branches(QS_URL, "Events");     // the real inventory, so the columns step is honest
+}
+if (GUIDED){
+  document.body.classList.add("guided");
+  $("guidecard").hidden = false;
+  $("gbuild").onclick = () => { quickstartFill(); build(); };
+}
 
 $("srcfilter").value = "";   // boot empty, whatever the browser restored (Derek, R7)
 $("branchfilter").value = "";
