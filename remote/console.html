@@ -364,6 +364,13 @@ async function status(){
       : `<span class="warn">cold</span> — first open pays the ~60 s xrootd handshake`;
     const jobs = Object.entries(p.jobs || {});
     const live = jobs.filter(([,ph]) => ph !== "done" && ph !== "error").length;
+    const expired = !anon && p.proxy && p.proxy.expired;
+    $("banner").hidden = !expired;
+    if (expired) $("banner").innerHTML =
+      `<b>Your grid proxy EXPIRED ${esc(p.proxy.expires)}.</b> Private CMS data ` +
+      `will fail until you renew it — run <code>voms-proxy-init -voms cms</code> ` +
+      `where the helper runs, then <b>restart the helper</b>. ` +
+      `Public open data still works.`;
     $("status").innerHTML =
       `<span class="stat"><b>helper</b>v${esc(p.version)} · port ${p.port} · up ${ago(p.uptime_s)}</span>` +
       `<span class="stat"><b>proxy</b>` +
@@ -371,7 +378,7 @@ async function status(){
         ? `<span class="warn">none — anonymous, public data only</span>`
         : `${esc(cn)} · ` + (left != null && left > 0
           ? `${left < 86400 ? '<span class="warn">' : '<span class="okline">'}${days} days left</span>`
-          : `<span class="err">EXPIRED — renew it: voms-proxy-init -voms cms</span>`)) +
+          : `<span class="err">EXPIRED — renew it: voms-proxy-init -voms cms, then restart the helper</span>`)) +
       `</span>` +
       `<span class="stat"><b>xrootd</b>${hs}</span>` +
       `<span class="stat"><b>jobs</b>${jobs.length} known, ${live} running</span>`;

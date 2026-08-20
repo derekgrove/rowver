@@ -123,7 +123,7 @@ def proxy_info() -> dict:
     """Identity + expiry, for the console's countdown and its dead-proxy banner."""
     import subprocess
     out = {"path": PROXY, "expires": proxy_expiry(), "seconds_left": None,
-           "subject": "unreadable"}
+           "subject": "unreadable", "expired": False}
     if not Path(PROXY).exists():
         out["subject"] = "none — anonymous (public storage only)"
         return out
@@ -135,6 +135,7 @@ def proxy_info() -> dict:
         from datetime import datetime, timezone
         exp = datetime.strptime(out["expires"], "%b %d %H:%M:%S %Y %Z")
         out["seconds_left"] = int(exp.replace(tzinfo=timezone.utc).timestamp() - time.time())
+        out["expired"] = out["seconds_left"] <= 0
     except Exception:
         pass
     return out
@@ -508,10 +509,12 @@ class Handler(BaseHTTPRequestHandler):
             u = urllib.parse.urlparse(self.path)
             q = dict(urllib.parse.parse_qsl(u.query))
             if u.path == "/ping":
+                pinfo = proxy_info()
                 return self._json({"ok": True, "helper": "rowver-remote",
                                    "version": page.VERSION, "port": PORT,
-                                   "proxy_expires": proxy_expiry(),
-                                   "proxy": proxy_info(),
+                                   "proxy_expires": ("EXPIRED " + pinfo["expires"])
+                                                    if pinfo["expired"] else pinfo["expires"],
+                                   "proxy": pinfo,
                                    "uptime_s": int(time.time() - START),
                                    "handshake": HANDSHAKE,
                                    "jobs": {k: v.get("phase") for k, v in JOBS.items()}})
@@ -616,16 +619,23 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    info = proxy_info()
     if not HAVE_PROXY:
         print(f"NOTE: no grid proxy at {PROXY} — PUBLIC storage (eospublic open data) "
               "works anonymously; for CMS data run voms-proxy-init -voms cms first",
               flush=True)
+    elif info["expired"]:
+        print(f"WARNING: the grid proxy at {PROXY} EXPIRED {info['expires']} — "
+              "private CMS data will FAIL until you renew it "
+              "(voms-proxy-init -voms cms) and RESTART this helper; "
+              "public open data still works", flush=True)
     if not CERTS:
         print("NOTE: no grid CA bundle found (X509_CERT_DIR unset, no standard "
               "location present) — authenticated xrootd will fail its TLS step; "
               "public endpoints may still work", flush=True)
     print(f"rowver remote helper on http://127.0.0.1:{PORT}  "
-          f"(proxy: {proxy_expiry()}; CAs: {CERTS or 'none'}; cache {CACHE})",
+          f"(proxy: {'EXPIRED ' + info['expires'] if info['expired'] else info['expires']}; "
+          f"CAs: {CERTS or 'none'}; cache {CACHE})",
           flush=True)
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 
