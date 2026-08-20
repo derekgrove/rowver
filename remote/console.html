@@ -28,6 +28,8 @@ button{background:var(--sunk);border:1px solid var(--rule);color:var(--ink);
 button:hover{border-color:var(--blue)}
 button.go{background:var(--blue);border-color:var(--blue);color:#08131c;font-weight:600}
 button.mini{padding:2px 7px;font-size:11px}
+button:disabled{opacity:.45;cursor:not-allowed;border-color:var(--rule)}
+button:disabled:hover{border-color:var(--rule)}
 .seg{display:inline-flex}
 .seg button{border-radius:0}
 .seg button:first-child{border-radius:3px 0 0 3px}
@@ -147,7 +149,7 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
 </div>
 
 <div class="card"><h2>helper</h2><div id="status">checking…</div>
-  <p class="hint" style="margin-top:8px">no proxy? no problem! <button class="go mini" id="qsgo"
+  <p class="hint" style="margin-top:8px">no proxy? no problem! <button class="go mini" id="qsgo" disabled
     title="fills the basket with one public 2016 NanoAOD file from eospublic (anonymous
  — no grid proxy involved), two flat branches and a KEEP filter, and builds it.
  Replaces whatever is in the basket.">build the open-data quickstart</button></p>
@@ -269,10 +271,13 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
 
 <script>
 "use strict";
-const BASE = "http://127.0.0.1:8271";
+// ?port=N for the case where 8271 was taken and the helper moved (it says so on startup)
+const PORT = new URLSearchParams(location.search).get("port") || "8271";
+const BASE = `http://127.0.0.1:${PORT}`;
 const START_CMD = "python3 remote/helper.py";   // from a clone of the repo
 const REDIRECTOR = "root://cmsxrootd.fnal.gov/";   // what the helper resolves DAS entries through
 const $ = id => document.getElementById(id);
+const QS_TITLE = document.getElementById("qsgo").title;
 const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
                           .replace(/"/g,"&quot;");
 //: auto unit roll-up, everywhere a size renders: >=1000 of a unit moves up one
@@ -348,6 +353,12 @@ function flip(){
   // building path). The helper card stays put in both states.
   $("getstarted").hidden = UP;
   ["c_source", "c_build", "c_act"].forEach(id => { $(id).hidden = !UP; });
+  // the quickstart button sits in the always-visible helper card, but everywhere it
+  // reports to (#builderr, #dash) is inside the hidden builder — so with no helper a
+  // click used to do nothing AT ALL. Off is better than silent.
+  $("qsgo").disabled = !UP;
+  $("qsgo").title = UP ? QS_TITLE
+    : "no helper is answering yet — start one with a recipe above and this lights up";
   if (GUIDED) $("guidecard").hidden = false;
   if (UP) guidedGo();
 }
@@ -358,7 +369,8 @@ async function status(){
     flip();
     const left = p.proxy && p.proxy.seconds_left;
     const anon = /^none/.test((p.proxy && p.proxy.subject) || "");
-    const cn = ((p.proxy && p.proxy.subject) || "").split("/CN=")[1] || "?";
+    const cn = (p.proxy && p.proxy.cn) ||
+               ((p.proxy && p.proxy.subject) || "").split("/CN=")[1] || "?";
     const days = left != null ? (left/86400).toFixed(1) : "?";
     const hs = p.handshake && p.handshake.done
       ? `<span class="okline">warm</span> (first open ${p.handshake.first_open_s}s)`
@@ -978,7 +990,7 @@ async function build(){
   try{
     const job = await api("/build", sp);
     for (;;){
-      const s = await api("/status?job=" + job.job);
+      const s = await api("/status?job=" + job.job);   // api() throws on {error}
       if (s.phase === "done") break;
       if (s.phase === "error") throw new Error(s.error);
       $("buildstate").textContent = "";

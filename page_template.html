@@ -5179,7 +5179,7 @@ async function remoteLoad(meta, name){
       throw new Error(`no helper answered on 127.0.0.1:${sum.port}. Get it: ` +
         `<code>git clone https://gitlab.cern.ch/dgrove/rowver</code> — then either ` +
         `<b>(recommended)</b> run it where your credentials already live, on a ` +
-        `cluster node: <code>python3 remote/helper.py</code> there, plus ` +
+        `cluster node: <code>cd rowver && python3 remote/helper.py</code> there, plus ` +
         `<code>ssh -L ${sum.port}:localhost:8271 &lt;cluster-host&gt;</code> from ` +
         `this machine — or locally: <code>python3 -m pip install --user numpy ` +
         `uproot fsspec-xrootd</code>, then <code>${esc(sum.start)}</code> (a grid ` +
@@ -5194,8 +5194,13 @@ async function remoteLoad(meta, name){
     if (job.error) throw new Error(`the helper refused: ${esc(job.error)}`);
     for (;;){
       const s = await (await /*net-ok*/fetch(`${base}/status?job=${job.job}`)).json();
+      // a helper that restarted mid-build answers {error:"no such job"} with no phase;
+      // without this the loop never ends and the bar reads the literal "undefined…"
+      if (s.error) throw new Error(s.error === "no such job"
+        ? "the helper restarted and lost this build — drop the file again"
+        : `the helper failed: ${esc(s.error)}`);
       if (s.phase === "done") break;
-      if (s.phase === "error") throw new Error(`the helper failed: ${esc(s.error)}`);
+      if (!s.phase) throw new Error("the helper answered without a status — restart it, then drop the file again");
       bar(s.total_files ? s.done_files / s.total_files : -1,
           s.note || `${s.phase}…`);
       await new Promise(r => setTimeout(r, 800));

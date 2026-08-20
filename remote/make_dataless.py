@@ -22,7 +22,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import page  # noqa: E402
 
-START = "python3 remote/helper.py"   # from a clone of the repo
+START = "cd rowver && python3 remote/helper.py"   # from a clone of the repo
 
 
 def write(path: str | Path, spec: dict) -> Path:

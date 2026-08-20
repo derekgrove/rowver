@@ -43,9 +43,11 @@ timings are recorded in remote/metrics/ — the study's numbers come from there.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
+import socket
 import ssl
 import sys
 import threading
@@ -56,10 +58,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 try:
+    # all three, not just numpy: a half-installed stack used to start cleanly and then
+    # fail as an HTTP 500 in the browser, where the missing package is invisible
     import numpy as np
-except ImportError:
-    sys.exit("helper.py needs numpy, uproot and fsspec-xrootd:\n"
-             "    python3 -m pip install --user numpy uproot fsspec-xrootd")
+    import uproot                                # noqa: F401
+    import XRootD.client                         # noqa: F401
+except ImportError as e:
+    sys.exit(f"helper.py cannot import {e.name or e} — it needs numpy, uproot and "
+             "fsspec-xrootd:\n    python3 -m pip install --user numpy uproot fsspec-xrootd")
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))          # the repo root, for page.py
@@ -72,7 +78,15 @@ except ImportError:
 
 #: everything machine-specific is DISCOVERED or overridable — nothing here names a
 #: particular person or laptop, so the same file runs on any machine or cluster node.
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else     int(os.environ.get("ROWVER_HELPER_PORT", "8271"))
+if len(sys.argv) > 1 and not sys.argv[1].isdigit():
+    print("usage: python3 remote/helper.py [port]      (default 8271, or "
+          "ROWVER_HELPER_PORT)\n"
+          "  reach it from your laptop's browser with:\n"
+          "      ssh -L 8271:localhost:8271 <cluster-host>\n"
+          "  other knobs: ROWVER_EOS (which lab's eos to browse), X509_USER_PROXY, "
+          "X509_CERT_DIR")
+    sys.exit(0 if sys.argv[1] in ("-h", "--help", "help") else 2)
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("ROWVER_HELPER_PORT", "8271"))
 PROXY = os.environ.get("X509_USER_PROXY", f"/tmp/x509up_u{os.getuid()}")
 
 def find_certs() -> str | None:
@@ -97,7 +111,12 @@ if CERTS:
 
 DBS = "https://cmsweb.cern.ch/dbs/prod/global/DBSReader"
 REDIRECTOR = os.environ.get("ROWVER_REDIRECTOR", "root://cmsxrootd.fnal.gov/")
-EOS = os.environ.get("ROWVER_EOS", "root://cmseos.fnal.gov/")
+#: eos means a different machine at each lab, and browsing the wrong one answers "no
+#: such file or directory" for a path that plainly exists — so follow the host we are
+#: actually running on, and let ROWVER_EOS override for anywhere else.
+EOS = os.environ.get("ROWVER_EOS") or (
+    "root://eosuser.cern.ch/" if socket.getfqdn().endswith(".cern.ch")
+    else "root://cmseos.fnal.gov/")
 CACHE = HERE / "cache"
 METRICS = HERE / "metrics"
 CACHE.mkdir(exist_ok=True)
@@ -106,39 +125,78 @@ METRICS.mkdir(exist_ok=True)
 JOBS: dict = {}
 JOBS_LOCK = threading.Lock()
 START = time.time()
+#: A helper must not outlive the person running it. It holds a FIXED port on a machine
+#: that is usually SHARED, and it answers with whatever credentials that person has —
+#: so an orphan is both a blocked port for them and a live proxy for everyone else on
+#: the node. It retires two ways: the moment its terminal proves gone (an unwritable
+#: log), and after this many minutes with nobody asking it anything. The page polls
+#: /ping every ~1.5 s per open tab, so an open browser IS the heartbeat; nothing asking
+#: means the tunnel, the tab, or the person is gone. 0 disables the idle half.
+IDLE_MIN = float(os.environ.get("ROWVER_IDLE_MIN", "30"))
+LAST_SEEN = time.time()
+SRV = None
+#: the process that started us — the remote shell an ssh session owns. When that session
+#: ends the shell dies and we are reparented to init, which is the ONLY prompt signal
+#: available: a dead tunnel means no more requests, so waiting to notice a failed log
+#: write never fires (measured 2026-08-20 — the helper outlived its killed tunnel).
+#: Already-1 at startup means someone detached us deliberately (setsid); leave them be
+#: and let the idle timer do the work.
+PARENT = os.getppid()
 #: the once-per-process xrootd auth handshake, observed from the first real open
 HANDSHAKE = {"done": False, "first_open_s": None}
 
 
-def proxy_expiry() -> str:
-    import subprocess
-    if not Path(PROXY).exists():
-        return "no proxy"
-    r = subprocess.run(["openssl", "x509", "-in", PROXY, "-noout", "-enddate"],
-                       capture_output=True, text=True)
-    return r.stdout.strip().replace("notAfter=", "") if r.returncode == 0 else "unreadable"
+#: NOTHING in this process may fork. XRootD registers a pthread_atfork handler that
+#: stops its poller, and a fork raced against an in-flight xrootd operation deadlocks
+#: the interpreter with the GIL held — the helper goes silent and only SIGKILL ends it.
+#: Measured 2026-08-20: /ping used to shell out to `openssl` twice, and the page polls
+#: /ping every ~1.5 s per open tab; a browse-while-polling stress froze the helper in
+#: 22 s (macOS) and Derek's own helper wedged after five minutes. So the proxy is
+#: decoded IN-PROCESS, and cached by the file's mtime so a renewal is still noticed.
+PROXY_CACHE: dict = {}
 
 
 def proxy_info() -> dict:
     """Identity + expiry, for the console's countdown and its dead-proxy banner."""
-    import subprocess
-    out = {"path": PROXY, "expires": proxy_expiry(), "seconds_left": None,
-           "subject": "unreadable", "expired": False}
-    if not Path(PROXY).exists():
-        out["subject"] = "none — anonymous (public storage only)"
+    out = {"path": PROXY, "expires": "no proxy", "seconds_left": None,
+           "subject": "none — anonymous (public storage only)", "cn": "anonymous",
+           "expired": False}
+    try:
+        stamp = Path(PROXY).stat().st_mtime_ns
+    except OSError:
         return out
-    r = subprocess.run(["openssl", "x509", "-in", PROXY, "-noout", "-subject"],
-                       capture_output=True, text=True)
-    if r.returncode == 0:
-        out["subject"] = r.stdout.strip().replace("subject= ", "")
+    if PROXY_CACHE.get("stamp") != stamp:
+        PROXY_CACHE.update(stamp=stamp, **decode_cert(PROXY))
+    out.update({k: PROXY_CACHE[k] for k in ("expires", "subject", "cn")})
     try:
         from datetime import datetime, timezone
         exp = datetime.strptime(out["expires"], "%b %d %H:%M:%S %Y %Z")
         out["seconds_left"] = int(exp.replace(tzinfo=timezone.utc).timestamp() - time.time())
         out["expired"] = out["seconds_left"] <= 0
-    except Exception:
+    except ValueError:
         pass
     return out
+
+
+#: openssl's short names, so the subject reads the way voms-proxy-info prints it
+RDN_SHORT = {"domainComponent": "DC", "countryName": "C", "organizationName": "O",
+             "organizationalUnitName": "OU", "commonName": "CN",
+             "stateOrProvinceName": "ST", "localityName": "L"}
+
+
+def decode_cert(path: str) -> dict:
+    """A PEM certificate's notAfter and subject, with no subprocess (see above)."""
+    try:
+        import _ssl
+        cert = _ssl._test_decode_cert(path)
+        rdns = [(RDN_SHORT.get(k, k), v) for rdn in cert.get("subject", ()) for k, v in rdn]
+        cns = [v for k, v in rdns if k == "CN"]
+        return {"expires": cert.get("notAfter", "unreadable"),
+                "subject": "".join(f"/{k}={v}" for k, v in rdns) or "unreadable",
+                "cn": cns[0] if cns else "unreadable"}
+    except Exception as e:
+        return {"expires": "unreadable", "cn": "unreadable",
+                "subject": f"unreadable ({type(e).__name__}: {e})"}
 
 
 def note_first_open(seconds: float):
@@ -148,10 +206,14 @@ def note_first_open(seconds: float):
 
 
 def dbs_get(path_qs: str):
-    if not HAVE_PROXY:
+    # asked LIVE, not from the startup snapshot: the documented path is to start with
+    # no proxy (the open-data quickstart), then run voms-proxy-init — and the old gate
+    # went on refusing afterwards, telling you to do the thing you had just done
+    if not Path(PROXY).exists():
         raise RuntimeError(f"DAS/DBS needs a grid proxy and none exists at {PROXY} — "
                            "run voms-proxy-init -voms cms (public eos browsing still "
                            "works without one)")
+    os.environ["X509_USER_PROXY"] = PROXY
     ctx = ssl.create_default_context(capath=CERTS)
     ctx.load_cert_chain(PROXY, PROXY)
     with urllib.request.urlopen(f"{DBS}/{path_qs}", context=ctx, timeout=120) as r:
@@ -194,7 +256,9 @@ def eos_ls(path: str) -> dict:
     fs = client.FileSystem(EOS)
     status, listing = fs.dirlist(path, flags=client.flags.DirListFlags.STAT)
     if not status.ok:
-        raise RuntimeError(f"eos dirlist {path}: {status.message}")
+        raise RuntimeError(f"eos dirlist {EOS}{path.lstrip('/')}: {status.message}"
+                           f"  (this helper browses {EOS} — set ROWVER_EOS and restart "
+                           f"it to browse a different lab's eos)")
     dirs, files = [], []
     for e in listing:
         if e.statinfo and (e.statinfo.flags & client.flags.StatInfoFlags.IS_DIR):
@@ -502,7 +566,19 @@ class Handler(BaseHTTPRequestHandler):
         self._head(204)
 
     def log_message(self, fmt, *args):
-        sys.stderr.write("%s %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
+        # An unwritable log used to take the RESPONSE down with it while the process
+        # lived on (measured 2026-08-20: an orphan on cmslpc345 answered every request
+        # with an empty reply for two hours while holding the port). It must not — but
+        # it is also the earliest proof the terminal is gone, so it is what retires us.
+        try:
+            sys.stderr.write("%s %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
+        except OSError:
+            die("its terminal went away")
+
+    def handle_one_request(self):
+        global LAST_SEEN
+        LAST_SEEN = time.time()
+        return super().handle_one_request()
 
     def do_GET(self):
         try:
@@ -511,7 +587,7 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/ping":
                 pinfo = proxy_info()
                 return self._json({"ok": True, "helper": "rowver-remote",
-                                   "version": page.VERSION, "port": PORT,
+                                   "version": page.VERSION, "port": PORT, "eos": EOS,
                                    "proxy_expires": ("EXPIRED " + pinfo["expires"])
                                                     if pinfo["expired"] else pinfo["expires"],
                                    "proxy": pinfo,
@@ -618,7 +694,79 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
 
 
+def die(why: str):
+    """Retire the helper and give the port back. Idempotent, and safe from any thread:
+    serve_forever() must not be shut down from inside its own loop, so a fresh thread
+    does it while this one returns."""
+    global SRV
+    srv, SRV = SRV, None
+    if srv is None:
+        return
+    try:
+        print(f"\nhelper exiting — {why}. The port is free; start a new one when you "
+              f"need it.", flush=True)
+    except OSError:
+        pass                                   # the terminal is exactly what went away
+    threading.Thread(target=srv.shutdown, daemon=True).start()
+
+
+def watchdog():
+    """Retire the helper the moment it stops being reachable, and again if it is merely
+    forgotten. Two signals because neither covers the other: reparenting catches a
+    dropped ssh session within seconds and needs no traffic to notice, while the idle
+    timer catches the shell that outlives its usefulness — a tmux window, a laptop
+    asleep with the tunnel up — where the parent never dies."""
+    while SRV is not None:
+        time.sleep(5)
+        if SRV is None:
+            return
+        if PARENT > 1 and os.getppid() != PARENT:
+            return die("the session that started it ended")
+        if IDLE_MIN > 0 and time.time() - LAST_SEEN > IDLE_MIN * 60:
+            return die(f"nothing asked it anything for {IDLE_MIN:g} minutes")
+
+
+def whoever_has(port: int) -> dict | None:
+    """Whatever is already listening on `port` — a rowver helper answers /ping."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/ping", timeout=2) as r:
+            got = json.loads(r.read())
+        return got if got.get("helper") == "rowver-remote" else {}
+    except Exception:
+        return {}
+
+
+def bind(first: int) -> ThreadingHTTPServer:
+    """Bind BEFORE anything is announced, and make a taken port a sentence rather than
+    a traceback. A login node is shared and the helper outlives the ssh session that
+    started it, so `Address already in use` is the single likeliest first-run failure —
+    Derek hit it on cmslpc345, where a helper from an earlier test still held 8271."""
+    for port in range(first, first + 20):
+        try:
+            return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        except OSError as e:
+            if e.errno not in (errno.EADDRINUSE, errno.EACCES):
+                raise
+            mine = whoever_has(port)
+            if mine and port == first:
+                print(f"A rowver helper is ALREADY RUNNING on port {port} — v"
+                      f"{mine.get('version')}, up {mine.get('uptime_s', 0) // 60} min, "
+                      f"proxy {(mine.get('proxy') or {}).get('cn', '?')}.\n"
+                      "  If that one is yours you need nothing else: go back to the page.\n"
+                      "  To replace it:  pkill -f 'remote/helper.py'   (then run this again)",
+                      flush=True)
+                sys.exit(0)
+            print(f"port {port} is busy"
+                  + (" (another rowver helper — a login node is shared)" if mine else "")
+                  + ", trying the next one", flush=True)
+    sys.exit(f"ports {first}-{first + 19} are all busy; pick one with "
+             f"ROWVER_HELPER_PORT=<port> or a first argument")
+
+
 def main():
+    global PORT, SRV
+    SRV = srv = bind(PORT)
+    PORT = srv.server_address[1]
     info = proxy_info()
     if not HAVE_PROXY:
         print(f"NOTE: no grid proxy at {PROXY} — PUBLIC storage (eospublic open data) "
@@ -635,9 +783,22 @@ def main():
               "public endpoints may still work", flush=True)
     print(f"rowver remote helper on http://127.0.0.1:{PORT}  "
           f"(proxy: {'EXPIRED ' + info['expires'] if info['expired'] else info['expires']}; "
-          f"CAs: {CERTS or 'none'}; cache {CACHE})",
+          f"CAs: {CERTS or 'none'}; eos: {EOS}; cache {CACHE})",
           flush=True)
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    if PORT != 8271:
+        print(f"  NOTE: not the usual 8271, so the page must still reach 8271 on your "
+              f"laptop — tunnel with  ssh -L 8271:localhost:{PORT} <this-host>", flush=True)
+    print("  Leave this running; Ctrl-C when you are done. It also retires itself when "
+          "the session that started it ends" +
+          (f", or after {IDLE_MIN:g} idle minutes (ROWVER_IDLE_MIN)." if IDLE_MIN > 0
+           else " — the idle timeout is OFF (ROWVER_IDLE_MIN=0).") +
+          " A helper left running holds this port and answers with YOUR credentials, "
+          "and a login node is shared.", flush=True)
+    threading.Thread(target=watchdog, daemon=True).start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\nhelper stopped.", flush=True)
 
 
 if __name__ == "__main__":
