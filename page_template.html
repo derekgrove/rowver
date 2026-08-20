@@ -84,36 +84,8 @@ h1{font-family:var(--mono);font-weight:600;font-size:calc(clamp(20px,3vw,29px) *
 .rst{float:right;padding:0 6px;line-height:1.6;font-size:calc(11px * var(--ts))}
 .rstall{float:right;padding:3px 9px;font-size:calc(10px * var(--ts));letter-spacing:.06em}
 .bname{user-select:none}
-.optpanel{padding:12px 14px}
-.optwarn{font-family:var(--mono);font-size:calc(11px * var(--ts));color:var(--warn);margin:8px 0 10px}
-.optrow2{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0;
-  font-family:var(--mono);font-size:calc(11px * var(--ts))}
-.optrow2 label{display:inline-flex;gap:4px;align-items:center}
-.optlist{display:flex;flex-wrap:wrap;gap:4px 14px}
 .optvar{font-family:var(--mono);font-size:calc(11px * var(--ts));display:inline-flex;gap:4px;
   align-items:center}
-.opttblbox{max-height:280px;overflow:auto;border:1px solid var(--rule)}
-.opttbl{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:calc(10.5px * var(--ts))}
-.opttbl th,.opttbl td{padding:2px 8px;text-align:right;border-bottom:1px solid var(--rule-2);
-  white-space:nowrap}
-.opttbl th{position:sticky;top:0;background:var(--panel);color:var(--ink-3)}
-.opttbl th.mv,.opttbl td.mv{text-align:left}
-.opttbl tr.best td{color:var(--signal);font-weight:600}
-.opttbl tbody tr{cursor:pointer}
-.optgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,360px);
-  gap:4px 26px;align-items:start}
-@media (max-width:900px){.optgrid{grid-template-columns:1fr}}
-.opth{font-family:var(--mono);font-size:calc(10px * var(--ts));letter-spacing:.16em;
-  text-transform:uppercase;color:var(--ink-3);margin:14px 0 7px;padding-bottom:5px;
-  border-bottom:1px solid var(--rule-2)}
-.optgrid .opth:first-child{margin-top:2px}
-.optbot{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,440px);
-  gap:12px;align-items:start;margin-top:8px}
-@media (max-width:1100px){.optbot{grid-template-columns:1fr}}
-#optplot{height:280px;border:1px solid var(--rule)}
-#optplot .modebar{display:none !important}
-#optbkg{max-width:100%}
-#optsum{margin:10px 0 0;white-space:pre-wrap}
 .cutsec > summary{font-family:var(--mono);font-size:calc(10px * var(--ts));letter-spacing:.16em;
   text-transform:uppercase;color:var(--ink-3);cursor:pointer;list-style:none;
   margin:22px 0 11px;padding-bottom:7px;border-bottom:1px solid var(--rule-2)}
@@ -759,6 +731,7 @@ canvas#rgncanvas:not(.empty):hover{outline:3px solid var(--signal);outline-offse
 .rgntbl td{padding:3px 0;border-bottom:1px solid var(--rule-2)}
 .rgndot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
 .rgnnote{font-family:var(--mono);font-size:calc(11px * var(--ts));color:var(--ink-3);margin:8px 0 0}
+.rgnsig{margin-top:10px;border-top:1px solid var(--rule);padding-top:2px}
 .rgntray{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 12px;
   border-bottom:1px solid var(--rule-2);min-height:38px}
 .rgntray.over{background:var(--hero-bg);outline:2px dashed var(--signal);outline-offset:-3px}
@@ -1020,61 +993,6 @@ pre.rgndoc{background:var(--panel);border:1px solid var(--rule);border-radius:7p
                 <button class="tbtn" id="cutclose">close</button></span></div>
         <textarea id="cuttext" readonly></textarea></div>
 
-      <div class="panel optpanel" id="optpanel" hidden>
-        <div class="exhead"><span>Optimizer — N−1 coordinate scans</span>
-          <span><button class="tbtn" id="optclose">close</button></span></div>
-        <p class="optwarn">For fun, and at most a first jumping-off point. The cut space is
-          multidimensional and a global maximum cannot be found empirically — a coordinate
-          scan settles on a local one at best, and a maximum found on this MC is tuned to
-          its fluctuations. Nothing here is a measurement.</p>
-        <div class="optgrid">
-          <div>
-            <p class="opth">search space — sliders</p>
-            <div id="optcont" class="optlist"></div>
-            <p class="opth">search space — chips</p>
-            <div id="optcat" class="optlist"></div>
-          </div>
-          <div>
-            <p class="opth">signals — optimize for (groups or single samples)</p>
-            <div id="optsigs" class="optlist"></div>
-            <p class="opth">background</p>
-            <div class="optrow2"><select id="optbkg"></select></div>
-            <div class="optrow2"><span class="seg" id="segopt">
-              <button data-v="all" aria-pressed="true">all at once (worst case)</button>
-              <button data-v="each" aria-pressed="false">one at a time</button></span></div>
-            <p class="opth">objective — product of the ticked</p>
-            <div class="optlist">
-              <label class="optvar"><input type="checkbox" id="objsob" checked> S/B</label>
-              <label class="optvar"><input type="checkbox" id="objsig"> S/√(B+σ²)</label>
-              <label class="optvar"><input type="checkbox" id="objzbi"> ZBI</label>
-            </div>
-            <p class="opth">constraint</p>
-            <label class="optvar">min signal events
-              <input class="bin" id="optmins" value="6"
-                     title="a point with weighted S below this is rejected outright"></label>
-            <p class="opth">run</p>
-            <div class="optrow2">
-              <label>grid points per scan
-                <input class="bin" id="optgrid" placeholder="24"></label>
-            </div>
-            <label class="optvar" title="no live redrawing — just the arithmetic and the table">
-              <input type="checkbox" id="optweak" checked> weak machine mode</label>
-            <div class="optrow2">
-              <button class="tbtn hero" id="optrun">run</button>
-              <button class="tbtn" id="optbest">apply best</button>
-            </div>
-            <p id="optstat" class="pnote"></p>
-          </div>
-        </div>
-        <div id="optsum" class="pnote"></div>
-        <div class="optbot">
-          <div class="opttblbox" id="opttblbox"><table class="opttbl"><thead><tr>
-            <th>#</th><th>pass</th><th class="mv">move</th><th>S</th><th>B</th>
-            <th>S/B</th><th>S/√(B+σ²)</th><th>ZBI</th><th>score</th>
-            </tr></thead><tbody id="opttbody"></tbody></table></div>
-          <div id="optplot"></div>
-        </div>
-      </div>
     </div>
   </div>
   <details class="schema" id="cfbox">
@@ -1155,7 +1073,13 @@ function unpack(buf){
     throw new Error(`this file says ${WCOL ? `weights "${WCOL}"` : "no weights"} and `
       + `${META.cols.length} columns over ${n} events, needing ${want} B, but declares `
       + `${META.bytes} B — the header contradicts itself`);
-  D.weight = WCOL ? new Float64Array(buf, w.offset, n) : null;
+  // The weights array lives at D.__w — the packer's own namespace, like __ds — and NEVER
+  // at a plain name a data column could claim. It sat at a plain-name alias ("weight")
+  // until 2026-08-20, when
+  // a study whose weights column was named differently ALSO carried an ordinary data
+  // column literally named "weight": the column loop overwrote the alias, and every
+  // weighted number on that page silently used the wrong array (raw counts unaffected).
+  D.__w = WCOL ? new Float64Array(buf, w.offset, n) : null;
   for (const c of META.cols)
     D[c.name] = c.kind === "f8" ? new Float64Array(buf, c.offset, n)
                                 : new Int32Array(buf, c.offset, n);
@@ -1163,7 +1087,7 @@ function unpack(buf){
   // with no weights every event counts once, so the file total IS the event count
   SUMW = 0;
   SUMWDS = new Float64Array(META.datasets.length);
-  if (WCOL){ for (let i = 0; i < n; i++){ SUMW += D.weight[i]; SUMWDS[D.__ds[i]] += D.weight[i]; } }
+  if (WCOL){ for (let i = 0; i < n; i++){ SUMW += D.__w[i]; SUMWDS[D.__ds[i]] += D.__w[i]; } }
   else { SUMW = n; for (let i = 0; i < n; i++) SUMWDS[D.__ds[i]] += 1; }
   if (META.bytes !== buf.byteLength)
     throw new Error(`blob is ${buf.byteLength} B, expected ${META.bytes}`);
@@ -2016,19 +1940,19 @@ function buildUI(){
   $("newgrp").onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); addGroup(); } };
   let bclicks = [];
   $("bname").onclick = () => {
+    // three fast clicks on the wordmark: Rover gets (or doffs) his top hat. A plain
+    // double-click is two, so it can never fire one by accident; the hat is runtime
+    // posture only and is never written to a file. (The hidden optimizer that used to
+    // live here was removed at Derek's request, 2026-08-20 — "never useful".)
     const t = Date.now();
     bclicks = bclicks.filter(x => t - x < 900);
     bclicks.push(t);
     if (bclicks.length < 3) return;
     bclicks = [];
-    const panel = $("optpanel");
-    panel.hidden = !panel.hidden;
-    if (!panel.hidden){
-      optBuild();
-      optTargets();
-      say("optimizer: for fun only \u2014 read the warning at the top of its panel");
-      panel.scrollIntoView({behavior:"smooth", block:"nearest"});
-    } else OPT.stop = true;
+    RV.hat = !RV.hat;
+    roverDraw();
+    say(RV.hat ? "Rover puts on his top hat \u2014 very dapper"
+               : "Rover tips his hat and puts it away");
   };
   $("sall").onclick = () => setAll(true);
   $("snone").onclick = () => setAll(false);
@@ -3098,24 +3022,7 @@ function buildTabs(){
   };
 }
 
-function parkOptimizer(){
-  // Everything the optimizer holds belongs to the tab that ran it. A live scan is undone
-  // right here — pre-scan cuts back into S before the tab is snapshotted, since the queued
-  // tick would otherwise restore them onto the NEXT tab — and the results are dropped, so
-  // "apply best" cannot land cuts found under one tab's groups on another.
-  if (OPT.running && OPT.ctx){
-    applyPt(OPT.ctx.snap); cutLabels();
-    OPT.running = false;
-    $("optrun").textContent = "run";
-  }
-  OPT.stop = true; OPT.ctx = null;
-  OPT.rows = []; OPT.best = null;
-  if (OPT.built){ optRows(); optPlot(); $("optstat").textContent = ""; }
-  $("optpanel").hidden = true;
-}
-
 function switchTab(i){
-  // Park first, so the snapshot holds the user's cuts and never a scan's trial point.
   // FACTORY first on the way in — the same two-step the resets use — so a key the target
   // state omits opens fresh instead of keeping the previous tab's value. One plot
   // rebuild and the scroll pinned: each rebuild collapses the page for a moment, and
@@ -3123,7 +3030,6 @@ function switchTab(i){
   if (i === TAB || i < 0 || i >= TABS.length) return;
   const y = window.scrollY || 0;
   const chrome = railChrome();
-  parkOptimizer();
   if (TBLX) tblCollapse();      // an expanded cell belongs to the tab that opened it
   storeTab();
   const prev = TABS[TAB].st;
@@ -3164,7 +3070,6 @@ function copyName(src){
 
 function newTab(copy){
   // Either flavour lands live: a copy of what is on screen, or an empty page.
-  parkOptimizer();
   storeTab();
   const st = copy ? JSON.parse(JSON.stringify(TABS[TAB].st)) : blankState();
   let name;
@@ -3187,7 +3092,6 @@ function closeTab(i){
   if (i === TAB){
     const y = window.scrollY || 0;
     const chrome = railChrome();
-    parkOptimizer();
     if (TBLX) tblCollapse();
     TAB = Math.min(i, TABS.length - 1);
     FILE = TABS[TAB].file;
@@ -3376,412 +3280,6 @@ function stem(){
   return (SOURCE || META.title || "rowver")
       .replace(/\.(html|rvr)$/, "")
       .replace(/(_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})+$/, "");
-}
-
-/* ---- optimizer — hidden behind a triple-click on the wordmark ---------------------
-   Coordinate scans, N-1 style: each enabled variable is swept over a grid while every
-   other cut holds still, the best value is adopted, and passes repeat until one changes
-   nothing. Deterministic — no seed, nothing to reproduce, the same page gives the same
-   answer. optTick evaluates one candidate per call, synchronously, so the harness can
-   run the whole thing without timers. */
-let OPT = {built:false, en:{}, running:false, stop:false, rows:[], best:null, bests:[],
-           ctx:null, mode:"all", sig:new Set(), bkg:""};
-
-function copyPt(pt){
-  return {cuts: Object.fromEntries(Object.entries(pt.cuts).map(([k, r]) => [k, r.slice()])),
-          chips: Object.fromEntries(Object.entries(pt.chips).map(([k, v]) => [k, new Set(v)]))};
-}
-
-function pagePt(){
-  return copyPt({cuts: S.cuts, chips: S.chips});
-}
-
-function applyPt(pt){
-  for (const [i, r] of Object.entries(pt.cuts)) S.cuts[i] = r.slice();
-  for (const [i, v] of Object.entries(pt.chips)) S.chips[i] = new Set(v);
-}
-
-function optBuild(){
-  // The enable lists: every column starts eligible, unticking removes it from the search.
-  if (OPT.built) return;
-  OPT.built = true;
-  META.cols.forEach((c, i) => { OPT.en[i] = true; });
-  const box = i => `<label class="optvar"><input type="checkbox" data-oi="${i}" checked>
-                    ${META.cols[i].name}</label>`;
-  $("optcont").innerHTML = META.cols.map((c, i) => c.vals ? "" : box(i)).join("");
-  $("optcat").innerHTML = META.cols.map((c, i) => c.vals ? box(i) : "").join("");
-  document.querySelectorAll("#optpanel [data-oi]").forEach(el =>
-      el.onchange = () => { OPT.en[+el.dataset.oi] = el.checked; });
-  $("optrun").onclick = () => { if (OPT.running) OPT.stop = true; else optStart(); };
-  $("optbest").onclick = () => {
-    if (!OPT.best) return;
-    applyPt(OPT.best.pt); cutLabels(); drawAll();
-    say(`applied the best point — score ${fmt(OPT.best.score)}; the section resets undo it`);
-  };
-  $("optclose").onclick = () => { $("optpanel").hidden = true; OPT.stop = true; };
-  document.querySelectorAll("#segopt button").forEach(b => b.onclick = () => {
-    document.querySelectorAll("#segopt button").forEach(o =>
-      o.setAttribute("aria-pressed", o === b));
-    OPT.mode = b.dataset.v;
-  });
-  $("opttblbox").onclick = e => {
-    let tr = e.target;
-    while (tr && tr.tagName !== "TR") tr = tr.parentElement;
-    const ri = tr && tr.dataset ? +tr.dataset.ri : 0;
-    if (!ri || OPT.running) return;
-    applyPt(OPT.rows[ri - 1].pt); cutLabels(); drawAll();
-    say(`applied point #${ri} — the section resets undo it`);
-  };
-}
-
-function optTargets(){
-  // signals may be groups OR loose samples (mass points, say); the background is a
-  // group. Defaults follow the figure-of-merit pair; stale picks drop as groups change.
-  const srcs = bldSources();
-  OPT.sig = new Set([...OPT.sig].filter(s => srcs.includes(s)));
-  if (!OPT.sig.size && S.fomn) OPT.sig = new Set([S.fomn]);
-  const gs = groupNames();
-  if (!gs.includes(OPT.bkg)) OPT.bkg = S.fomd || gs[0] || "";
-  $("optsigs").innerHTML = srcs.map(s =>
-    `<button class="chip" data-osig="${s}" aria-pressed="${OPT.sig.has(s)}">${s}</button>`)
-    .join("");
-  document.querySelectorAll("#optsigs [data-osig]").forEach(b => b.onclick = () => {
-    const s = b.dataset.osig;
-    if (OPT.sig.has(s)) OPT.sig.delete(s); else OPT.sig.add(s);
-    b.setAttribute("aria-pressed", OPT.sig.has(s));
-  });
-  $("optbkg").innerHTML = gs.map(g =>
-    `<option${g === OPT.bkg ? " selected" : ""}>${g}</option>`).join("");
-  $("optbkg").onchange = e => { OPT.bkg = e.target.value; };
-}
-
-function optInit(grid, picks){
-  const cont = [], cat = [];
-  META.cols.forEach((c, i) => { if (OPT.en[i]) (c.vals ? cat : cont).push(i); });
-  if (!cont.length && !cat.length) return null;
-  const bkg = OPT.bkg || S.fomd;
-  const names = picks || (OPT.sig.size ? [...OPT.sig] : (S.fomn ? [S.fomn] : []));
-  const sigs = [];
-  for (const nm of names){
-    const gsel = META.datasets.map((d, di) =>
-      S.show[di] !== false && (S.group[di] === nm || (!S.group[di] && d === nm)) ? 1 : 0);
-    if (gsel.some(v => v)) sigs.push({name: nm, gsel});
-  }
-  let hasB = false;
-  const bsel = META.datasets.map((d, di) => {
-    if (S.show[di] === false || S.group[di] !== bkg) return 0;
-    hasB = true; return 1;
-  });
-  if (!sigs.length || !bkg || !hasB) return null;
-  if (sigs.some(g => g.gsel.some((v, di) => v && bsel[di]))){
-    say("a signal pick overlaps the background group — untangle them first");
-    return null;
-  }
-  const roles = META.datasets.map((d, di) => {
-    const s = [];
-    sigs.forEach((g, k) => { if (g.gsel[di]) s.push(k); });
-    const b = bsel[di] === 1;
-    return (s.length || b) ? {s, b} : null;
-  });
-  const obj = {sob: $("objsob").checked, sig: $("objsig").checked, zbi: $("objzbi").checked};
-  if (!obj.sob && !obj.sig && !obj.zbi) return null;
-  const minS = parseFloat($("optmins").value);
-  return {grid: Math.max(3, grid | 0), obj, minS: isFinite(minS) ? minS : 0,
-          syst: parseFloat(S.syst) || 0, cont, cat, sigs, roles, tag: "",
-          snap: pagePt(), cur: null, curScore: -Infinity,
-          pass: 0, improved: false, plan: [], unit: -1, u: null,
-          cand: [], ci: 0, scanBest: null, scanBestScore: -Infinity, n: 0};
-}
-
-function optLegs(grid){
-  // 'one at a time' runs the same descent once per signal; anything else is a single
-  // run whose score is the WORST signal's — the grid is only as good as its weakest point
-  const ctx = optInit(grid);
-  if (!ctx) return null;
-  if (!(OPT.mode === "each" && ctx.sigs.length > 1)) return [ctx];
-  return ctx.sigs.map(g => Object.assign(optInit(grid, [g.name]), {tag: g.name}));
-}
-
-function legName(ctx){
-  return ctx.tag || (ctx.sigs.length > 1
-    ? ctx.sigs.map(g => g.name).join(" + ") + " — worst case" : ctx.sigs[0].name);
-}
-
-function optScore(pt, ctx){
-  // S per signal and the ONE shared B under the candidate, in a single pass.
-  const act = [];
-  META.cols.forEach((c, i) => {
-    if (c.vals){ if (pt.chips[i].size !== c.vals.length) act.push([i, c, null]); }
-    else { const b = bounds(c), r = pt.cuts[i];
-           if (r[0] > b[0] || r[1] < b[1]) act.push([i, c, openRange(c, r)]); }
-  });
-  const sw = ctx.sigs.map(() => 0);
-  let bw = 0, bw2 = 0;
-  for (let r0 = 0; r0 < META.n; r0++){
-    const role = ctx.roles[D.__ds[r0]];
-    if (!role) continue;
-    let ok = 1;
-    for (const [i, c, rg] of act){
-      const x = D[c.name][r0];
-      if (rg ? (x < rg[0] || x > rg[1]) : !pt.chips[i].has(x)){ ok = 0; break; }
-    }
-    if (!ok) continue;
-    // the luminosity goes in HERE, not on the totals: b2 is a sum of SQUARED weights, and
-    // pulling one L outside it is only right while every sample shares that L
-    const w = (WCOL ? D.weight[r0] : 1) * LUMI(D.__ds[r0]);
-    if (role.b){ bw += w; bw2 += w * w; }
-    for (const k of role.s) sw[k] += w;
-  }
-  return {s: sw, b: bw, b2: bw2};
-}
-
-function optEval(ctx, pt, mv, live){
-  // One candidate: per-signal metrics against the shared background; the score is the
-  // WORST signal's product, so one cut set serves the whole grid. Displayed numbers are
-  // that worst signal's. Single-signal runs reduce to exactly the old behavior.
-  const {s, b, b2} = optScore(pt, ctx);
-  const per = s.map(sk => {
-    const m = {sob: b > 0 ? sk / b : NaN,
-               // no weights means no MC-statistical term to add — sigma^2 would just
-               // be B's own Poisson count again, and S/sqrt(2B) counts it twice
-               sig: sigFom(sk, b, b2),
-               zbi: zbi(sk, b, b2, ctx.syst)};
-    let sc = 1;
-    for (const k of ["sob", "sig", "zbi"])
-      if (ctx.obj[k]) sc *= isFinite(m[k]) ? Math.max(m[k], 0) : NaN;
-    return {m, sc: isFinite(sc) ? sc : -Infinity, s: sk};
-  });
-  let wi = 0;
-  per.forEach((p2, k) => { if (p2.sc < per[wi].sc) wi = k; });
-  let score = per[wi].sc, note = "";
-  if (s.some(sk => sk < ctx.minS)){ score = -Infinity; note = "S < min"; }
-  else if (!isFinite(score)){ score = -Infinity; note = b > 0 ? "undefined" : "B = 0"; }
-  ctx.n++;
-  const n = OPT.rows.length + 1;
-  const isBest = isFinite(score) && (!OPT.best || score > OPT.best.score);
-  if (isBest) OPT.best = {score, s: per[wi].s, b, pt: copyPt(pt), n};
-  OPT.rows.push({n, r: ctx.pass, mv: (ctx.tag ? ctx.tag + " · " : "") + mv,
-                 s: per[wi].s, b, m: per[wi].m, score, note, best: isBest,
-                 pt: copyPt(pt)});
-  if (live){ applyPt(pt); cutLabels(); drawAll(); }
-  return score;
-}
-
-function optCandidates(ctx, u){
-  // Everything one scan will try: a grid over one slider edge, or every single chip flip.
-  const out = [], c = META.cols[u.i];
-  if (u.type === "edge"){
-    const b = bounds(c), cut = ctx.cur.cuts[u.i];
-    const a = u.edge ? cut[0] : b[0], z = u.edge ? b[1] : cut[1];
-    let last = null;
-    for (let g = 0; g < ctx.grid; g++){
-      let v = a + (z - a) * g / (ctx.grid - 1);
-      if (c.kind === "i4") v = Math.round(v);
-      if (v === last || v === cut[u.edge]) continue;
-      last = v;
-      const pt = copyPt(ctx.cur);
-      pt.cuts[u.i][u.edge] = v;
-      out.push({pt, mv: `${c.name} ${u.edge ? "hi" : "lo"} \u2192 ${fmt(v)}`});
-    }
-  } else {
-    for (const v of c.vals){
-      const on = ctx.cur.chips[u.i].has(v);
-      if (on && ctx.cur.chips[u.i].size <= 1) continue;      // never an empty column
-      const pt = copyPt(ctx.cur);
-      const lab = c.names ? c.names[c.vals.indexOf(v)] : v;
-      if (on){ pt.chips[u.i].delete(v); out.push({pt, mv: `${c.name} \u2212${lab}`}); }
-      else { pt.chips[u.i].add(v); out.push({pt, mv: `${c.name} +${lab}`}); }
-    }
-  }
-  return out;
-}
-
-function optPlanPass(ctx){
-  ctx.pass++; ctx.improved = false; ctx.unit = -1;
-  ctx.plan = [];
-  for (const i of ctx.cont){
-    ctx.plan.push({type:"edge", i, edge:0});
-    ctx.plan.push({type:"edge", i, edge:1});
-  }
-  for (const i of ctx.cat) ctx.plan.push({type:"chip", i, round:0});
-}
-
-function optAdvance(ctx){
-  // Adopt what the finished scan found, then line up the next scan or the next pass. A
-  // chip column that just improved is queued once more — one flip may enable another.
-  if (ctx.u && ctx.scanBest){
-    ctx.cur = ctx.scanBest; ctx.curScore = ctx.scanBestScore; ctx.improved = true;
-    if (ctx.u.type === "chip" && ctx.u.round < META.cols[ctx.u.i].vals.length)
-      ctx.plan.splice(ctx.unit + 1, 0, {type:"chip", i:ctx.u.i, round:ctx.u.round + 1});
-  }
-  ctx.u = null;
-  while (true){
-    ctx.unit++;
-    if (ctx.unit >= ctx.plan.length){
-      if (ctx.improved && ctx.pass < 10){ optPlanPass(ctx); continue; }
-      return false;
-    }
-    const u = ctx.plan[ctx.unit], cand = optCandidates(ctx, u);
-    if (!cand.length) continue;
-    ctx.u = u; ctx.cand = cand; ctx.ci = 0;
-    ctx.scanBest = null; ctx.scanBestScore = ctx.curScore;
-    return true;
-  }
-}
-
-function optTick(ctx, live){
-  // One evaluation. Returns whether there is more to do.
-  if (ctx.cur === null){
-    const pt = copyPt(ctx.snap);
-    ctx.cur = pt;
-    ctx.curScore = optEval(ctx, pt, "page cuts", live);
-    optPlanPass(ctx);
-    return optAdvance(ctx);
-  }
-  const c = ctx.cand[ctx.ci++];
-  const score = optEval(ctx, c.pt, c.mv, live);
-  if (score > ctx.scanBestScore){ ctx.scanBestScore = score; ctx.scanBest = c.pt; }
-  return ctx.ci < ctx.cand.length ? true : optAdvance(ctx);
-}
-
-function optRows(){
-  const cell = v => isFinite(v) ? fmt(v) : "\u2013";
-  $("opttbody").innerHTML = OPT.rows.map(r =>
-    `<tr data-ri="${r.n}"${r.best ? ' class="best"' : ""}><td>${r.n}</td><td>${r.r}</td>` +
-    `<td class="mv">${r.mv}</td><td>${fmt(r.s)}</td><td>${fmt(r.b)}</td>` +
-    `<td>${cell(r.m.sob)}</td><td>${cell(r.m.sig)}</td><td>${cell(r.m.zbi)}</td>` +
-    `<td>${r.note || cell(r.score)}</td></tr>`).join("");
-}
-
-function optPlot(){
-  // The three metrics per point tried, whatever the objective — watching S/B climb while
-  // ZBI falls is the whole argument for not optimizing one number alone.
-  const rows = OPT.rows, x = rows.map(r => r.n);
-  const tr = [["sob", "S/B", "--s1"],
-              ["sig", WCOL ? "S/\u221a(B+\u03c3\u00b2)" : "S/\u221aB", "--s2"],
-              ["zbi", "ZBI", "--s3"]].map(([k, nm, cv]) => ({
-      type:"scatter", mode:"lines", name:nm, x,
-      y: rows.map(r => isFinite(r.m[k]) ? r.m[k] : null),
-      line:{width:2, color:css(cv)}}));
-  const starts = rows.filter((r, i) => i && rows[i - 1].r !== r.r).map(r => r.n);
-  const ax = axisStyle(), panel = css("--panel");
-  Plotly.react("optplot", tr, {
-    margin:{l:56, r:10, t:8, b:38}, font:{family:MONO, size:pf(10), color:css("--ink")},
-    xaxis:{...ax, title:{text:"point tried", font:TFONT()}},
-    yaxis:{...ax},
-    shapes: starts.map(n => ({type:"line", x0:n - 0.5, x1:n - 0.5, y0:0, y1:1,
-        yref:"paper", line:{color:css("--rule"), width:1, dash:"dot"}})),
-    legend:{orientation:"h", y:1.14, x:0, font:{family:MONO, size:pf(9), color:css("--ink-2")}},
-    plot_bgcolor:panel, paper_bgcolor:panel, uirevision:"optp"
-  }, {...PLOTOPTS(), edits:{}});
-}
-
-function optMoves(a, b){
-  // which cuts the winning point actually moved, column by column
-  const out = [];
-  META.cols.forEach((c, i) => {
-    if (c.vals){
-      const A = a.chips[i], B = b.chips[i];
-      const lab = v => c.names ? c.names[c.vals.indexOf(v)] : v;
-      const d = [...A].filter(v => !B.has(v)).map(v => "−" + lab(v))
-        .concat([...B].filter(v => !A.has(v)).map(v => "+" + lab(v)));
-      if (d.length) out.push(c.name + " " + d.join(" "));
-    } else {
-      if (a.cuts[i][0] !== b.cuts[i][0]) out.push(`${c.name} lo→${fmt(b.cuts[i][0])}`);
-      if (a.cuts[i][1] !== b.cuts[i][1]) out.push(`${c.name} hi→${fmt(b.cuts[i][1])}`);
-    }
-  });
-  return out;
-}
-
-function optSummary(){
-  // the honest report, per signal: the winning point and exactly which cuts moved.
-  // An untouched slider means the scan tried it and kept it — and now the report says so.
-  $("optsum").textContent = OPT.bests.map(({name, best, snap}) => {
-    if (!best) return `${name}: no point passed the floor with B > 0`;
-    const mv = optMoves(snap, best.pt);
-    return `${name}: best #${best.n}, score ${fmt(best.score)} — ` +
-           (mv.length ? "moved " + mv.join(", ")
-                      : "the page's own cuts already sit at the optimum") +
-           " — click that row to apply";
-  }).join("\n");
-}
-
-function optStat(ctx){
-  $("optstat").textContent = (ctx.tag ? ctx.tag + " · " : "") + `pass ${ctx.pass}` +
-      (ctx.u ? ` \u00b7 scanning ${META.cols[ctx.u.i].name}` +
-               (ctx.u.type === "edge" ? (ctx.u.edge ? " hi" : " lo") : "") : "") +
-      ` \u00b7 point ${ctx.n}` +
-      (OPT.best ? ` \u00b7 best score ${fmt(OPT.best.score)} (#${OPT.best.n})` : "");
-}
-
-function optFinish(ctx){
-  applyPt(ctx.snap); cutLabels(); drawAll();
-  OPT.running = false; OPT.ctx = null;
-  $("optrun").textContent = "run";
-  OPT.bests.push({name: legName(ctx), best: OPT.best, snap: ctx.snap});
-  optRows(); optPlot(); optStat(ctx); optSummary();
-  say(OPT.best
-      ? `converged after ${ctx.pass} pass${ctx.pass > 1 ? "es" : ""}: ${OPT.rows.length}` +
-        ` points, best score ${fmt(OPT.best.score)} \u2014 the page is back on its own` +
-        ` cuts; the summary under the table says what moved`
-      : `done: ${OPT.rows.length} points, none passed the floor with B > 0`);
-}
-
-function optStart(){
-  const grid = parseInt($("optgrid").value, 10) || 24;
-  const legs = optLegs(grid);
-  if (!legs){
-    say("the optimizer needs an enabled variable, a ticked objective, at least one " +
-        "signal with shown events, and a background group on screen");
-    return;
-  }
-  OPT.running = true; OPT.stop = false;
-  OPT.rows = []; OPT.best = null; OPT.bests = [];
-  $("optrun").textContent = "stop";
-  const live = !$("optweak").checked;
-  const chunk = live ? 1 : 25;
-  let li = 0, ctx = legs[0];
-  OPT.ctx = ctx;
-  const step = () => {
-    if (!OPT.running) return;   // parked by a tab switch — the scan was already undone
-    let more = true;
-    for (let i = 0; i < chunk && more; i++){
-      if (OPT.stop){ optFinish(ctx); return; }
-      more = optTick(ctx, live);
-      if (!more && li + 1 < legs.length){
-        // one signal converged — bank its best and start the next leg
-        OPT.bests.push({name: legName(ctx), best: OPT.best, snap: ctx.snap});
-        OPT.best = null;
-        ctx = legs[++li];
-        OPT.ctx = ctx;
-        more = true;
-      }
-    }
-    optRows(); optPlot(); optStat(ctx);
-    if (more) setTimeout(step, live ? 30 : 0); else optFinish(ctx);
-  };
-  setTimeout(step, 0);
-}
-
-function optRunSync(grid){
-  // The whole scan with no timers and no drawing — what the harness calls.
-  const legs = optLegs(grid || 12);
-  if (!legs) return null;
-  OPT.rows = []; OPT.best = null; OPT.bests = [];
-  let last = legs[0];
-  for (const ctx of legs){
-    if (ctx !== legs[0]){
-      OPT.bests.push({name: legName(last), best: OPT.best, snap: last.snap});
-      OPT.best = null;
-    }
-    while (optTick(ctx, false)){}
-    last = ctx;
-  }
-  OPT.bests.push({name: legName(last), best: OPT.best, snap: last.snap});
-  applyPt(legs[0].snap); cutLabels();
-  return {points: OPT.rows.length, passes: last.pass,
-          best: OPT.best && {score: OPT.best.score, s: OPT.best.s, b: OPT.best.b, n: OPT.best.n}};
 }
 
 function stamp(){
@@ -3983,7 +3481,7 @@ function totals(keep){
     const di = D.__ds[r];
     if (!keep[r] || !S.show[di]) continue;
     kept++;
-    const ww = weighted ? D.weight[r]*LUMI(di) : 1;
+    const ww = weighted ? D.__w[r]*LUMI(di) : 1;
     sw += ww;
     const g = S.group[di];
     if (!g) continue;
@@ -4556,7 +4054,7 @@ function cutflow(){
   for (let r = 0; r < META.n; r++){
     const di = D.__ds[r];
     if (S.show[di] === false) continue;
-    const ww = weighted ? D.weight[r] * LUMI(di) : 1, g = S.group[di];
+    const ww = weighted ? D.__w[r] * LUMI(di) : 1, g = S.group[di];
     for (let step = 0; ; step++){
       const acc = rows[step];
       acc.raw++; acc.w += ww;
@@ -4770,7 +4268,7 @@ function draw1D(p, keep){
       all.forEach(di => { want[di] = 1; });
       const sel = new Uint8Array(META.n);
       for (let r = 0; r < META.n; r++) sel[r] = keep[r] && want[D.__ds[r]] ? 1 : 0;
-      const b = binned(D[name], D.weight, sel, lo, hi, nb, weighted, lbx, p.oflow);
+      const b = binned(D[name], D.__w, sel, lo, hi, nb, weighted, lbx, p.oflow);
       over += b.over; under += b.under; overW += b.overW; underW += b.underW;
       const label = (p.merge && p.merge[nm]) || nm;
       const a = agg[label] || (agg[label] = {h:new Float64Array(nb),
@@ -4784,7 +4282,7 @@ function draw1D(p, keep){
     if (!S.show[di]) return;
     const sel = new Uint8Array(META.n);
     for (let r = 0; r < META.n; r++) sel[r] = keep[r] && D.__ds[r] === di ? 1 : 0;
-    const b = binned(D[name], D.weight, sel, lo, hi, nb, weighted, lbx, p.oflow);
+    const b = binned(D[name], D.__w, sel, lo, hi, nb, weighted, lbx, p.oflow);
     over += b.over; under += b.under; overW += b.overW; underW += b.underW;
     const mg = mergeOf(p, di);
     if (!mg && !S.group[di]) traces.push({dn, di, b});
@@ -5024,7 +4522,7 @@ function draw2D(p, keep){
   const summed = n === 1 && p.lines;
   const layers = n === 1 ? [summed ? "__sum__" : p.layer] : [p.layer, p.layer2];
   const lbx = p.lbx && X.lo > 0, lby = p.lby && Y.lo > 0;   // log bins need a positive edge
-  const maps = layers.map(which => binned2D(D[xn], D[yn], D.weight,
+  const maps = layers.map(which => binned2D(D[xn], D[yn], D.__w,
                                             which === "__sum__" ? linesSel(keep, p.lines)
                                                                 : layerSel(keep, which),
                                             X.lo, X.hi, nbx, Y.lo, Y.hi, nby, weighted,
@@ -5390,7 +4888,7 @@ function buildSchema(){
   // Straight out of META. This is what the FILE says each column is — not what any config
   // claimed when it was written, which is the whole point of reading it back.
   let wlo = Infinity, whi = -Infinity;
-  if (WCOL) for (const w of D.weight){ if (w < wlo) wlo = w; if (w > whi) whi = w; }
+  if (WCOL) for (const w of D.__w){ if (w < wlo) wlo = w; if (w > whi) whi = w; }
   const head = ["column", "type", "measured", "control opens on", "values"];
   const rows = META.cols.map(c => {
     const b = bounds(c);
@@ -5533,6 +5031,10 @@ async function fromFile(file){
   const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, len)));
   if (!READS.includes(meta.rowver))
     throw new Error(`${file.name} is .rvr version ${meta.rowver}, this viewer reads ${READS.join(", ")}`);
+  // a DATA-LESS file (optional `remote` key, 0.28.0): the columns are not here — a
+  // local helper fetches them over xrootd and builds the real file, which then comes
+  // back through this very function. Old files carry no such key and never turn here.
+  if (meta.remote) return remoteLoad(meta, file.name);
   for (const key of ["n", "bytes", "datasets", "ds_offset", "cols"])
     if (!(key in meta)) throw new Error(`${file.name}: META has no ${key}`);
 
@@ -5547,6 +5049,98 @@ async function fromFile(file){
 
   META = meta;
   start(body, file.name);
+}
+
+/* ---------- remote: the data-less .rvr and the local helper ---------- */
+
+function remoteSpecCheck(meta){
+  // Pure — the battery pins it. What a data-less file must carry to be loadable, and
+  // the summary the page acts on. Throws with the reason when the spec is unusable.
+  const spec = meta.remote;
+  if (!spec || typeof spec !== "object") throw new Error("no remote spec");
+  if (!spec.fileset || !Object.keys(spec.fileset).length)
+    throw new Error("the remote spec names no datasets");
+  if (!spec.branches || !Object.keys(spec.branches).length)
+    throw new Error("the remote spec names no branches");
+  let files = 0;
+  for (const name of Object.keys(spec.fileset)){
+    const e = spec.fileset[name] || {};
+    if (e.dataset) continue;             // named dataset: file list resolved at build time
+    const f = e.files;
+    if (!f || !Object.keys(f).length)
+      throw new Error(`dataset ${name} has no files`);
+    files += Object.keys(f).length;
+  }
+  return {datasets: Object.keys(spec.fileset).length, files: files,
+          columns: Object.keys(spec.branches).length,
+          cut: spec.cut || null, port: spec.port || 8271,
+          start: spec.start || "the helper (see remote/helper.py)"};
+}
+
+async function remoteLoad(meta, name){
+  // The drop screen's own progress bar tells the story; every failure names the fix.
+  const sum = remoteSpecCheck(meta);
+  const base = `http://127.0.0.1:${sum.port}`;
+  const bar = (frac, text) => {
+    $("dlwrap").hidden = false;
+    $("dltext").textContent = text;
+    $("dlbar").classList.toggle("wait", frac < 0);
+    if (frac >= 0) $("dlfill").style.width = Math.round(frac * 100) + "%";
+  };
+  const done = () => { $("dlwrap").hidden = true; };
+  try {
+    bar(-1, `remote study: ${sum.datasets} datasets, ${sum.files} files — looking for the helper…`);
+    let ping;
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 4000);
+      ping = await (await /*net-ok*/fetch(`${base}/ping`, {signal: ctl.signal})).json();
+      clearTimeout(t);
+    } catch (e){
+      throw new Error(`no helper answered on 127.0.0.1:${sum.port} — start it with ` +
+                      `<code>${esc(sum.start)}</code> and drop the file again`);
+    }
+    bar(-1, `helper up (proxy expires ${ping.proxy_expires}) — requesting the build…`);
+    const job = await (await /*net-ok*/fetch(`${base}/build`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(meta.remote)})).json();
+    if (job.error) throw new Error(`the helper refused: ${esc(job.error)}`);
+    for (;;){
+      const s = await (await /*net-ok*/fetch(`${base}/status?job=${job.job}`)).json();
+      if (s.phase === "done") break;
+      if (s.phase === "error") throw new Error(`the helper failed: ${esc(s.error)}`);
+      bar(s.total_files ? s.done_files / s.total_files : -1,
+          s.note || `${s.phase}…`);
+      await new Promise(r => setTimeout(r, 800));
+    }
+    bar(-1, "fetching the built file…");
+    const r = await /*net-ok*/fetch(`${base}/fetch?job=${job.job}`);
+    if (!r.ok) throw new Error(`fetch of the built file: HTTP ${r.status}`);
+    const total = +(r.headers.get("Content-Length") || 0);
+    let blob;
+    if (r.body && r.body.getReader){
+      const reader = r.body.getReader();
+      const parts = [];
+      let got = 0;
+      for (;;){
+        const {done: fin, value} = await reader.read();
+        if (fin) break;
+        parts.push(value);
+        got += value.length;
+        bar(total ? got / total : -1,
+            `built file — ${(got / 1048576).toFixed(1)} MB`);
+      }
+      blob = new Blob(parts);
+    } else {
+      blob = await r.blob();
+    }
+    done();
+    // the built file is a NORMAL .rvr (no remote key), so it takes the ordinary door
+    await fromFile(new File([blob], name.replace(/\.rvr$/, "") + "_loaded.rvr"));
+  } catch (e){
+    done();
+    fail(e.message);
+  }
 }
 
 let SOURCE = "";
@@ -5585,15 +5179,17 @@ const BLD = {open:false, stage:"layout", draft:null, active:0};
 
 // ——— Rover, the mascot: a wireframe cube projected to ASCII live. He blinks at
 // rest and spins when clicked; the whole robot is this renderer and two timers.
-function roverFrame(th, blink){
-  const W = 27, H = 13, g = Array.from({length: H}, () => Array(W).fill(" "));
+function roverFrame(th, blink, hat){
+  // three rows of headroom so the hat never forces the layout to move; they are
+  // blank air when he is bareheaded
+  const W = 27, H = 16, TOP = 3, g = Array.from({length: H}, () => Array(W).fill(" "));
   const c = Math.cos(th), s = Math.sin(th), tc = Math.cos(0.30), ts = Math.sin(0.30);
   const P = [];
   for (const X of [-1, 1]) for (const Y of [-1, 1]) for (const Z of [-1, 1]){
     const x = X * c + Z * s, z = Z * c - X * s, y = Y * tc - z * ts;
     // centred on column 13, not 13.5: the half-column rounding pushed the right
     // corners onto the right arm's shoulder while the left side never got close
-    P.push([Math.round((W - 1) / 2 + x * 8), Math.round(H / 2 + y * 4.4)]);
+    P.push([Math.round((W - 1) / 2 + x * 8), TOP + Math.round((H - TOP) / 2 + y * 4.4)]);
   }
   const put = (x, y, ch) => { if (y >= 0 && y < H && x >= 0 && x < W) g[y][x] = ch; };
   for (const [a, b] of [[0,1],[0,2],[0,4],[1,3],[1,5],[2,3],[2,6],[3,7],[4,5],[4,6],[5,7],[6,7]]){
@@ -5613,7 +5209,7 @@ function roverFrame(th, blink){
   P.forEach(([x, y]) => put(x, y, "o"));
   if (Math.abs(s) < 0.35){
     // the face sits centred on the FRONT face, clear of the projected top edge
-    const ey = Math.floor(H / 2), e = blink ? "-" : "•";
+    const ey = TOP + Math.floor((H - TOP) / 2), e = blink ? "-" : "•";
     put(Math.floor(W / 2) - 2, ey, e);
     put(Math.floor(W / 2) + 2, ey, e);
     // every rover glyph must be EXACTLY one cell in the page's mono stack, or the
@@ -5621,17 +5217,30 @@ function roverFrame(th, blink){
     // edges left; ◡ measures 1.000 (canvas-measured via the mario rig)
     put(Math.floor(W / 2), ey + 1, "◡");
   }
-  const ay = Math.floor(H / 2) + 1;
+  const ay = TOP + Math.floor((H - TOP) / 2) + 1;
   g[ay][0] = "╰"; g[ay][1] = "o"; g[ay][W - 2] = "o"; g[ay][W - 1] = "╯";
+  if (hat){
+    // the top hat (the wordmark's triple-click easter egg): brim and crown drawn
+    // above the highest top corner, tracking him as he turns; put() clips it at the
+    // frame edge mid-spin, which reads as physics rather than a bug
+    const tops = [0, 1, 4, 5].map(i => P[i]);
+    const [hx, hy] = tops.reduce((a, b) => (b[1] < a[1] ? b : a));
+    for (let dx = -2; dx <= 2; dx++) put(hx + dx, hy - 3, "_");
+    for (let dx = -1; dx <= 1; dx++){ put(hx + dx, hy - 2, " "); put(hx + dx, hy - 1, "_"); }
+    put(hx - 2, hy - 2, "|"); put(hx + 2, hy - 2, "|");
+    put(hx - 2, hy - 1, "|"); put(hx + 2, hy - 1, "|");
+    for (const dx of [-4, -3, 3, 4]) put(hx + dx, hy - 1, "_");
+  }
   return g.map(r => r.join("")).join("\n");
 }
 
-const RV = {th: 0.3, want: 0.3, spin: 0, blink: false, x: 10, tx: 120, pause: 15};
+const RV = {th: 0.3, want: 0.3, spin: 0, blink: false, x: 10, tx: 120, pause: 15,
+            hat: false};   // the top hat: runtime posture, never saved
 
 function roverDraw(){
   const el = $("rover");
   if (!el) return;
-  el.textContent = roverFrame(RV.th, RV.blink);
+  el.textContent = roverFrame(RV.th, RV.blink, RV.hat);
   if (el.style) el.style.transform = `translateX(${Math.round(RV.x)}px)`;
 }
 
@@ -5825,8 +5434,6 @@ function defaultSpec(){
 }
 
 function openBuilder(){
-  // a live optimizer scan redraws the page under the dim, so it parks first
-  parkOptimizer();
   BLD.open = true;
   BLD.mode = "create";
   BLD.edit = null;
@@ -5843,7 +5450,6 @@ function openBuilder(){
 function openBuilderFor(p){
   // edit reuses the create builder, prefilled, landing on data — and it edits deep
   // COPIES, so cancel costs nothing and apply lands in place under the same ids
-  parkOptimizer();
   const idxs = p.sheet != null
     ? PLOTS.map((q, i) => q.sheet === p.sheet ? i : -1).filter(i => i >= 0)
     : [PLOTS.indexOf(p)];
@@ -6637,8 +6243,7 @@ function tblCol(src){
 
 function tblCompute(keep){
   // One pass over the events: Σw, Σw² and N per distinct source on the board or shelf,
-  // then the shared background sum and each signal's metrics — the optimizer's own
-  // formulas, so the board and a scan can never disagree about the same cuts.
+  // then the shared background sum and each signal's metrics.
   const weighted = WTD();
   const names = [...new Set(TBL.cells.filter(Boolean).concat(TBL.bkgs))];
   const acc = {};
@@ -6650,7 +6255,7 @@ function tblCompute(keep){
     const di = D.__ds[r];
     const list = byDs[di];
     if (!list.length) continue;
-    const ww = weighted ? D.weight[r]*LUMI(di) : 1;
+    const ww = weighted ? D.__w[r]*LUMI(di) : 1;
     for (const a of list){ a.w += ww; a.w2 += ww*ww; a.n++; }
   }
   let b = 0, b2 = 0, bn = 0;
@@ -6690,9 +6295,9 @@ function tblHists(sp, keep){
   for (const s of srcs){
     const m = tblMask(keep, s);
     out[s] = sp.mode === "2d"
-      ? binned2D(D[sp.varx], D[sp.vary], D.weight, m, ax.x.lo, ax.x.hi, ax.x.nb,
+      ? binned2D(D[sp.varx], D[sp.vary], D.__w, m, ax.x.lo, ax.x.hi, ax.x.nb,
                  ax.y.lo, ax.y.hi, ax.y.nb, weighted, sp.lbx, sp.lby, sp.oflow !== false).h
-      : binned(D[sp.varx], D.weight, m, ax.x.lo, ax.x.hi, ax.x.nb,
+      : binned(D[sp.varx], D.__w, m, ax.x.lo, ax.x.hi, ax.x.nb,
                weighted, sp.lbx, sp.oflow !== false).h;
   }
   const nb = sp.mode === "2d" ? ax.x.nb*ax.y.nb : ax.x.nb;
@@ -7616,7 +7221,7 @@ function rgnCount(keep){
     const di = D.__ds[r];
     const si = byDs[di];
     if (si < 0) continue;
-    const w = weighted ? D.weight[r] * LUMI(di) : 1;
+    const w = weighted ? D.__w[r] * LUMI(di) : 1;
     let node = root;
     for (;;){
       node.y[si] += w; node.n[si] += 1; node.y2[si] += w * w;
@@ -9113,7 +8718,8 @@ function rgnPanel(){
       : "") +
     (chk.exact ? "" :
       ` · <span class="rgnbad">SUM RULE BROKEN: ${chk.leafN} of ${chk.rootN}</span>`) +
-    `</p>`;
+    `</p>` +
+    rgnSigHtml();
   rgnGridStatus();
   // the table is rebuilt on every paint, so its buttons are rewired with it
   if (box.querySelectorAll){
@@ -9616,9 +9222,13 @@ function rgnGridWire(){
 }
 
 function rgnBinName(n){
-  // a region's path as one identifier: what Combine wants for a bin, and what a human can
-  // still read back to the cuts that made it
-  const raw = ["Bin"].concat(n.path).join("_");
+  // A region's path as one identifier: what Combine wants for a bin, and what a human can
+  // still read back to the cuts that made it. Comparison operators are TRANSLITERATED,
+  // never stripped: "X < a" and "X ≥ a" are different regions, and sanitizing both to
+  // "X_a" collapsed a real 152-leaf map to 76 exported bins (2026-08-20) — the two
+  // windows of every one-cut chain overwrote each other in the flattened dict.
+  const raw = ["Bin"].concat(n.path).join("_")
+    .replace(/</g, "_lt_").replace(/≥/g, "_ge_").replace(/≤/g, "_le_");
   return raw.replace(/[^A-Za-z0-9_]+/g, "_").replace(/_+/g, "_").replace(/_$/, "");
 }
 
@@ -9637,7 +9247,11 @@ function rgnFlat(){
       // process list and a datacard built from this does not go ragged
       bin[s] = {nominal:[n.n[i] || 0, n.y[i] || 0, Math.sqrt(n.y2 ? n.y2[i] : 0)]};
     });
-    out[rgnBinName(n)] = bin;
+    // NEVER lossy: if two leaves still sanitize to one name (exotic labels), the later
+    // one takes a deterministic tree-order suffix instead of overwriting the earlier
+    let name = rgnBinName(n);
+    for (let k = 2; out[name] !== undefined; k++) name = rgnBinName(n) + "_" + k;
+    out[name] = bin;
   })(RGNT);
   return out;
 }
@@ -9650,6 +9264,160 @@ function rgnExportJson(){
   download(JSON.stringify(flat, null, 1), name, "application/json");
   say(`exported <b>${bins}</b> region${bins === 1 ? "" : "s"} × ${rgnSrcs().length} ` +
       `process${rgnSrcs().length === 1 ? "" : "es"} to <b>${esc(name)}</b>`);
+}
+
+/* ---------- significance: the snapshot through the fit framework's own algebra ---------- */
+
+//: The snapshot IS the algorithm's input: rgnSigCalc takes the SAME flattened-json-shaped
+//: object the json button exports (rgnFlat — the arrays rgnCount filled), so the bubbles,
+//: the tables, the export and the significance can never disagree — there is one shape.
+//: A column's side comes from the heat map's own assignment (rgnHeatCat): every "sig"
+//: column is a separate signal hypothesis, B is the sum of the "bkg" columns.
+const RGN_SIG_KAPPA = 1.5;    // the profiled norm per background process — the systematics
+                              // model of the current fit-framework cards (family lnN 1.5)
+
+function rgnSigCalc(flat, catOf, kappa){
+  // Per signal process: the ASIMOV r=1 EXPECTED DISCOVERY significance over the
+  // snapshot's bins, two tiers.
+  //   z1 — NO SYSTEMATICS, exact closed form: q0 = 2·Σ[(s+b)·ln(1+s/b) − s], Z = √q0.
+  //   z2 — one lnN `kappa` norm per background process, profiled at r=0 on the exact
+  //        likelihood (rgnSigProfile). z2 <= z1 always: the norms buy the background
+  //        freedom to absorb signal.
+  // Edges, stated: an s=0 bin contributes 0 to z1 and STAYS in z2 (it constrains the
+  // norms); a bin with s>0 over b<=0 (the ln diverges), s<0, b<0 under s=0, or any
+  // non-finite yield is DROPPED for that point and counted, never silent. `thin` counts
+  // kept s>0 bins whose b rests on < 5 raw MC events — where these formulas flatter.
+  // Pure — no DOM, no canvas — so the battery pins it.
+  const bins = Object.keys(flat).sort();
+  const seen = {};
+  bins.forEach(b => Object.keys(flat[b]).forEach(p => { seen[p] = 1; }));
+  const procs = Object.keys(seen).sort();
+  const bkgs = procs.filter(p => catOf(p) === "bkg");
+  const sigs = procs.filter(p => catOf(p) !== "bkg");
+  const nom = (b, p) => (flat[b][p] || {nominal: [0, 0, 0]}).nominal;
+  const points = sigs.map(pt => {
+    const rows = [];
+    let dropped = 0, thin = 0, q1 = 0;
+    bins.forEach(bn => {
+      const s = nom(bn, pt)[1];
+      const bf = bkgs.map(f => nom(bn, f)[1]);
+      const b = bf.reduce((a, v) => a + v, 0);
+      const raw = bkgs.reduce((a, f) => a + nom(bn, f)[0], 0);
+      if (!isFinite(s) || !isFinite(b) || s < 0 || (s > 0 && b <= 0) ||
+          (s === 0 && b < 0)){ dropped++; return; }
+      if (s > 0 && b > 0 && raw < 5) thin++;
+      if (s > 0 && b > 0) q1 += 2 * ((s + b) * Math.log1p(s / b) - s);
+      rows.push({s, bf, b});
+    });
+    return {name: pt, z1: Math.sqrt(Math.max(q1, 0)),
+            z2: rgnSigProfile(rows, bkgs.length, kappa), dropped, thin};
+  });
+  return {bins: bins.length, sigs, bkgs, points};
+}
+
+function rgnSigProfile(rows, nf, kappa){
+  // The r=0 profile under the r=1 Asimov: minimize Σ_i[μ_i − n_i·ln μ_i] + Σ_f θ_f²/2
+  // with μ_i = Σ_f b_if·kappa^θ_f and n_i = s_i + b_i, by coordinate Newton from θ=0
+  // (the optimum sits within |θ| ~ 0.05 on real maps; a step is halved back inside
+  // μ>0 whenever a negative-weight cell would take it out). Then
+  // q0 = 2·Σ_i[n_i·ln(n_i/μ̂_i) − n_i + μ̂_i] + Σ_f θ̂_f², Z = √q0.
+  if (!nf || !rows.length) return null;
+  const lnk = Math.log(kappa);
+  const n = rows.map(r => r.s + r.b);
+  const th = new Float64Array(nf);
+  const muAt = t => rows.map(r => {
+    let m = 0;
+    for (let f = 0; f < nf; f++) m += r.bf[f] * Math.pow(kappa, t[f]);
+    return m;
+  });
+  const valid = mu => mu.every((m, i) => !(n[i] > 0 && m <= 0));
+  if (!valid(muAt(th))) return null;
+  for (let round = 0; round < 500; round++){
+    let worst = 0;
+    for (let j = 0; j < nf; j++){
+      const kj = Math.pow(kappa, th[j]);
+      const mu = muAt(th);
+      let g = th[j], h = 1;
+      for (let i = 0; i < rows.length; i++){
+        const ratio = n[i] > 0 ? n[i] / mu[i] : 0;
+        const dj = rows[i].bf[j] * lnk * kj;
+        g += (1 - ratio) * dj;
+        h += (1 - ratio) * dj * lnk + (n[i] > 0 ? ratio / mu[i] * dj * dj : 0);
+      }
+      let step = h > 0 ? -g / h : -g;
+      step = Math.max(-0.5, Math.min(0.5, step));
+      th[j] += step;
+      while (!valid(muAt(th)) && Math.abs(step) > 1e-16){
+        th[j] -= step; step *= 0.5; th[j] += step;
+      }
+      worst = Math.max(worst, Math.abs(step));
+    }
+    if (worst < 1e-13) break;
+  }
+  const mu = muAt(th);
+  let acc = 0;
+  for (let i = 0; i < rows.length; i++){
+    if (n[i] > 0) acc += n[i] * Math.log(n[i] / mu[i]);
+    acc += mu[i] - n[i];
+  }
+  let q0 = 2 * acc;
+  for (let j = 0; j < nf; j++) q0 += th[j] * th[j];
+  return Math.sqrt(Math.max(q0, 0));
+}
+
+function rgnSigModel(){
+  // The cached readout: recomputed when the tree is rebuilt (rgnCount makes a new RGNT)
+  // or the S/B assignment changes; a hover repaint hits the cache.
+  if (!RGNT) return null;
+  const key = JSON.stringify([rgnSrcs(), (RGN.pages && RGN.pages.cats) || null,
+                              RGN.bkg || null]);
+  if (RGNT.sigm && RGNT.sigm.key === key) return RGNT.sigm.out;
+  const out = rgnSigCalc(rgnFlat(), rgnHeatCat, RGN_SIG_KAPPA);
+  RGNT.sigm = {key, out};
+  return out;
+}
+
+function rgnSigHtml(){
+  // The panel block: MAP-WIDE (every leaf of the partition, whatever camp is focused),
+  // one row per signal process. Significance is a READOUT and never a size — bubbles
+  // keep area = yield. The tier label rides ON each column, not in a tooltip.
+  const sg = rgnSigModel();
+  if (!sg || !sg.points.length) return "";
+  if (!sg.bkgs.length)
+    return `<p class="rgnnote rgnsig">significance needs a background side — every ` +
+           `column is "signal". Flip columns on the table's heat headers, or list ` +
+           `backgrounds in the map's bkg.</p>`;
+  const rows = sg.points.map(p => {
+    const flags =
+      (p.dropped ? ` <span class="rgnbad" title="bins with s>0 over b≤0 (the ln ` +
+        `diverges) or a negative yield — left out of THIS point's sum, never silently">` +
+        `${p.dropped} dropped</span>` : "") +
+      (p.thin ? ` <span class="rgnbad" title="kept s>0 bins whose background rests on ` +
+        `fewer than 5 raw MC events — the formulas flatter exactly there">` +
+        `${p.thin} thin</span>` : "");
+    const t = `z (no syst) = ${p.z1}` +
+              (p.z2 == null ? "" : ` · z (lnN ${RGN_SIG_KAPPA}/bkg) = ${p.z2}`) +
+              ` · full precision`;
+    return `<tr title="${esc(t)}"><td>${esc(p.name)}${flags}</td>` +
+           `<td class="r">${rgnPgFmt(p.z1)}</td>` +
+           `<td class="r">${p.z2 == null ? "—" : rgnPgFmt(p.z2)}</td></tr>`;
+  });
+  return `<div class="rgnsig">` +
+    `<p class="rgnnote" title="the median expected discovery significance on the r=1 ` +
+    `Asimov dataset, computed from this map's flattened yields — the same numbers the ` +
+    `json button exports — over ALL ${sg.bins} regions of the partition. Signal and ` +
+    `background columns follow the heat map's assignment (click a table header to ` +
+    `flip). Every signal column is its own hypothesis against the summed backgrounds.">` +
+    `expected discovery Z · Asimov r=1 · ${WTD() ? "" : "RAW counts · "}` +
+    `all ${sg.bins} regions</p>` +
+    `<table class="rgntbl"><tr><th>signal</th>` +
+    `<th class="r" title="tier 1, NO SYSTEMATICS — the exact closed form ` +
+    `q0 = 2·Σ[(s+b)·ln(1+s/b) − s], Z = √q0. Systematics can only lower it.">` +
+    `Z no syst</th>` +
+    `<th class="r" title="tier 2 — one log-normal norm of ${RGN_SIG_KAPPA} per ` +
+    `background process, profiled (the systematics model of the current fit-framework ` +
+    `cards). Still no shape or MC-stat systematics.">Z lnN ${RGN_SIG_KAPPA}/bkg</th>` +
+    `</tr>${rows.join("")}</table></div>`;
 }
 
 /* ---------- table mode: pages of yields tables ---------- */
@@ -9861,6 +9629,7 @@ function rgnPagesRender(){
       if (Object.keys(cats).length) pg.cats = cats; else delete pg.cats;
       RGN.pages = pg;
       markDirty(); rgnPagesRender();
+      rgnPanel();       // the significance readout follows the S/B assignment
     };
   });
   wire("rgnpgpng", () => rgnExportZip());

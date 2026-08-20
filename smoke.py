@@ -487,75 +487,25 @@ def run(html: str, rowver: str | None = None, probe: str = "") -> str:
           "}"
           "\nNORM = curves.length + 'curves';"
           "\nPLOTS[0].norm = wasN; PLOTS[0].mode = wasM;"
-          # the hidden optimizer: three fast clicks reveal it, a seed reproduces, and the
-          # page comes back exactly as it was. Runs only where a figure-of-merit pair exists.
-          "\nvar OZ = 'no fom pair';"
-          "\nif (S.fomn && S.fomd && groupNames().length >= 2){"
-          "  DOC.optpanel.hidden = true;"
+          # the wordmark easter egg (0.30.0, the optimizer's replacement): three fast
+          # clicks give Rover a top hat, two never do, and the hat is pure posture —
+          # the page state cannot change and nothing of it is ever saved.
+          "\nvar HAT = 'no handler';"
+          "\nif (typeof RV === 'object' && DOC.bname.onclick){"
+          "  var beforeHat = JSON.stringify(collectState());"
           "  DOC.bname.onclick(); DOC.bname.onclick();"
-          "  if (!DOC.optpanel.hidden) return 'two clicks revealed the optimizer';"
+          "  if (RV.hat) return 'two clicks put the hat on';"
           "  DOC.bname.onclick();"
-          "  if (DOC.optpanel.hidden) return 'three clicks did not reveal the optimizer';"
-          # the stub cannot parse `checked` off the markup, so tick the default objective
-          "  DOC.objsob.checked = true; DOC.optmins.value = '';"
-          "  var beforeOpt = JSON.stringify(collectState());"
-          "  var o1 = optRunSync(10), o2 = optRunSync(10);"
-          "  if (!o1) return 'the optimizer refused with a valid figure-of-merit pair';"
-          "  if (o1.points < 5) return 'a scan tried only ' + o1.points + ' points';"
-          "  if (OPT.rows[0].mv !== 'page cuts') return 'the scan does not start from the page cuts';"
-          "  if (JSON.stringify(o1) !== JSON.stringify(o2))"
-          "    return 'the same page gave a different scan result';"
-          "  if (o1.best && isFinite(OPT.rows[0].score) && o1.best.score + 1e-12 < OPT.rows[0].score)"
-          "    return 'the scan ended below its own starting point';"
-          "  if (JSON.stringify(collectState()) !== beforeOpt)"
-          "    return 'the optimizer did not restore the page';"
-          "  if (OPT.rows.length !== o2.points) return 'the table dropped points';"
-          "  if (o1.best && !OPT.rows.some(function(r){ return r.best; }))"
-          "    return 'a best exists but no row is marked as it';"
-          # an impossible signal floor must reject every point
-          "  DOC.optmins.value = '1e12';"
-          "  var oF = optRunSync(6);"
-          "  if (oF.best) return 'the minimum-signal floor did not bind';"
-          "  if (!OPT.rows.every(function(r){ return r.note === 'S < min'; }))"
-          "    return 'a floored point does not say S < min';"
-          "  DOC.optmins.value = '';"
-          # the product objective runs and reproduces too
-          "  DOC.objsig.checked = true; DOC.objzbi.checked = true;"
-          "  var oM1 = optRunSync(8), oM2 = optRunSync(8);"
-          "  if (!oM1 || !oM1.points) return 'the product objective broke the run';"
-          "  if (JSON.stringify(oM1) !== JSON.stringify(oM2))"
-          "    return 'the product objective is not deterministic';"
-          "  DOC.objsig.checked = false; DOC.objzbi.checked = false;"
-          # the metric plot draws one trace per metric
-          "  optPlot();"
-          "  if (DRAWN.length !== 3) return 'the metric plot drew ' + DRAWN.length + ' traces';"
-          # multi-signal: a loose sample can be a signal beside the FOM group; one-at-a-time
-          # reports one best per signal, the summary names them, optMoves invents nothing
-          "  if (typeof optTargets === 'function'){"
-          "    optTargets();"
-          "    if (optMoves(pagePt(), pagePt()).length) return 'optMoves invented a move';"
-          "    var loose9 = META.datasets.filter(function(d, i){"
-          "      return !S.group[i] && S.show[i] !== false; });"
-          "    if (loose9.length){"
-          "      OPT.sig = new Set([S.fomn, loose9[0]]);"
-          "      OPT.mode = 'each';"
-          "      var r9 = optRunSync(6);"
-          "      if (!r9) return 'multi-signal optRunSync refused to run';"
-          "      if (OPT.bests.length !== 2)"
-          "        return 'one-at-a-time made ' + OPT.bests.length + ' reports for 2 signals';"
-          "      optSummary();"
-          "      if (!DOC.optsum.textContent || DOC.optsum.textContent.indexOf(loose9[0]) < 0)"
-          "        return 'the summary does not name the signal';"
-          "      OPT.sig = new Set(); OPT.mode = 'all';"
-          "      var r8 = optRunSync(6);"
-          "      if (!r8 || OPT.bests.length !== 1) return 'the default run lost its report';"
-          "    }"
-          "  }"
-          "  if (JSON.stringify(collectState()) !== beforeOpt)"
-          "    return 'the extra optimizer runs did not restore the page';"
+          "  if (!RV.hat) return 'three clicks did not put the hat on';"
+          "  if (roverFrame(0.3, false, true).indexOf('_____') < 0)"
+          "    return 'the hat frame draws no crown';"
+          "  if (roverFrame(0.3, false, false).indexOf('_') >= 0)"
+          "    return 'a bare head still shows hat glyphs';"
           "  DOC.bname.onclick(); DOC.bname.onclick(); DOC.bname.onclick();"
-          "  if (!DOC.optpanel.hidden) return 'three more clicks did not hide it again';"
-          "  OZ = o1.points + 'pts';"
+          "  if (RV.hat) return 'three more clicks did not take the hat off';"
+          "  if (JSON.stringify(collectState()) !== beforeHat)"
+          "    return 'the hat leaked into the page state';"
+          "  HAT = 'ok';"
           "}"
           # titles are editable in place; the edit is plot state, a zoom is not an edit,
           # and the CMS row is not a title anyone may retype here
@@ -1287,7 +1237,7 @@ def run(html: str, rowver: str | None = None, probe: str = "") -> str:
           "\nvar RVR = 'skipped';"
           "\nif (typeof roverFrame === 'function'){"
           "  var f0 = roverFrame(0, false);"
-          "  if (f0.split('\\n').length !== 13) return 'rover is the wrong height';"
+          "  if (f0.split('\\n').length !== 16) return 'rover is the wrong height';"
           "  if (f0.indexOf('\\u2022') < 0) return 'rover has no eyes at rest';"
           "  if (roverFrame(0, true).indexOf('\\u2022') >= 0) return 'rover did not blink';"
           "  if (roverFrame(0.9, false) === f0) return 'rover does not turn';"
@@ -1546,7 +1496,7 @@ def run(html: str, rowver: str | None = None, probe: str = "") -> str:
           "    var sw9 = 0, sn9 = 0;"
           "    for (var r9 = 0; r9 < META.n; r9++)"
           "      if (MASK[r9] && want9[D.__ds[r9]]){"
-          "        sw9 += (wtd9 ? D.weight[r9]*LUMI() : 1); sn9++; }"
+          "        sw9 += (wtd9 ? D.__w[r9]*LUMI() : 1); sn9++; }"
           "    var a9 = TBLY.acc[ts9[0]];"
           "    if (!a9 || Math.abs(a9.w - sw9) > 1e-9*(1 + Math.abs(sw9)) || a9.n !== sn9)"
           "      return 'the cell yield disagrees with a straight loop: '"
@@ -1766,7 +1716,7 @@ def run(html: str, rowver: str | None = None, probe: str = "") -> str:
           "       ' roundtrip=ok groups=' + groupNames().length + ' partial=' + PARTIAL +"
           "       ' move=' + MOVE + ' newgroup=' + NEWG +"
           "       ' cutflow=' + cf.steps.length + 'steps' + ' reorder=' + CO + ' 3d=' + D3 +"
-          "       ' colour=' + COL + ' cutsec=' + SEC + ' edits=' + ED + ' bar=' + BAR + ' opt=' + OZ +"
+          "       ' colour=' + COL + ' cutsec=' + SEC + ' edits=' + ED + ' bar=' + BAR + ' hat=' + HAT +"
           "       ' pull=' + PULL + ' pullrange=' + PR + ' shape=' + NORM + ' everything=' + EV.length + 'files' +"
           "       ' panels=' + PAN + ' tabs=' + TB + ' draw=' + DR + ' builder=' + BS +"
           "       ' drawer=' + DW + ' rover=' + RVR + ' locks=' + LK + ' table=' + TM +"
@@ -1943,6 +1893,70 @@ BGRID_PROBE = (
     "  srcs:pm9.srcs, cats:hm9.cats, win:win9, top:top9, lit:lit9});"
 )
 
+#: the significance readout (0.29.0): rgnSigCalc is pure and consumes the SAME
+#: flattened snapshot the json button exports (rgnFlat), so pinning its numbers pins
+#: the whole snapshot -> algorithm path. z1 = the exact no-syst Asimov discovery Z,
+#: z2 = one lnN 1.5 per background process profiled by coordinate Newton; the pins
+#: were computed independently in numpy/scipy (2026-08-20) and are compared at 1e-9.
+SIG_PROBE = (
+    "\nvar gz9 = -1;"
+    "\nfor (var iz9 = 0; iz9 < TABS.length; iz9++)"
+    "  if (TABS[iz9].st && TABS[iz9].st.regions) gz9 = iz9;"
+    "\nif (gz9 < 0) return 'the file no longer carries a region map tab';"
+    "\nswitchTab(gz9);"
+    "\nif (!RGN) return 'the map tab did not come up as a region map';"
+    "\ntry { drawAll(); } catch(e){ return 'the map THREW: ' + e.message; }"
+    "\nvar sm9 = rgnSigModel();"
+    "\nif (!sm9) return 'no significance model';"
+    "\nvar sp9 = sm9.points.map(function(p){ return {name:p.name,"
+    "  z1:+p.z1.toPrecision(12), z2:(p.z2 == null ? null : +p.z2.toPrecision(12)),"
+    "  dropped:p.dropped, thin:p.thin}; });"
+    "\nvar sh9 = 'skipped';"
+    "\ntry { sh9 = typeof rgnSigHtml() === 'string' ? 'ok' : 'not a string'; }"
+    " catch(e){ sh9 = 'THREW: ' + e.message; }"
+    "\nreturn 'SIG OK ' + JSON.stringify({bins:sm9.bins, bkgs:sm9.bkgs,"
+    "  points:sp9, html:sh9});"
+)
+
+#: the data-less .rvr (0.28.0): no boot — the file has no columns to boot on. The page's
+#: pure remoteSpecCheck reads the summary out of META, and must also still REFUSE a
+#: spec whose branches are gone. The network path is deliberately unpinned: no helper
+#: runs in the battery; this pins the FORMAT and the detector.
+REMOTE_PROBE = (
+    "\nvar out9;"
+    "\ntry { out9 = remoteSpecCheck(META); }"
+    " catch(e){ return 'remoteSpecCheck THREW: ' + e.message; }"
+    "\nvar bad9 = JSON.parse(JSON.stringify(META));"
+    "\ndelete bad9.remote.branches;"
+    "\nvar refuse9 = 'no';"
+    "\ntry { remoteSpecCheck(bad9); } catch(e){ refuse9 = 'yes'; }"
+    "\nreturn 'REMOTE OK ' + JSON.stringify({sum: out9, refuses: refuse9});"
+)
+
+
+def run_remote(html: str, rvr: str) -> tuple[str, dict, int]:
+    """The stub with META set from a data-less file and ONLY the remote probe — the
+    normal boot cannot run on a file that deliberately carries no columns."""
+    h = pathlib.Path(html).read_text()
+    ids = sorted(set(re.findall(r'id="([A-Za-z_][\w-]*)"', h)))
+    src = re.findall(r"<script>(.*?)</script>", h, re.S)[-1]
+    blob = gzip.decompress(pathlib.Path(rvr).read_bytes())
+    length = int.from_bytes(blob[:4], "little")
+    meta = json.loads(blob[4:4 + length])
+    body = len(blob) - 4 - length
+    cut = src.rindex("(async function()")
+    js = ("(function(){\nvar IDS = " + json.dumps(ids) + ";\nvar OPENIDS = [];\n"
+          + STUB + src[:cut]
+          + "\nMETA = " + json.dumps(meta) + ";"
+          + REMOTE_PROBE + "\n})();")
+    p = "/tmp/smoke_remote.js"
+    pathlib.Path(p).write_text(js)
+    import subprocess
+    r = subprocess.run(["osascript", "-l", "JavaScript", p],
+                       capture_output=True, text=True)
+    return (r.stdout or r.stderr).strip(), meta, body
+
+
 #: The frozen files and exactly what the version that wrote them read out. The sha means
 #: the bytes may never change; the counts mean a future page must still READ them
 #: identically — exact integers, the only comparison that catches a silent misread.
@@ -2085,6 +2099,36 @@ GOLDEN = {
             "top": "background:rgba(213,94,0,0.520)",
             "lit": "background:#e4a677",
         },
+        #: the significance readout (0.29.0), pinned on the SAME frozen bytes: with the
+        #: stored cats override the map has ONE background (ZZ) and two signal points.
+        #: The chan-2e2mu leaf carries s>0 over b=0, so each point drops exactly one
+        #: bin (never silently — the count is part of the answer); the 2e2mu point's
+        #: whole s sits in that dropped bin, so its Z is exactly 0. `signal`'s numbers
+        #: were computed independently in numpy (closed form) and scipy+Newton
+        #: (profiled lnN 1.5 on ZZ), Newton-vs-scipy agreement 3e-12.
+        "sigz": {
+            "bins": 9, "bkgs": ["ZZ"],
+            "points": [
+                {"name": "MC · ZZ→2e2mu", "z1": 0.0, "z2": 0.0,
+                 "dropped": 1, "thin": 0},
+                {"name": "signal", "z1": 0.420639345625448,
+                 "z2": 0.392661196950171, "dropped": 1, "thin": 1},
+            ],
+        },
+    },
+    #: 0.28.0's data-less remote file: rowver stays 4, the buffer is EMPTY, and the one
+    #: optional `remote` key carries the whole study identity. Pins the format (empty
+    #: body, n=0), the detector's summary (both fileset shapes: verbatim files and a
+    #: named dataset), and that a branchless spec is refused. Checked by its own
+    #: dataless branch below — a file with no columns cannot take the boot pipeline.
+    "golden_0.28.0_dataless.rvr": {
+        "sha256": "ab05626e2b06bf2482665818c6016de6f56b5484fefc09b691e1191cbe016ecc",
+        "dataless": {
+            "rowver": 4, "made_by": "0.28.0", "n": 0, "bytes": 0, "datasets": 2,
+            "sum": {"datasets": 2, "files": 1, "columns": 3, "cut": "M4L >= 70",
+                    "port": 8271, "start": "python remote/helper.py"},
+            "refuses": "yes",
+        },
     },
     #: the reason v4 exists — no weights column at all. Every pinned number here is an
     #: integer the page reaches without ever touching a weight.
@@ -2162,6 +2206,24 @@ def golden() -> str:
         sha = hashlib.sha256(f.read_bytes()).hexdigest()
         if sha != want["sha256"]:
             return f"{name}: bytes CHANGED (sha {sha[:12]}…) — frozen means frozen"
+        if "dataless" in want:
+            # its own lane: a file with no columns cannot take the boot pipeline
+            pin = want["dataless"]
+            t, meta, body = run_remote(str(here / "viewer.html"), str(f))
+            if not t.startswith("REMOTE OK "):
+                return f"{name}: the remote detector — {t}"
+            said = json.loads(t[len("REMOTE OK "):])
+            got = {"rowver": meta.get("rowver"), "made_by": meta.get("made_by"),
+                   "n": meta.get("n"), "bytes": meta.get("bytes"),
+                   "datasets": len(meta.get("datasets") or []),
+                   "sum": said["sum"], "refuses": said["refuses"]}
+            if body != 0:
+                return f"{name}: a data-less file carries {body} B of buffer"
+            bad = {k: f"{got[k]!r} != {pin[k]!r}" for k in pin if got.get(k) != pin[k]}
+            if bad:
+                return f"{name}: dataless pins moved: {bad}"
+            out.append(f"{name} ok — data-less, remote summary + refusal pinned")
+            continue
         blob = gzip.decompress(f.read_bytes())
         meta = json.loads(blob[4:4 + int.from_bytes(blob[:4], "little")])
         got = {"rowver": meta.get("rowver"), "n": meta.get("n"),
@@ -2282,6 +2344,32 @@ def golden() -> str:
                 if not ok:
                     return f"{name}: heat window {k} is {got_w!r}, pinned {v!r}"
             note += ", bubble grid cells + heat model pinned"
+        if "sigz" in want:
+            t = run(str(here / "viewer.html"), str(f), probe=SIG_PROBE)
+            if not t.startswith("SIG OK "):
+                return f"{name}: the significance readout — {t}"
+            said = json.loads(t[len("SIG OK "):])
+            pin = want["sigz"]
+            if said["bins"] != pin["bins"] or said["bkgs"] != pin["bkgs"]:
+                return (f"{name}: significance sees bins={said['bins']} "
+                        f"bkgs={said['bkgs']}, pinned {pin['bins']}/{pin['bkgs']}")
+            if said["html"] != "ok":
+                return f"{name}: the readout html {said['html']}"
+            if len(said["points"]) != len(pin["points"]):
+                return (f"{name}: {len(said['points'])} signal points against "
+                        f"{len(pin['points'])} pinned")
+            for got_p, want_p in zip(said["points"], pin["points"]):
+                for k in ("name", "dropped", "thin"):
+                    if got_p[k] != want_p[k]:
+                        return (f"{name}: significance {k} is {got_p[k]!r}, "
+                                f"pinned {want_p[k]!r} for {want_p['name']!r}")
+                for k in ("z1", "z2"):
+                    a, b = got_p[k], want_p[k]
+                    if (a is None) != (b is None) or (
+                            a is not None and abs(a - b) > 1e-9):
+                        return (f"{name}: significance {k} is {a!r}, pinned {b!r} "
+                                f"for {want_p['name']!r} — beyond 1e-9")
+            note += ", significance z1/z2 + edge counts pinned"
         if "yields_dump" in want:
             import yields
             spec = want["yields_dump"]
