@@ -62,12 +62,48 @@ frozen copy of it. (0.18.0 briefly gave it its own `pre` selection; a file carry
 still opens, the key is simply ignored.)
 
     at      int                 which block of the tab's stack the map is, like `table`
-    view    "stack" | "ledger"  how a camp shows its samples
+    view    str                 legacy (pre-0.23.0 files say "stack"/"ledger"/"bubble").
+                                Bubbles are the only view since 0.23.0: the key is
+                                accepted and ignored, the file opens drawn as bubbles.
+                                New maps write "bubble".
     sig     str                 the group that is S; bkg [str] is what B sums
     srcs    [str] | absent      the sources the map counts. An EMPTY list is a map nobody
                                 has filled yet; ABSENT means every source the page offers,
                                 so a file written before the tray reopens as it was
     root    node | null         null is one unsplit bar — the map before any cut
+    pages   {on, inner, raw, heat, cats} | absent
+                                optional: table mode — the map's regions as PAGES of
+                                yields tables (one row per region, one column per
+                                process, cells [raw, yield, MC-stat err] from the same
+                                arrays the bubbles and the json export read). Bins are
+                                ordered as one nested loop over the map's variables;
+                                `inner` names the row (fastest) one — an explicit pick
+                                that always wins; ABSENT, the page computes the
+                                cleanest choice at open (fewest split sweeps, then
+                                fewest sweeps, then fewest pages; tree order breaks
+                                ties) — the default is derived, never baked in. A page
+                                break may only fall where a row sweep completes.
+                                `raw` shows the raw count under each yield (absent =
+                                off; off, it survives as the cell's hover title).
+                                `heat` (absent = off) tints each cell by its yield,
+                                ranked WITHIN its column's category — blue for signal
+                                columns, red for background, each gradient normalized
+                                within itself (log10, global across all pages, floored
+                                4 decades under the category max). `cats` maps a
+                                process name to "sig"|"bkg" and holds only DEVIATIONS
+                                from the map's own default (a source in `bkg` is red,
+                                everything else blue); absent = no overrides.
+                                Absent = off: a file written before opens unchanged.
+    bgrid   {x, y} | absent     optional: the bubble grid. `x` (and optionally `y`)
+                                name map variables — the same chained list the table's
+                                row picker offers — and the canvas is cut into labeled
+                                equal-sized cells (x across, y down), every live bubble
+                                landing in the one cell whose windows its cuts satisfy.
+                                Layout only: counts, yields and the partition are
+                                untouched, and one radius scale is shared by every
+                                circle so area stays the yield across the whole map.
+                                Absent = the packed cloud; a stale name falls back to
+                                the cloud rather than guessing.
     grid    {vars, exhaustive} | absent
                                 optional: the DECLARATION a partition was built from, and
                                 a recipe only — `root` is what the map draws. The two are
@@ -111,7 +147,7 @@ from plotly.offline import get_plotlyjs
 
 TEMPLATE: Path = Path(__file__).with_name("page_template.html")
 PAGES: Path = Path(__file__).with_name("pages")
-VERSION: str = "0.22.1"   # the tool, shown on every page it builds; bump when the page changes
+VERSION: str = "0.27.0"   # the tool, shown on every page it builds; bump when the page changes
 ROWVER: int = 4           # .rvr format version, which moves separately
 READS: tuple = (4,)       # v2 and v3 are gone: their weights were undeclared
 MAX_MB: int = 40

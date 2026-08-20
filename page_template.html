@@ -303,13 +303,6 @@ label.event{display:flex;align-items:center;gap:6px;font-family:var(--mono);font
 /* a control the FILE cannot support: present, visibly dead, explaining itself on hover */
 .grp.inert{opacity:.42}
 .grp.inert button,.grp.inert input{pointer-events:none}
-.disclaim{position:fixed;left:20px;top:50%;transform:translateY(-50%);max-width:290px;
-  border-left:3px solid var(--warn);padding:2px 0 2px 13px;color:var(--warn);
-  font:13px/1.55 var(--sans);text-align:left}
-.disclaim b{display:block;margin-bottom:6px;letter-spacing:.01em}
-.disclaim .sig{display:block;margin-top:9px;font-style:italic;opacity:.85}
-@media (max-width:1100px){.disclaim{position:static;transform:none;margin:22px auto 0;
-  max-width:520px}}
 .schema{border-top:3px solid var(--ink);margin-top:34px;padding-top:12px}
 .schead{font-family:var(--mono);font-size:calc(10px * var(--ts));letter-spacing:.16em;text-transform:uppercase;
   color:var(--ink-3);margin:0 0 9px}
@@ -770,6 +763,27 @@ canvas#rgncanvas:not(.empty):hover{outline:3px solid var(--signal);outline-offse
   border-bottom:1px solid var(--rule-2);min-height:38px}
 .rgntray.over{background:var(--hero-bg);outline:2px dashed var(--signal);outline-offset:-3px}
 canvas#rgncanvas.over{outline:3px dashed var(--signal);outline-offset:-4px}
+/* table mode: pages of yields tables */
+#rgnpages{padding:6px 2px 10px;overflow-x:auto}
+#rgnpages .rgnpgbar{display:flex;align-items:center;gap:8px;margin:2px 0 8px;
+  font:12px var(--mono);color:var(--ink-2)}
+#rgnpages .rgnpage{display:none}
+#rgnpages .rgnpage.on{display:block}
+#rgnpages .rgncap{font:600 12.5px var(--mono);color:var(--ink);margin:14px 0 7px}
+/* rows breathe: separate borders with a vertical gap, so no two rows ever touch */
+#rgnpages table{border-collapse:separate;border-spacing:0 8px;font:12px var(--mono);
+  min-width:60%;margin:0 0 18px}
+#rgnpages th,#rgnpages td{border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  padding:8px 13px;text-align:right;white-space:nowrap}
+#rgnpages th:first-child,#rgnpages td:first-child{border-left:1px solid var(--rule);
+  text-align:left}
+#rgnpages th:last-child,#rgnpages td:last-child{border-right:1px solid var(--rule)}
+#rgnpages th{background:var(--sunk);color:var(--ink-2);font-weight:600}
+/* the corner cell over the row labels is a PAD, not a header: no fill, no visible border,
+   so the sample-name rectangle starts flush at the first sample column instead of leaving
+   a blank where the kinematic title sat until 0.25.0 (Derek 2026-08-20) */
+#rgnpages th.pad{background:transparent;border-color:transparent}
+#rgnpages td .raw{display:block;color:var(--ink-3);font-size:10.5px;margin-top:2px}
 .rgnchip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);
   font-size:calc(11.5px * var(--ts));background:var(--sunk);border:1px solid var(--rule);
   border-radius:2px;padding:2px 3px 2px 8px}
@@ -868,18 +882,6 @@ pre.rgndoc{background:var(--panel);border:1px solid var(--rule);border-radius:7p
     <p class="hint">Don't have a .rvr file of your data? Generate one here:
       <a href="https://gitlab.cern.ch/dgrove/rowver" target="_blank"
          rel="noopener">gitlab.cern.ch/dgrove/rowver</a></p>
-    <div class="disclaim">
-      <b>A note on .rvr compatibility</b>
-      Sorry — I made a kind of "foundational error" in my original design: I forgot to
-      consider unweighted events (real data, or anyone who simply has no event weights and
-      doesn't care to use them). I've made a small change that handles both cases, files
-      with and without weights.
-      The catch: .rvr files written by this new version will not open in older copies of
-      the page. This page reads everything, old and new — but if you are using a page I
-      sent you earlier, just ask me for an updated one and I'll give it to you right away.
-      Thanks!
-      <span class="sig">— Derek</span>
-    </div>
     <p class="hint" id="demorow">see a demo, CMS open data:
       <button class="tbtn hero" id="demo">the dimuon spectrum</button>
       <span id="demonote" hidden>— back soon</span></p>
@@ -7405,7 +7407,7 @@ function rgnDefault(){
   // opens as ONE unsplit bar — root null. There is no map to enter, only a bar that
   // grows into one as you cut it.
   const gs = groupNames();
-  return {at:0, view:"stack", sig:(gs.includes(S.fomn) ? S.fomn : gs[0]) || null,
+  return {at:0, view:"bubble", sig:(gs.includes(S.fomn) ? S.fomn : gs[0]) || null,
           bkg:(gs.includes(S.fomd) ? [S.fomd] : gs.slice(1)), srcs:[],
           pre:{cuts:{}, chips:{}, lumi:LUMI()}, root:null};
 }
@@ -7678,77 +7680,6 @@ function rgnDim(n){
   return rgnFloorMode() === "all" ? thin.every(Boolean) : thin.some(Boolean);
 }
 
-/* ---------- layout ---------- */
-
-//: the gutter shrinks with depth and the header with it, so the eye reads pieces inside a
-//: camp without any extra chrome. Both are capped by the node's own size below.
-//: a slice thinner than this in world units reads as a line rather than a block, and is
-//: lifted into the depleted strip instead of being drawn to scale
-const RGN_THIN = 8, RGN_STRIP = 30;
-const RGN_GAP  = [22, 12, 7, 4, 3, 2];
-const RGN_HEAD = [28, 21, 16, 13, 11, 10];
-
-function rgnLayout(node, x, y, w, h, d, horiz){
-  // Area is yield at every depth: within one camp a child's share of the AREA is exactly
-  // its share of the YIELD, because the gutter and the header come out of the space being
-  // shared before the share is worked out. Both are capped by the node's own size — a
-  // constant header is larger than the node itself a few levels down, which drives every
-  // child to zero area and destroys the invariant while the detail rule hides the damage.
-  node.rect = {x, y, w, h, d};
-  node.head = 0; node.gap = 0;
-  const live = node.kids.filter(k => rgnY(k) > 0);
-  if (!node.kids.length){ return; }
-  const dd = Math.min(d, RGN_GAP.length - 1);
-  const kn = Math.max(1, live.length);
-  let gap = Math.min(RGN_GAP[dd], w * .05, h * .05);
-  const head = Math.min(RGN_HEAD[dd], h * .22);
-  gap = Math.max(0, Math.min(gap, (horiz ? w - gap : h - head) / (2 * kn)));
-  node.head = head; node.gap = gap;
-  const ix = x + gap * .5, iy = y + head;
-  const iw = Math.max(0, w - gap), ih = Math.max(0, h - head - gap * .5);
-  const total = live.reduce((a, k) => a + rgnY(k), 0) || 1;
-  const span0 = (horiz ? iw : ih) - gap * (kn - 1);
-  // A region whose slice would be a few pixels thick reads as a line, not a block. Those
-  // are lifted OUT of the sharing into a strip at the end of the camp and listed by name,
-  // so the ones you can actually read keep their proportions. The price is stated plainly:
-  // a depleted region's rectangle is NOT its yield any more, which is why they are drawn
-  // apart, labelled, and left out of the area check rather than quietly rescaled.
-  const thin = Math.min(RGN_THIN, span0 * .06);
-  node.kids.forEach(k => { k.thin = false; });
-  let drawn = live.filter(k => span0 * rgnY(k) / total >= thin);
-  let sunk = live.filter(k => drawn.indexOf(k) < 0);
-  if (!drawn.length){ drawn = live; sunk = []; }      // all equally small: none is special
-  sunk.forEach(k => { k.thin = true; });
-  const strip = sunk.length ? Math.min(RGN_STRIP, span0 * .28) : 0;
-  const span = Math.max(1, span0 - (strip ? strip + gap : 0));
-  const share = drawn.reduce((a, k) => a + rgnY(k), 0) || 1;
-  node.strip = strip; node.stripHoriz = horiz;
-  let off = 0;
-  for (const k of node.kids){
-    const kh = (k.kids.length && k.col === node.col) ? horiz : !horiz;
-    if (rgnY(k) <= 0 || k.thin){ continue; }
-    const len = span * rgnY(k) / share;
-    if (horiz) rgnLayout(k, ix + off, iy, len, ih, d + 1, kh);
-    else       rgnLayout(k, ix, iy + off, iw, len, d + 1, kh);
-    off += len + gap;
-  }
-  // the depleted strip: equal slots, because their sizes are no longer their yields
-  if (strip){
-    let soff = off + (off ? gap : 0);
-    const each = strip / sunk.length;
-    sunk.forEach(k => {
-      if (horiz) rgnLayout(k, ix + soff, iy, each, ih, d + 1, !horiz);
-      else       rgnLayout(k, ix, iy + soff, iw, each, d + 1, !horiz);
-      soff += each;
-    });
-  }
-  node.kids.forEach(k => {
-    if (rgnY(k) > 0) return;
-    k.rect = {x:ix, y:iy, w:0, h:0, d:d + 1}; k.head = 0; k.gap = 0; k.thin = false;
-    rgnLayout(k, ix, iy, 0, 0, d + 1, horiz);
-  });
-}
-
 /* ---------- bubbles: one circle per region, area = yield, globally ---------- */
 
 //: The nested map is proportional WITHIN a camp — across camps the chrome and the depleted
@@ -7984,6 +7915,176 @@ function rgnAxisBands(v){
   return out.concat(["≥ " + fmt(e[e.length - 1])]);
 }
 
+function rgnWinIndex(){
+  // The map's own variables and their windows, derived from the leaf cuts — ONE
+  // derivation shared by the table's row picker and the bubble grid, so both offer
+  // exactly the same variable list and agree about which window a leaf sits in.
+  if (!RGNT || !RGN) return null;
+  const leaves = [];
+  (function rec(n){ if (!n.kids.length){ leaves.push(n); return; } n.kids.forEach(rec); })(RGNT);
+  if (!leaves.length) return null;
+  const infos = leaves.map(n => ({n, cuts: rgnCutsOf(n)}));
+  const vars = [];
+  infos.forEach(i => i.cuts.forEach(c => { if (!vars.includes(c.col)) vars.push(c.col); }));
+  if (!vars.length) return null;
+
+  const winKey = c => c.vals ? "v:" + c.vals.join(",") : "r:" + c.lo + ":" + c.hi;
+  const winPos = c => {
+    if (!c.vals) return c.lo == null ? -Infinity : c.lo;
+    const col = rgnColByName(c.col), all = (col && col.vals) || [];
+    return Math.min.apply(null, c.vals.map(v => {
+      const i = all.indexOf(v); return i < 0 ? 1e9 : i; }));
+  };
+  const idx = {}, labels = {};   // per column: window -> its position, and a label per position
+  vars.forEach(col => {
+    const seen = new Map();
+    infos.forEach(i => {
+      const c = i.cuts.find(x => x.col === col);
+      if (c && !seen.has(winKey(c))) seen.set(winKey(c), [winPos(c), c]);
+    });
+    idx[col] = {};
+    labels[col] = [];
+    [...seen.entries()].sort((a, b) => a[1][0] - b[1][0])
+                       .forEach(([k, v], j) => { idx[col][k] = j;
+                                                 labels[col].push(rgnCutText(v[1])); });
+  });
+  const keyOf = (i, col) => {
+    const c = i.cuts.find(x => x.col === col);
+    return c ? idx[col][winKey(c)] : 1e9;      // a leaf without the column sorts last
+  };
+  return {infos, vars, keyOf, labels};
+}
+
+//: `bgrid` rides INSIDE the regions state, optional: {x, y} naming map variables — the
+//: SAME chained list the table's row picker offers. Absent = off (the packed cloud), so
+//: every older file opens unchanged; a name gone stale (a re-skim, a re-cut map) falls
+//: back to off rather than guessing.
+function rgnBgrid(wi){
+  const g = RGN && RGN.bgrid;
+  if (!g || !g.x || !wi || !wi.vars.includes(g.x)) return null;
+  return {x: g.x, y: (g.y && g.y !== g.x && wi.vars.includes(g.y)) ? g.y : null};
+}
+
+function rgnBgridLayout(root, W, H){
+  // Derek's bubble grid (2026-08-20): the free cloud is honest but unreadable past a
+  // hundred regions, so the same variable choice the table rows got cuts the CANVAS
+  // into labeled cells — one variable = labeled bands across, two = rows x columns —
+  // and every live bubble lands in the ONE cell whose windows its own cuts satisfy
+  // (exactly one by construction: a leaf holds one window per variable). LAYOUT ONLY:
+  // counts, yields, the pens and the region model itself are untouched. Cells are
+  // EQUAL-SIZED on purpose: a bubble's area already says the yield, so a yield-sized
+  // cell would encode it twice and crush exactly the thin cells worth reading. One
+  // radius scale is shared by every circle — the fullest cell dictates it — so area
+  // stays the yield across the whole map, the invariant this view exists for.
+  const wi = rgnWinIndex();
+  const g = rgnBgrid(wi);
+  if (!g) return null;
+  const leaves = rgnBubbleOrder(root);
+  const empty = leaves.filter(n => rgnY(n) <= 0);
+  const under = leaves.filter(n => rgnY(n) > 0 && rgnDim(n));
+  const live = leaves.filter(n => rgnY(n) > 0 && !rgnDim(n));
+  leaves.forEach(n => { n.bub = null; });
+  if (!live.length) return null;
+  const info = new Map(wi.infos.map(i => [i.n, i]));
+
+  // an axis: the windows the LIVE leaves occupy, in window order; leaves without the
+  // column share one trailing band, labeled the way the table rows would label it
+  const axis = col => {
+    const keys = [...new Set(live.map(n => wi.keyOf(info.get(n), col)))].sort((a, b) => a - b);
+    return {at: new Map(keys.map((k, i) => [k, i])),
+            labels: keys.map(k => k < 1e9 ? wi.labels[col][k] : `any ${col}`)};
+  };
+  const ax = axis(g.x), ay = g.y ? axis(g.y) : null;
+  const ncol = ax.at.size, nrow = ay ? ay.at.size : 1;
+  const cellOf = n => {
+    const i = info.get(n);
+    return (ay ? ay.at.get(wi.keyOf(i, g.y)) : 0) * ncol + ax.at.get(wi.keyOf(i, g.x));
+  };
+
+  // geometry: the margins the declared-axes layout uses, so the two grids look alike
+  const PADT = 26;
+  const rp = rgnPenPlan(empty, H, "right"), lp = rgnPenPlan(under, H, "left");
+  const shelfW = Math.min(W * .3, rp.w), penW = Math.min(W * .3, lp.w);
+  const PADL = 96 + (penW ? penW + 18 : 0);
+  const gw = Math.max(60, W - shelfW - (shelfW ? 18 : 0) - PADL);
+  const gh = Math.max(60, H - PADT);
+  const cw = gw / ncol, ch = gh / nrow;
+
+  // each cell's bubbles packed as their own little cloud — the free layout's spiral, in
+  // tree order, at radii pre-scaled so the spiral's absolute gaps stay small against
+  // the circles — then ONE fit scale k across all cells
+  const total = live.reduce((a, n) => a + rgnY(n), 0) || 1;
+  const rmax = live.reduce((a, n) => Math.max(a, rgnRadius(rgnY(n), total)), 0) || 1;
+  const S = 100 / rmax;
+  const cells = new Map();
+  live.forEach(n => {
+    const key = cellOf(n);
+    if (!cells.has(key)) cells.set(key, []);
+    cells.get(key).push(n);
+  });
+  let k = Infinity;
+  const packs = new Map();
+  cells.forEach((ns, key) => {
+    const placed = [];
+    const fits = (x, y, r) => {
+      for (const q of placed){
+        const dx = x - q.x, dy = y - q.y, rr = r + q.r + 1.5;
+        if (dx * dx + dy * dy < rr * rr) return false;
+      }
+      return true;
+    };
+    const pos = new Map();
+    ns.forEach(n => {
+      const r = Math.max(1e-6, rgnRadius(rgnY(n), total) * S);
+      let cloud = 0;
+      for (const q of placed) cloud = Math.max(cloud, Math.sqrt(q.x * q.x + q.y * q.y) + q.r);
+      const reach = cloud + 2 * r + 6, K = 4000;
+      const step = Math.max(1.2, r * .35, reach / Math.sqrt(K));
+      let put = null;
+      for (let t = 0; t < K && !put; t++){
+        const a = t * 2.39996323, rad = step * Math.sqrt(t);
+        const x = rad * Math.cos(a), y = rad * Math.sin(a);
+        if (fits(x, y, r)) put = {x:x, y:y, r:r};
+      }
+      if (!put) put = {x:cloud + 2 * r + 6, y:0, r:r};   // clear of everything, never the middle
+      placed.push(put);
+      pos.set(n, put);
+    });
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    pos.forEach(p => {
+      x0 = Math.min(x0, p.x - p.r); x1 = Math.max(x1, p.x + p.r);
+      y0 = Math.min(y0, p.y - p.r); y1 = Math.max(y1, p.y + p.r);
+    });
+    const pk = {pos:pos, cx:(x0 + x1) / 2, cy:(y0 + y1) / 2,
+                w:Math.max(1e-6, x1 - x0), h:Math.max(1e-6, y1 - y0)};
+    packs.set(key, pk);
+    k = Math.min(k, (cw * .86) / pk.w, (ch * .86) / pk.h);
+  });
+  if (!isFinite(k) || k <= 0) k = 1;
+
+  cells.forEach((ns, key) => {
+    const p = packs.get(key);
+    const ox = PADL + ((key % ncol) + .5) * cw;
+    const oy = PADT + (Math.floor(key / ncol) + .5) * ch;
+    ns.forEach(n => {
+      const q = p.pos.get(n);
+      n.bub = {x:ox + (q.x - p.cx) * k, y:oy + (q.y - p.cy) * k,
+               r:Math.max(RGN_MINR, q.r * k), ghost:false, shelf:false};
+    });
+  });
+
+  RGNSHELF = empty.length ? {side:"right", w:shelfW, n:empty.length, plan:rp,
+                             label:`${empty.length} empty`} : null;
+  RGNPEN = under.length ? {side:"left", w:penW, n:under.length, plan:lp,
+                           label:`${under.length} under the floor`} : null;
+  if (empty.length) rgnPenPlace(empty, "right", rp, true);
+  if (under.length) rgnPenPlace(under, "left", lp, false);
+  RGNAXES = {x0:PADL, y0:PADT, cw:cw, ch:ch, ncol:ncol, nrow:nrow, gh:gh, lane:0,
+             cols:ax.labels, rows:ay ? ay.labels : [""],
+             xname:g.x, yname:g.y || "", dropped:0, inner:""};
+  return rgnBubbleRects(root);
+}
+
 function rgnBubbleLayout(root, W, H){
   // Radius from the yield: r = sqrt(y / total) * R, so pi*r^2 is exactly proportional to y.
   // Placement is a deterministic outward spiral in tree order — no randomness, so the same
@@ -7991,6 +8092,10 @@ function rgnBubbleLayout(root, W, H){
   // The free cloud is the default — circles packed until they touch. The declared grid is
   // a choice, and only offered when the partition actually came from a dict.
   RGNAXES = null;
+  // the bubble grid is an explicit per-map choice, so it outranks the declared-axes
+  // toggle; absent or stale, everything below is exactly as before
+  const bg = rgnBgridLayout(root, W, H);
+  if (bg) return bg;
   if (RGN && RGN.axes && RGN.grid && rgnGridVars().length && rgnGridFresh() === true){
     const got = rgnAxesLayout(root, W, H);
     if (got) return got;
@@ -8233,9 +8338,6 @@ function rgnFitAll(){
     if (b && b.r > 0 && !b.pin){
       x0 = Math.min(x0, b.x - b.r); x1 = Math.max(x1, b.x + b.r);
       y0 = Math.min(y0, b.y - b.r); y1 = Math.max(y1, b.y + b.r);
-    } else if (!rgnIsBubble() && n.rect && n.rect.w > 0){
-      x0 = Math.min(x0, n.rect.x); x1 = Math.max(x1, n.rect.x + n.rect.w);
-      y0 = Math.min(y0, n.rect.y); y1 = Math.max(y1, n.rect.y + n.rect.h);
     }
     n.kids.forEach(rec);
   })(RGNT);
@@ -8356,144 +8458,12 @@ function rgnRows(n){
              .filter(r => r.y > 0).sort((a, b) => b.y - a.y);
 }
 
-const rgnOpen = (n, W, H) => n.kids.length > 0 && W > 92 && H > 64;
-
-function rgnFillOf(n, css){
-  return [css.lv1, css.lv2, css.lv3, css.block][Math.min(n.depth, 3)];
-}
-
-function rgnDrawHead(ctx, n, X, Y, W, head, css){
-  if (head < 11 || W < 64) return;
-  const fs = Math.min(12.5, Math.max(9, head * .52));
-  ctx.textBaseline = "middle";
-  ctx.font = `600 ${fs}px ${css.mono}`;
-  const val = rgnCampVal(n), wv = ctx.measureText(val).width;
-  ctx.fillStyle = css.ink3;
-  ctx.fillText(val, X + W - wv - 7, Y + head / 2);
-  ctx.fillStyle = css.ink2;
-  ctx.fillText(rgnClip(ctx, n.name, W - wv - 22), X + 7, Y + head / 2);
-}
-
-function rgnDrawDepleted(ctx, n, X, Y, W, H, css){
-  // drawn apart and hatched, because its size is no longer its yield
-  ctx.fillStyle = css.sunk;
-  ctx.fillRect(X, Y, W, H);
-  ctx.save();
-  ctx.beginPath(); ctx.rect(X, Y, W, H); ctx.clip();
-  ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
-  for (let i = -H; i < W; i += 6){
-    ctx.beginPath(); ctx.moveTo(X + i, Y + H); ctx.lineTo(X + i + H, Y); ctx.stroke();
-  }
-  ctx.restore();
-  ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
-  ctx.strokeRect(X + .5, Y + .5, W - 1, H - 1);
-  const along = W >= H;
-  const label = `depleted · ${rgnClip(ctx, n.name, 1e4)} · ${rgnCampVal(n)}`;
-  ctx.fillStyle = css.ink3;
-  ctx.font = `10.5px ${css.mono}`;
-  if (along && W > 60 && H > 11){
-    ctx.textBaseline = "middle";
-    ctx.fillText(rgnClip(ctx, label, W - 8), X + 4, Y + H / 2);
-  } else if (!along && H > 60 && W > 11){
-    ctx.save();
-    ctx.translate(X + W / 2, Y + H - 4);
-    ctx.rotate(-Math.PI / 2);
-    ctx.textBaseline = "middle";
-    ctx.fillText(rgnClip(ctx, label, H - 8), 0, 0);
-    ctx.restore();
-  }
-}
-
-function rgnDrawLeaf(ctx, n, X, Y, W, H, css){
-  // STACK is the default: the block is subdivided by source, so a source's yield is area
-  // as well as a number, and whatever is too thin to draw is listed above it instead —
-  // nothing is resized, the slivers keep their true area and just also get a number.
-  // LEDGER is the same numbers with no bands, for when composition is not the question.
-  ctx.fillStyle = rgnDim(n) ? css.dim : rgnFillOf(n, css);
-  ctx.fillRect(X, Y, W, H);
-  if (W > 2 && H > 2){
-    ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
-    ctx.strokeRect(X + .5, Y + .5, W - 1, H - 1);
-  }
-  const rows = rgnRows(n), tot = rgnY(n);
-  let cy = Y + 5;
-  ctx.textBaseline = "top";
-  if (W > 84 && H > 20){
-    ctx.font = `600 12px ${css.mono}`;
-    ctx.fillStyle = css.ink;
-    ctx.fillText(rgnClip(ctx, n.name, W - 12), X + 6, cy); cy += 13;
-  }
-  if (W > 84 && H > 34){
-    ctx.font = `600 13px ${css.mono}`;
-    ctx.fillStyle = css.ink;
-    ctx.fillText(rgnClip(ctx, rgnCampVal(n), W - 12), X + 6, cy); cy += 17;
-  }
-  if (tot <= 0 || !rows.length) return;
-  const ledger = RGN.view === "ledger";
-  const room = Math.max(0, Y + H - 5 - cy);
-  const thin = ledger ? rows : rows.filter(r => room * r.y / tot < 3);
-  if (W > 118 && thin.length && room > 14){
-    ctx.font = `11px ${css.mono}`;
-    for (const r of thin){
-      if (cy + 12 > Y + H - 4) break;
-      ctx.fillStyle = r.col;
-      ctx.fillRect(X + 6, cy + 3, 7, 7);
-      ctx.fillStyle = css.ink2;
-      const val = rgnFmt(r.y), wv = ctx.measureText(val).width;
-      ctx.fillText(rgnClip(ctx, r.src, W - wv - 30), X + 18, cy);
-      ctx.fillStyle = css.ink;
-      ctx.fillText(val, X + W - wv - 6, cy);
-      cy += 12;
-    }
-    cy += 2;
-  }
-  if (ledger) return;
-  const bandsH = Math.max(0, Y + H - 5 - cy);
-  if (bandsH < 6 || W < 26) return;
-  let off = 0;
-  for (const r of rows){
-    const bh = bandsH * r.y / tot;
-    ctx.fillStyle = r.col;
-    ctx.globalAlpha = rgnDim(n) ? .35 : .85;
-    ctx.fillRect(X + 4, cy + off, W - 8, Math.max(0.6, bh));
-    ctx.globalAlpha = 1;
-    if (bh > 12 && W > 116){
-      ctx.font = `10.5px ${css.mono}`;
-      ctx.textBaseline = "middle";
-      ctx.fillStyle = rgnInk(r.col);
-      const val = rgnFmt(r.y), wv = ctx.measureText(val).width;
-      ctx.fillText(rgnClip(ctx, r.src, W - wv - 26), X + 9, cy + off + bh / 2);
-      ctx.fillText(val, X + W - wv - 9, cy + off + bh / 2);
-      ctx.textBaseline = "top";
-    }
-    off += bh;
-  }
-}
-
-function rgnDrawNode(ctx, n, css, CW, CH){
-  // a camp opens into its pieces only when there is room on screen for them — a
-  // screen-size rule, not a depth rule, so zooming out gives a landscape not confetti
-  const r = n.rect;
-  if (!r || r.w <= 0 || r.h <= 0) return;
-  const X = (r.x - RGNV.x) * RGNV.k, Y = (r.y - RGNV.y) * RGNV.k;
-  const W = r.w * RGNV.k, H = r.h * RGNV.k;
-  if (X > CW || Y > CH || X + W < 0 || Y + H < 0) return;
-  if (n.thin){ rgnDrawDepleted(ctx, n, X, Y, W, H, css); return; }
-  if (rgnOpen(n, W, H)){
-    ctx.fillStyle = rgnFillOf(n, css);
-    ctx.fillRect(X, Y, W, H);
-    ctx.strokeStyle = css.rule; ctx.lineWidth = 1;
-    ctx.strokeRect(X + .5, Y + .5, W - 1, H - 1);
-    rgnDrawHead(ctx, n, X, Y, W, n.head * RGNV.k, css);
-    n.kids.forEach(k => rgnDrawNode(ctx, k, css, CW, CH));
-    return;
-  }
-  rgnDrawLeaf(ctx, n, X, Y, W, H, css);
-}
-
 /* ---------- drawing the bubbles ---------- */
 
-const rgnIsBubble = () => !!(RGN && RGN.view === "bubble");
+//: Bubbles are THE region-map view (the stack and ledger views were removed 2026-08-19,
+//: Derek's call). A saved `view` of "stack" or "ledger" in an old file is accepted and
+//: ignored — the file opens, drawn as bubbles — exactly the `pre` / `cmton` precedent.
+const rgnIsBubble = () => !!RGN;
 
 function rgnWedges(n){
   // one wedge per source with any yield, biggest first, as angles that sum to a full turn
@@ -8998,18 +8968,7 @@ function rgnZoomable(){
 }
 
 function rgnPickAt(px, py){
-  if (rgnIsBubble()) return rgnPickBubble(px, py);
-  let best = null;
-  (function rec(n){
-    const r = n.rect;
-    if (!r || r.w <= 0) return;
-    const X = (r.x - RGNV.x) * RGNV.k, Y = (r.y - RGNV.y) * RGNV.k;
-    const W = r.w * RGNV.k, H = r.h * RGNV.k;
-    if (px < X || py < Y || px > X + W || py > Y + H) return;
-    best = n;
-    if (rgnOpen(n, W, H)) n.kids.forEach(rec);
-  })(RGNT);
-  return best;
+  return rgnPickBubble(px, py);
 }
 
 function rgnCss(){
@@ -9051,8 +9010,7 @@ function rgnDrawOnly(){
     rgnPanel();
     return;
   }
-  if (rgnIsBubble()) rgnDrawBubbles(ctx, css2, CW, CH);
-  else rgnDrawNode(ctx, RGNT, css2, CW, CH);
+  rgnDrawBubbles(ctx, css2, CW, CH);
   for (const [n, w] of [[RGNH, 1], [RGNF, 2]]){
     if (!n || !n.rect || n.rect.w <= 0) continue;
     const r = n.rect;
@@ -9070,6 +9028,8 @@ function rgnDrawOnly(){
     ctx.setLineDash([]);
   }
   rgnPanel();
+  rgnBgVis();
+  rgnPagesRender();
 }
 
 function rgnDraw(keep){
@@ -9080,8 +9040,7 @@ function rgnDraw(keep){
   RGNW = Math.max(420, (box && box.width) || 1200);
   RGNH0 = Math.max(320, (box && box.height) || 700);
   rgnCount(keep);
-  if (rgnIsBubble()) rgnBubbleLayout(RGNT, RGNW, Math.max(1, RGNH0 - RGN_TOP));
-  else rgnLayout(RGNT, 0, 0, RGNW, Math.max(1, RGNH0 - RGN_TOP), 0, true);
+  rgnBubbleLayout(RGNT, RGNW, Math.max(1, RGNH0 - RGN_TOP));
   if (!RGNV.k || !isFinite(RGNV.k) || RGNV.k <= 0) rgnFitAll();
   RGNF = RGNFS ? rgnFindSlot(RGNFS.obj, RGNFS.key) : null;
   if (!RGNF) RGNFS = null;                 // its camp is gone: forget it rather than hold a ghost
@@ -9151,10 +9110,10 @@ function rgnPanel(){
           `</span>` : ""}` +
         `${bub.floored ? ` · <span class="rgnbad">${bub.floored} too small to draw, held ` +
           `up to a minimum and NOT to scale — zoom in</span>` : ""}`
-      : "") + ` · ` +
-    `<span class="${chk.exact ? "rgnok" : "rgnbad"}">` +
-    `${chk.exact ? "every event in exactly one region, counts exact"
-                 : `SUM RULE BROKEN: ${chk.leafN} of ${chk.rootN}`}</span></p>`;
+      : "") +
+    (chk.exact ? "" :
+      ` · <span class="rgnbad">SUM RULE BROKEN: ${chk.leafN} of ${chk.rootN}</span>`) +
+    `</p>`;
   rgnGridStatus();
   // the table is rebuilt on every paint, so its buttons are rewired with it
   if (box.querySelectorAll){
@@ -9490,10 +9449,9 @@ function rgnGridDraw(){
 }
 
 function rgnOptVis(){
-  // these belong to the bubbles and mean nothing under stack or ledger, so they are not
-  // offered there; the axis picker only matters once the grid layout is actually on
+  // the axis picker only matters once the grid layout is actually on
   const o = $("rgnopt"), a = $("rgnaxpick");
-  if (o) o.hidden = !rgnIsBubble();
+  if (o) o.hidden = false;
   if (a){
     a.hidden = !(rgnIsBubble() && RGN && RGN.axes && rgnGridVars().length);
     if (!a.hidden && a.querySelectorAll){
@@ -9503,6 +9461,29 @@ function rgnOptVis(){
       if (b[1]) b[1].textContent = "y: " + (v[xy[1]] ? v[xy[1]].col : "—");
     }
   }
+}
+
+function rgnBgVis(){
+  // the two grid-by selects follow the map's own variable list; rebuilt only when the
+  // list or the pick changed, so an open dropdown is not yanked shut under the pointer
+  const sx = $("rgnbgx"), sy = $("rgnbgy");
+  if (!sx || !sy) return;
+  const wi = RGNT ? rgnWinIndex() : null;
+  const vars = (wi && wi.vars) || [];
+  const g = rgnBgrid(wi) || {x:"", y:null};
+  const sig = JSON.stringify([vars, g.x, g.y]);
+  if (sx.dataset && sx.dataset.sig === sig) return;
+  if (sx.dataset) sx.dataset.sig = sig;
+  sx.innerHTML = `<option value=""${g.x ? "" : " selected"}>off</option>` +
+    vars.map(v => `<option value="${esc(v)}"${v === g.x ? " selected" : ""}>` +
+                  `${esc(v)}</option>`).join("");
+  sx.value = g.x;
+  sy.hidden = !g.x;
+  sy.innerHTML = `<option value=""${g.y ? "" : " selected"}>—</option>` +
+    vars.filter(v => v !== g.x)
+        .map(v => `<option value="${esc(v)}"${v === g.y ? " selected" : ""}>` +
+                  `× ${esc(v)}</option>`).join("");
+  sy.value = g.y || "";
 }
 
 function rgnAxesPick(){
@@ -9671,6 +9652,574 @@ function rgnExportJson(){
       `process${rgnSrcs().length === 1 ? "" : "es"} to <b>${esc(name)}</b>`);
 }
 
+/* ---------- table mode: pages of yields tables ---------- */
+
+//: `pages` rides INSIDE the regions state, optional: {on, inner}. Absent = off, so every
+//: older file opens unchanged. `inner` names the loop's innermost variable; a page break
+//: may only fall where an innermost sweep completes — never mid-sweep.
+const rgnPagesOn = () => !!(RGN && RGN.pages && RGN.pages.on);
+//: derived, not chosen: a row is ~46 css px under the current spacing (12px line + 2
+//: raw-line + 8+8 padding + 8 row gap, doubled lines), and ~900px of pager is
+//: comfortable on screen, so floor(900/46) = 19 rows. Print never relies on this —
+//: its break-inside rules move whole sweeps between sheets whatever the heights.
+const RGN_PAGE_ROWS = 19;
+let RGNPGI = 0;                 // which page is on screen — posture, never saved
+
+function rgnPageModel(){
+  // Pure — no DOM, no canvas — so the battery can pin it. Bins are ordered as ONE nested
+  // loop over the map's own variables (outermost = nearest the root), the ROW variable
+  // varying fastest. The numbers are the very arrays the bubbles and the json export
+  // read (n.y / n.n / n.y2 from rgnCount), so this table can never drift from either.
+  //
+  // The row variable: an explicit regions.pages.inner always wins; absent (or stale
+  // after a re-skim), the page COMPUTES the cleanest choice at open — the criterion,
+  // measured over a trial pagination of every candidate, lexicographically:
+  //   1. fewest split sweeps (a "(continued)" fragment is the one ugliness the
+  //      never-mid-sweep rule allows, so it is minimized first),
+  //   2. fewest sweeps (every sweep costs a caption + header block — fewer, larger
+  //      tables read cleaner),
+  //   3. fewest pages,
+  //   4. first in tree order (outermost first) — a deterministic tie-break.
+  // The computed default is derived at open, never baked into the file.
+  const wi = rgnWinIndex();
+  if (!wi) return null;
+  const {infos, vars, keyOf} = wi;
+
+  const sweepsFor = rowVar => {
+    // sort by the nested loop for this row variable, then group into sweeps — the runs
+    // sharing every OUTER window, which a page may never split
+    const order = vars.filter(v => v !== rowVar).concat([rowVar]);
+    const sorted = infos.slice().sort((a, b) => {
+      for (const col of order){
+        const d = keyOf(a, col) - keyOf(b, col);
+        if (d) return d;
+      }
+      return 0;
+    });
+    const outers = order.slice(0, -1);
+    const sweeps = [];
+    sorted.forEach(i => {
+      const sig = outers.map(col => keyOf(i, col)).join("|");
+      const last = sweeps[sweeps.length - 1];
+      if (last && last.sig === sig) last.infos.push(i);
+      else sweeps.push({sig, infos: [i]});
+    });
+    return {order, outers, sweeps};
+  };
+  const scoreOf = sweeps => {
+    let splits = 0, pages = 0, room = 0;
+    sweeps.forEach(sw => {
+      if (sw.infos.length > RGN_PAGE_ROWS){
+        splits += Math.ceil(sw.infos.length / RGN_PAGE_ROWS) - 1;
+        pages += Math.ceil(sw.infos.length / RGN_PAGE_ROWS);
+        room = 0;
+        return;
+      }
+      if (sw.infos.length > room){ pages++; room = RGN_PAGE_ROWS; }
+      room -= sw.infos.length;
+    });
+    return [splits, sweeps.length, pages];
+  };
+  let autoPick = vars[0], best = null;
+  vars.forEach(v => {
+    const sc = scoreOf(sweepsFor(v).sweeps);
+    if (!best || sc[0] < best[0] || (sc[0] === best[0] && (sc[1] < best[1] ||
+        (sc[1] === best[1] && sc[2] < best[2])))){ best = sc; autoPick = v; }
+  });
+
+  const explicit = RGN.pages && RGN.pages.inner;
+  const auto = !vars.includes(explicit);
+  const inner = auto ? autoPick : explicit;
+  const {order, outers, sweeps} = sweepsFor(inner);
+
+  const srcs = rgnSrcs().slice().sort();       // lexical, as flattened.json writes them
+  const live = rgnSrcs();
+  const row = i => {
+    const c = i.cuts.find(x => x.col === inner);
+    return {label: c ? rgnCutText(c) : `any ${inner}`, bin: rgnBinName(i.n),
+            cells: srcs.map(s => {
+              const k = live.indexOf(s);
+              return [i.n.n[k] || 0, i.n.y[k] || 0, Math.sqrt(i.n.y2 ? i.n.y2[k] : 0)];
+            })};
+  };
+  const capOf = i => outers.map(col => {
+    const c = i.cuts.find(x => x.col === col);
+    return c ? rgnCutText(c) : null;
+  }).filter(Boolean).join("  ·  ") || rgnRootName();
+  const pages = [];
+  let cur = {sweeps: []};
+  const rowsIn = p => p.sweeps.reduce((a, s) => a + s.rows.length, 0);
+  sweeps.forEach(sw => {
+    if (sw.infos.length > RGN_PAGE_ROWS){
+      // one sweep alone larger than a page: it must split, and the spill says so
+      if (rowsIn(cur)){ pages.push(cur); cur = {sweeps: []}; }
+      for (let at = 0; at < sw.infos.length; at += RGN_PAGE_ROWS)
+        pages.push({sweeps: [{cap: capOf(sw.infos[0]), cont: at > 0,
+                              rows: sw.infos.slice(at, at + RGN_PAGE_ROWS).map(row)}]});
+      return;
+    }
+    if (rowsIn(cur) + sw.infos.length > RGN_PAGE_ROWS){ pages.push(cur); cur = {sweeps: []}; }
+    cur.sweeps.push({cap: capOf(sw.infos[0]), cont: false, rows: sw.infos.map(row)});
+  });
+  if (rowsIn(cur)) pages.push(cur);
+  return {inner, auto, autoPick, vars, srcs, pages};
+}
+
+//: DISPLAY precision only — the json export and yields.py stay full float64 (rounding a
+//: machine-readable output is exactly the writeSamplesJSON sin root-caused in 04b).
+//: Derek's rule: at most 4 digits past the decimal point; a nonzero value that would
+//: read 0.0000 falls back to 2 significant figures so it can never masquerade as zero.
+const rgnPgFmt = v => {
+  if (v === 0) return "0";
+  const fixed = +v.toFixed(4);
+  return fixed !== 0 ? String(fixed) : Number(v.toPrecision(2)).toString();
+};
+
+function rgnPagesRender(){
+  const box = $("rgnpages");
+  if (!box) return;
+  const on = rgnPagesOn();
+  const cv = $("rgncanvas");
+  if (cv && cv.style) cv.style.display = on ? "none" : "";
+  const keys = (typeof document !== "undefined" && document.querySelector)
+    ? document.querySelector(".rgn .rgnkeys") : null;
+  if (keys && keys.style) keys.style.display = on ? "none" : "";
+  box.hidden = !on;
+  const btn = $("rgnpgbtn");
+  if (btn && btn.setAttribute) btn.setAttribute("aria-pressed", on);
+  if (!on) return;
+  const m = rgnPageModel();
+  if (!m || !m.pages.length){
+    box.innerHTML = `<p class="rgnnote">nothing to tabulate — cut the map into regions first</p>`;
+    return;
+  }
+  RGNPGI = Math.max(0, Math.min(RGNPGI, m.pages.length - 1));
+  const sweepHtml = sw => rgnSweepHtml(m, sw);
+  box.innerHTML =
+    `<div class="rgnpgbar">` +
+    `<button class="tbtn" id="rgnpgprev" title="previous page">←</button>` +
+    `<span>page ${RGNPGI + 1} of ${m.pages.length}</span>` +
+    `<button class="tbtn" id="rgnpgnext" title="next page">→</button>` +
+    `<span class="rgnsp"></span>` +
+    `<span class="rgnlab">rows</span>` +
+    `<select id="rgnpginner" class="tbtn"` +
+    ` title="which variable runs down a table's rows — one table sweeps it, and a page ` +
+    `never breaks mid-sweep. auto picks the cleanest: fewest split sweeps, then fewest ` +
+    `tables (caption+header blocks), then fewest pages; tree order breaks ties">` +
+    `<option value=""${m.auto ? " selected" : ""}>auto — ${esc(m.autoPick)}</option>` +
+    m.vars.map(v => `<option value="${esc(v)}"${!m.auto && v === m.inner ? " selected" : ""}>` +
+                    `${esc(v)}</option>`).join("") +
+    `</select>` +
+    `<button class="tbtn" id="rgnpgraw" aria-pressed="${!!(RGN.pages && RGN.pages.raw)}"` +
+    ` title="show the raw event count under each yield — off, it lives in the cell's hover">` +
+    `show raw</button>` +
+    `<button class="tbtn" id="rgnpgheat" aria-pressed="${!!(RGN.pages && RGN.pages.heat)}"` +
+    ` title="tint each cell by its yield, ranked within its column's CATEGORY — blue for ` +
+    `signal columns, red for background, each gradient normalized within itself so the ` +
+    `two scales cannot wash each other out. Click a sample header to flip its side">` +
+    `heat</button>` +
+    `<button class="tbtn" id="rgnpgpng"` +
+    ` title="every table as PNGs in one zip — light background baked in, sized by measurement">png</button>` +
+    `<button class="tbtn" id="rgnpgpdf"` +
+    ` title="every table as one PDF — light background baked in, a page never breaks mid-sweep">pdf</button>` +
+    `</div>` +
+    m.pages.map((p, k) => `<div class="rgnpage${k === RGNPGI ? " on" : ""}">` +
+                          p.sweeps.map(sweepHtml).join("") + `</div>`).join("");
+  const wire = (id, fn) => { const b = $(id); if (b) b.onclick = fn; };
+  wire("rgnpgprev", () => { RGNPGI--; rgnPagesRender(); });
+  wire("rgnpgnext", () => { RGNPGI++; rgnPagesRender(); });
+  const pick = $("rgnpginner");
+  if (pick) pick.onchange = () => {
+    // an explicit pick saves and always wins; "auto" removes the key, so the default
+    // stays computed-at-open and follows the map if its variables change
+    const next = Object.assign({}, RGN.pages);
+    if (pick.value) next.inner = pick.value;
+    else delete next.inner;
+    RGN.pages = next;
+    RGNPGI = 0; markDirty(); rgnPagesRender();
+  };
+  wire("rgnpgraw", () => {
+    RGN.pages = Object.assign({}, RGN.pages, {raw: !(RGN.pages && RGN.pages.raw)});
+    markDirty(); rgnPagesRender();
+  });
+  wire("rgnpgheat", () => {
+    const next = Object.assign({}, RGN.pages);
+    if (next.heat) delete next.heat; else next.heat = true;   // absent is the default
+    RGN.pages = next;
+    markDirty(); rgnPagesRender();
+  });
+  // the header handles: flipping a column stores only the DEVIATIONS from the map's own
+  // S/B default in regions.pages.cats, so a file with no flips carries no key at all
+  if (box.querySelectorAll) box.querySelectorAll("th[data-hsrc]").forEach(h => {
+    h.onclick = () => {
+      const src = h.dataset.hsrc;
+      const def = ((RGN && RGN.bkg) || []).indexOf(src) >= 0 ? "bkg" : "sig";
+      const next = rgnHeatCat(src) === "sig" ? "bkg" : "sig";
+      const cats = Object.assign({}, RGN.pages && RGN.pages.cats);
+      if (next === def) delete cats[src]; else cats[src] = next;
+      const pg = Object.assign({}, RGN.pages);
+      if (Object.keys(cats).length) pg.cats = cats; else delete pg.cats;
+      RGN.pages = pg;
+      markDirty(); rgnPagesRender();
+    };
+  });
+  wire("rgnpgpng", () => rgnExportZip());
+  wire("rgnpgpdf", () => rgnExportPdf());
+}
+
+/* ---------- exports: measured row-by-row, literal colors, zip + pdf ----------
+   The browser print dialog is NOT trusted for these tables: background printing is a
+   user setting JS cannot control, so a dark-theme page prints near-white ink on white
+   paper — Derek's "32 pages of nothing" (2026-08-19). Exports therefore render into
+   an offscreen DOM with LITERAL colors (the 0.7.x pen-ink precedent: theme-proof by
+   construction, explicit opaque fills), the atomic unit is ONE ROW, and every packing
+   decision is made from MEASURED pixel heights plus explicit margins — clipping and
+   overpacking are impossible rather than unlikely. */
+
+//: literal light palette, no vars, no media queries — identical in any theme, any host
+const RGN_EXPORT_CSS = [
+  '.xp{font:12px ui-monospace,Menlo,Consolas,monospace;color:#16181d;background:#ffffff}',
+  '.xp .rgncap{font-weight:600;font-size:12.5px;margin:0 0 7px;color:#16181d}',
+  '.xp table{border-collapse:separate;border-spacing:0 8px;margin:0 0 16px}',
+  '.xp th,.xp td{border-top:1px solid #b9bec7;border-bottom:1px solid #b9bec7;' +
+    'padding:8px 13px;text-align:right;white-space:nowrap;background:#f4f5f7}',
+  '.xp th:first-child,.xp td:first-child{border-left:1px solid #b9bec7;text-align:left}',
+  '.xp th:last-child,.xp td:last-child{border-right:1px solid #b9bec7}',
+  '.xp th{background:#e6e8ec;color:#3a3f47;font-weight:600}',
+  // the corner pad: invisible in the export too, same reason as on screen
+  '.xp th.pad{background:transparent;border-color:transparent}',
+  '.xp td .raw{display:block;color:#6a7078;font-size:10.5px;margin-top:2px}',
+].join("\n");
+
+/* ---------- heat map: two per-category gradients over the cells ---------- */
+
+//: the two gradient hues are the page's own S/B pair (Okabe-Ito blue / vermillion), so
+//: "blue = signal, red = background" on the table matches every plot on the page
+const RGN_HEAT = {sig: [0, 114, 178], bkg: [213, 94, 0]};
+
+function rgnHeatCat(src){
+  // which gradient one process column feeds: an explicit regions.pages.cats entry wins;
+  // absent, the map's own S/B declaration decides — a source listed in RGN.bkg is
+  // background (red), everything else signal (blue). No sample-name heuristics: the map
+  // already says which side each source is on, and the header click makes the
+  // assignment entirely the user's.
+  const o = RGN && RGN.pages && RGN.pages.cats;
+  if (o && (o[src] === "sig" || o[src] === "bkg")) return o[src];
+  return ((RGN && RGN.bkg) || []).indexOf(src) >= 0 ? "bkg" : "sig";
+}
+
+function rgnHeatModel(m){
+  // Per CATEGORY, the log-yield window a cell's tint is read against. Normalizing
+  // WITHIN blue and WITHIN red separately is the point: signal sits orders of magnitude
+  // under background, and one shared scale would wash every signal cell to nothing.
+  // The window is GLOBAL across all pages (one shade means one yield everywhere), log10
+  // because a category still spans decades, and floored 4 decades under the category
+  // max so one freak tiny yield cannot compress the rest to full tint. Pure — no DOM —
+  // so the battery pins it.
+  const cats = m.srcs.map(rgnHeatCat);
+  const hi = {sig: 0, bkg: 0}, lo = {sig: Infinity, bkg: Infinity};
+  m.pages.forEach(p => p.sweeps.forEach(s => s.rows.forEach(r => r.cells.forEach((c, i) => {
+    if (!(c[1] > 0)) return;
+    const k = cats[i];
+    hi[k] = Math.max(hi[k], c[1]);
+    lo[k] = Math.min(lo[k], c[1]);
+  }))));
+  const win = {};
+  ["sig", "bkg"].forEach(k => {
+    win[k] = hi[k] > 0
+      ? [Math.max(Math.log10(lo[k]), Math.log10(hi[k]) - 4), Math.log10(hi[k])]
+      : null;
+  });
+  return {cats, win};
+}
+
+function rgnHeatBg(cat, y, hm, lit){
+  // one cell's tint. Screen: an rgba wash OVER the theme background, so the same alpha
+  // reads in both themes; export: the SAME wash composited to an opaque hex over the
+  // export cell fill — a literal color, like everything else the exports draw. The
+  // alpha is capped at 0.52 so the 4-decimal ink stays readable on the deepest cell.
+  // Zero and empty cells return nothing and stay quiet.
+  if (!(y > 0) || !hm) return "";
+  const w = hm.win[cat];
+  if (!w) return "";
+  const t = w[1] > w[0] ? Math.max(0, Math.min(1, (Math.log10(y) - w[0]) / (w[1] - w[0]))) : 1;
+  const a = 0.10 + 0.42 * t;
+  const c = RGN_HEAT[cat];
+  if (!lit) return `background:rgba(${c[0]},${c[1]},${c[2]},${a.toFixed(3)})`;
+  const base = [244, 245, 247];                       // the export cell fill, #f4f5f7
+  const mix = c.map((v, i) => Math.round(v * a + base[i] * (1 - a)));
+  return `background:#${mix.map(v => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function rgnSweepHtml(m, sw, from, to, cont){
+  // one sweep (or a row slice of it) as caption + one filled table. The raw count is
+  // opt-in (RGN.pages.raw, absent = off, Derek 2026-08-19): off, it survives as the
+  // cell's hover title; on, it rides under the yield — screen and both exports alike,
+  // and the measured packer simply measures whichever rows it gets.
+  const showRaw = !!(RGN && RGN.pages && RGN.pages.raw);
+  // heat is opt-in too (RGN.pages.heat, absent = off, Derek 2026-08-20): the model is
+  // computed once per page model and cached on it, and m.lit (set by the export path)
+  // picks the literal-color form of every tint
+  const hm = (RGN && RGN.pages && RGN.pages.heat) ? (m.heat || (m.heat = rgnHeatModel(m))) : null;
+  const cell = (c, i) => {
+    const st = hm ? rgnHeatBg(hm.cats[i], c[1], hm, m.lit) : "";
+    const at = st ? ` style="${st}"` : "";
+    return showRaw
+      ? `<td${at}>${rgnPgFmt(c[1])} ± ${rgnPgFmt(c[2])}` +
+        `<span class="raw">${c[0].toLocaleString("en-US")} raw</span></td>`
+      : `<td${at} title="${c[0].toLocaleString("en-US")} raw">` +
+        `${rgnPgFmt(c[1])} ± ${rgnPgFmt(c[2])}</td>`;
+  };
+  const th = (s, i) => {
+    if (!hm) return `<th>${esc(s)}</th>`;
+    // the category handle: the underline says which gradient this column feeds, the
+    // click flips it — screen only wires the click; in an export the underline is just
+    // one more literal color
+    const c = RGN_HEAT[hm.cats[i]];
+    return `<th data-hsrc="${esc(s)}" style="cursor:pointer;` +
+      `border-bottom:3px solid rgb(${c[0]},${c[1]},${c[2]})" title="` +
+      `${hm.cats[i] === "sig" ? "signal (blue)" : "background (red)"} — click to flip">` +
+      `${esc(s)}</th>`;
+  };
+  const rows = sw.rows.slice(from == null ? 0 : from, to == null ? sw.rows.length : to);
+  // columns are SAMPLES ONLY (Derek 2026-08-19: "it needs just samples") — the Combine
+  // table shape, bins down and processes across. The kinematics live in the row label
+  // and the sweep caption, never in a column header. The corner over the labels is a
+  // PAD (class pad, drawn as nothing), so the sample-name rectangle starts flush at the
+  // first sample column (Derek 2026-08-20).
+  return `<p class="rgncap">${esc(sw.cap)}${(cont || sw.cont) ? " (continued)" : ""}</p>` +
+    `<table><tr><th class="pad"></th>${m.srcs.map(th).join("")}</tr>` +
+    rows.map(r => `<tr title="${esc(r.bin)}"><td>${esc(r.label)}</td>` +
+                  r.cells.map(cell).join("") + `</tr>`).join("") + `</table>`;
+}
+
+async function rgnExportCanvases(){
+  // every export page as a canvas: white fill, 2x, sized from the real layout
+  const m = rgnPageModel();
+  if (!m || !m.pages.length){ say("nothing to export — cut the map into regions first"); return null; }
+  m.lit = true;      // every color in this render is a literal value, heat tints included
+  const sweeps = [];
+  m.pages.forEach(p => p.sweeps.forEach(s => sweeps.push(s)));
+
+  const host = document.createElement("div");
+  host.style.cssText = "position:absolute;left:-100000px;top:0";
+  host.innerHTML = `<style>${RGN_EXPORT_CSS}</style>` +
+                   `<div class="xp" style="width:max-content;padding:0"></div>`;
+  document.body.appendChild(host);
+  const box = host.querySelector(".xp");
+  try {
+    // measure every sweep once: its width, its caption+header, and EVERY row's height
+    const GAP = 16, MARGIN = 26, PAGE_H = 1400;   // css px; PAGE_H = inner budget
+    const meas = sweeps.map(sw => {
+      box.innerHTML = rgnSweepHtml(m, sw);
+      const trs = Array.from(box.querySelectorAll("tr"));
+      const capH = box.querySelector(".rgncap").offsetHeight + 7;
+      return {sw, w: box.scrollWidth,
+              headH: capH + trs[0].offsetHeight + 8,
+              rowH: trs.slice(1).map(r => r.offsetHeight + 8)};
+    });
+    const maxW = Math.max.apply(null, meas.map(x => x.w));
+
+    // pack: whole sweeps when their measured height fits, row-split only when a single
+    // sweep is taller than an empty page — and then by measured rows, never a guess
+    const pages = [];
+    let cur = null, curH = 0;
+    const open = () => { cur = []; curH = 0; pages.push(cur); };
+    open();
+    for (const x of meas){
+      const rowsH = x.rowH.reduce((a, v) => a + v, 0);
+      const whole = x.headH + rowsH + GAP;
+      if (curH > 0 && curH + whole > PAGE_H && whole <= PAGE_H) open();
+      if (whole <= PAGE_H){
+        cur.push(rgnSweepHtml(m, x.sw));
+        curH += whole;
+        continue;
+      }
+      let at = 0;                                     // the degenerate monster sweep
+      while (at < x.sw.rows.length){
+        if (curH > 0) open();
+        let take = 0, h = x.headH;
+        while (at + take < x.sw.rows.length && h + x.rowH[at + take] <= PAGE_H) h += x.rowH[at + take++];
+        if (!take){ take = 1; h += x.rowH[at]; }      // one row taller than a page: still one row
+        cur.push(rgnSweepHtml(m, x.sw, at, at + take, at > 0));
+        curH = h + GAP;
+        at += take;
+      }
+    }
+
+    // rasterize each page at its MEASURED size plus explicit margins
+    const canvases = [];
+    for (const frags of pages){
+      box.style.width = maxW + "px";
+      box.style.padding = MARGIN + "px";
+      box.innerHTML = frags.join("");
+      const w = maxW + 2 * MARGIN, h = box.offsetHeight + 2;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">` +
+        `<rect width="100%" height="100%" fill="#ffffff"/>` +
+        `<foreignObject width="100%" height="100%">` +
+        `<style>${RGN_EXPORT_CSS}</style>` +
+        `<div xmlns="http://www.w3.org/1999/xhtml" class="xp"` +
+        ` style="width:${maxW}px;padding:${MARGIN}px">` + box.innerHTML + `</div>` +
+        `</foreignObject></svg>`;
+      const img = new Image();
+      const url = URL.createObjectURL(new Blob([svg], {type: "image/svg+xml"}));
+      try {
+        await new Promise((res, rej) => {
+          img.onload = res;
+          img.onerror = () => rej(new Error("the export SVG did not parse"));
+          img.src = url;
+        });
+      } finally { URL.revokeObjectURL(url); }
+      const cv = document.createElement("canvas");
+      cv.width = w * 2; cv.height = h * 2;
+      const cx = cv.getContext("2d");
+      cx.scale(2, 2);
+      cx.fillStyle = "#ffffff";
+      cx.fillRect(0, 0, w, h);
+      cx.drawImage(img, 0, 0);
+      canvases.push(cv);
+    }
+    return canvases;
+  } finally {
+    host.remove();
+  }
+}
+
+const RGN_CRC_T = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++){
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function rgnCrc32(u8){
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < u8.length; i++) c = RGN_CRC_T[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function rgnZipStore(files){
+  // a STORE (uncompressed) zip, hand-written: PNGs are already compressed, and the page
+  // stays self-contained — local headers + central directory + end record, nothing else
+  const enc = new TextEncoder();
+  const u16 = v => new Uint8Array([v & 255, (v >> 8) & 255]);
+  const u32 = v => new Uint8Array([v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255]);
+  const parts = [], central = [];
+  let off = 0;
+  const push = b => { parts.push(b); off += b.length; };
+  for (const f of files){
+    const name = enc.encode(f.name), crc = rgnCrc32(f.bytes), n = f.bytes.length, at = off;
+    [u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0),
+     u32(crc), u32(n), u32(n), u16(name.length), u16(0), name, f.bytes].forEach(push);
+    central.push({name, crc, n, at});
+  }
+  const cdAt = off;
+  for (const e of central)
+    [u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0),
+     u32(e.crc), u32(e.n), u32(e.n), u16(e.name.length), u16(0), u16(0), u16(0), u16(0),
+     u32(0), u32(e.at), e.name].forEach(push);
+  [u32(0x06054b50), u16(0), u16(0), u16(central.length), u16(central.length),
+   u32(off - cdAt), u32(cdAt), u16(0)].forEach(push);
+  const out = new Uint8Array(off);
+  let p = 0;
+  parts.forEach(b => { out.set(b, p); p += b.length; });
+  return out;
+}
+
+function rgnSaveBytes(bytes, name, mime){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([bytes], {type: mime}));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+const rgnExportName = () => (META.title || "regions").replace(/\.(rvr|html)$/, "");
+
+async function rgnExportZip(){
+  const canvases = await rgnExportCanvases();
+  if (!canvases) return;
+  const files = [];
+  for (let i = 0; i < canvases.length; i++){
+    const blob = await new Promise(res => canvases[i].toBlob(res, "image/png"));
+    files.push({name: `${rgnExportName()}_yields_p${i + 1}.png`,
+                bytes: new Uint8Array(await blob.arrayBuffer())});
+  }
+  const name = `${rgnExportName()}_yields_pngs.zip`;
+  rgnSaveBytes(rgnZipStore(files), name, "application/zip");
+  say(`saved <b>${esc(name)}</b> — ${files.length} PNG${files.length === 1 ? "" : "s"}`);
+}
+
+async function rgnExportPdf(){
+  // a minimal PDF written by hand: one image XObject per page, FlateDecode when the
+  // browser has CompressionStream, JPEG (DCTDecode) otherwise. White background is IN
+  // the pixels, so no viewer or printer setting can lose it.
+  const canvases = await rgnExportCanvases();
+  if (!canvases) return;
+  const imgs = [];
+  for (const cv of canvases){
+    if (typeof CompressionStream === "function"){
+      const id = cv.getContext("2d").getImageData(0, 0, cv.width, cv.height).data;
+      const rgb = new Uint8Array(cv.width * cv.height * 3);
+      for (let i = 0, j = 0; i < id.length; i += 4){
+        rgb[j++] = id[i]; rgb[j++] = id[i + 1]; rgb[j++] = id[i + 2];
+      }
+      const zipped = new Uint8Array(await new Response(
+        new Blob([rgb]).stream().pipeThrough(new CompressionStream("deflate"))).arrayBuffer());
+      imgs.push({w: cv.width, h: cv.height, filter: "FlateDecode", data: zipped});
+    } else {
+      const blob = await new Promise(res => cv.toBlob(res, "image/jpeg", 0.95));
+      imgs.push({w: cv.width, h: cv.height, filter: "DCTDecode",
+                 data: new Uint8Array(await blob.arrayBuffer())});
+    }
+  }
+  const name = `${rgnExportName()}_yields.pdf`;
+  rgnSaveBytes(rgnPdfBytes(imgs), name, "application/pdf");
+  say(`saved <b>${esc(name)}</b> — ${imgs.length} page${imgs.length === 1 ? "" : "s"}`);
+}
+
+function rgnPdfBytes(imgs){
+  // objects: 1 catalog, 2 pages, then per page i: page 3+3i, contents 4+3i, image 5+3i
+  const enc = s => new TextEncoder().encode(s);
+  const parts = [], offs = [];
+  let off = 0;
+  const push = b => { parts.push(b); off += b.length; };
+  const obj = (n, body, stream) => {
+    offs[n] = off;
+    push(enc(`${n} 0 obj\n${body}\n`));
+    if (stream){ push(enc("stream\n")); push(stream); push(enc("\nendstream\n")); }
+    push(enc("endobj\n"));
+  };
+  push(enc("%PDF-1.4\n"));
+  obj(1, "<< /Type /Catalog /Pages 2 0 R >>");
+  obj(2, `<< /Type /Pages /Count ${imgs.length} /Kids [` +
+         imgs.map((_, i) => `${3 + 3 * i} 0 R`).join(" ") + "] >>");
+  imgs.forEach((im, i) => {
+    const W = (im.w / 2 * 0.75).toFixed(2), H = (im.h / 2 * 0.75).toFixed(2);
+    obj(3 + 3 * i, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] ` +
+                   `/Contents ${4 + 3 * i} 0 R ` +
+                   `/Resources << /XObject << /Im${i} ${5 + 3 * i} 0 R >> >> >>`);
+    const cs = enc(`q ${W} 0 0 ${H} 0 0 cm /Im${i} Do Q`);
+    obj(4 + 3 * i, `<< /Length ${cs.length} >>`, cs);
+    obj(5 + 3 * i, `<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} ` +
+                   `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /${im.filter} ` +
+                   `/Length ${im.data.length} >>`, im.data);
+  });
+  const xrefAt = off;
+  const total = 3 + 3 * imgs.length;
+  let x = `xref\n0 ${total}\n0000000000 65535 f \n`;
+  for (let n = 1; n < total; n++) x += String(offs[n]).padStart(10, "0") + " 00000 n \n";
+  push(enc(x + `trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xrefAt}\n%%EOF`));
+  const out = new Uint8Array(off);
+  let p = 0;
+  parts.forEach(b => { out.set(b, p); p += b.length; });
+  return out;
+}
+
+
 function rgnCutsOf(node){
   // Every constraint that makes this region, root to leaf, as {col, lo, hi} for a number
   // axis or {col, vals} for a chip one. A camp is a chain on ONE column, so the band a
@@ -9765,14 +10314,9 @@ function rgnStripMarkup(){
     <button class="tbtn" id="rgngopen"
             title="the regions are declared as a dict — this is where">regions…</button>
     <span class="rgnsp"></span>
-    <span class="rgnlab">show</span>
-    <span class="seg" id="rgnview">
-      <button data-v="stack" aria-pressed="${RGN.view !== "ledger" && RGN.view !== "bubble"}">stack</button>
-      <button data-v="ledger" aria-pressed="${RGN.view === "ledger"}">ledger</button>
-      <button data-v="bubble" aria-pressed="${RGN.view === "bubble"}">bubbles</button>
-    </span>
-    <span class="seg" id="rgnopt" title="how the bubbles are laid out and sized"
-          ${RGN.view === "bubble" ? "" : "hidden"}>
+    <button class="tbtn" id="rgnpgbtn" aria-pressed="${!!(RGN.pages && RGN.pages.on)}"
+            title="pages of yields tables — one row per region, one column per process">table</button>
+    <span class="seg" id="rgnopt" title="how the bubbles are laid out and sized">
       <button data-o="axes" aria-pressed="${!!RGN.axes}"
               title="lay the circles out on the declared grid's axes">grid</button>
       <button data-o="logr" aria-pressed="${!!RGN.logr}"
@@ -9782,6 +10326,11 @@ function rgnStripMarkup(){
       <button data-ax="col" title="which variable runs across">x</button>
       <button data-ax="row" title="which variable runs down">y</button>
     </span>
+    <span class="rgnlab">grid by</span>
+    <select id="rgnbgx" class="tbtn"
+      title="cut the canvas into labeled cells of one of the map's own variables — every bubble lands in the cell whose window it satisfies; off = the packed cloud"></select>
+    <select id="rgnbgy" class="tbtn" hidden
+      title="a second variable: the first runs across, this one down"></select>
     <span class="rgnlab">floor</span>
     <input id="rgnfloor" class="rgnnum" value="${rgnFloor()}"
            title="a region under this is greyed and penned to the left">
@@ -9806,6 +10355,7 @@ function rgnMarkup(){
   return `<div class="panel rgn">
     ${rgnStripMarkup()}
     <div class="rgnbody"><div class="rgnwrap"><canvas id="rgncanvas"></canvas>
+      <div id="rgnpages" hidden></div>
       <p class="rgnkeys"><kbd>←</kbd><kbd>→</kbd> camps <kbd>↑</kbd><kbd>↓</kbd> level
         <kbd>enter</kbd> fly <kbd>esc</kbd> fit · drag to pan, wheel to zoom</p></div>
       <div class="rgnside" id="rgnpanel"></div></div>
@@ -9837,10 +10387,18 @@ function rgnWire(){
   rgnGridDraw();
   rgnGridWire();
   rgnOptVis();
+  rgnBgVis();
   rgnWireDrop($("rgncanvas"));
   rgnWireDrop($("rgnpanel"));
   const js = $("rgnjson");
   if (js) js.onclick = () => rgnExportJson();
+  const pg = $("rgnpgbtn");
+  if (pg) pg.onclick = () => {
+    RGN.pages = Object.assign({}, RGN.pages, {on: !rgnPagesOn()});
+    RGNPGI = 0;
+    markDirty();
+    rgnPagesRender();
+  };
   const fit = $("rgnfit");
   if (fit) fit.onclick = () => { rgnFitAll(); rgnDrawOnly(); };
   const drop = $("rgndrop");
@@ -9848,20 +10406,6 @@ function rgnWire(){
   const mv = $("rgnmove");
   if (mv && mv.querySelectorAll)
     mv.querySelectorAll("button").forEach(b => b.onclick = () => rgnMove(+b.dataset.v));
-  const view = $("rgnview");
-  if (view && view.querySelectorAll)
-    view.querySelectorAll("button").forEach(b => b.onclick = () => {
-      const was = RGN.view;
-      RGN.view = b.dataset.v;
-      view.querySelectorAll("button").forEach(o =>
-        o.setAttribute("aria-pressed", o === b));
-      markDirty();
-      // bubbles and the nested map are different LAYOUTS, not different paints, so the
-      // geometry has to be rebuilt and the camera refitted rather than merely repainted
-      rgnOptVis();
-      if ((was === "bubble") !== (RGN.view === "bubble")){ RGNV = {x:0, y:0, k:0}; drawAll(); }
-      else rgnDrawOnly();
-    });
   const pick = $("rgnaxpick");
   if (pick && pick.querySelectorAll)
     pick.querySelectorAll("button").forEach(b => b.onclick = () => {
@@ -9879,6 +10423,25 @@ function rgnWire(){
       RGNV = {x:0, y:0, k:0};
       drawAll();
     });
+  const bgx = $("rgnbgx"), bgy = $("rgnbgy");
+  if (bgx) bgx.onchange = () => {
+    const x = bgx.value;
+    const y = RGN.bgrid && RGN.bgrid.y;
+    if (!x) delete RGN.bgrid;                    // absent is the default, so it stays absent
+    else RGN.bgrid = Object.assign({x:x}, y && y !== x ? {y:y} : {});
+    if (bgx.dataset) delete bgx.dataset.sig;     // the selects re-derive on the next draw
+    markDirty();
+    RGNV = {x:0, y:0, k:0};                      // a different layout wants a fresh frame
+    drawAll();
+  };
+  if (bgy) bgy.onchange = () => {
+    if (!RGN.bgrid) return;
+    RGN.bgrid = bgy.value ? {x:RGN.bgrid.x, y:bgy.value} : {x:RGN.bgrid.x};
+    if (bgx && bgx.dataset) delete bgx.dataset.sig;
+    markDirty();
+    RGNV = {x:0, y:0, k:0};
+    drawAll();
+  };
   const fm = $("rgnfmode");
   if (fm && fm.querySelectorAll)
     fm.querySelectorAll("button").forEach(b => b.onclick = () => {

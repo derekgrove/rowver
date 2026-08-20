@@ -1861,11 +1861,13 @@ REGION_PROBE = (
     "\n(function rec(n){ if (!n.kids.length){ lv9.push(rgnN(n)); return; } n.kids.forEach(rec); })(RGNT);"
     "\nvar ck9 = rgnCheck();"
     "\nif (!ck9) return 'the map reported no checks';"
-    # The rectangle map's area claim is WITHIN a camp; the bubble view's is across every
-    # circle. Asserting the wrong one of the two is asserting nothing.
-    "\nvar bb9 = (RGN.view === 'bubble') ? rgnBubbleCheck() : null;"
-    "\nvar area9 = bb9 ? bb9.area : ck9.area;"
-    "\nvar akind9 = bb9 ? 'circle area over the whole map' : 'camp area within its parent';"
+    # Bubbles are the only view since 0.23.0 (stack/ledger removed 2026-08-19, Derek's
+    # call): the drawn-area claim is always the bubble one — circle area across the whole
+    # map. RGN.view still reports the FILE's stored key, accepted and ignored, so the
+    # frozen goldens' `view` pins keep checking that the reader reads the file faithfully.
+    "\nvar bb9 = rgnBubbleCheck();"
+    "\nvar area9 = bb9.area;"
+    "\nvar akind9 = 'circle area over the whole map';"
     # the map must survive a state round trip like everything else the page saves
     "\nvar rt9 = JSON.stringify(collectState().regions) === JSON.stringify(RGN);"
     "\nreturn 'REGIONS OK ' + JSON.stringify({counts:lv9, total:rgnN(RGNT),"
@@ -1875,6 +1877,70 @@ REGION_PROBE = (
     "  lumis:(S.lumis || null), style:(S.style || null),"
     "  scaled:(bb9 ? bb9.scaled : null), penned:(bb9 ? bb9.shelf : null),"
     "  roundtrip:rt9});"
+)
+
+#: table mode: the page model is pure (no DOM), so it is pinned directly — page count,
+#: rows per page, the innermost variable, and every first-page row's raw total, which
+#: retraces the SAME integers the region pins hold. The renderer runs too, in the stub,
+#: so a DOM-only regression cannot hide behind the pure model.
+PAGES_PROBE = (
+    "\nvar gp9 = -1;"
+    "\nfor (var ip9 = 0; ip9 < TABS.length; ip9++)"
+    "  if (TABS[ip9].st && TABS[ip9].st.regions) gp9 = ip9;"
+    "\nif (gp9 < 0) return 'the file no longer carries a region map tab';"
+    "\nswitchTab(gp9);"
+    "\nif (!RGN) return 'the map tab did not come up as a region map';"
+    "\ntry { drawAll(); } catch(e){ return 'the map THREW: ' + e.message; }"
+    "\nvar pm9 = rgnPageModel();"
+    "\nif (!pm9) return 'table mode built no page model';"
+    "\nvar rw9 = pm9.pages.map(function(p){"
+    "  return p.sweeps.reduce(function(a, s){ return a + s.rows.length; }, 0); });"
+    "\nvar rr9 = [];"
+    "\npm9.pages[0].sweeps.forEach(function(s){ s.rows.forEach(function(r){"
+    "  rr9.push(r.cells.reduce(function(a, c){ return a + c[0]; }, 0)); }); });"
+    "\nvar rend9 = 'ok';"
+    "\ntry { rgnPagesRender(); } catch(e){ rend9 = 'THREW: ' + e.message; }"
+    "\nreturn 'PAGES OK ' + JSON.stringify({on:rgnPagesOn(), count:pm9.pages.length,"
+    "  rows:rw9, inner:pm9.inner, auto:pm9.auto, autopick:pm9.autoPick,"
+    "  raws:rr9, render:rend9});"
+)
+
+#: the bubble grid + heat map (0.27.0): the cell every live bubble landed in is derived
+#: from its DRAWN position against the axes — measuring the layout, not the model — and
+#: the heat model (categories + per-category log windows) is pure, so both compare to
+#: numpy-computed pins. The two color strings are regression pins on the tint formula.
+BGRID_PROBE = (
+    "\nvar gb9 = -1;"
+    "\nfor (var ib9 = 0; ib9 < TABS.length; ib9++)"
+    "  if (TABS[ib9].st && TABS[ib9].st.regions) gb9 = ib9;"
+    "\nif (gb9 < 0) return 'the file no longer carries a region map tab';"
+    "\nswitchTab(gb9);"
+    "\nif (!RGN) return 'the map tab did not come up as a region map';"
+    "\ntry { drawAll(); } catch(e){ return 'the map THREW: ' + e.message; }"
+    "\nvar wi9 = rgnWinIndex();"
+    "\nvar bg9 = rgnBgrid(wi9);"
+    "\nif (!bg9) return 'no bubble grid on this map';"
+    "\nvar ax9 = RGNAXES;"
+    "\nif (!ax9) return 'the bubble grid drew no axes';"
+    "\nvar cells9 = {};"
+    "\nrgnBubbleOrder(RGNT).forEach(function(n){"
+    "  if (!(rgnY(n) > 0) || rgnDim(n) || !n.bub || n.bub.shelf || n.bub.pin) return;"
+    "  var c9 = Math.floor((n.bub.x - ax9.x0) / ax9.cw);"
+    "  var r9 = Math.floor((n.bub.y - ax9.y0) / ax9.ch);"
+    "  var k9 = r9 + ',' + c9;"
+    "  (cells9[k9] = cells9[k9] || []).push(rgnN(n));"
+    "});"
+    "\nvar pm9 = rgnPageModel();"
+    "\nif (!pm9) return 'no page model for the heat pins';"
+    "\nvar hm9 = rgnHeatModel(pm9);"
+    "\nvar win9 = {};"
+    "\nObject.keys(hm9.win).forEach(function(k){"
+    "  win9[k] = hm9.win[k] ? hm9.win[k].map(function(v){ return +v.toFixed(6); }) : null; });"
+    "\nvar top9 = rgnHeatBg('bkg', Math.pow(10, hm9.win.bkg[1]), hm9, false);"
+    "\nvar lit9 = rgnHeatBg('bkg', Math.pow(10, hm9.win.bkg[1]), hm9, true);"
+    "\nreturn 'BGRID OK ' + JSON.stringify({ncol:ax9.ncol, nrow:ax9.nrow,"
+    "  xname:ax9.xname, yname:ax9.yname, cols:ax9.cols, rows:ax9.rows, cells:cells9,"
+    "  srcs:pm9.srcs, cats:hm9.cats, win:win9, top:top9, lit:lit9});"
 )
 
 #: The frozen files and exactly what the version that wrote them read out. The sha means
@@ -1954,10 +2020,71 @@ GOLDEN = {
         #: what the per-group luminosity does, as yields the tab's own lumi of 1 cannot
         #: reach: signal at 3.0 and ZZ at 7.0, the loose sample left at the tab's
         "lumis": {"signal": 3.0, "ZZ": 7.0},
+        #: yields.py (the Combine-format dump) on this same frozen file: eight bins that
+        #: retrace the pinned grid regions, so the dump's raw counts are cross-tied to
+        #: `regions.counts` above, and the whole output text is pinned by hash — a change
+        #: in float formatting, lumi resolution or NaN handling goes red here.
+        "yields_dump": {
+            "bins": "golden_yields_bins.json",
+            "raw": {"chan0": [3, 529, 213, 107], "chan1": [3, 329, 151, 92]},
+            "sha256": "c5f31725991650402a90f7939767e77ca0b49634d3ab9cd21fd786668af0b6aa",
+        },
         "yields": {"signal": 0.935690, "ZZ": 4.466608, "MC \u00b7 ZZ\u21922e2mu": 0.571064},
         "style": {"signal": "dash", "ZZ": "cross", "MC \u00b7 ZZ\u21922e2mu": "dots"},
         "grid": {"declared": 4, "vars": ["channel", "M4L"], "exhaustive": False,
                  "floorsrcs": ["signal", "ZZ"], "floormode": "all", "axes": True},
+    },
+    #: 0.24.0's table mode: the frozen grid partition with `pages` on, inner = M4L. The
+    #: raws retrace the grid golden's pinned region counts through the page model's own
+    #: nested-loop ordering — channel sweeps whole, M4L fastest, the no-M4L complement
+    #: leaf as its own one-row sweep at the end.
+    "golden_0.24.0_pages.rvr": {
+        "sha256": "bf85113a64389fbe5321abc401933dfb0020158b4e219eafdc9f9ae33f2b4e15",
+        "rowver": 4, "n": 23263, "datasets": 4, "tabs": 2, "tab": 0,
+        "made_by": "0.24.0", "weights": "weight", "shown": 2313,
+        #: `inner` is the file's EXPLICIT pick (it must always win); `autopick` is what
+        #: the cleanest-tables criterion would compute for this partition — pinning it
+        #: pins the criterion itself against silent drift. Here they coincide: M4L rows
+        #: give 3 sweeps against channel's 5.
+        "pages": {"on": True, "count": 1, "rows": [9], "inner": "M4L",
+                  "auto": False, "autopick": "M4L",
+                  "raws": [3, 529, 213, 107, 3, 329, 151, 92, 886]},
+    },
+    #: 0.27.0's bubble grid + heat map, on the SAME partition as the grid golden so the
+    #: cell counts retrace already-pinned integers. bgrid axes are the REVERSE of the
+    #: declared grid's (M4L across, channel down) and the file carries grid+axes too, so
+    #: ncol=5 also pins that the bubble grid OUTRANKS the declared-axes layout; the
+    #: 2e2mu leaf carries no M4L cut and lands in the trailing "any M4L" band. Heat:
+    #: cats pin the default (in-RGN.bkg = red) plus one explicit cats override (2e2mu
+    #: flipped to blue); the windows are numpy-computed per category (log10, 4-decade
+    #: floor, per-group lumis folded); top/lit pin the tint formula's two color forms.
+    "golden_0.27.0_bgrid.rvr": {
+        "sha256": "20d28feecf934d2001b67eabe807a880b785e7a196b24a6a4999c8e469186d8e",
+        "rowver": 4, "n": 23263, "datasets": 4, "tabs": 2, "tab": 0,
+        "made_by": "0.27.0", "weights": "weight", "shown": 2313,
+        "regions": {
+            "counts": [3, 529, 213, 107, 3, 329, 151, 92, 886],
+            "total": 2313, "leaves": 9, "empty": 0,
+            "shape": ("(channel in [0] ? (M4L<110 ? . : (M4L<140 ? . : (M4L<170 ? . : .)))"
+                      " : (channel in [1] ? (M4L<110 ? . : (M4L<140 ? . : (M4L<170 ? . :"
+                      " .))) : .))"),
+            "at": 0, "view": "bubble", "board_at": None,
+        },
+        "lumis": {"signal": 3.0, "ZZ": 7.0},
+        "bgrid": {
+            "ncol": 5, "nrow": 3, "xname": "M4L", "yname": "channel",
+            "cols": ["M4L < 110", "110 ≤ M4L < 140", "140 ≤ M4L < 170",
+                     "M4L ≥ 170", "any M4L"],
+            "rows": ["channel = 4mu", "channel = 4e", "channel = 2e2mu"],
+            "cells": {"0,0": [3], "0,1": [529], "0,2": [213], "0,3": [107],
+                      "1,0": [3], "1,1": [329], "1,2": [151], "1,3": [92],
+                      "2,4": [886]},
+            "srcs": ["MC · ZZ→2e2mu", "ZZ", "signal"],
+            "cats": ["sig", "bkg", "sig"],
+            "win": {"sig": [-3.123339, -0.243315], "bkg": [-1.937738, 0.08962]},
+            "top": "background:rgba(213,94,0,0.520)",
+            "lit": "background:#e4a677",
+        },
     },
     #: the reason v4 exists — no weights column at all. Every pinned number here is an
     #: integer the page reaches without ever touching a weight.
@@ -2120,6 +2247,60 @@ def golden() -> str:
                     return f"{name}: the map says {key}={said[key]!r}, pinned {pin[key]!r}"
             note = (f", {len(counts)} regions summing to {sum(counts):,} exactly"
                     f", area=events to {said['area']:.0e}{note}")
+        if "pages" in want:
+            t = run(str(here / "viewer.html"), str(f), probe=PAGES_PROBE)
+            if not t.startswith("PAGES OK "):
+                return f"{name}: table mode — {t}"
+            said = json.loads(t[len("PAGES OK "):])
+            pin = want["pages"]
+            for key in ("on", "count", "rows", "inner", "auto", "autopick", "raws"):
+                if said[key] != pin[key]:
+                    return (f"{name}: table mode {key} is {said[key]!r}, "
+                            f"pinned {pin[key]!r}")
+            if said["render"] != "ok":
+                return f"{name}: the table renderer {said['render']}"
+            note += (f", table mode: {said['count']} page(s), rows {said['rows']}, "
+                     f"raws retrace the partition")
+        if "bgrid" in want:
+            t = run(str(here / "viewer.html"), str(f), probe=BGRID_PROBE)
+            if not t.startswith("BGRID OK "):
+                return f"{name}: the bubble grid — {t}"
+            said = json.loads(t[len("BGRID OK "):])
+            pin = want["bgrid"]
+            for key in ("ncol", "nrow", "xname", "yname", "cols", "rows", "cells",
+                        "srcs", "cats", "top", "lit"):
+                if said[key] != pin[key]:
+                    return (f"{name}: bubble grid {key} is {said[key]!r}, "
+                            f"pinned {pin[key]!r}")
+            # the windows are float64 log10 sums from two implementations (numpy wrote
+            # the pin, the page computed its own) — compared at the pin's own precision
+            for k, v in pin["win"].items():
+                got_w = said["win"].get(k)
+                ok = (got_w is None and v is None) or (
+                    got_w is not None and v is not None and len(got_w) == len(v)
+                    and all(abs(a - b) <= 5e-6 for a, b in zip(got_w, v)))
+                if not ok:
+                    return f"{name}: heat window {k} is {got_w!r}, pinned {v!r}"
+            note += ", bubble grid cells + heat model pinned"
+        if "yields_dump" in want:
+            import yields
+            spec = want["yields_dump"]
+            bins = json.loads((here / "golden" / spec["bins"]).read_text())
+            dumped = yields.dump(f, bins, tab_cuts=True, allow_tab_lumi=True)
+            raw = {b: sum(int(v["nominal"][0]) for v in dumped[b].values())
+                   for b in dumped}
+            got = {ch: [raw[f"{ch}_{t}"] for t in ("Mlt110", "M110_140",
+                                                   "M140_170", "M170")]
+                   for ch in ("chan0", "chan1")}
+            if got != spec["raw"]:
+                return (f"{name}: the yields dump counts {got} against the pinned "
+                        f"{spec['raw']} — the dump and the region map disagree")
+            text = json.dumps(dumped, indent=4, sort_keys=True) + "\n"
+            sha = hashlib.sha256(text.encode()).hexdigest()
+            if sha != spec["sha256"]:
+                return (f"{name}: the yields dump text moved (sha {sha[:12]}…) — "
+                        f"formatting, lumi resolution or NaN handling changed")
+            note += f", yields dump retraces the partition and its text is byte-pinned"
         out.append(f"{name} ok — {want['n']:,} events, shown={want['shown']}{note}")
     return "; ".join(out)
 
