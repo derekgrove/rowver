@@ -79,6 +79,12 @@ td.num,th.num{text-align:right}
 a{color:var(--blue)}
 details{margin:2px 0}
 summary{cursor:pointer;color:var(--ink2)}
+/* the build form: one labeled field per line, room to breathe (Derek, R11) */
+.field{display:grid;grid-template-columns:110px minmax(200px,520px);gap:2px 12px;
+  align-items:center;margin-top:8px}
+.field label{color:var(--ink2);font-weight:600;font-size:11px;text-transform:uppercase;
+  letter-spacing:.06em;text-align:right}
+.field .hint{grid-column:2;margin:0}
 /* guided open-data mode: every .guide note is ORANGE (Derek's spec) and exists ONLY
    when the body carries .guided — the normal builder stays clean */
 .guide{display:none;color:var(--orange);font-size:12px;line-height:1.55;margin:8px 0 0}
@@ -112,47 +118,39 @@ body.guided .guide{display:block}
 </head>
 <body>
 <h1><span>RowVer</span> remote console</h1>
-<p class="sub">browse DAS or eos, inspect branches, select events, and build .rvr files</p>
+<p class="sub">build .rvr files from CMS DAS or eos</p>
 
 <div id="banner" hidden></div>
 
 <div class="card" id="guidecard" hidden><h2>guided · build a study from CMS Open Data</h2>
-  <p class="guide" style="margin-top:0">Welcome! This walks you through building a real
-  <b>.rvr</b> study file from public CMS Open Data — <b>no grid proxy, no credentials</b>.
-  The only moving part is the <b>helper</b>: a tiny daemon on your machine (or reached
-  over an ssh tunnel) that reads just the branches you pick from CERN's public storage,
-  because a browser cannot speak to grid storage by itself. Everything below has been
-  filled in for you — read the orange notes, then press <b>build .rvr</b>. Prefer the
-  shortcut? <button class="mini" id="gbuild"
+  <p class="guide" style="margin-top:0">A real <b>.rvr</b> from public CMS Open Data —
+  <b>no credentials needed</b>. Everything is pre-filled: follow the orange notes, then
+  press <b>build .rvr</b>. <button class="mini" id="gbuild"
   style="border-color:var(--orange);color:var(--orange)">or just build it for me</button></p>
 </div>
 
-<div class="card" id="getstarted" hidden><h2>no helper answered — get one running (two ways)</h2>
-  <b>recommended · on a cluster node (one terminal, top to bottom; substitute your
-  username/host — examples: username@cmslpc-el9.fnal.gov, username@lxplus.cern.ch):</b>
+<div class="card" id="getstarted" hidden><h2>no helper answered — get one running</h2>
+  <b>on a cluster node (recommended; substitute your username@host)</b>
   <pre>ssh -L 8271:localhost:8271 username@cmslpc-el9.fnal.gov
 git clone https://gitlab.cern.ch/dgrove/rowver
 python3 -m pip install --user numpy uproot fsspec-xrootd
 cd rowver &amp;&amp; python3 remote/helper.py</pre>
-  <b>or on this machine:</b>
+  <b>or on this machine</b>
   <pre>git clone https://gitlab.cern.ch/dgrove/rowver
 python3 -m pip install --user numpy uproot fsspec-xrootd
 cd rowver &amp;&amp; python3 remote/helper.py</pre>
-  <p class="hint">A grid proxy is only needed for private CMS data — open data works
-  without one. Firefox may ask permission for this page to access your local network
-  (it talks only to 127.0.0.1) — allow it.</p>
-  <p class="guide">Open data needs <b>no proxy</b>: just start the helper with either
-  recipe and this page takes over from there.</p>
+  <p class="hint">Open data needs no proxy; private CMS data does. If Firefox asks
+  about local-network access, allow it. Details:
+  <a href="https://gitlab.cern.ch/dgrove/rowver/-/blob/main/remote/README.md">remote/README.md</a>.</p>
   <div class="row" style="margin-top:8px"><button class="go" id="recheck">check again</button>
-  <span class="hint" style="margin:0">this page flips into the builder the moment the helper answers (it checks every few seconds by itself)</span></div>
+  <span class="hint" style="margin:0">flips to the builder when a helper answers</span></div>
 </div>
 
 <div class="card"><h2>helper</h2><div id="status">checking…</div>
-  <p class="hint" style="margin-top:8px">no proxy? no problem! test building a .rvr file
-  with CMS open data here: <button class="go mini" id="qsgo"
+  <p class="hint" style="margin-top:8px">no proxy? no problem! <button class="go mini" id="qsgo"
     title="fills the basket with one public 2016 NanoAOD file from eospublic (anonymous
- — no grid proxy involved), two flat branches and a cut, and builds it. Replaces
- whatever is in the basket.">build the open-data quickstart</button></p>
+ — no grid proxy involved), two flat branches and a KEEP filter, and builds it.
+ Replaces whatever is in the basket.">build the open-data quickstart</button></p>
 </div>
 
 <div class="card" id="c_source"><h2>1 · source</h2>
@@ -184,18 +182,15 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
     <p class="hint" id="treefile"></p>
     <div class="wrap" id="treewrap"><table id="treeout"></table></div>
   </div>
-  <p class="guide" id="gsource">The open-data file is already in the build basket below —
-  it lives on CERN's public eos (<b>eospublic</b>), so its address starts with
-  <code>root://eospublic.cern.ch//eos/opendata/…</code>. Open data is not in CMS DAS and
-  needs no credentials. The branch inventory of the file is opening underneath: those
-  are the per-event quantities inside it — clicking a name adds it as a column. We
-  pre-picked <b>MET_pt</b> and <b>nMuon</b> for you.</p>
+  <p class="guide" id="gsource">The open-data file is already in the basket — it lives on
+  CERN's public eos (<b>eospublic</b>), no credentials. Its real branch inventory opens
+  underneath: click a name to add it as a column. <b>MET_pt</b> and <b>nMuon</b> are
+  pre-picked.</p>
   <div id="branchbox" hidden>
     <div class="row" style="margin-top:8px">
       <span class="tag" id="branchhead"></span>
       <input id="branchfilter" size="24" placeholder="filter branches" autocomplete="off">
     </div>
-    <p class="hint">click a branch name to add it to the build’s column list</p>
     <div class="wrap" id="branchwrap"><table id="branchout"></table></div>
   </div>
 </div>
@@ -203,18 +198,27 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
 <div class="card" id="c_build"><h2>2 · build</h2>
  <div class="buildwrap">
  <div class="buildleft">
-  <div id="basket"><p class="hint">nothing selected yet — add datasets, files, or a file subset from the source panel</p></div>
-  <div class="row" style="margin-top:10px">
-    <label>columns <input id="cols" size="52" placeholder="click branches in the source browser to add columns"></label>
+  <div id="basket"><p class="hint">empty — add files from the source panel</p></div>
+  <div class="field" style="margin-top:12px">
+    <label for="title">title</label>
+    <input id="title" size="20" value="console">
   </div>
-  <div class="row" style="margin-top:6px">
-    <label>cut <input id="cut" size="34" placeholder="optional numpy expression over the columns"></label>
-    <label>weights <input id="wcol" size="10" placeholder="optional"></label>
-    <label>title <input id="title" size="14" value="console"></label>
+  <div class="field">
+    <label for="cols">columns</label>
+    <input id="cols" size="52" placeholder="click branches in the source browser to add columns">
   </div>
-  <p class="guide">Ready: pressing <b>build .rvr</b> asks the helper to read JUST the
-  two picked branches (about 0.4 MB of the 66 MB file) for every event passing the cut,
-  and to pack them into a page-ready .rvr. Watch the live meters below while it runs.</p>
+  <div class="field">
+    <label for="cut">KEEP</label>
+    <input id="cut" size="40" placeholder="e.g. nMuon >= 2">
+    <span class="hint">event preselection over the columns — at least some filter is
+    highly recommended (an unfiltered build reads every event)</span>
+  </div>
+  <div class="field">
+    <label for="wcol">weights branch</label>
+    <input id="wcol" size="16" placeholder="optional">
+  </div>
+  <p class="guide">Pressing <b>build .rvr</b> reads JUST the picked branches (~0.4 MB
+  of the 66 MB file) for events passing KEEP. Watch the live meters below.</p>
   <div class="row" style="margin-top:10px">
     <button class="go" id="buildgo">build .rvr</button>
     <button id="datalessgo" title="the 1 kB study-identity file: drop it on viewer.html and THIS build runs on demand">download data-less .rvr</button>
@@ -234,7 +238,7 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
       <span class="stat"><b>avg rate</b><span id="m_avg">–</span></span>
       <span class="stat"><b>now</b><span id="m_inst">–</span></span>
       <span class="stat"><b>entries read</b><span id="m_read">–</span></span>
-      <span class="stat"><b>kept by cut</b><span id="m_kept">–</span></span>
+      <span class="stat"><b>kept by KEEP</b><span id="m_kept">–</span></span>
       <span class="stat"><b>wire / disk</b><span id="m_frac">–</span></span>
       <span class="stat"><b>ETA</b><span id="m_eta">–</span></span>
     </div>
@@ -244,9 +248,6 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
   </div>
   <div class="err" id="builderr"></div>
   <div id="builddone" hidden></div>
-  <p class="hint">the built file is a normal .rvr — drop it on <code>viewer.html</code>. The
-  data-less variant carries only the spec; dropping it makes the page ask this same helper
-  to build (and cache) the real thing.</p>
  </div>
  <div class="livecard">
   <div class="lhead"><span class="tag">live build json</span>
@@ -254,14 +255,14 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
     <span class="hint" style="margin:0">exactly what “build .rvr” sends</span></div>
   <div id="liveprob"></div>
   <pre id="livejson"></pre>
-  <p class="hint">DAS entries resolve through the redirector at build time — each listed
-  file url already names the redirector it will use. Long file lists are collapsed for
-  reading (click to expand); the copy button always carries the complete json.</p>
+  <p class="hint" title="DAS entries resolve through the redirector at build time — each
+  listed file url already names the redirector it will use">long file lists collapse —
+  click to expand; “copy json” always carries everything.</p>
  </div>
  </div>
 </div>
 
-<div class="card" id="c_act"><h2>3 · activity — cache and build history</h2>
+<div class="card" id="c_act"><h2>3 · activity</h2>
   <div class="row"><button id="actgo">refresh</button></div>
   <div id="actout"></div>
 </div>
@@ -387,17 +388,6 @@ async function status(){
     flip();
     $("status").textContent = "not answering — see the two recipes above";
     $("banner").hidden = true;
-    void `<b>no helper on 127.0.0.1:8271.</b> ` +
-      `Get it from a clone of the repo — <code>git clone ` +
-      `https://gitlab.cern.ch/dgrove/rowver</code> — then either:<br>` +
-      `<b>recommended · on a cluster node</b> (credentials, CAs and eos already ` +
-      `live there): <code>python3 remote/helper.py</code> on the node, ` +
-      `<code>ssh -L 8271:localhost:8271 &lt;cluster-host&gt;</code> from here.<br>` +
-      `<b>or locally</b>: <code>python3 -m pip install --user numpy uproot ` +
-      `fsspec-xrootd</code>, a grid proxy for CMS data (public open data needs ` +
-      `none), then <code>${esc(START_CMD)}</code>.<br>` +
-      `If Firefox asks to allow local network access for this page, allow it — ` +
-      `the page talks only to 127.0.0.1. Then this page comes alive by itself.`;
   }
 }
 status();
@@ -420,13 +410,11 @@ const VIEWS = {das: null, eos: null};   // what each mode last showed, so the to
 const DASINFO = {};                     // dataset -> {files, events, bytes}
 
 const HINTS = {
-  das: `Dataset NAME search is DBS, proxy-authenticated — the same service DAS queries
-  (rucio would add replica location, not names). Wildcards: <code>*</code> anywhere in the
-  /primary/campaign/TIER shape. “info” = files/events/size; “files” opens the file list for
-  subset picking; “add” takes the whole dataset (the helper resolves files at build time,
-  smallest first).`,
-  eos: `Directories through xrootd on cmseos. Click a directory to descend, “trees” to
-  inspect a file, the checkboxes to build from a subset of files.`,
+  das: `<span title="DBS name search — the same service DAS queries; the helper resolves
+  files at build time, smallest first">Wildcards: <code>*</code> anywhere in
+  /primary/campaign/TIER. “info” = files/events/size; “files” = pick a subset;
+  “add” = the whole dataset.</span>`,
+  eos: `Click a directory to descend, “trees” to inspect a file, checkboxes for a subset.`,
 };
 
 function setMode(m){
@@ -783,7 +771,7 @@ function drawBasket(){
   $("cols").placeholder = colsPlaceholder();
   renderLive();
   if (!BASKET.length){
-    $("basket").innerHTML = `<p class="hint">nothing selected yet — add datasets, files, or a file subset from the source panel</p>`;
+    $("basket").innerHTML = `<p class="hint">empty — add files from the source panel</p>`;
     return;
   }
   $("basket").innerHTML = BASKET.map((b,i) => `<div class="basketrow">` +
@@ -840,7 +828,7 @@ function buildSpec(strict){
   cols.forEach(c => { branches[c] = c; });
   const w = $("wcol").value.trim();
   if (w && cols.indexOf(w) < 0)
-    problems.push(`weights ${w} is not one of the columns`);
+    problems.push(`weights branch ${w} is not one of the columns`);
   const out = {
     title: $("title").value.trim() || "console",
     fileset: fileset,
@@ -1009,12 +997,10 @@ async function build(){
       ` — then drop it on viewer.html · ` +
       `<span class="hint" style="display:inline">job ${job.job}` +
       `${job.cached ? " · cache HIT" : " · cache miss, built fresh"} — per-file numbers in section 3</span>` +
-      (GUIDED ? `<p class="guide">That's it — you built a real study file. The download
-      link above saves <b>${esc(sp.title)}.rvr</b>; drop it on the
-      <a href="./" style="color:var(--orange)">RowVer page</a> and it opens as an
-      interactive study (plots, cuts, the region map). A data-less variant of the same
-      spec — the tiny file that rebuilds this on any machine with a helper — is one
-      click away: “download data-less .rvr”.</p>` : "");
+      (GUIDED ? `<p class="guide">That's it. Save <b>${esc(sp.title)}.rvr</b> and drop
+      it on the <a href="./" style="color:var(--orange)">RowVer page</a> — it opens as
+      an interactive study. “download data-less .rvr” saves the tiny spec that rebuilds
+      this on any machine with a helper.</p>` : "");
     activity();
   } catch(e){
     $("builderr").textContent = explain(e.message);
