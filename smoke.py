@@ -487,6 +487,31 @@ def run(html: str, rowver: str | None = None, probe: str = "") -> str:
           "}"
           "\nNORM = curves.length + 'curves';"
           "\nPLOTS[0].norm = wasN; PLOTS[0].mode = wasM;"
+          # the stack toggle (0.33.0): backgrounds stack cumulatively — the drawn top
+          # of the stack must equal the flat curves' per-bin sum EXACTLY (same arrays,
+          # both modes) — signals overlay un-filled, and off restores the flat draw.
+          "\nvar STK = 'skipped';"
+          "\nif (PLOTS.length){"
+          "  var sp9 = PLOTS[0], was9 = {mode:sp9.mode, stack:sp9.stack, norm:sp9.norm};"
+          "  sp9.mode = '1d'; sp9.norm = ''; sp9.stack = true; drawOne(sp9, MASK);"
+          "  var st9 = DRAWN.filter(function(t){ return t.fill; });"
+          "  var ov9 = DRAWN.filter(function(t){ return !t.fill && t.name !== 'pull'; });"
+          "  if (!st9.length) return 'stack on drew no filled trace';"
+          "  var topY9 = st9[st9.length-1].y, names9 = st9.map(function(t){ return t.name; });"
+          "  sp9.stack = false; drawOne(sp9, MASK);"
+          "  var sum9 = topY9.map(function(){ return 0; }), seen9 = 0;"
+          "  DRAWN.forEach(function(t){ if (names9.indexOf(t.name) < 0) return; seen9++;"
+          "    t.y.forEach(function(v, i){ sum9[i] += v; }); });"
+          "  if (seen9 !== names9.length)"
+          "    return 'flat draw lost ' + (names9.length - seen9) + ' stacked curve(s)';"
+          "  var worst9 = 0;"
+          "  topY9.forEach(function(v, i){ worst9 = Math.max(worst9, Math.abs(v - sum9[i])); });"
+          "  if (worst9 > 1e-9) return 'stack top differs from the component sum by ' + worst9;"
+          "  sp9.mode = was9.mode; sp9.norm = was9.norm;"
+          "  if (was9.stack) sp9.stack = true; else delete sp9.stack;"
+          "  drawOne(sp9, MASK);"
+          "  STK = st9.length + 'stk/' + ov9.length + 'over';"
+          "}"
           # the wordmark easter egg (0.30.0, the optimizer's replacement): three fast
           # clicks give Rover a top hat, two never do, and the hat is pure posture —
           # the page state cannot change and nothing of it is ever saved.
@@ -1716,7 +1741,7 @@ def run(html: str, rowver: str | None = None, probe: str = "") -> str:
           "       ' roundtrip=ok groups=' + groupNames().length + ' partial=' + PARTIAL +"
           "       ' move=' + MOVE + ' newgroup=' + NEWG +"
           "       ' cutflow=' + cf.steps.length + 'steps' + ' reorder=' + CO + ' 3d=' + D3 +"
-          "       ' colour=' + COL + ' cutsec=' + SEC + ' edits=' + ED + ' bar=' + BAR + ' hat=' + HAT +"
+          "       ' colour=' + COL + ' cutsec=' + SEC + ' edits=' + ED + ' bar=' + BAR + ' hat=' + HAT + ' stack=' + STK +"
           "       ' pull=' + PULL + ' pullrange=' + PR + ' shape=' + NORM + ' everything=' + EV.length + 'files' +"
           "       ' panels=' + PAN + ' tabs=' + TB + ' draw=' + DR + ' builder=' + BS +"
           "       ' drawer=' + DW + ' rover=' + RVR + ' locks=' + LK + ' table=' + TM +"
