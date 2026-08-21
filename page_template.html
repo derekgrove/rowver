@@ -767,6 +767,10 @@ canvas#rgncanvas.over{outline:3px dashed var(--signal);outline-offset:-4px}
    so the sample-name rectangle starts flush at the first sample column instead of leaving
    a blank where the kinematic title sat until 0.25.0 (Derek 2026-08-20) */
 #rgnpages th.pad{background:transparent;border-color:transparent}
+/* and because the pad draws no border, the rectangle's LEFT wall belongs to the first
+   sample column — :first-child alone put it on the pad, where it is invisible, leaving
+   the sample-name box open at the left end (Derek 2026-08-21) */
+#rgnpages th.pad + th{border-left:1px solid var(--rule)}
 #rgnpages td .raw{display:block;color:var(--ink-3);font-size:10.5px;margin-top:2px}
 .rgnchip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);
   font-size:calc(11.5px * var(--ts));background:var(--sunk);border:1px solid var(--rule);
@@ -1083,6 +1087,8 @@ function weightOf(){
 function unpack(buf){
   // Column-major. Each column carries its own byte offset, so the packer is free to put
   // every float column before any int one — a Float64Array cannot start on a 4-byte offset.
+  // These views are zero-copy and so read NATIVE byte order: the format is little-endian
+  // because every machine is, and a byte-swapping reader would have to give the views up.
   const n = META.n;
   const w = weightOf();
   WCOL = w.name;
@@ -5469,6 +5475,7 @@ function resizePlots(){
   // plotly's responsive flag watches the WINDOW, not the container — anything that
   // changes the stage's width must ask every live plot to re-measure, or the plots
   // keep their old pixels and shove the page into a horizontal scroll
+  rgnResize();
   if (!(Plotly.Plots && Plotly.Plots.resize)) return;
   PLOTS.forEach(p => {
     const d = document.getElementById("plot" + p.id);
@@ -8776,6 +8783,22 @@ function rgnDrawOnly(){
   rgnPagesRender();
 }
 
+function rgnResize(){
+  // the map is a raw canvas, so nothing re-measures it the way plotly re-measures itself:
+  // a stage that changed width leaves the old bitmap squeezed into the new box until some
+  // unrelated redraw. Re-lay out from the tree already counted — a resize must never
+  // re-bin events, and the camera and focus are the user's, so they stay.
+  if (!RGN || !RGNT) return;
+  const cv = $("rgncanvas");
+  const box = (cv && cv.getBoundingClientRect) ? cv.getBoundingClientRect() : null;
+  if (!box || !box.width || !box.height) return;      // table mode hides it: nothing to draw
+  RGNW = Math.max(420, box.width);
+  RGNH0 = Math.max(320, box.height);
+  rgnBubbleLayout(RGNT, RGNW, Math.max(1, RGNH0 - RGN_TOP));
+  if (!RGNV.k || !isFinite(RGNV.k) || RGNV.k <= 0) rgnFitAll();
+  rgnDrawOnly();
+}
+
 function rgnDraw(keep){
   // rebuild the tree from the TAB's mask — the same events the plots and the board see
   if (!RGN) return;
@@ -9796,6 +9819,7 @@ const RGN_EXPORT_CSS = [
   '.xp th{background:#e6e8ec;color:#3a3f47;font-weight:600}',
   // the corner pad: invisible in the export too, same reason as on screen
   '.xp th.pad{background:transparent;border-color:transparent}',
+  '.xp th.pad + th{border-left:1px solid #b9bec7}',   // the box's left wall, as on screen
   '.xp td .raw{display:block;color:#6a7078;font-size:10.5px;margin-top:2px}',
 ].join("\n");
 

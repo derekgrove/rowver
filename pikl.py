@@ -78,7 +78,7 @@ _VIRTUAL: bool | None = None
 
 
 def supports_virtual(ttree) -> bool:
-    """Whether this uproot can hand back lazy arrays. Older ones cannot, and say so once."""
+    """Checks whether the user's uproot can hand back lazy arrays"""
     global _VIRTUAL
     if _VIRTUAL is None:
         import inspect
@@ -96,7 +96,7 @@ def supports_virtual(ttree) -> bool:
 
 
 def _closest(want: str, have, n: int = 6) -> list[str]:
-    """Branch names most like the one asked for, so a typo or a rename is obvious."""
+    """Branch names most like the one asked for"""
     import difflib
     hit = difflib.get_close_matches(want, list(have), n=n, cutoff=0.4)
     return hit or sorted(have)[:n]

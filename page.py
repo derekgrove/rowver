@@ -8,6 +8,22 @@ A gzip stream. Uncompressed it is:
     bytes 4..4+L    that header, UTF-8 JSON — this is META
     bytes 4+L..     the column buffer, column-major, no padding
 
+BYTE ORDER — every multi-byte scalar in the file is LITTLE-ENDIAN. Bytes 0..3 say so
+explicitly on both sides (`int.from_bytes(raw[:4], "little")` here, `getUint32(0, true)`
+in the template — a DataView defaults to BIG-endian, so that flag is load-bearing). The
+column buffer never converts: `.tobytes()` writes the machine's native order and
+`new Float64Array(buf, off, n)` reads it back. The buffer is therefore little-endian by
+HARDWARE rather than by conversion — safe, since every platform RowVer targets is
+little-endian, but a big-endian writer would produce a file this reader accepts and
+silently misreads.
+
+Do NOT add a byte-swapping read path. Native order is what makes the page's unpack() a
+zero-copy view instead of a decode pass: measured on ku_2l_run2 (724,493 rows x 7 f8
+columns, in JavaScriptCore) the views cost 0 ms, while the same columns through
+DataView.getFloat64 cost 109 ms plus a second 38.7 MiB copy of the buffer. Little-endian
+also gzips 0.65% smaller on that file, all of it from columns widened to f64 from float32
+NanoAOD branches; full-entropy f8 and every i4 column compress identically either way.
+
 META:
 
     rowver      4                format version; a reader refuses anything else
@@ -155,7 +171,7 @@ def get_plotlyjs() -> str:
 
 TEMPLATE: Path = Path(__file__).with_name("page_template.html")
 PAGES: Path = Path(__file__).with_name("pages")
-VERSION: str = "0.33.0"   # the tool, shown on every page it builds; bump when the page changes
+VERSION: str = "0.33.1"   # the tool, shown on every page it builds; bump when the page changes
 ROWVER: int = 4           # .rvr format version, which moves separately
 READS: tuple = (4,)       # v2 and v3 are gone: their weights were undeclared
 MAX_MB: int = 40
