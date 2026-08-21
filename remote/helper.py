@@ -183,6 +183,15 @@ START = time.time()
 #: log), and after this many minutes with nobody asking it anything. The page polls
 #: /ping every ~1.5 s per open tab, so an open browser IS the heartbeat; nothing asking
 #: means the tunnel, the tab, or the person is gone. 0 disables the idle half.
+#: How many worker PROCESSES read files at once. "auto" races serial against a small
+#: pool on the job's own files and keeps the winner; a number forces it, and 1 forces
+#: the old serial path. Forcing exists because auto-tuning is a measurement, and a
+#: measurement can be wrong on a link nobody has tried yet — measured 2026-08-20, the
+#: right answer swings from 4.3x FASTER (cmslpc, CPU-bound) to no gain at all (laptop
+#: over WAN), and no cheap property of the link predicts which.
+WORKERS = os.environ.get("ROWVER_WORKERS", "auto").strip().lower()
+PROBE_ENTRIES = int(os.environ.get("ROWVER_PROBE_ENTRIES", "20000"))
+TUNED: dict = {}                    # endpoint -> {"workers": n, "why": str}
 IDLE_MIN = float(os.environ.get("ROWVER_IDLE_MIN", "30"))
 LAST_SEEN = time.time()
 SRV = None
@@ -377,73 +386,176 @@ def eval_cut(cut: str, cols: dict) -> np.ndarray:
 CHUNK = 500_000
 
 
+def _warm(_):
+    """Spin a worker all the way up — fork, interpreter, uproot import — so that
+    one-time cost is not charged to whichever wave happens to time it."""
+    import uproot                                   # noqa: F401
+    return True
+
+
+def pool_ctx():
+    """A context that forks from the FORKSERVER, never from us. This process holds live
+    XRootD state and an atfork handler that deadlocks if we fork while a read is in
+    flight (that is the bug efc3285 fixed), so the forkserver is started at startup
+    while nothing is happening and every later pool is forked by IT."""
+    import multiprocessing as mp
+    return mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods()
+                          else "spawn")
+
+
+def plan_workers(files) -> tuple:
+    """How many workers, and whether we still need to find out. The override always
+    wins; a verdict already measured against this endpoint is reused; otherwise we go
+    in CALIBRATING and let the build itself answer the question."""
+    endpoint = files[0][0].split("//")[1].split("/")[0] if files else "?"
+    if WORKERS.isdigit():
+        return max(1, int(WORKERS)), endpoint, False
+    if endpoint in TUNED:
+        return TUNED[endpoint]["workers"], endpoint, False
+    cap = min(8, os.cpu_count() or 2, len(files))
+    wave = min(3, cap)
+    if cap < 2 or len(files) < 2 * wave:
+        return 1, endpoint, False        # too small for the answer to be worth having
+    return cap, endpoint, True
+
+
+def read_file(task: tuple) -> tuple:
+    """One file, start to finish: open, check, read, cut. TOP-LEVEL and picklable on
+    purpose — the identical function runs inline for a serial build and inside a worker
+    process for a parallel one, so the two paths cannot drift apart. Workers cannot
+    touch the job dict, so everything the parent needs comes back in `stats`."""
+    import uproot
+    idx, name, url, tree, want, branches, cut, limit = task
+    t0 = time.time()
+    f = uproot.open(url, timeout=300)
+    t = f[tree]
+    missing = [b for b in want if b not in t]
+    if missing:
+        raise RuntimeError(f"{name}: {url} has no branch(es) {missing}")
+    jag = [b for b in want if "AsJagged" in str(t[b].interpretation)
+           or "AsObjects" in str(t[b].interpretation)]
+    if jag:
+        raise RuntimeError(
+            f"{name}: branch(es) {', '.join(jag)} are not one number per event — the "
+            f".rvr format is flat. Reduce them in a skim, or drop them from the columns.")
+    n_tot = int(t.num_entries)
+    parts: dict = {c: [] for c in branches}
+    read = kept = 0
+    for arrs in t.iterate(want, step_size=CHUNK, library="np",
+                          entry_stop=limit if limit else None):
+        read += len(arrs[want[0]])
+        cols = {c: arrs[b] for c, b in branches.items()}
+        if cut:
+            keep = eval_cut(cut, cols)
+            cols = {c: v[keep] for c, v in cols.items()}
+        kept += len(next(iter(cols.values())))
+        for c, v in cols.items():
+            parts[c].append(v)
+    out = {c: (np.concatenate(v) if v else np.array([], np.float64))
+           for c, v in parts.items()}
+    stats = {"idx": idx, "dataset": name, "url": url, "entries": n_tot,
+             "read": read, "kept": kept,
+             "file_MB": round(f.file.source.num_bytes / 1e6, 2),
+             "disk_bytes": f.file.source.num_bytes,
+             "wire_bytes": f.file.source.num_requested_bytes,
+             "wire_MB": round(f.file.source.num_requested_bytes / 1e6, 3),
+             "seconds": round(time.time() - t0, 2)}
+    return out, stats
+
+
 def load_dataset(name: str, entry: dict, branches: dict, cut: str | None, job: dict):
     """All requested branches of one dataset, cut applied, as {column: array}.
-    Reads in CHUNK-entry slices and updates the job's LIVE counters after each — every
-    number the console shows is sampled from uproot's own byte meter, never invented."""
-    import uproot
+    Files are read serially or across worker processes — tune_workers decides which,
+    and the SAME read_file does the work either way. Results are re-ordered by file
+    index before concatenation, so a parallel build is byte-identical to a serial one."""
     want = sorted(set(branches.values()))
-    parts: dict = {c: [] for c in branches}
-    for url, tree in entry["files"].items():
-        base = url.rstrip("/").split("/")[-1]
-        cold = not HANDSHAKE["done"]
-        job["phase"] = "opening"
-        job["current"] = {"dataset": name, "file": base, "entries_total": None,
-                          "entries_read": 0, "wire_MB": 0.0, "file_MB": None}
-        job["note"] = f"opening {base}" + (
-            " — FIRST open in this helper process: the one-time ~60 s xrootd handshake"
-            if cold else "")
-        t0 = time.time()
-        f = uproot.open(url, timeout=300)
-        note_first_open(time.time() - t0)
-        t = f[tree]
-        missing = [b for b in want if b not in t]
-        if missing:
-            raise RuntimeError(f"{name}: {url} has no branch(es) {missing}")
-        n_tot = int(t.num_entries)
-        job["disk_bytes"] += f.file.source.num_bytes
-        job["current"]["entries_total"] = n_tot
-        job["current"]["file_MB"] = round(f.file.source.num_bytes / 1e6, 2)
-        job["phase"] = "reading"
-        job["note"] = f"{name}: {base}"
-        read = 0
-        checked = False
-        for arrs in t.iterate(want, step_size=CHUNK, library="np"):
-            if not checked:
-                for b in want:
-                    if arrs[b].dtype == object or arrs[b].ndim != 1:
-                        raise RuntimeError(
-                            f"{name}: branch {b} is not one number per event — the "
-                            f".rvr format is flat; reduce it in a skim first")
-                checked = True
-            got = len(arrs[want[0]])
-            read += got
-            job["entries_read"] += got
-            cols = {c: arrs[b] for c, b in branches.items()}
-            if cut:
-                keep = eval_cut(cut, cols)
-                cols = {c: v[keep] for c, v in cols.items()}
-            job["entries_kept"] += len(next(iter(cols.values())))
-            for c, v in cols.items():
-                parts[c].append(v)
-            job["current"]["entries_read"] = read
-            job["current"]["wire_MB"] = round(f.file.source.num_requested_bytes / 1e6, 3)
-            job["wire_bytes"] = job["_wire_done"] + f.file.source.num_requested_bytes
-        if read == 0:
-            for c in branches:                       # an empty tree still needs arrays
-                parts[c].append(np.array([], np.float64))
-        job["_wire_done"] += f.file.source.num_requested_bytes
+    files = list(entry["files"].items())
+    cap, endpoint, calibrating = plan_workers(files)
+    nproc = 1 if calibrating else cap
+    job["workers"] = nproc
+    job["tuning"] = ("measuring on the first files…" if calibrating
+                     else (TUNED.get(endpoint, {}).get("why")
+                           or (f"forced by ROWVER_WORKERS={WORKERS}" if WORKERS.isdigit()
+                               else "too few files to be worth tuning")))
+    tasks = [(i, name, u, tr, want, branches, cut, None)
+             for i, (u, tr) in enumerate(files)]
+    got: dict = {}
+
+    def absorb(cols, st):
+        got[st["idx"]] = cols
+        job["entries_read"] += st["read"]
+        job["entries_kept"] += st["kept"]
+        job["disk_bytes"] += st["disk_bytes"]
+        job["_wire_done"] += st["wire_bytes"]
         job["wire_bytes"] = job["_wire_done"]
-        job["file_log"].append({
-            "dataset": name, "url": url, "entries": n_tot,
-            "file_MB": round(f.file.source.num_bytes / 1e6, 2),
-            "wire_MB": round(f.file.source.num_requested_bytes / 1e6, 3),
-            "seconds": round(time.time() - t0, 2)})
+        job["file_log"].append({k: st[k] for k in
+                                ("dataset", "url", "entries", "file_MB", "wire_MB", "seconds")})
         job["done_files"] += 1
-        # this file is now COUNTED, so it must stop counting as work in progress too —
-        # leaving it here made the bar read (done + 1)/total, i.e. 114% on a 7-file build
         job["current"] = None
-        job["note"] = f"{name}: {job['done_files']}/{job['total_files']} files"
+        job["note"] = (f"{name}: {job['done_files']}/{job['total_files']} files"
+                       + (f" · {job['workers']} workers" if job["workers"] > 1 else ""))
+
+    def run_serial(batch):
+        for task in batch:
+            base = task[2].rstrip("/").split("/")[-1]
+            job["phase"] = "opening"
+            job["current"] = {"dataset": name, "file": base, "entries_total": None,
+                              "entries_read": 0, "wire_MB": 0.0, "file_MB": None}
+            job["note"] = f"opening {base}"
+            cols, st = read_file(task)
+            job["phase"] = "reading"
+            absorb(cols, st)
+
+    #: ONE pool for the whole build. Creating one per wave charged the parallel wave a
+    #: fork it did not owe and the serial wave nothing, which made the calibration lie:
+    #: it read 1.1x on cmslpc where the true figure is 1.8x, and chose serial.
+    POOL = {"p": None}
+
+    def run_pool(batch, n):
+        if POOL["p"] is None:
+            POOL["p"] = pool_ctx().Pool(n)
+        # imap_unordered so counters move as files land; `idx` in stats restores order
+        for cols, st in POOL["p"].imap_unordered(read_file, batch):
+            absorb(cols, st)
+
+    job["phase"] = "reading"
+    if not calibrating:
+        (run_serial if nproc <= 1 else lambda b: run_pool(b, nproc))(tasks)
+    else:
+        #: CALIBRATE ON REAL WORK. A separate probe has to open files twice, and on a
+        #: latency-bound link opening IS the cost — measured, a taste-first probe turned
+        #: a 24 s build into 40 s. So the first wave runs serially and the second in
+        #: parallel, both keeping their data, and the measured per-file rate picks the
+        #: remainder. Nothing is read twice and nothing is thrown away.
+        wave = min(3, cap)
+        job["tuning"] = "assessing the fastest setup for this storage…"
+        #: compare ENTRIES PER SECOND, not seconds per file. The fileset is sorted
+        #: smallest-first, so wave two is strictly bigger than wave one and a per-file
+        #: comparison is invalid — measured, it read 1.1x on cmslpc where forcing the
+        #: workers actually gives 1.8x, and so it talked itself into staying serial.
+        n0 = job["entries_read"]; t0 = time.time()
+        run_serial(tasks[:wave])
+        ser_rate = (job["entries_read"] - n0) / max(time.time() - t0, 1e-9)
+        POOL["p"] = pool_ctx().Pool(cap)
+        POOL["p"].map(_warm, range(cap))            # started and warm BEFORE we time it
+        n0 = job["entries_read"]; t0 = time.time()
+        run_pool(tasks[wave:2 * wave], cap)
+        par_rate = (job["entries_read"] - n0) / max(time.time() - t0, 1e-9)
+        gain = par_rate / ser_rate if ser_rate > 0 else 1.0
+        nproc, why = ((cap, f"{gain:.1f}x faster with {cap} workers") if gain >= 1.25
+                      else (1, f"serial — {cap} workers measured only {gain:.1f}x"))
+        TUNED[endpoint] = {"workers": nproc, "why": why}
+        job["workers"], job["tuning"] = nproc, why
+        rest = tasks[2 * wave:]
+        if rest:
+            (run_serial if nproc <= 1 else lambda b: run_pool(b, nproc))(rest)
+    if POOL["p"] is not None:
+        POOL["p"].close(); POOL["p"].join()
+
+    parts = {c: [got[i][c] for i in sorted(got)] for c in branches}
+    for c in parts:
+        if not any(len(v) for v in parts[c]):
+            parts[c] = [np.array([], np.float64)]
     out = {}
     for c, chunks in parts.items():
         v = np.concatenate(chunks) if chunks else np.array([], np.float64)
@@ -621,6 +733,7 @@ class Handler(BaseHTTPRequestHandler):
                 pinfo = proxy_info()
                 return self._json({"ok": True, "helper": "rowver-remote",
                                    "version": page.VERSION, "port": PORT, "eos": EOS,
+                                   "workers": WORKERS, "tuned": TUNED,
                                    "proxy_expires": ("EXPIRED " + pinfo["expires"])
                                                     if pinfo["expired"] else pinfo["expires"],
                                    "proxy": pinfo,
@@ -652,6 +765,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not job:
                     return self._json({"error": "no such job"}, 404)
                 keys = ("phase", "done_files", "total_files", "note", "error",
+                        "workers", "tuning",
                         "current", "entries_read", "entries_kept")
                 out = {k: job.get(k) for k in keys}
                 # elapsed on the HELPER's clock, wire from uproot's own meter — the
@@ -828,6 +942,18 @@ def main():
            else " — the idle timeout is OFF (ROWVER_IDLE_MIN=0).") +
           " A helper left running holds this port and answers with YOUR credentials, "
           "and a login node is shared.", flush=True)
+    # Start the forkserver NOW, while this process is quiescent. Every worker pool is
+    # forked by it rather than by us, so a pool created mid-build cannot race the XRootD
+    # atfork handler. Stress-verified on Mac and cmslpc: six pools created while the
+    # parent was actively reading, no deadlock.
+    if WORKERS != "1":
+        try:
+            import multiprocessing.forkserver as _fs
+            import multiprocessing as _mp
+            if "forkserver" in _mp.get_all_start_methods():
+                _fs.ensure_running()
+        except Exception as e:
+            print(f"  NOTE: no forkserver ({type(e).__name__}) — reads stay serial", flush=True)
     threading.Thread(target=watchdog, daemon=True).start()
     try:
         srv.serve_forever()
