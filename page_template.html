@@ -399,6 +399,17 @@ body[data-dirty] #saverow::after,body[data-dirty] #saveall::after{content:" *";c
   padding:54px 24px;text-align:center;margin:40px auto;max-width:620px}
 #drop.over{border-color:var(--signal);background:var(--sunk)}
 #drop p{margin:6px 0;font-family:var(--mono);font-size:calc(13px * var(--ts))}
+/* the two ways in, as ALIGNED rows: button in a fixed column, its one line beside it.
+   Five centred paragraphs of equal weight is what made this screen read as ragged. */
+.dropacts{display:flex;flex-direction:column;gap:11px;margin:22px auto 0;width:min(520px,100%)}
+/* every row the SAME width, not merely centred: centring each row independently left
+   the two buttons at different x, which is what still read as ragged */
+.dropact{display:flex;align-items:center;gap:13px;width:100%;text-align:left}
+.dropact .tbtn{flex:0 0 auto;width:170px;text-align:center}
+.dropact>span{color:var(--ink-3);font-size:calc(11.5px * var(--ts));line-height:1.55}
+#drop .dropfoot{max-width:520px;margin:20px auto 0;text-align:center;
+  border-top:1px solid var(--rule-2);padding-top:12px}
+#drop .dropfoot a{white-space:nowrap}   /* never break a url mid-path */
 #drop .hint{color:var(--ink-3);font-size:calc(11.5px * var(--ts));margin-top:16px}
 .pick{color:var(--signal);cursor:pointer;text-decoration:underline}
 
@@ -849,22 +860,25 @@ pre.rgndoc{background:var(--panel);border:1px solid var(--rule);border-radius:7p
   <div id="drop" hidden>
     <p><b>Drop a .rvr file here</b></p>
     <p>or <label class="pick">choose one<input type="file" id="pick" accept=".rvr" hidden></label></p>
-    <p class="hint">Never written one before? The <a href="" id="bldhint">builder</a>
-      browses your storage, shows you the branches, and writes the
-      <code>fileset.json</code> and <code>config.py</code> a study is made of.</p>
-    <p class="hint">Built with <code>page.data(columns, "name")</code>. Your data is never
-      saved nor processed on a remote machine — all computational work is done on your
-      local machine, in your browser.</p>
-    <p class="hint">Don't have a .rvr file of your data? Generate one here:
+    <div class="dropacts">
+      <div class="dropact">
+        <button class="tbtn hero" id="demo">the dimuon spectrum</button>
+        <span>a worked demo, built from CMS open data<span id="demonote" hidden>
+          — back soon</span></span>
+      </div>
+      <div class="dropact">
+        <button class="tbtn hero" id="bldlink"
+          title="browse DAS or eos, inspect branches, select events, and build .rvr files
+ through a small local helper — the builder explains how to start one">open the builder</button>
+        <span>no .rvr yet? Browse DAS datasets or eos files, pick your branches, and it
+          writes the <code>fileset.json</code> and <code>config.py</code> a study is
+          made of.</span>
+      </div>
+    </div>
+    <p class="hint dropfoot">Your data is never uploaded and never processed remotely —
+      every computation runs in this browser, on your own machine.
       <a href="https://gitlab.cern.ch/dgrove/rowver" target="_blank"
          rel="noopener">gitlab.cern.ch/dgrove/rowver</a></p>
-    <p class="hint" id="demorow">see a demo, CMS open data:
-      <button class="tbtn hero" id="demo">the dimuon spectrum</button>
-      <span id="demonote" hidden>— back soon</span></p>
-    <p class="hint">Want to build a .rvr from CMS storage — DAS datasets, eos files,
-      or a subset of either? <button class="tbtn hero" id="bldlink"
-      title="the builder: browse DAS or eos, inspect branches, select events, and
- build .rvr files through a small local helper (the page explains how to start one)">open the builder</button></p>
     <div id="dlwrap" hidden>
       <div class="dlbar" id="dlbar"><i id="dlfill"></i></div>
       <p class="hint" id="dltext"></p>
@@ -10478,7 +10492,6 @@ function rgnWire(){
       ? "remote/console.html" : "console.html");
     if ($("bldlink")) $("bldlink").onclick = () => { location.href = consoleAt(); };
     if ($("qsgo")) $("qsgo").onclick = () => { location.href = consoleAt() + "?guided"; };
-    if ($("bldhint")) $("bldhint").href = consoleAt();
     // A demo goes live only when its .rvr has been reviewed ON the deployed page, and it
     // needs a served page: file:// has nowhere to fetch the demo file from.
     const DEMOS = {demo: true};
