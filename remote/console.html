@@ -96,7 +96,9 @@ body.guided .guide{display:block}
 #guidecard h2{color:var(--orange)}
 #getstarted pre{background:var(--sunk);border:1px solid var(--rule);border-radius:3px;
   padding:8px 10px;margin:6px 0;overflow-x:auto;font-size:12px;line-height:1.6}
-#getstarted b{display:block;margin-top:10px}
+/* only the OPTION HEADINGS are blocks. Applying this to every <b> broke inline
+   emphasis onto its own line mid-sentence, which read as badly as no emphasis. */
+#getstarted>b{display:block;margin-top:12px}
 /* the one waiting animation: three dots that grow and shrink in order (Derek, R7) */
 .dots{display:inline-block;vertical-align:baseline}
 .dots i{display:inline-block;width:5px;height:5px;border-radius:50%;
@@ -131,25 +133,43 @@ body.guided .guide{display:block}
   style="border-color:var(--orange);color:var(--orange)">or just build it for me</button></p>
 </div>
 
-<div class="card" id="getstarted" hidden><h2>no helper answered — get one running</h2>
-  <b>on a cluster node (recommended; substitute your username@host)</b>
+<div class="card" id="getstarted" hidden><h2>setting up — two things this needs</h2>
+  <p class="hint" style="margin:0 0 4px">
+  <b>1. Something that can read the files.</b> A browser cannot open CMS storage
+  itself — grid authentication and the missing CORS headers make it impossible, even
+  for public files. So the reading is done by <code>helper.py</code>, a small program
+  you run on your own machine. This page talks to it on <code>localhost</code> only;
+  your data never leaves the machine it is read on.<br>
+  <b>2. A grid proxy, for anything private.</b> DAS datasets and your own eos space
+  need a valid proxy on whichever machine runs the helper. <b>CMS open data needs
+  none</b> — you can do the whole guided walkthrough with no certificate at all.</p>
+
+  <b>Option 1 — on your laptop (start here)</b>
+  <pre>voms-proxy-init -voms cms --valid 192:00     <span class="jnote"># skip if you only want open data</span>
+git clone https://gitlab.cern.ch/dgrove/rowver
+python3 -m pip install --user numpy uproot fsspec-xrootd
+cd rowver &amp;&amp; python3 remote/helper.py</pre>
+  <p class="hint">No proxy on this machine yet? This walkthrough is the one that works:
+  <a href="https://hackmd.io/@andrzejnovak/SJxscCZvD" target="_blank" rel="noopener">the
+  conda-forge route</a>. Note that <code>voms-proxy-init</code> ends in red
+  (<code>CRL has expired</code>) even when it succeeds — the line that matters is
+  <code>Your proxy is valid until …</code>.</p>
+
+  <b>Option 2 — on a cluster node you already use (lxplus, cmslpc)</b>
   <pre>ssh -L 8271:localhost:8271 username@cmslpc-el9.fnal.gov
 git clone https://gitlab.cern.ch/dgrove/rowver
 python3 -m pip install --user numpy uproot fsspec-xrootd
 cd rowver &amp;&amp; python3 remote/helper.py</pre>
-  <b>or on this machine</b>
-  <pre>git clone https://gitlab.cern.ch/dgrove/rowver
-python3 -m pip install --user numpy uproot fsspec-xrootd
-cd rowver &amp;&amp; python3 remote/helper.py</pre>
-  <p class="hint">Open data needs no proxy; private CMS data does. If Firefox asks
-  about local-network access, allow it. Details:
+  <p class="hint">More setup, but your credentials and the data are already there — and
+  it is <b>much faster</b>: measured on an 8-file study, 39.6 s from a laptop against
+  1.7 s on a cmslpc node. Worth it once your studies get big. Keep the ssh session open;
+  the helper stops with it.</p>
+
+  <p class="hint">If Firefox asks to allow <b>local network access</b>, allow it — this
+  page only ever talks to <code>127.0.0.1</code>. Full instructions:
   <a href="https://gitlab.cern.ch/dgrove/rowver/-/blob/main/remote/README.md">remote/README.md</a>.</p>
-  <p class="hint" style="margin-top:10px">Never done this before? Once a helper is
-  running, <b>no proxy? no problem</b> — there is a guided build against public CMS
-  open data, pre-filled and annotated step by step, so you can see the whole thing
-  work before pointing it at your own files.</p>
   <div class="row" style="margin-top:8px"><button class="go" id="recheck">check again</button>
-  <span class="hint" style="margin:0">flips to the builder when a helper answers</span></div>
+  <span class="hint" style="margin:0">flips to the builder the moment a helper answers</span></div>
 </div>
 
 <div class="card"><h2>helper</h2><div id="status">checking…</div>
@@ -414,7 +434,7 @@ async function status(){
   } catch(e){
     UP = false;
     flip();
-    $("status").textContent = "not answering — see the two recipes above";
+    $("status").textContent = "not answering — follow one of the two options above";
     $("banner").hidden = true;
   }
 }
