@@ -15,6 +15,7 @@ h1 span{color:var(--blue)}
 .sub{color:var(--ink3);margin:0 0 14px}
 .card{background:var(--panel);border:1px solid var(--rule);border-radius:4px;
   padding:12px 14px;margin:0 0 14px}
+.h2sub{text-transform:none;letter-spacing:0;color:var(--ink3);font-weight:400}
 .card h2{font-size:13px;margin:0 0 8px;color:var(--blue);text-transform:uppercase;
   letter-spacing:.08em}
 .hint{color:var(--ink3);font-size:11.5px;margin:6px 0 0;line-height:1.5}
@@ -133,18 +134,18 @@ body.guided .guide{display:block}
   style="border-color:var(--orange);color:var(--orange)">or just build it for me</button></p>
 </div>
 
-<div class="card" id="getstarted" hidden><h2>setting up — two things this needs</h2>
-  <p class="hint" style="margin:0 0 4px">
-  <b>1. Something that can read the files.</b> A browser cannot open CMS storage
-  itself — grid authentication and the missing CORS headers make it impossible, even
-  for public files. So the reading is done by <code>helper.py</code>, a small program
-  you run on your own machine. This page talks to it on <code>localhost</code> only;
-  your data never leaves the machine it is read on.<br>
-  <b>2. A grid proxy, for anything private.</b> DAS datasets and your own eos space
-  need a valid proxy on whichever machine runs the helper. <b>CMS open data needs
-  none</b> — you can do the whole guided walkthrough with no certificate at all.</p>
+<div class="card" id="getstarted" hidden>
+  <h2>building a .rvr file in browser <span class="h2sub">(this will run the python for
+  you)</span></h2>
+  <p class="hint" style="margin:0">This tool requires access to a grid proxy. You can
+  either have one installed locally on your laptop — a bit hacky, but
+  <a href="https://hackmd.io/@andrzejnovak/SJxscCZvD" target="_blank" rel="noopener">follow
+  this tutorial</a> — or you can tunnel into a remote machine that already has grid
+  access (lxplus or Fermilab LPC). <b>I would recommend installing the proxy locally.</b>
+  In either case, <b>you run helper.py on the machine that has the proxy</b>, then this
+  browser will find it and handshake, and voilà — it works.</p>
 
-  <b>Option 1 — on your laptop (start here)</b>
+  <b>Option 1 — proxy installed locally</b>
   <pre>voms-proxy-init -voms cms --valid 192:00     <span class="jnote"># skip if you only want open data</span>
 git clone https://gitlab.cern.ch/dgrove/rowver
 python3 -m pip install --user numpy uproot fsspec-xrootd
@@ -155,7 +156,7 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
   (<code>CRL has expired</code>) even when it succeeds — the line that matters is
   <code>Your proxy is valid until …</code>.</p>
 
-  <b>Option 2 — on a cluster node you already use (lxplus, cmslpc)</b>
+  <b>Option 2 — tunneling to a cluster</b>
   <pre>ssh -L 8271:localhost:8271 username@cmslpc-el9.fnal.gov
 git clone https://gitlab.cern.ch/dgrove/rowver
 python3 -m pip install --user numpy uproot fsspec-xrootd
