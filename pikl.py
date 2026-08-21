@@ -175,7 +175,7 @@ def skim(cart, sample: str, step: int = STEP, threads: int = 0,
 
     per_chunk = []
     for path, ttree in trees.items():
-        meta = cart.meta(sample, path, files[path])
+        meta = cart.hook_meta(sample, path, files[path])
         assert ttree.num_entries, f"{files[path]} in {path} is empty"
         for start in range(0, ttree.num_entries, step):
             lazy = {"virtual": True} if supports_virtual(ttree) else {}

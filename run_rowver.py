@@ -47,7 +47,7 @@ def parse(argv: list[str] | None = None) -> argparse.Namespace:
 def view_of(cart):
     """The study's view.py, or None when it has none."""
     path = cart.dir / "view.py" if cart.dir else None
-    return cart_module.module(path, f"studies.{cart.name}.view") if path and path.exists() else None
+    return cart_module.import_file(path, f"studies.{cart.name}.view") if path and path.exists() else None
 
 
 def only(spec, names: list[str]):
@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     """Skim, then build, reporting what each step cost."""
     args = parse(argv)
     if args.list or not args.study:
-        print("studies:", ", ".join(cart_module.available()) or "none")
+        print("studies:", ", ".join(cart_module.study_names()) or "none")
         return 0 if args.list else 2
 
     cores = os.cpu_count() or 1
@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
 
     view = view_of(cart)
     check_view(view, list(cart.fileset), f"{cart.dir}/view.py")
-    print(f"\n{cart.check()} files across {len(cart.fileset)} samples")
+    print(f"\n{cart.count_files()} files across {len(cart.fileset)} samples")
 
     if args.check:
         per_sample = cart.files()

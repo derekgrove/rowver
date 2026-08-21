@@ -431,8 +431,27 @@ def branch_inventory(url: str, tree: str) -> dict:
                              for n in names]}
 
 
+def fileset_weights(node) -> list:
+    """Every weights branch a FILESET literal names, or [None] where a sample declares none."""
+    import ast
+    out = []
+    for sample in getattr(node, "values", []):
+        if not isinstance(sample, ast.Dict):
+            return ["?"]
+        meta = next((v for k, v in zip(sample.keys, sample.values)
+                     if isinstance(k, ast.Constant) and k.value == "metadata"), None)
+        if not isinstance(meta, ast.Dict):
+            out.append(None)
+            continue
+        spec = next((v for k, v in zip(meta.keys, meta.values)
+                     if isinstance(k, ast.Constant) and k.value == "weights"), None)
+        out.append(spec.value if isinstance(spec, ast.Constant) else
+                   (None if spec is None else "?"))
+    return out
+
+
 def parse_config(source: str) -> dict:
-    """Read a study's config.py well enough to refill the builder — or refuse.
+    """Read a study's cart.py well enough to refill the builder — or refuse.
 
     Parsed with `ast`, never executed: this is a file the user hands us, and importing
     it would run it. The builder can only express columns that are branch names copied
@@ -473,6 +492,7 @@ def parse_config(source: str) -> dict:
         elif isinstance(node, ast.Assign) and len(node.targets) == 1 \
                 and isinstance(node.targets[0], ast.Name):
             name = node.targets[0].id
+            seen.add(name)
             if name == "COLUMNS":
                 if not isinstance(node.value, ast.Dict):
                     cannot.append("a COLUMNS that is not a literal dict")
@@ -483,12 +503,24 @@ def parse_config(source: str) -> dict:
                         out["columns"].append(v.value)
                     else:
                         cannot.append(f"column {key!r} is computed, not a branch")
-            elif name == "WEIGHTS_BRANCH" and isinstance(node.value, ast.Constant):
-                out["weights"] = node.value.value or ""
+            elif name == "FILESET":
+                # weights are per sample; the builder has one field, so it can only take
+                # a cart where every weighted sample names the SAME branch
+                said = fileset_weights(node.value)
+                named = sorted({w for w in said if w})
+                if "?" in named or len(named) > 1:
+                    cannot.append("samples with different or computed weights branches")
+                out["weights"] = named[0] if named else ""
             elif name == "LABELS":
                 cannot.append("a LABELS map")
     if "COLUMNS" not in source:
-        raise RuntimeError("no COLUMNS in that file — is it a RowVer config.py?")
+        raise RuntimeError("no COLUMNS in that file — is it a RowVer cart.py?")
+    for retired in ("HAS_WEIGHTS", "WEIGHTS_BRANCH"):
+        if retired in seen or f"\n{retired}" in source:
+            raise RuntimeError(
+                f"that file still declares {retired}, which nothing reads. Weights are "
+                f"per sample: name the branch in each sample's metadata as "
+                f"{{'weights': '<branch>'}}. Left as it is every sample builds at 1.0.")
     if cannot:
         raise RuntimeError(
             "the builder cannot represent this config, so it will not half-import it: "
@@ -622,11 +654,7 @@ def _read_open(f, task, t0):
 
 
 def sample_weights(spec: dict, entry: dict) -> str | None:
-    """The branch filling this sample's weights column: its own, the spec's, or none.
-
-    A fileset entry may carry its own `weights` — a branch name, or null to say this
-    sample has none and is real data. Absent, it falls back to whatever the spec's
-    `branches` maps the weights column to, which is how every sample used to be read."""
+    """The branch filling this sample's weights column: its own, the spec's, or none."""
     column = spec.get("weights")
     if not column:
         return None
@@ -826,14 +854,8 @@ def build_rvr(spec: dict, job: dict) -> Path:
     if grouping:
         meta["grouping"] = grouping
     meta["title"] = spec.get("title", "remote") + ".rvr"
-    # THE CARTRIDGE STAMP (rowver 5, replacing `origin`): what this file is made of and
-    # what was done to it. Per sample the RESOLVED {url: tree} it was actually read from —
-    # post-DAS-resolution, subset included, exactly what load_dataset consumed — its own
-    # weights branch, and how many events it contributed. The submitted spec rides under
-    # `config`, which is what a builder file has instead of a config.py.
-    # ⚠️ `built` ENDS the R3 property that two builds of one spec are byte-identical.
-    # Nothing operational changes: the cache is keyed on the spec's sha, not on the bytes,
-    # so a second request for the same spec is served the first build, timestamp and all.
+    # the cartridge stamp: per sample the resolved {url: tree} actually read, its weights
+    # branch and its event count; the submitted spec rides under `config`
     spec_json = json.dumps(submitted, indent=1)
     meta["cart"] = {
         "name": spec.get("title", "remote"),

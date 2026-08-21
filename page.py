@@ -96,6 +96,8 @@ no single number a plot axis could honestly carry.
                                  reads the same way in both. Absent means every source is
                                  solid. ids: dash, dot, dashdot, hatch, back, cross, dots
     made_by     str              optional: the RowVer version that wrote the file
+    viewer      str              optional: where to open this file, so an emailed .rvr
+                                 is not an unidentifiable binary
     title, path str              optional: for the masthead
 
 Each entry of cols:
@@ -212,6 +214,7 @@ VERSION: str = "0.34.0"   # the tool, shown on every page it builds; bump when t
 ROWVER: int = 5           # .rvr format version, which moves separately
 READS: tuple = (4, 5)     # v2 and v3 are gone: their weights were undeclared
 MAX_MB: int = 40
+VIEWER: str = "https://rowver.web.cern.ch"   # what opens a .rvr, recorded IN the .rvr
 MAX_CHIPS: int = 25
 
 USAGE = """usage: python page.py extract file.rvr > studies/mine/view.py
@@ -326,8 +329,8 @@ def pack(columns_by_sample: dict[str, dict[str, np.ndarray]],
     if weights is not None:
         assert weights in every_column, (
             f"the weights column is declared as {weights!r}, which this skim does not "
-            f"produce — COLUMNS defines: {every_column}. Set WEIGHTS_BRANCH to one of "
-            f"those, or HAS_WEIGHTS = False if these events carry no weights.")
+            f"produce — it has: {every_column}. The pikl was almost certainly skimmed "
+            f"before this cart declared weights; rerun without --no-skim.")
     kind = kinds(columns_by_sample, weights)
     axes = [c for c in every_column if c != weights]
     assert axes, "a file needs at least one column that is not the weights"
@@ -394,6 +397,7 @@ def build(columns_by_sample: dict[str, dict[str, np.ndarray]],
     """Pack the columns and attach the opening view — the part export() and data() share."""
     meta, buf = pack(columns_by_sample, labels, weights)
     meta["made_by"] = VERSION
+    meta["viewer"] = VIEWER
     if cart:
         meta["cart"] = cart
     if not tabs:

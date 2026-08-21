@@ -1,6 +1,6 @@
 """REMOTE EXAMPLE — a study whose files are not on this machine.
 
-Only fileset.json differs from any other study: it names URLs instead of paths. These
+Only the FILESET differs from any other study: it names URLs instead of paths. These
 are public CMS Open Data on CERN's EOS, so no certificate is needed.
 
     root://host//path/file.root      needs `fsspec-xrootd`
@@ -11,7 +11,7 @@ you the xrdcp command but not the URL. Both samples use root://, because https r
 these files fail under the many small byte ranges a skim asks for.
 
 Streaming re-reads the network every skim. To iterate on KEEP, copy them down once with
-xrdcp and point fileset.json at the local files instead — measured here, 22s to copy and
+xrdcp and point FILESET at the local files instead — measured here, 22s to copy and
 then 0s a skim, against 15s on every run. For grid files see studies/grid_example/.
 """
 from cart import Cart

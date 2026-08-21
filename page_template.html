@@ -227,6 +227,8 @@ label.event{display:flex;align-items:center;gap:6px;font-family:var(--mono);font
   display:inline-flex;align-items:center;justify-content:center;cursor:help;
   color:var(--ink-3);border:1px solid var(--ink-3)}
 .pflag.pwarn{color:var(--warn);border-color:var(--warn)}
+.cartpath{font-family:var(--mono);font-size:calc(10px * var(--ts));word-break:break-all}
+.cartsrc{font-family:var(--mono);font-size:calc(10px * var(--ts));white-space:pre-wrap;max-height:340px;overflow:auto;background:var(--sunk);padding:8px;margin:8px 0 0}
 .tblmix{margin:0 0 10px}
 .hint a{color:var(--signal)}
 /* A demo file is ~10MB over the network and then has to be gunzipped and unpacked, which
@@ -1032,6 +1034,10 @@ pre.rgndoc{background:var(--panel);border:1px solid var(--rule);border-radius:7p
   <details class="schema">
     <summary class="schead">columns in this file</summary>
     <div class="scwrap"><table id="schema"></table></div>
+  </details>
+  <details class="schema" id="cartbox" hidden>
+    <summary class="schead">what this file is made of</summary>
+    <div class="scwrap" id="cartwrap"></div>
   </details>
   </div>
 </div>
@@ -5056,6 +5062,35 @@ function zbi(s, b, b2, syst){
   return -normInv(ibeta(s + b, 1 + tau*b, 1/(1 + tau)));
 }
 
+function buildCart(){
+  // The cartridge label, on the page. Everything here is META.cart, which travels inside
+  // the file — so whoever you send it to can read what it is made of without the tool.
+  const c = META.cart, box = $("cartbox");
+  if (!box) return;
+  box.hidden = !c;
+  if (!c) return;
+  const cell = (x, cls) => `<td${cls ? ` class="${cls}"` : ""}>${esc(String(x))}</td>`;
+  const rows = Object.entries(c.samples || {}).map(([name, s]) =>
+    `<tr class="tyr"><td>${esc(name)}</td>` +
+    cell((s.n == null ? "?" : s.n.toLocaleString("en-US")), "r") +
+    cell(s.weights == null ? "no weights — counted raw" : s.weights) +
+    cell(Object.keys(s.files || {}).length + " file(s)", "r") +
+    `<td>${Object.entries(s.files || {}).map(([u, t]) =>
+        `<div class="cartpath">${esc(u)} <b>${esc(t)}</b></div>`).join("") || "—"}</td></tr>`);
+  const line = (k, v) => v ? `<tr class="tyr"><td>${k}</td><td colspan="4">${esc(v)}</td></tr>` : "";
+  const cfg = c.config || {};
+  $("cartwrap").innerHTML =
+    `<table><tr><th>sample</th><th class="r">events</th><th>weights</th>` +
+    `<th class="r">files</th><th>where</th></tr>${rows.join("")}</table>` +
+    `<table>${line("selection", c.keep)}${line("prepared by", c.prepare)}` +
+    `${line("columns", Object.entries(c.columns || {}).map(([k, v]) => `${k} = ${v}`).join("  ·  "))}` +
+    `${line("skimmed", c.skimmed)}${line("written", c.built)}${line("by", META.made_by)}` +
+    `${line("from", cfg.path)}${line("sha256", cfg.sha256)}` +
+    `${(c.merged || []).map(m => line("merged from", `${m.file} (${m.name || "?"})`)).join("")}` +
+    `</table>` +
+    (cfg.source ? `<pre class="cartsrc">${esc(cfg.source)}</pre>` : "");
+}
+
 function buildSchema(){
   // Straight out of META. This is what the FILE says each column is — not what any config
   // claimed when it was written, which is the whole point of reading it back.
@@ -5188,10 +5223,6 @@ function gunzip(stream){
 }
 
 const ROWVER = 5;   // the .rvr version this viewer writes; page.py holds the same number.
-// A v4 file re-saved from the page is written as v5, which is right: v5 is v4 plus an
-// OPTIONAL cart stamp, and a file without one reads as every-sample-weighted — exactly
-// what v4 meant. A file that HAS a stamp keeps it: Object.assign copies META, and the
-// stamp describes what produced the columns, which a re-save does not change.
 const READS = [4, 5];   // v2 and v3 are gone: their weights were undeclared
 const MADEBY = "__VERSION__";   // the tool version stamped into files this page writes
                     // v2 is still read — initTabs lifts its single state to one tab.
@@ -7155,6 +7186,7 @@ function start(buf, source){
   showSource();
   buildUI();
   buildSchema();
+  buildCart();
   PLOTS = [newPlot()];
   // a deep copy: collectState spreads plot specs shallowly, and without it FACTORY would
   // share the boot plot's nested objects and stop being the untouched page

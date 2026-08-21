@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import load
 import page
-import study
+from cart import Cart
 
 HERE = Path(__file__).parent
 STRIDE = 16
@@ -56,11 +56,10 @@ BOARD = {"rows": 2, "cols": 2,
 
 def strided(name: str) -> dict:
     """Every 16th event of each sample — shapes survive, size does not."""
-    st = study.load(name)
-    full = load.load(name, st["dir"])
+    cart = Cart.load(name)
+    full = load.load(name, cart.dir)
     return ({ds: {c: v[::STRIDE] for c, v in cols.items()} for ds, cols in full.items()},
-            getattr(st["config"], "LABELS", None),
-            study.weights(st["config"], st["dir"] / "config.py"))
+            cart.labels, cart.weights_column)
 
 
 def wide_state(meta):

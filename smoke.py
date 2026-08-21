@@ -109,6 +109,7 @@ def run(html: str, rowver: str | None = None, probe: str = "") -> str:
           "\ntry { showSource(); } catch(e){ return 'showSource THREW: ' + e.message; }"
           "\ntry { buildUI(); } catch(e){ return 'buildUI THREW: ' + e.message; }"
           "\ntry { buildSchema(); } catch(e){ return 'buildSchema THREW: ' + e.message; }"
+          "\ntry { buildCart(); } catch(e){ return 'buildCart THREW: ' + e.message; }"
           # every column, plus weight, plus dataset, gets a row. Counted by the `tyr`
           # class the rows now carry rather than by a bare <tr>: the byte-cost colouring
           # gives each row a class, and the header row is not a data row anyway.
@@ -2188,7 +2189,7 @@ GOLDEN = {
     #: read the same open-data file, so they hold the same events and only the weighting
     #: differs — data must read its raw count at EVERY luminosity, MC must scale.
     "golden_0.34.0_mixed.rvr": {
-        "sha256": "a279233ee7a75a863c5c98f983b0f1ee7e2ecb6b32e7ae8e7c62c0211121b1cf",
+        "sha256": "857038d1e6351ccd173ff9c35571795413816582ff1898e8b14b39597d2d2844",
         "rowver": 5, "n": 1000858, "datasets": 2, "tabs": 1, "tab": 0,
         "made_by": "0.34.0", "weights": "weight", "shown": 1000858,
         "mixed": {
@@ -2495,6 +2496,7 @@ USAGE = """boot a page, or drop a .rvr on one, or round-trip a pikl through the 
     smoke.py golden=golden                       the frozen files still open, unchanged
     smoke.py merge:mixed_demo=merge              split a study apart and merge it back
     smoke.py guards=guards                       every route to a silently wrong yield
+    smoke.py build:mixed_demo=build              run_rowver.py itself, end to end
 """
 
 
@@ -2531,12 +2533,7 @@ def viewtrip(rvr: str) -> str:
 
 
 def mergetrip(name: str) -> str:
-    """Split a study into part file per sample, merge them back, and demand the original.
-
-    The closure a merge has to satisfy: adding a sample to a built file must give exactly
-    what building all of them at once would have. It is checked on a study that MIXES —
-    part sample with weights and part without — because that is the case v4 could not hold
-    and the part where a merge has to invent a column rather than copy it."""
+    """Split a study into one file per sample, merge them back, and demand the original."""
     import tempfile
     import numpy as np
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -2544,17 +2541,18 @@ def mergetrip(name: str) -> str:
     original = cart.Cart.load(name)
     rows = load.load(name, original.dir)
     if len(rows) < 2:
-        return f"{name} holds part sample — nothing to merge"
+        return f"{name} holds one sample — nothing to merge"
 
     tmp = pathlib.Path(tempfile.mkdtemp())
     part_files = []
     for sample, columns in rows.items():
-        part = cart.Cart(name=f"part{len(part_files)}", fileset={sample: original.fileset[sample]},
-                        columns=original.columns, keep=original.keep, prepare=original.prepare)
+        part = cart.Cart(name=f"part{len(part_files)}",
+                         fileset={sample: original.fileset[sample]}, columns=original.columns,
+                         keep=original.keep, prepare=original.prepare)
         part.source, part.dir = original.source, original.dir     # else the stamp quotes THIS file
         # on its own, a sample declaring no weights has no weights column at all
-        to_write = columns if part.weights_column else {c: v for c, v in columns.items()
-                                                   if c != original.weights_column}
+        to_write = (columns if part.weights_column else
+                    {c: v for c, v in columns.items() if c != original.weights_column})
         part_files.append(part.write({sample: to_write}, dest=tmp)["file"])
 
     out = cart.Cart.merge(part_files, name="merged", dest=tmp)
@@ -2574,6 +2572,37 @@ def mergetrip(name: str) -> str:
         return f"the merged stamp lost a sample's weights: {stamped}"
     return (f"{len(part_files)} parts merged back into {meta['n']:,} events, identical to the "
             f"one-shot build, {len(want)} samples, weights kept per sample")
+
+
+def buildtrip(name: str) -> str:
+    """Run the real command line end to end, which nothing else in the battery does.
+
+    Every other lane starts from a built file, so a rename that breaks run_rowver.py is
+    invisible to all of them — twice now that is exactly what happened."""
+    import contextlib
+    import io
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    import cart, page, run_rowver
+    quiet = io.StringIO()
+    with contextlib.redirect_stdout(quiet):
+        code = run_rowver.main([name, "--no-skim", "--out", f"{name}_buildtrip"])
+    if code != 0:
+        return f"run_rowver.py returned {code}"
+    built = cart.Cart.load(name).dir / f"{name}_buildtrip.rvr"
+    header, _ = page.read(built)
+    stamp = header.get("cart") or {}
+    built.unlink()
+    for key in ("name", "built", "skimmed", "samples", "columns", "keep", "config"):
+        if key not in stamp:
+            return f"the stamp has no {key!r}"
+    if header.get("viewer") != page.VIEWER:
+        return f"the file does not say what opens it: {header.get('viewer')!r}"
+    absolute = [u for s in stamp["samples"].values() for u in s["files"]
+                if not (u.startswith("/") or "://" in u)]
+    if absolute:
+        return f"the stamp holds paths that mean nothing elsewhere: {absolute[:2]}"
+    return (f"run_rowver.py built {header['n']:,} events, stamped {len(stamp['samples'])} "
+            f"sample(s) with complete paths, and named its own viewer")
 
 
 def guardtrip(_: str = "") -> str:
@@ -2639,6 +2668,8 @@ def check(path: str) -> str:
     """Dispatch one argument to the boot, drop, round-trip or golden check."""
     if path == "golden":
         return golden()
+    if path.startswith("build:"):
+        return buildtrip(path[len("build:"):])
     if path == "guards":
         return guardtrip()
     if path.startswith("merge:"):

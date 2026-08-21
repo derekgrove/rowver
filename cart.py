@@ -72,8 +72,11 @@ def expand_globs(fileset: dict) -> dict:
         paths = {}
         for pattern, tree in sample["files"].items():
             local_glob = not is_remote(pattern) and any(c in pattern for c in "*?[")
-            paths |= {hit: tree for hit in (sorted(glob.glob(pattern)) if local_glob
-                                            else [pattern])}
+            hits = sorted(glob.glob(pattern)) if local_glob else [pattern]
+            # a COMPLETE path, which is what the stamp promises: a relative one means
+            # nothing to whoever you send the file to, and glob returns relative hits
+            paths |= {hit if is_remote(hit) else str(Path(hit).resolve()): tree
+                      for hit in hits}
         out[name] = {"files": paths, "metadata": dict(sample.get("metadata") or {})}
     return out
 
@@ -85,10 +88,7 @@ def recover_labels(header: dict) -> dict | None:
 
 
 def column_shape(header: dict) -> list[tuple]:
-    """Each column a built file declares, as (name, kind), in order.
-
-    The KIND matters as much as the name: pack() takes a column's type from the samples
-    it is given, so merging an int column into a float one of the same name truncates it."""
+    """Each column a built file declares, as (name, kind), in order."""
     return [(c["name"], c["kind"]) for c in header["cols"]]
 
 
@@ -179,12 +179,7 @@ class Cart:
         self.check_weights_declared()
 
     def check_weights_declared(self) -> None:
-        """Refuse a fileset that is silent about weights, which is how a yield goes wrong.
-
-        Silence and "no weights" look identical in a dict, so every sample must SAY which
-        it is once any sample does. The half-converted config — weights still sitting in
-        COLUMNS, nothing in any metadata — is the case that used to build cleanly and
-        ship every MC sample at weight 1.0."""
+        """Refuse a fileset that is silent about weights, which is how a yield goes wrong."""
         said = [s for s, e in self.fileset.items() if "weights" in e["metadata"]]
         missing = sorted(set(self.fileset) - set(said))
         assert not said or not missing, (
@@ -296,9 +291,7 @@ class Cart:
                 "files": entry["files"],
                 "metadata": {k: describe(v) if callable(v) else v
                              for k, v in entry["metadata"].items()}}
-        # the recipe the SKIM ran, when the pikl recorded one. cart.py may have been
-        # edited since, and stamping today's selection over yesterday's columns is the one
-        # way a cartridge can lie with a sha256 vouching for it
+        # the recipe the SKIM ran: cart.py may have been edited since it produced these
         return {"name": self.name,
                 "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "skimmed": skim.get("skimmed"),
@@ -355,9 +348,7 @@ class Cart:
         stamp = header.get("cart") or {}
         cart = cls.__new__(cls)
         cart.name = stamp.get("name") or Path(path).stem
-        # the stamp keeps each sample's weights in its own field, which is the schema and
-        # the only place a builder-made file records them; put it back where the cart
-        # reads it, so an opened file answers weights_spec() like the one that wrote it
+        # the stamp keeps weights in their own field; put them where weights_spec reads
         cart.fileset = {n: {"files": s.get("files") or {},
                             "metadata": {**(s.get("metadata") or {}),
                                          "weights": s.get("weights")}}
@@ -374,16 +365,7 @@ class Cart:
     @classmethod
     def merge(cls, paths: list, name: str = "merged",
               dest: str | Path | None = None) -> dict:
-        """Put the samples of several .rvr files on one cart, re-skimming none of them.
-
-        This is how a sample is ADDED to a study: skim the new one on its own, then merge.
-        The columns are column-major, so the buffer is repacked either way — but repacking
-        is a memcpy over arrays that are already read, while re-skimming is hours.
-
-        It REFUSES rather than concatenating blind. Two files whose columns or whose
-        selection disagree do not describe the same measurement, and a merged file that
-        pretended otherwise would be a lie no reader could detect. That check is only
-        possible because a cart stamps what it did."""
+        """Put the samples of several .rvr files on one cart, re-skimming none of them."""
         assert len(paths) >= 2, "merge needs at least two files"
         loaded = [(str(path), *page.read_by_sample(path)) for path in paths]
         first_path, first, _ = loaded[0]

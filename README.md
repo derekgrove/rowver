@@ -79,7 +79,7 @@ git clone https://gitlab.cern.ch/dgrove/rowver.git
 and `cd` into it:
 
 ```
-cd RowVer
+cd rowver
 ```
 
 ## how it works:
@@ -140,11 +140,12 @@ size on disk, so it is asked for rather than assumed.
 The same pieces from python, if you need them individually:
 
 ```python
-import study, samples, pikl, load, page
-st = study.load("template")
-pikl.pikl("template", samples.files(st["fileset"]), st["config"],
-          metadata=samples.meta(st["fileset"]), dest=st["dir"])
-page.export(load.load("template"), "template", dest=st["dir"])
+import load
+from cart import Cart
+
+mine = Cart.load("template")      # studies/template/cart.py
+mine.skim()                       # -> studies/template/template.pkl
+mine.write(load.load(mine.name, mine.dir))   # -> studies/template/template.rvr
 ```
 
 ## Three artifacts
@@ -188,13 +189,20 @@ st = page.state(meta, cuts={"PT_mu_lead": [20, 500], "nJet": [1, 2, 3]},
                 groups={"signal": ["some_signal_sample"],
                         "background": ["some_background_sample"]},
                 fom=("signal", "background"), lumi=400, varx="MET", nb=24)
-page.data(d, "mine", defaults=st, dest="studies/mine")
+page.data(d, "mine", tabs=[{"name": "mine", "state": st}], dest="studies/mine")
 ```
 
 ## What a built file remembers
 
 A `.rvr` is a cartridge: plug it into the viewer and it plays, and it also tells you —
 with no other file, on any machine — exactly what was put on it.
+
+**On the page**, under *what this file is made of*: every sample with its event count,
+its weights branch (or "no weights — counted raw"), and every file it read, plus the
+selection, the columns, when it was skimmed and written, and the `cart.py` text itself.
+Whoever you send the file to reads all of that in the viewer, with nothing installed.
+
+**From the shell:**
 
 ```
 python cart.py studies/mine/mine.rvr          the cartridge label
@@ -212,7 +220,13 @@ Under `META.cart` the file carries its whole fileset — every sample, every com
 local or remote, tree names, per-sample metadata, the branch that filled each sample's
 weights and how many events it contributed — plus how each column was made (the branch it
 copied, or the source of the function that computed it), the selection's name and
-docstring, when it was built, and the `cart.py` that defined it with its sha256.
+docstring, **when it was skimmed and when it was written**, and the `cart.py` that defined
+it with its sha256. `META.viewer` names what opens it, so an emailed `.rvr` is not an
+unidentifiable binary.
+
+The recipe rides in the `.pkl` as well as the `.rvr`, so `--no-skim` after editing
+`cart.py` stamps the cart that **actually produced those columns**, not whatever the file
+says today. A cartridge cannot describe a selection that never ran.
 
 It is a record, never a promise. A cart that imports a private module is not reproducible
 from its text, and nothing here re-runs anything. But it is enough to answer "which files
@@ -355,7 +369,15 @@ python smoke.py viewer.html+studies/x/x.rvr=drop  what dropping that file does
 python smoke.py rowver:x=rt                       write, read back, compare
 python smoke.py golden=golden                     the frozen files still open, unchanged
 python smoke.py merge:mixed_demo=merge            split a study apart and merge it back
+python smoke.py guards=guards                     every route to a silently wrong yield
+python smoke.py build:mixed_demo=build            run_rowver.py itself, end to end
 ```
+
+`guards` is the one to read if you are changing how weights work: it pins six ways a cart
+could once have built cleanly and shipped numbers that were quietly wrong — a study ported
+with `HAS_WEIGHTS` still at the top, a misspelt `metadata`, `weight` singular, a sample
+that simply says nothing, and two more. Every one of them is a regression, not a
+hypothetical.
 
 `golden/` holds .rvr files frozen at the version that wrote them (open data, built by
 `golden/make_goldens_0_13_0.py`, never re-run). The `golden` check opens each with
@@ -408,10 +430,16 @@ python run_rowver.py mine
 
 A study is `studies/<name>/` with a `cart.py`, plus an optional `view.py`.
 
-Every fileset shipped here holds machine-local paths, so a study fails on a fresh
-clone until you point it at your own ROOT files; the error says which file to edit.
-`template` ships with placeholder paths for the same reason — it is a starting point to
-copy, not a study to run.
+`dimuon_demo` and `mixed_demo` ship their own ROOT file, so both run on a fresh clone
+with nothing to edit — run one first, it teaches the whole loop in 30 seconds:
+
+```
+python run_rowver.py dimuon_demo
+```
+
+Every other fileset here holds machine-local paths, so those studies fail until you
+point them at your own ROOT files; the error says which file to edit. `template` ships
+with placeholder paths for the same reason — a starting point to copy, not a study to run.
 
 ### FILESET
 
@@ -431,6 +459,23 @@ FILESET = {
 
 `metadata` is yours to fill and reaches every hook (see below). `weights` is the one key
 the cart reads itself.
+
+**Already have a JSON fileset?** Keep it. A cart takes any dict, so whatever script
+already writes your fileset keeps working — and you gain the ability to hang a python
+function on a sample, which JSON cannot hold:
+
+```python
+FILESET = json.loads(Path("my_fileset.json").read_text())
+FILESET["ttbar"]["metadata"]["weights"] = lambda a, m: a.weight * m["lumi"] / 137.93
+```
+
+**The last line of every cart.py** binds the pieces together. Without it the build says
+`defines no CART`:
+
+```python
+CART = Cart(name="mine", fileset=FILESET, columns=COLUMNS, keep=KEEP,
+            prepare=PREPARE, labels=LABELS)      # prepare and labels optional
+```
 
 `python cart.py mine --json` prints the fileset as JSON whenever you want to read it that
 way, and `python cart.py studies/mine/mine.rvr` prints what a **built** file holds — every
@@ -541,9 +586,14 @@ FILESET = {
 }
 ```
 
-**A sample that declares none is real data**: its rows are 1.0 and **the page never scales
-them by a luminosity**, whatever its group is set to. So its number is its event count,
-always, and there is no per-group luminosity to remember to set to 1.
+**`None` means real data**: its rows are 1.0 and **the page never scales them by a
+luminosity**, whatever its group is set to. So its number is its event count, always, and
+there is no per-group luminosity to remember to set to 1.
+
+⚠️ **Every sample must say one or the other.** Once any sample declares weights, a sample
+that stays silent is refused — because silence and "no weights" look identical in a dict,
+and that is exactly how an MC sample ends up at weight 1.0 with a yield quietly wrong by
+`Σw/N × L`. Say `'weights': None` and mean it.
 
 If no sample on the cart declares weights, no weights column is written at all — the page
 then hides the weighted/raw toggle and the luminosity box, counts every event once, and
