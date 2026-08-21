@@ -3,8 +3,10 @@
 Why it exists (measured, LOG.md R0/R1): the browser cannot reach CMS storage itself —
 grid-CA TLS, VOMS-proxy client auth, no CORS, capability redirects — but THIS process
 can, over xrootd with the grid proxy, and selective branch reads cost ~0.6% of the
-file's bytes. The xrootd auth handshake costs ~60 s ONCE PER PROCESS, so the helper is
-a resident daemon that pays it once and then serves opens in well under a second.
+file's bytes. The xrootd auth handshake is paid ONCE PER PROCESS, so the helper is a
+resident daemon that pays it once and then serves opens in well under a second.
+(That cost was once ~60 s; measured 2026-08-20 it is 0.34 s warm on a laptop and 0.05 s
+on cmslpc, so it no longer justifies anything on its own.)
 
 Run, from a clone of the repo (any python3 with numpy + uproot + fsspec-xrootd; it
 prints the install one-liner itself if an import is missing):

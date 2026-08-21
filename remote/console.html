@@ -96,7 +96,7 @@ body.guided .guide{display:block}
 .guide b{color:var(--orange)}
 #guidecard{border-color:var(--orange)}
 #guidecard h2{color:var(--orange)}
-#getstarted pre{background:var(--sunk);border:1px solid var(--rule);border-radius:3px;
+#getstarted pre,#qspre{background:var(--sunk);border:1px solid var(--rule);border-radius:3px;
   padding:8px 10px;margin:6px 0;overflow-x:auto;font-size:12px;line-height:1.6}
 /* only the OPTION HEADINGS are blocks. Applying this to every <b> broke inline
    emphasis onto its own line mid-sentence, which read as badly as no emphasis. */
@@ -151,11 +151,6 @@ body.guided .guide{display:block}
 git clone https://gitlab.cern.ch/dgrove/rowver
 python3 -m pip install --user numpy uproot fsspec-xrootd
 cd rowver &amp;&amp; python3 remote/helper.py</pre>
-  <p class="hint">No proxy on this machine yet? This walkthrough is the one that works:
-  <a href="https://hackmd.io/@andrzejnovak/SJxscCZvD" target="_blank" rel="noopener">the
-  conda-forge route</a>. Note that <code>voms-proxy-init</code> ends in red
-  (<code>CRL has expired</code>) even when it succeeds — the line that matters is
-  <code>Your proxy is valid until …</code>.</p>
 
   <b>Option 2 — tunneling to a cluster</b>
   <pre>ssh -L 8271:localhost:8271 username@cmslpc-el9.fnal.gov
@@ -163,19 +158,23 @@ git clone https://gitlab.cern.ch/dgrove/rowver
 python3 -m pip install --user numpy uproot fsspec-xrootd
 cd rowver &amp;&amp; python3 remote/helper.py</pre>
   <p class="hint">More setup, but your credentials and the data are already there — and
-  it is <b>much faster</b>: measured on an 8-file study, 39.6 s from a laptop against
-  1.7 s on a cmslpc node. Worth it once your studies get big. Keep the ssh session open;
-  the helper stops with it.</p>
+  it can be much faster: if your files are stored in eos at the LPC, you can expect much
+  faster load times of your root files while tunneled into the LPC. Keep the ssh session
+  open; the helper stops with it.</p>
 
-  <p class="hint">If Firefox asks to allow <b>local network access</b>, allow it — this
-  page only ever talks to <code>127.0.0.1</code>. Full instructions:
-  <a href="https://gitlab.cern.ch/dgrove/rowver/-/blob/main/remote/README.md">remote/README.md</a>.</p>
+  <p class="hint">Your browser will ask to allow <b>local network access</b> — this page
+  communicates with the helper through that connection, on <code>127.0.0.1</code>.</p>
   <div class="row" style="margin-top:8px"><button class="go" id="recheck">check again</button>
   <span class="hint" style="margin:0">flips to the builder the moment a helper answers</span></div>
 </div>
 
 <div class="card"><h2>helper</h2><div id="status">checking…</div>
-  <p class="hint" style="margin-top:8px">no proxy? no problem! <button class="go mini" id="qsgo" disabled
+  <p class="hint" style="margin-top:10px">If you don't have a proxy but would still like
+  to try the builder, you can do it with CMS open data after running helper.py:</p>
+  <pre id="qspre">git clone https://gitlab.cern.ch/dgrove/rowver
+python3 -m pip install --user numpy uproot fsspec-xrootd
+cd rowver &amp;&amp; python3 remote/helper.py</pre>
+  <p class="hint">then click here: <button class="go mini" id="qsgo" disabled
     title="fills the basket with one public 2016 NanoAOD file from eospublic (anonymous
  — no grid proxy involved), two flat branches and a KEEP filter, and builds it.
  Replaces whatever is in the basket.">build the open-data quickstart</button></p>
@@ -340,7 +339,7 @@ const ago = s => s<90 ? s+" s" : s<5400 ? Math.round(s/60)+" min" : Math.round(s
 const dots = label => `${esc(label)} <span class="dots"><i></i><i></i><i></i></span>`;
 
 //: per-endpoint timeout budgets, seconds — no query may spin forever. /trees and
-//: /branches open remote files and a COLD helper pays the ~60 s xrootd handshake
+//: /branches open remote files and a COLD helper pays the xrootd handshake
 //: there, hence the long leash; everything else is metadata or an immediate answer.
 const BUDGET = {"/ping": 5, "/datasets": 45, "/datasetinfo": 45, "/files": 60,
                 "/ls": 45, "/trees": 240, "/branches": 240, "/build": 30,
@@ -369,7 +368,7 @@ async function api(path, body){
       throw new Error(`${ep} gave no answer in ${budget} s — the helper may be stuck ` +
         `or the network slow` +
         (ep === "/trees" || ep === "/branches"
-          ? " (even beyond the cold ~60 s first open)" : "") +
+          ? " (even allowing for a cold first open)" : "") +
         ". Try the same action again, or restart the helper.");
     throw e;
   } finally {
@@ -399,6 +398,7 @@ function flip(){
   // the quickstart button sits in the always-visible helper card, but everywhere it
   // reports to (#builderr, #dash) is inside the hidden builder — so with no helper a
   // click used to do nothing AT ALL. Off is better than silent.
+  if ($("qspre")) $("qspre").hidden = UP;   // pointless once one answers
   $("qsgo").disabled = !UP;
   $("qsgo").title = UP ? QS_TITLE
     : "no helper is answering yet — start one with a recipe above and this lights up";
@@ -417,7 +417,7 @@ async function status(){
     const days = left != null ? (left/86400).toFixed(1) : "?";
     const hs = p.handshake && p.handshake.done
       ? `<span class="okline">warm</span> (first open ${p.handshake.first_open_s}s)`
-      : `<span class="warn">cold</span> — first open pays the ~60 s xrootd handshake`;
+      : `<span class="warn">cold</span> — the first file open pays the xrootd handshake`;
     const jobs = Object.entries(p.jobs || {});
     const live = jobs.filter(([,ph]) => ph !== "done" && ph !== "error").length;
     const expired = !anon && p.proxy && p.proxy.expired;
@@ -441,7 +441,7 @@ async function status(){
   } catch(e){
     UP = false;
     flip();
-    $("status").textContent = "not answering — follow one of the two options above";
+    $("status").textContent = "not answering";
     $("banner").hidden = true;
   }
 }
