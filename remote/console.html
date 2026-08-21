@@ -495,7 +495,8 @@ function setMode(m){
   $("meos").setAttribute("aria-pressed", m === "eos");
   $("mlocal").setAttribute("aria-pressed", m === "local");
   $("srcin").value = REMEMBER[m];
-  $("srcin").placeholder = m === "das" ? DAS_DEFAULT : "/store/user/your_eos_dir";
+  $("srcin").placeholder = m === "das" ? DAS_DEFAULT
+    : m === "local" ? "/path/to/root_files" : "/store/user/your_space";
   $("srcgo").textContent = m === "das" ? "search" : "list";
   $("srchint").innerHTML = HINTS[m];
   $("srcerr").textContent = "";
