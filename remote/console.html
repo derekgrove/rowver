@@ -105,7 +105,8 @@ body.guided .guide{display:block}
   padding:8px 10px;margin:6px 0;overflow-x:auto;font-size:12px;line-height:1.6}
 /* only the OPTION HEADINGS are blocks. Applying this to every <b> broke inline
    emphasis onto its own line mid-sentence, which read as badly as no emphasis. */
-#getstarted>b{display:block;margin-top:12px}
+#getstarted>b{display:block;margin-top:26px;margin-bottom:2px}
+#getstarted>p:first-of-type{margin-bottom:6px}
 /* the one waiting animation: three dots that grow and shrink in order (Derek, R7) */
 .dots{display:inline-block;vertical-align:baseline}
 .dots i{display:inline-block;width:5px;height:5px;border-radius:50%;
@@ -168,16 +169,10 @@ cd rowver &amp;&amp; python3 remote/helper.py                     <span class="j
   tunneled into the LPC.</p>
 
   <b>What if my .root files are on my laptop and not in remote storage?</b>
-  <p class="hint">Then you need none of the above — no proxy, no helper, and no browser
-  to drive it. RowVer reads local paths directly; point a study at them and run it:</p>
-  <pre>git clone https://gitlab.cern.ch/dgrove/rowver
-cd rowver
-cp -r studies/template studies/mine                       <span class="jnote"># then edit its fileset.json and config.py</span>
-python run_rowver.py mine                                 <span class="jnote"># writes studies/mine/mine.rvr — drop that on the RowVer page</span></pre>
-  <p class="hint"><code>studies/dimuon_demo/</code> ships as a worked example of exactly
-  this: its <code>fileset.json</code> names a plain file path, no url and no credentials.
-  The builder above only browses DAS and eos, so local files skip it entirely.</p>
-
+  <p class="hint">Then you have the simplest setup — no proxy needed at all. Run
+  helper.py the same way (it reads local paths directly, no credentials involved), then
+  browse your own disk instead of eos:
+  <button class="go mini" id="golocal">switch to local disk</button></p>
 
 </div>
 
@@ -198,6 +193,8 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
     <span class="seg">
       <button id="mdas" aria-pressed="true" title="dataset NAME search through DBS — the service DAS itself queries">CMS DAS</button>
       <button id="meos" aria-pressed="false" title="browse eos directories through xrootd">eos</button>
+      <button id="mlocal" aria-pressed="false" title="browse directories on the machine
+ running helper.py — no proxy and no xrootd involved">local disk</button>
     </span>
     <input id="srcin" size="56">
     <button class="go" id="srcgo">search</button>
@@ -476,8 +473,10 @@ let MODE = "das";
 const DAS_DEFAULT = "/TTto2L2Nu_TuneCP5_13p6TeV_powheg-pythia8/Run3Summer22NanoAODv12*/NANOAODSIM";
 const EOS_DEFAULT = (typeof localStorage !== "undefined" &&
   localStorage.getItem("rowver_eos_path")) || "";
-const REMEMBER = {das: DAS_DEFAULT, eos: EOS_DEFAULT};
-const VIEWS = {das: null, eos: null};   // what each mode last showed, so the toggle flips pages
+const LOCAL_DEFAULT = (typeof localStorage !== "undefined" &&
+  localStorage.getItem("rowver_local_path")) || "";
+const REMEMBER = {das: DAS_DEFAULT, eos: EOS_DEFAULT, local: LOCAL_DEFAULT};
+const VIEWS = {das: null, eos: null, local: null};   // what each mode last showed, so the toggle flips pages
 const DASINFO = {};                     // dataset -> {files, events, bytes}
 
 const HINTS = {
@@ -494,6 +493,7 @@ function setMode(m){
   MODE = m;
   $("mdas").setAttribute("aria-pressed", m === "das");
   $("meos").setAttribute("aria-pressed", m === "eos");
+  $("mlocal").setAttribute("aria-pressed", m === "local");
   $("srcin").value = REMEMBER[m];
   $("srcin").placeholder = m === "das" ? DAS_DEFAULT : "/store/user/your_eos_dir";
   $("srcgo").textContent = m === "das" ? "search" : "list";
@@ -504,6 +504,8 @@ function setMode(m){
 }
 $("mdas").onclick = () => setMode("das");
 $("meos").onclick = () => setMode("eos");
+$("mlocal").onclick = () => setMode("local");
+$("golocal").onclick = () => { setMode("local"); $("srcin").focus(); };
 
 async function go(){
   const v = $("srcin").value.trim();
@@ -515,11 +517,14 @@ async function go(){
       const names = await api("/datasets?pattern=" + encodeURIComponent(v));
       VIEWS.das = {kind: "dsets", names: names};
     } else {
-      const got = await api("/ls?eos=" + encodeURIComponent(v));
+      const got = await api((MODE === "local" ? "/ls?local=" : "/ls?eos=")
+                           + encodeURIComponent(v));
       got.files.forEach(f => { f.checked = false; });
-      VIEWS.eos = {kind: "eos", path: got.path, dirs: got.dirs, files: got.files};
-      REMEMBER.eos = got.path;
-      try{ localStorage.setItem("rowver_eos_path", got.path); } catch(e){}
+      VIEWS[MODE] = {kind: MODE === "local" ? "local" : "eos",
+                     path: got.path, dirs: got.dirs, files: got.files};
+      REMEMBER[MODE] = got.path;
+      try{ localStorage.setItem(MODE === "local" ? "rowver_local_path"
+                                                : "rowver_eos_path", got.path); } catch(e){}
       $("srcin").value = got.path;
     }
     renderSrc();
@@ -610,7 +615,7 @@ function renderSrc(){
     pickbarDraw(view);
   }
 
-  if (view.kind === "eos"){
+  if (view.kind === "eos" || view.kind === "local"){
     const parts = view.path.split("/").filter(Boolean);
     $("crumbs").innerHTML = "/" + parts.map((p, i) =>
       `<span class="crumb" data-up="${i}">${esc(p)}</span>`).join("/");
@@ -734,7 +739,7 @@ $("pickadd").onclick = async () => {
   if (!sel.length){ $("srcerr").textContent = "no files ticked — select some first"; return; }
   $("srcerr").textContent = "";
   let tree = $("picktree").value.trim() || "Events";
-  if (view.kind === "eos"){
+  if (view.kind === "eos" || view.kind === "local"){
     // NEVER default 'Events' against a custom ntuple (Derek's live failure, R9): the
     // tree is checked against the first selected file's actual inventory. A lone
     // physics tree is adopted (and shown in the tree box); several demand a pick.
@@ -853,8 +858,12 @@ function addSubset(label, tree, urls, total, split){
 }
 //: which storage side a basket row came from — the columns hint and the parked
 //: mixed-source refusal both read it
-const srcOf = b => b.kind === "dataset" ? "das"
-  : ((b.url || (b.urls && b.urls[0]) || "").indexOf("cmseos") >= 0 ? "eos" : "das");
+const srcOf = b => {
+  if (b.kind === "dataset") return "das";
+  const u = b.url || (b.urls && b.urls[0]) || "";
+  if (!/^[a-z]+:\/\//.test(u)) return "local";     // a plain path is local disk
+  return u.indexOf("cmseos") >= 0 ? "eos" : "das";
+};
 
 function colsPlaceholder(){
   //: context-aware (Derek, R7): NanoAOD names only make sense for DAS sources; a custom

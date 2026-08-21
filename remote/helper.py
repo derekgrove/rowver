@@ -320,6 +320,59 @@ def dbs_files(dataset: str) -> list:
              "size": f["file_size"], "events": f["event_count"]} for f in rows]
 
 
+#: RNTuple is a TTree's replacement and uproot reads it the same way — iterate(),
+#: arrays() and num_entries all work — but it has no `.branches`, and its class name is
+#: "ROOT::RNTuple", so a filter written for TTrees rejects it outright. The shipped
+#: dimuon_demo file IS an RNTuple, so that filter refused RowVer's own demo.
+TREE_CLASSES = ("TTree", "ROOT::RNTuple")
+
+
+def field_shapes(t, names) -> dict:
+    """{field: is it one number per event} for a TTree or an RNTuple alike.
+    A TTree answers from its interpretation without reading; an RNTuple has none, so a
+    SINGLE one-entry read of every field answers for all of them at once."""
+    try:
+        out = {}
+        for n in names:
+            s = str(t[n].interpretation)
+            out[n] = not any(k in s for k in ("AsJagged", "AsObjects", "AsStrings"))
+        return out
+    except Exception:
+        pass
+    try:
+        # SEVERAL entries, not one: uproot flattens a single event's jagged field into a
+        # plain array, so at entry_stop=1 every field looks flat. And equal multiplicity
+        # across the sample gives a 2-D array rather than an object one, so ndim counts
+        # too — the same pair of tests the read loop itself used to apply.
+        n_try = min(int(getattr(t, "num_entries", 0)) or 64, 64)
+        one = t.arrays(list(names), entry_stop=n_try, library="np")
+        return {n: one[n].dtype != object and one[n].ndim == 1 for n in names}
+    except Exception:
+        return {n: True for n in names}          # unknown: let the read decide
+
+
+def local_ls(path: str) -> dict:
+    """One directory of this machine's own disk, shaped exactly like eos_ls so the
+    console can browse it with the same code. Files on local disk need no proxy and no
+    xrootd — uproot opens the path directly — but they DO still need this helper, since
+    a browser cannot read a file off disk and cannot run uproot."""
+    d = Path(path).expanduser()
+    if not d.is_dir():
+        raise RuntimeError(f"{d} is not a directory on the machine running this helper"
+                           + (" (it is a file — give its directory)" if d.is_file() else ""))
+    dirs, files = [], []
+    for e in sorted(d.iterdir(), key=lambda x: x.name):
+        try:
+            if e.is_dir():
+                dirs.append(e.name)
+            elif e.suffix == ".root":
+                files.append({"name": e.name, "url": str(e.resolve()),
+                              "size": e.stat().st_size})
+        except OSError:
+            continue                       # unreadable entries are skipped, not fatal
+    return {"path": str(d.resolve()), "dirs": dirs, "files": files}
+
+
 def eos_ls(path: str) -> dict:
     """One eos directory as the console browses it: subdirectories AND files."""
     from XRootD import client
@@ -351,7 +404,7 @@ def list_trees(url: str) -> dict:
     t0 = time.time()
     with xrd_open(url, 180) as f:
         trees = sorted({k.split(";")[0] for k, cls in f.classnames().items()
-                        if cls == "TTree"})
+                        if cls in TREE_CLASSES})
         note_first_open(time.time() - t0)
         return {"file": url, "trees": trees}
 
@@ -361,12 +414,17 @@ def branch_inventory(url: str, tree: str) -> dict:
     with xrd_open(url, 180) as f:
         t = f[tree]
         note_first_open(time.time() - t0)
+        names = [b.name for b in t.branches] if hasattr(t, "branches") else list(t.keys())
+        flat = field_shapes(t, names)
+        def kind(n):
+            try:
+                return str(t[n].interpretation)
+            except Exception:
+                return "RNTuple field"
+        # the page greys out what the flat .rvr format cannot hold
         return {"entries": int(t.num_entries),
-                "branches": [{"name": b.name, "type": str(b.interpretation),
-                              # the page greys out what the flat .rvr format cannot hold
-                              "flat": not any(k in str(b.interpretation)
-                                              for k in ("AsJagged", "AsObjects", "AsStrings"))}
-                             for b in t.branches]}
+                "branches": [{"name": n, "type": kind(n), "flat": bool(flat.get(n, True))}
+                             for n in names]}
 
 
 def parse_config(source: str) -> dict:
@@ -497,7 +555,9 @@ def plan_workers(files) -> tuple:
     """How many workers, and whether we still need to find out. The override always
     wins; a verdict already measured against this endpoint is reused; otherwise we go
     in CALIBRATING and let the build itself answer the question."""
-    endpoint = files[0][0].split("//")[1].split("/")[0] if files else "?"
+    # a local path has no scheme://host, so splitting on "//" and taking [1] threw
+    first = files[0][0] if files else ""
+    endpoint = first.split("//")[1].split("/")[0] if "//" in first else "local disk"
     if WORKERS.isdigit():
         return max(1, int(WORKERS)), endpoint, False
     if endpoint in TUNED:
@@ -527,8 +587,7 @@ def _read_open(f, task, t0):
     missing = [b for b in want if b not in t]
     if missing:
         raise RuntimeError(f"{name}: {url} has no branch(es) {missing}")
-    jag = [b for b in want if "AsJagged" in str(t[b].interpretation)
-           or "AsObjects" in str(t[b].interpretation)]
+    jag = [b for b, ok in field_shapes(t, want).items() if not ok]
     if jag:
         raise RuntimeError(
             f"{name}: branch(es) {', '.join(jag)} are not one number per event — the "
@@ -701,7 +760,7 @@ def build_rvr(spec: dict, job: dict) -> Path:
             with xrd_open(url, 300) as f:
                 note_first_open(time.time() - t0)
                 trees = sorted({k.split(";")[0] for k, cls in f.classnames().items()
-                                if cls == "TTree"})
+                                if cls in TREE_CLASSES})
             if tree not in trees:
                 raise RuntimeError(
                     f"{name}: the spec asks for tree '{tree}' but "
@@ -840,7 +899,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/datasetinfo":
                 return self._json(dbs_summary(q["dataset"]))
             if u.path == "/ls":
-                return self._json(eos_ls(q["eos"]))
+                return self._json(local_ls(q["local"]) if "local" in q
+                                  else eos_ls(q["eos"]))
             if u.path == "/trees":
                 return self._json(list_trees(q["file"]))
             if u.path == "/cache":
