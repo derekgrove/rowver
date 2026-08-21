@@ -138,13 +138,13 @@ body.guided .guide{display:block}
 <div class="card" id="getstarted" hidden>
   <h2>building a .rvr file from your browser <span class="h2sub">(a front end for the
   RowVer python — it still runs, on whichever machine has helper.py)</span></h2>
-  <p class="hint" style="margin:0">This tool requires access to a grid proxy. You can
-  either have one installed locally on your laptop — a bit hacky, but
+  <p class="hint" style="margin:0">This tool requires access to a CERN grid proxy. You
+  can either have one installed locally on your laptop — a bit hacky, but
   <a href="https://hackmd.io/@andrzejnovak/SJxscCZvD" target="_blank" rel="noopener">follow
   this tutorial</a> — or you can tunnel into a remote machine that already has grid
-  access (lxplus or Fermilab LPC). <b>I would recommend installing the proxy locally.</b>
-  In either case, <b>you run helper.py on the machine that has the proxy</b>, then this
-  browser will find it and handshake, and voilà — it works.</p>
+  access (lxplus or Fermilab LPC). In either case, <b>you run helper.py on the machine
+  that has the proxy</b>, then this browser will find it and handshake, and voilà — this
+  browser can interface with the CERN computing grid.</p>
 
   <b>Option 1 — proxy installed locally</b>
   <pre>voms-proxy-init -voms cms --valid 192:00
