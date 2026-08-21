@@ -852,9 +852,11 @@ function buildSpec(strict){
     branches: branches,
     weights: w || null,
     start: START_CMD,
+    //: NO opening plot (Derek 2026-08-20). The builder has no idea what you want to
+    //: look at, and guessing cost a page-killing bug when its guess was the weights
+    //: column. An empty plots list is a real state the page understands.
     tabs: [{name: $("title").value.trim() || "console",
-            view: {lumi: 1, shown: ["*"],
-                   plots: [{varx: plottable[0] || "x", nb: 40, logy: true, span: "p99"}]}}],
+            view: {lumi: 1, shown: ["*"], plots: []}}],
   };
   const cut = $("cut").value.trim();
   if (cut) out.cut = cut;

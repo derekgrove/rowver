@@ -87,7 +87,56 @@ if len(sys.argv) > 1 and not sys.argv[1].isdigit():
           "X509_CERT_DIR")
     sys.exit(0 if sys.argv[1] in ("-h", "--help", "help") else 2)
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("ROWVER_HELPER_PORT", "8271"))
-PROXY = os.environ.get("X509_USER_PROXY", f"/tmp/x509up_u{os.getuid()}")
+#: openssl's short names, so the subject reads the way voms-proxy-info prints it
+RDN_SHORT = {"domainComponent": "DC", "countryName": "C", "organizationName": "O",
+             "organizationalUnitName": "OU", "commonName": "CN",
+             "stateOrProvinceName": "ST", "localityName": "L"}
+
+
+def decode_cert(path: str) -> dict:
+    """A PEM certificate's notAfter and subject, with no subprocess (see above)."""
+    try:
+        import _ssl
+        cert = _ssl._test_decode_cert(path)
+        rdns = [(RDN_SHORT.get(k, k), v) for rdn in cert.get("subject", ()) for k, v in rdn]
+        cns = [v for k, v in rdns if k == "CN"]
+        return {"expires": cert.get("notAfter", "unreadable"),
+                "subject": "".join(f"/{k}={v}" for k, v in rdns) or "unreadable",
+                "cn": cns[0] if cns else "unreadable"}
+    except Exception as e:
+        return {"expires": "unreadable", "cn": "unreadable",
+                "subject": f"unreadable ({type(e).__name__}: {e})"}
+
+
+def expires_in(path: str) -> float | None:
+    """Seconds until this proxy expires; None if it will not decode at all."""
+    from datetime import datetime, timezone
+    try:
+        exp = datetime.strptime(decode_cert(path)["expires"], "%b %d %H:%M:%S %Y %Z")
+    except ValueError:
+        return None
+    return exp.replace(tzinfo=timezone.utc).timestamp() - time.time()
+
+
+def find_proxy() -> str:
+    """Where voms-proxy-init ACTUALLY left it. The env override always wins; otherwise
+    look in every place it is known to land — most sites write /tmp, but cmslpc wrote
+    $HOME (measured 2026-08-20, and the old /tmp-only guess simply missed it).
+    A proxy that is expired or unreadable must not mask a good one further down the
+    list, so candidates are ranked before they are chosen rather than taken in order."""
+    env = os.environ.get("X509_USER_PROXY")
+    if env:
+        return env
+    uid = os.getuid()
+    here = [p for p in (f"/tmp/x509up_u{uid}", str(Path.home() / f"x509up_u{uid}"),
+                        f"/tmp/x509up_p{uid}", str(Path.home() / ".globus" / f"x509up_u{uid}"))
+            if Path(p).is_file()]
+    for path in here:
+        left = expires_in(path)
+        if left is not None and left > 0:
+            return path
+    return here[0] if here else f"/tmp/x509up_u{uid}"
+
 
 def find_certs() -> str | None:
     """The grid CA bundle: the env override first, then the standard locations."""
@@ -102,9 +151,11 @@ def find_certs() -> str | None:
             return str(c)
     return None
 
+PROXY = find_proxy()
 CERTS = find_certs()
 HAVE_PROXY = Path(PROXY).exists()
 if HAVE_PROXY:
+    # exported because uproot and the xrootd client read the ENV, not this variable
     os.environ["X509_USER_PROXY"] = PROXY
 if CERTS:
     os.environ["X509_CERT_DIR"] = CERTS
@@ -176,27 +227,6 @@ def proxy_info() -> dict:
     except ValueError:
         pass
     return out
-
-
-#: openssl's short names, so the subject reads the way voms-proxy-info prints it
-RDN_SHORT = {"domainComponent": "DC", "countryName": "C", "organizationName": "O",
-             "organizationalUnitName": "OU", "commonName": "CN",
-             "stateOrProvinceName": "ST", "localityName": "L"}
-
-
-def decode_cert(path: str) -> dict:
-    """A PEM certificate's notAfter and subject, with no subprocess (see above)."""
-    try:
-        import _ssl
-        cert = _ssl._test_decode_cert(path)
-        rdns = [(RDN_SHORT.get(k, k), v) for rdn in cert.get("subject", ()) for k, v in rdn]
-        cns = [v for k, v in rdns if k == "CN"]
-        return {"expires": cert.get("notAfter", "unreadable"),
-                "subject": "".join(f"/{k}={v}" for k, v in rdns) or "unreadable",
-                "cn": cns[0] if cns else "unreadable"}
-    except Exception as e:
-        return {"expires": "unreadable", "cn": "unreadable",
-                "subject": f"unreadable ({type(e).__name__}: {e})"}
 
 
 def note_first_open(seconds: float):
@@ -785,7 +815,8 @@ def main():
               "location present) — authenticated xrootd will fail its TLS step; "
               "public endpoints may still work", flush=True)
     print(f"rowver remote helper on http://127.0.0.1:{PORT}  "
-          f"(proxy: {'EXPIRED ' + info['expires'] if info['expired'] else info['expires']}; "
+          f"(proxy: {'EXPIRED ' + info['expires'] if info['expired'] else info['expires']}"
+          f"{' at ' + PROXY if HAVE_PROXY else ''}; "
           f"CAs: {CERTS or 'none'}; eos: {EOS}; cache {CACHE})",
           flush=True)
     if PORT != 8271:
