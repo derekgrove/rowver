@@ -2493,6 +2493,7 @@ USAGE = """boot a page, or drop a .rvr on one, or round-trip a pikl through the 
     smoke.py pages/viewer.html+pages/template.rvr=drop
     smoke.py rowver:template=rt
     smoke.py golden=golden                       the frozen files still open, unchanged
+    smoke.py merge:mixed_demo=merge              split a study apart and merge it back
 """
 
 
@@ -2528,10 +2529,58 @@ def viewtrip(rvr: str) -> str:
             else f"{len(rebuilt)} tabs survived the round trip unchanged")
 
 
+def mergetrip(name: str) -> str:
+    """Split a study into one file per sample, merge them back, and demand the original.
+
+    The closure a merge has to satisfy: adding a sample to a built file must give exactly
+    what building all of them at once would have. It is checked on a study that MIXES —
+    one sample with weights and one without — because that is the case v4 could not hold
+    and the one where a merge has to invent a column rather than copy it."""
+    import tempfile
+    import numpy as np
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    import cart, load, page
+    held = cart.Cart.load(name)
+    rows = load.load(name, held.dir)
+    if len(rows) < 2:
+        return f"{name} holds one sample — nothing to merge"
+
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    parts = []
+    for sample, columns in rows.items():
+        one = cart.Cart(name=f"part{len(parts)}", fileset={sample: held.fileset[sample]},
+                        columns=held.columns, keep=held.keep, prepare=held.prepare)
+        one.source, one.dir = held.source, held.dir     # else the stamp quotes THIS file
+        # on its own, a sample declaring no weights has no weights column at all
+        mine = columns if one.weights else {c: v for c, v in columns.items()
+                                            if c != held.weights}
+        parts.append(one.write({sample: mine}, dest=tmp)["file"])
+
+    out = cart.Cart.merge(parts, name="merged", dest=tmp)
+    _, want = page.rows(pathlib.Path(held.dir) / f"{name}.rvr")
+    meta, got = page.rows(out["file"])
+    if sorted(want) != sorted(got):
+        return f"merged holds {sorted(got)}, the original holds {sorted(want)}"
+    for sample in want:
+        for column in want[sample]:
+            if not np.array_equal(want[sample][column], got[sample][column]):
+                bad = int((want[sample][column] != got[sample][column]).sum())
+                return (f"{sample}.{column}: {bad} of {len(want[sample][column])} values "
+                        f"differ between the merge and the one-shot build")
+    stamped = {n: (v or {}).get("weights") for n, v in meta["cart"]["samples"].items()}
+    if len([w for w in stamped.values() if w]) != len(
+            [s for s in held.fileset if held.weighted(s)]):
+        return f"the merged stamp lost a sample's weights: {stamped}"
+    return (f"{len(parts)} parts merged back into {meta['n']:,} events, identical to the "
+            f"one-shot build, {len(want)} samples, weights kept per sample")
+
+
 def check(path: str) -> str:
     """Dispatch one argument to the boot, drop, round-trip or golden check."""
     if path == "golden":
         return golden()
+    if path.startswith("merge:"):
+        return mergetrip(path[len("merge:"):])
     if path.startswith("view:"):
         return viewtrip(path[len("view:"):])
     if path.startswith("rowver:"):

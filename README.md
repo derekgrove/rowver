@@ -226,6 +226,29 @@ gzipped.
 ⚠️ It also means **your paths and your cart's source travel with a file you send someone**:
 eos paths, usernames, directory layout, and whatever your `cart.py` says.
 
+### Adding a sample without re-skimming
+
+```
+python cart.py merge run2.rvr new_signal.rvr
+```
+
+`Cart.merge` puts the samples of several `.rvr` files onto one cart. The columns are
+column-major, so the buffer is repacked either way — but repacking is a memcpy over
+arrays that are already read, while re-skimming is hours. Skim the new sample on its own,
+merge, done.
+
+It **refuses** rather than concatenating blind: two files whose columns or whose selection
+disagree do not describe the same measurement, and two samples with the same name cannot
+share a file. That check is only possible because a cart stamps what it did — and the
+merged file records which carts its samples came from.
+
+Weights are per sample, so **a weightless data file merges into a weighted MC one**: the
+data samples get a column of ones, and the page still never scales them. Under v4 this
+was impossible — one global weights key, no way to say "these rows are counts".
+
+`smoke.py merge:<study>=merge` gates it by splitting a study into one file per sample and
+merging it back: the result must equal the one-shot build, column for column.
+
 ## The Sample grouping band
 
 Grouping is set up once, in the band across the top, and used everywhere: every tab,
@@ -331,6 +354,7 @@ python smoke.py studies/x/x.html=boot             boot it in JavaScriptCore
 python smoke.py viewer.html+studies/x/x.rvr=drop  what dropping that file does
 python smoke.py rowver:x=rt                       write, read back, compare
 python smoke.py golden=golden                     the frozen files still open, unchanged
+python smoke.py merge:mixed_demo=merge            split a study apart and merge it back
 ```
 
 `golden/` holds .rvr files frozen at the version that wrote them (open data, built by

@@ -31,6 +31,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import uproot
 
 import page
@@ -285,6 +286,75 @@ class Cart:
         cart.header, cart.data = header, data
         return cart
 
+    @classmethod
+    def merge(cls, paths: list, name: str = "merged",
+              dest: str | Path | None = None) -> dict:
+        """Put the samples of several .rvr files on one cart, re-skimming none of them.
+
+        This is how a sample is ADDED to a study: skim the new one on its own, then merge.
+        The columns are column-major, so the buffer is repacked either way — but repacking
+        is a memcpy over arrays that are already read, while re-skimming is hours.
+
+        It REFUSES rather than concatenating blind. Two files whose columns or whose
+        selection disagree do not describe the same measurement, and a merged file that
+        pretended otherwise would be a lie no reader could detect. That check is only
+        possible because a cart stamps what it did."""
+        assert len(paths) >= 2, "merge needs at least two files"
+        read = [(str(q), *page.rows(q)) for q in paths]
+        first = read[0][1]
+
+        for path, header, _ in read[1:]:
+            axes = lambda m: [c["name"] for c in m["cols"]]
+            assert axes(header) == axes(first), (
+                f"{path} and {read[0][0]} do not hold the same columns:\n"
+                f"  {axes(first)}\n  {axes(header)}\n"
+                f"These are different measurements; merging them would make a file whose "
+                f"columns mean different things for different samples.")
+            keeps = [(h.get("cart") or {}).get("keep", "") for h in (first, header)]
+            assert keeps[0] == keeps[1], (
+                f"{path} was selected differently:\n  {keeps[0]!r}\n  {keeps[1]!r}\n"
+                f"Merging them would put events chosen two different ways in one file.")
+
+        # one weights column across the merged file: whoever declares one must agree, and
+        # a file declaring none contributes ones — which is exactly what its samples are
+        declared = {h["weights"] for _, h, _ in read if h.get("weights")}
+        assert len(declared) <= 1, f"the files disagree on the weights column: {sorted(declared)}"
+        weights = declared.pop() if declared else None
+
+        merged, stamp_samples, sources = {}, {}, []
+        for path, header, samples in read:
+            held = header.get("cart") or {}
+            for sample, columns in samples.items():
+                assert sample not in merged, (
+                    f"both {path} and an earlier file hold a sample called {sample!r}. "
+                    f"Rename one — a merged file cannot have two samples with one name.")
+                if weights and weights not in columns:
+                    columns = {weights: np.ones(len(next(iter(columns.values()))), np.float64),
+                               **columns}
+                merged[sample] = columns
+                stamp_samples[sample] = (held.get("samples") or {}).get(sample) or {}
+            sources.append({"file": Path(path).name,
+                            "name": held.get("name"), "built": held.get("built"),
+                            "config": (held.get("config") or {}).get("sha256")})
+
+        # LABELS are not in the stamp, but every chip column's own value->name map is
+        labels = {c["name"]: dict(zip(c["vals"], c["names"]))
+                  for c in first["cols"] if c.get("names")} or None
+        held = first.get("cart") or {}
+        stamp = {"name": name,
+                 "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                 "samples": stamp_samples,
+                 "columns": held.get("columns") or {},
+                 "keep": held.get("keep", ""),
+                 "prepare": held.get("prepare"),
+                 "config": held.get("config"),
+                 "merged": sources}
+        # the first file's view carries over — its cuts index columns, and the columns are
+        # the same list in the same order or this would have refused above
+        return page.data(merged, name, labels=labels, dest=dest, weights=weights,
+                         tabs=first.get("tabs"), extra={"tab": first.get("tab", 0)},
+                         cart=stamp)
+
     @staticmethod
     def discover(directory: str, tree: str = "Events") -> dict:
         """A fileset from every subdirectory of `directory` that holds .root files."""
@@ -293,11 +363,21 @@ class Cart:
                 if sub.is_dir() and list(sub.glob("*.root"))}
 
 
+USAGE = """usage:
+    python cart.py <study>                    the cartridge label of a study
+    python cart.py <file>.rvr                 what a BUILT file holds
+    python cart.py <study | file>.rvr --json  its whole fileset, as JSON
+    python cart.py merge a.rvr b.rvr [...]    one file holding all their samples
+"""
+
 if __name__ == "__main__":
     import sys
-    what = sys.argv[1] if len(sys.argv) > 1 else ""
-    if not what:
-        sys.exit(f"usage: python cart.py <study | file.rvr> [--json]\n"
-                 f"studies: {', '.join(available()) or 'none'}")
-    held = Cart.open(what) if what.endswith(".rvr") else Cart.load(what)
-    print(held.json() if "--json" in sys.argv else held.summary())
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if not args:
+        sys.exit(USAGE + f"\nstudies: {', '.join(available()) or 'none'}")
+    if args[0] == "merge":
+        out = Cart.merge(args[1:], name="merged", dest=Path(args[1]).parent)
+        print(f"{out['file']}  —  {out['events']:,} events, {out['mb']:.1f} MB")
+    else:
+        held = Cart.open(args[0]) if args[0].endswith(".rvr") else Cart.load(args[0])
+        print(held.json() if "--json" in sys.argv else held.summary())

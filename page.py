@@ -58,7 +58,12 @@ so every one of its samples reads as weighted and it opens exactly as it always 
       keep      str                    the selection's name and first docstring line
       prepare   str | null             the same for the prepare hook
       config    {path, mtime, sha256, source}
-                                       the file that defined the cart, and its text
+                                       the file that defined the cart, and its text. A
+                                       BUILDER-made file has no config.py, so `source`
+                                       carries the spec it was built from instead
+      merged    [{file, name, built, config}] | absent
+                                       optional: present only on a file made by
+                                       Cart.merge, naming the carts its samples came from
     }
 
 `cart` is what makes a .rvr inspectable on its own: `cart.Cart.open(f)` hands back the
@@ -439,6 +444,21 @@ def read(path: str | Path) -> tuple[dict[str, object], dict[str, np.ndarray]]:
         dtype = np.float64 if col["kind"] == "f8" else np.int32
         columns[col["name"]] = np.frombuffer(buf, dtype, meta["n"], col["offset"])
     return meta, columns
+
+
+def rows(path: str | Path) -> tuple[dict[str, object], dict[str, dict[str, np.ndarray]]]:
+    """A .rvr back as (META, {sample: {column: ndarray}}) — the shape pack() takes in.
+
+    read() hands back one array per column over every event at once, which is what the
+    page wants; this splits them by the dataset index, which is what anything rebuilding
+    a file wants. The file is decompressed twice, once here and once in read(); a merge
+    is not a hot path and the alternative is changing read()'s shape for every caller."""
+    meta, columns = read(path)
+    raw = gzip.decompress(Path(path).read_bytes())
+    length = int.from_bytes(raw[:4], "little")
+    index = np.frombuffer(raw[4 + length:], np.int32, meta["n"], meta["ds_offset"])
+    return meta, {name: {c: v[index == i] for c, v in columns.items()}
+                  for i, name in enumerate(meta["datasets"])}
 
 
 def resolve(names: list, spec, subs: dict | None = None) -> list:
