@@ -154,9 +154,9 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
 
   <b>Option 2 — tunneling to a cluster</b>
   <pre>ssh -L 8271:localhost:8271 username@cmslpc-el9.fnal.gov
-git clone https://gitlab.cern.ch/dgrove/rowver
+git clone https://gitlab.cern.ch/dgrove/rowver            <span class="jnote"># clone RowVer to the remote machine</span>
 python3 -m pip install --user numpy uproot fsspec-xrootd
-cd rowver &amp;&amp; python3 remote/helper.py</pre>
+cd rowver &amp;&amp; python3 remote/helper.py                     <span class="jnote"># run helper.py on the remote machine, now your laptop browser can talk to the grid</span></pre>
   <p class="hint">More setup, but your credentials and the data are already there — and
   it can be much faster: if your files are stored in eos at the LPC, you can expect much
   faster load times of your root files while tunneled into the LPC. Keep the ssh session
