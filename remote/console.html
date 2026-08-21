@@ -203,7 +203,11 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
     <input id="pickn" size="3" value="5" title="how many the “first” button ticks — sampling a big dataset">
     <label>tree <input id="picktree" size="12" value="Events"
       title="the TTree every selected file is read with — check a file's “trees” if unsure"></label>
-    <button class="go mini" id="pickadd">add selected to build</button>
+    <button class="go mini" id="pickadd" title="one sample per file, named after the
+ file — pick this when the files are different processes">add as separate samples</button>
+    <button class="mini" id="pickadd1" title="all the ticked files become ONE sample —
+ pick this when they are shards of the same dataset">add as one sample</button>
+    <span class="hint" id="pickhint" style="margin:0"></span>
   </div>
   <div class="wrap" id="srclist" hidden></div>
   <div id="treebox" hidden>
@@ -622,6 +626,15 @@ function pickbarDraw(view){
   $("pickbar").hidden = false;
   const n = files.filter(x => x.checked).length;
   $("pickcount").textContent = `${n} of ${files.length} selected`;
+  //: an eos DIRECTORY usually holds one file per physics process, so separate samples
+  //: is right; the files of ONE DAS DATASET are shards of the same process, so merging
+  //: is right. Both buttons are always offered — only which one leads changes.
+  const dasfiles = view.kind === "files";
+  $("pickadd").classList.toggle("go", !dasfiles);
+  $("pickadd1").classList.toggle("go", dasfiles);
+  $("pickhint").textContent = dasfiles
+    ? "these are files of one dataset — normally one sample"
+    : "one file per process here? separate samples. shards of one dataset? one sample";
 }
 
 $("crumbs").onclick = e => {
@@ -692,6 +705,11 @@ $("pickfirst").onclick = () => pickSet(fs => {
   const n = Math.max(1, +$("pickn").value || 1);
   fs.forEach((x, i) => { x.checked = i < n; });
 });
+//: SPLIT BY DEFAULT. Ticking seven files in one directory used to make ONE
+//: sample: Derek got DY, TT, WW, WZ and ZZ summed into a single histogram with
+//: no way to pull them apart. Splitting is recoverable in the page's grouping
+//: band; merging is not, so merging has to be asked for.
+const PICKMODE = {split: true};
 $("pickadd").onclick = async () => {
   const view = VIEWS[MODE];
   const files = pickable(view);
@@ -728,8 +746,9 @@ $("pickadd").onclick = async () => {
     $("srcbusy").textContent = "";
   }
   addSubset(view.kind === "files" ? view.label : view.path,
-            tree, sel.map(x => x.url), files.length);
+            tree, sel.map(x => x.url), files.length, PICKMODE.split);
 };
+$("pickadd1").onclick = () => { PICKMODE.split = false; $("pickadd").onclick(); };
 
 async function trees(url){
   $("treebox").hidden = false;
@@ -808,10 +827,12 @@ function addFile(url, tree){
   BASKET.push({kind:"file", url:url, tree:tree});
   drawBasket();
 }
-function addSubset(label, tree, urls, total){
+function addSubset(label, tree, urls, total, split){
   //: a chosen subset stays EXPLICIT: the basket (and the spec, and the data-less .rvr)
   //: carries the url list, never "the dataset minus something"
-  BASKET.push({kind:"subset", label:label, tree:tree, urls:urls, total:total});
+  BASKET.push({kind:"subset", label:label, tree:tree, urls:urls, total:total,
+               split: split !== false});
+  PICKMODE.split = true;                          // the default reasserts itself
   drawBasket();
 }
 //: which storage side a basket row came from — the columns hint and the parked
@@ -860,6 +881,36 @@ function drawBasket(){
 //: ONE spec builder. strict (the build/dataless path) throws on problems; lenient (the
 //: live json pane) returns the same object plus the problem list — so what the pane
 //: shows is by construction exactly what POST /build receives.
+//: strip the prefix and suffix EVERY name shares — the distinguishing middle is what
+//: belongs on a legend. Never returns an empty or duplicate name.
+function trimCommon(names){
+  if (names.length < 2) return names.slice();
+  let pre = 0, suf = 0;
+  const min = Math.min(...names.map(n => n.length));
+  while (pre < min - 1 && names.every(n => n[pre] === names[0][pre])) pre++;
+  while (suf < min - pre - 1 &&
+         names.every(n => n[n.length - 1 - suf] === names[0][names[0].length - 1 - suf])) suf++;
+  const cut = names.map(n => n.slice(pre, n.length - suf).replace(/^[-_. ]+|[-_. ]+$/g, ""));
+  return cut.map((c, i) => c || names[i]);
+}
+
+//: names are dict KEYS, so two that collide would silently become one sample carrying
+//: both files' events. Truncation used to make that easy — two files agreeing in their
+//: first 48 characters merged with nothing on screen to say so. Now a collision
+//: disambiguates instead, and only a deliberate merge shares a key.
+function addFileset(fileset, name, url, tree, merge){
+  let key = String(name).slice(0, 64) || "sample";
+  if (!merge && fileset[key]){
+    const base = String(name).slice(0, 58);
+    let n = 2;
+    while (fileset[`${base} (${n})`]) n++;
+    key = `${base} (${n})`;
+  }
+  const entry = fileset[key] = fileset[key] || {files:{}};
+  entry.files[url] = tree;
+  return key;
+}
+
 function buildSpec(strict){
   const problems = [];
   if (!BASKET.length) problems.push("the basket is empty — add a dataset or a file first");
@@ -874,17 +925,22 @@ function buildSpec(strict){
     if (b.kind === "dataset"){
       const short = b.dataset.split("/")[1].slice(0, 40) + " · " + b.dataset.split("/")[2].split("-")[0];
       fileset[short] = {dataset:b.dataset, tree:b.tree, limit:b.limit};
+    } else if (b.kind === "subset" && b.split !== false){
+      // one sample per file, named from the filename with whatever prefix and suffix
+      // all of them share stripped off — leaves DYto2L-4Jets_MLL-120_HT-1500to2500
+      // rather than a 48-character stump of the same boilerplate on every legend
+      const trimmed = trimCommon(b.urls.map(u => u.split("/").pop().replace(/\.root$/, "")));
+      b.urls.forEach((u, k) => {
+        addFileset(fileset, trimmed[k] || `file ${k + 1}`, u, b.tree);
+      });
     } else if (b.kind === "subset"){
       const short = (b.label.startsWith("/store")
         ? lastName(b.label) : (b.label.split("/")[1] || b.label)).slice(0, 40) +
         ` · ${b.urls.length} of ${b.total}`;
-      const entry = fileset[short] = fileset[short] || {files:{}};
-      b.urls.forEach(u => { entry.files[u] = b.tree; });
+      b.urls.forEach(u => addFileset(fileset, short, u, b.tree, true));
     } else {
-      const short = b.url.split("/").pop().replace(/\.root$/,"").slice(0, 48) +
-                    (b.tree === "Events" ? "" : " · " + b.tree);
-      const entry = fileset[short] = fileset[short] || {files:{}};
-      entry.files[b.url] = b.tree;
+      addFileset(fileset, b.url.split("/").pop().replace(/\.root$/,"") +
+                 (b.tree === "Events" ? "" : " · " + b.tree), b.url, b.tree);
     }
   });
   const branches = {};
