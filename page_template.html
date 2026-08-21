@@ -227,6 +227,7 @@ label.event{display:flex;align-items:center;gap:6px;font-family:var(--mono);font
   display:inline-flex;align-items:center;justify-content:center;cursor:help;
   color:var(--ink-3);border:1px solid var(--ink-3)}
 .pflag.pwarn{color:var(--warn);border-color:var(--warn)}
+.tblmix{margin:0 0 10px}
 .hint a{color:var(--signal)}
 /* A demo file is ~10MB over the network and then has to be gunzipped and unpacked, which
    is seconds of a page that looks like it ignored the click. The bar fills on real bytes
@@ -3666,6 +3667,31 @@ function lumiTable(){
   return out;
 }
 
+function mixedGroups(){
+  // Groups and subgroups holding BOTH a weighted sample and an unweighted one. Such a
+  // total is part yield and part raw count, because an unweighted sample is never scaled
+  // by a luminosity — so every picture that draws one says so.
+  const by = {};
+  META.datasets.forEach((d, i) => {
+    if (S.show[i] === false) return;
+    for (const g of [S.group ? S.group[i] : null, S.sub ? S.sub[i] : null]){
+      if (!g) continue;
+      const m = by[g] = by[g] || {weighted: [], raw: []};
+      m[UNW[i] ? "raw" : "weighted"].push(d);
+    }
+  });
+  return Object.entries(by).filter(([, m]) => m.raw.length && m.weighted.length);
+}
+
+function mixedNote(){
+  // What the ! carries in its tooltip: which samples have no weights, and what that costs.
+  if (!WTD()) return "";
+  return mixedGroups().map(([g, m]) =>
+    `group "${g}" mixes weighted and unweighted samples. No weights: ${m.raw.join(", ")} `
+    + `— counted raw, never scaled by the luminosity. Weighted: ${m.weighted.join(", ")}. `
+    + `This group's total is part yield and part count.`).join("  ");
+}
+
 function lumiNames(){
   // every group and subgroup that can carry one, groups first, in the band's own order
   const out = [];
@@ -4272,14 +4298,16 @@ function note(p, text){
   // the caveat becomes a badge with the words in its tooltip; orange only when something
   // is actually wrong, so "one bin per value" does not wear a warning's colour
   const raw = String(text || "");
-  const plain = raw.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+  const mix = mixedNote();
+  const said = raw.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+  const plain = [mix, said].filter(Boolean).join(" · ");
   NOTES[p.id] = plain;
   const el = document.querySelector(`.plotbox[data-id="${p.id}"] [data-show="note"]`);
   if (!el) return;
   el.hidden = !plain;
   el.title = plain;
   el.textContent = plain ? "!" : "";
-  el.className = "pflag" + (raw.includes('class="flag"') ? " pwarn" : "");
+  el.className = "pflag" + (mix || raw.includes('class="flag"') ? " pwarn" : "");
 }
 
 function intBins(name, auto, lo_, hi_){
@@ -6709,6 +6737,7 @@ function tableMarkup(){
     <button class="tgrow tgr" id="tblgrm" title="drop the last row"
       ${TBL.rows > 1 ? "" : "hidden"}>−</button></span>`;
   return `<div class="panel tbl">
+    <p class="tblmix" hidden><span class="pflag pwarn" id="tblflag">!</span></p>
     <div class="tblshelf" id="tblshelf">${tblShelfMarkup()}</div>
     <div class="tblwrap">
       <div class="tblmid">
@@ -6743,6 +6772,8 @@ function drawTable(keep){
   }
   if ($("tblshelf")) $("tblshelf").innerHTML = tblShelfMarkup();
   if ($("tblboard")) $("tblboard").innerHTML = tblBoardMarkup();
+  const mix = mixedNote(), tf = $("tblflag");
+  if (tf){ tf.title = mix; if (tf.parentNode) tf.parentNode.hidden = !mix; }
   tblWireBoard();
   if (TBLX) tblDrawBig();
 }
@@ -8874,6 +8905,9 @@ function rgnPanel(){
     `${RGN.srcs ? ` · <button class="tbtn rgnmini" id="rgnall">every sample</button>` : ""}</p>` +
     (rgnSrcs().length ? "" :
       `<p class="rgnnote rgnbad">no samples on this map yet — drag one in</p>`) +
+    (mixedNote()
+      ? `<p class="rgnnote rgnbad">mixed weighting ` +
+        `<span class="pflag pwarn" title="${esc(mixedNote())}">!</span></p>` : "") +
     `<p class="rgnnote">${rgnDim(n) ? "under the floor — greyed, and not cut further. " : ""}` +
     `S/B ${B > 0 ? (Sg / B).toFixed(4) : "—"}</p>` +
     `<p class="rgnnote">${chk.leaves || 0} regions` +

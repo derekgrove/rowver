@@ -1827,9 +1827,21 @@ MIXED_PROBE = (
     "\nvar c9 = cutflow(), a9 = c9.rows[0];"
     "\nS.lumi = 400; lumiTable();"
     "\nvar d9 = cutflow(), b9 = d9.rows[0];"
+    "\nvar lum9 = META.datasets.map(function(d, i){ return LUMI(i); });"
+    #: and the badge: silent while data and MC sit in DIFFERENT groups, loud the moment one
+    #: group holds both, silent again in raw mode where nothing is scaled at all
+    "\nvar apart9 = mixedNote();"
+    "\nS.group[0] = 'both'; S.group[1] = 'both';"
+    "\nvar both9 = mixedNote();"
+    "\ndrawAll();"
+    "\nvar plot9 = NOTES[PLOTS[0].id];"
+    "\nS.wt = 'raw';"
+    "\nvar raw9 = mixedNote();"
     "\nreturn 'MIXED OK ' + JSON.stringify({unw: UNW, sumw: Array.from(SUMWDS),"
-    "  lumis: META.datasets.map(function(d, i){ return LUMI(i); }),"
-    "  groups: c9.gs, raw: a9.raw, at10: a9.by, at400: b9.by});"
+    "  lumis: lum9,"
+    "  groups: c9.gs, raw: a9.raw, at10: a9.by, at400: b9.by,"
+    "  apart: apart9, both: both9, rawmode: raw9,"
+    "  onplot: plot9.indexOf(both9) === 0 && plot9.length > both9.length});"
 )
 
 
@@ -2186,6 +2198,15 @@ GOLDEN = {
             "raw": 1000858,
             "at10": {"data": 500429, "MC": 10008580},
             "at400": {"data": 500429, "MC": 400343200},
+            #: the badge Derek asked for: only a group holding BOTH kinds earns it
+            "apart": "",
+            "rawmode": "",
+            "both": ('group "both" mixes weighted and unweighted samples. No weights: '
+                     "Data 2012 DoubleMuParked \u2014 counted raw, never scaled by the "
+                     "luminosity. Weighted: MC stand-in x2. This group's total is part "
+                     "yield and part count."),
+            #: and it PREFIXES the plot's own caveat rather than replacing it
+            "onplot": True,
         },
     },
     "golden_0.13.0_data.rvr": {
