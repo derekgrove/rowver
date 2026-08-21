@@ -410,6 +410,9 @@ def load_dataset(name: str, entry: dict, branches: dict, cut: str | None, job: d
             "wire_MB": round(f.file.source.num_requested_bytes / 1e6, 3),
             "seconds": round(time.time() - t0, 2)})
         job["done_files"] += 1
+        # this file is now COUNTED, so it must stop counting as work in progress too —
+        # leaving it here made the bar read (done + 1)/total, i.e. 114% on a 7-file build
+        job["current"] = None
         job["note"] = f"{name}: {job['done_files']}/{job['total_files']} files"
     out = {}
     for c, chunks in parts.items():

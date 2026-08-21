@@ -1107,6 +1107,38 @@ function bounds(c){
   return c.nice || c.lim;
 }
 
+//: a saved plot can name a column this file does not carry — most often the WEIGHTS
+//: column, which pack() deliberately keeps out of the axes, so a spec that plots it
+//: killed the whole page on an undefined column. Repaired ONCE at load (initTabs)
+//: rather than at each draw: varx is read by the axis code, the binners and the
+//: exporters, and patching those one at a time is whack-a-mole.
+const MISSING_AXIS = new Set();
+function repairAxes(st){
+  // rewrite every varx/vary that names no real column; say so once per bad name
+  if (!st || !st.plots || !META.cols.length) return;
+  const have = new Set(META.cols.map(c => c.name)), fallback = META.cols[0].name;
+  st.plots.forEach(p => ["varx", "vary"].forEach(k => {
+    if (typeof p[k] !== "string" || have.has(p[k])) return;
+    const bad = p[k];
+    p[k] = fallback;
+    if (MISSING_AXIS.has(bad)) return;
+    MISSING_AXIS.add(bad);
+    const why = META.weights && bad === META.weights
+      ? " — the weights column is never plottable" : "";
+    setTimeout(() => say(`this file has no column <b>${esc(bad)}</b>${why}; showing ` +
+      `<b>${esc(fallback)}</b> instead. Pick the one you want in the plot's ` +
+      `variable menu.`), 0);
+  }));
+}
+function missingAxis(name){
+  if (!MISSING_AXIS.has(name)){
+    MISSING_AXIS.add(name);
+    say(`this file has no column <b>${esc(name)}</b>; showing ` +
+        `<b>${esc(META.cols[0].name)}</b> instead.`);
+  }
+  return 0;
+}
+
 function edges(lo, hi, nb, logb){
   // Bin edges evenly spaced in x, or in log10(x) when asked and the low edge is positive.
   // A column reaching zero cannot be binned in log, so it silently stays linear and the
@@ -2918,6 +2950,7 @@ function initTabs(){
   // .rvr ever written still opens; each tab keeps the file's own state as its reset target.
   const lift = [{name: "tab 1", state: META.state || null}];
   const src = (META.tabs && META.tabs.length) ? META.tabs : lift;
+  src.forEach(t => repairAxes(t.state));
   TABS = src.map((t, i) => ({name: t.name || `tab ${i + 1}`,
                              st: t.state || null, file: t.state || null}));
   TAB = Math.max(0, Math.min(META.tab | 0, TABS.length - 1));
@@ -3467,7 +3500,9 @@ function typed(v){ const n = parseFloat(v); return isFinite(n) ? n : null; }
 function axisRange(name, span, auto, lo_, hi_){
   // The drawn span of one column: its cut, trimmed to that plot's percentile setting —
   // unless the plot names its own min and max, which win.
-  const ci = META.cols.findIndex(c => c.name === name), c = META.cols[ci];
+  let ci = META.cols.findIndex(c => c.name === name);
+  if (ci < 0){ ci = missingAxis(name); }
+  const c = META.cols[ci];
   let lo = bounds(c)[0], hi = bounds(c)[1];
   if (!c.vals && S.cuts[ci]) { lo = S.cuts[ci][0]; hi = S.cuts[ci][1]; }
   if (span !== "full" && !c.vals) hi = Math.min(hi, Math.max(c[span], lo + 1e-9));

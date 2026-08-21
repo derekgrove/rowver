@@ -841,6 +841,11 @@ function buildSpec(strict){
   const w = $("wcol").value.trim();
   if (w && cols.indexOf(w) < 0)
     problems.push(`weights branch ${w} is not one of the columns`);
+  //: the weights column is read as a branch but pack() keeps it OUT of the axes, so a
+  //: default plot pointed at it opens a page with no such column (Derek, 2026-08-20)
+  const plottable = cols.filter(c => c !== w);
+  if (w && !plottable.length)
+    problems.push("every column is the weights column — add one more to plot");
   const out = {
     title: $("title").value.trim() || "console",
     fileset: fileset,
@@ -849,7 +854,7 @@ function buildSpec(strict){
     start: START_CMD,
     tabs: [{name: $("title").value.trim() || "console",
             view: {lumi: 1, shown: ["*"],
-                   plots: [{varx: cols[0] || "x", nb: 40, logy: true, span: "p99"}]}}],
+                   plots: [{varx: plottable[0] || "x", nb: 40, logy: true, span: "p99"}]}}],
   };
   const cut = $("cut").value.trim();
   if (cut) out.cut = cut;
@@ -949,7 +954,8 @@ function dash(s, prev){
   // every value here is a helper-measured counter; the page only takes differences
   const cur = s.current || {};
   const curFrac = cur.entries_total ? cur.entries_read / cur.entries_total : 0;
-  const allFrac = s.total_files ? (s.done_files + curFrac) / s.total_files : 0;
+  const allFrac = s.total_files
+    ? Math.min(1, (s.done_files + curFrac) / s.total_files) : 0;
   $("dashall").style.width = Math.round(100 * allFrac) + "%";
   $("dashcur").style.width = Math.round(100 * curFrac) + "%";
   $("dashfiles").textContent = `${s.done_files}/${s.total_files} files` +
@@ -959,7 +965,7 @@ function dash(s, prev){
       (cur.entries_total ? ` of ${cur.entries_total.toLocaleString("en-US")} entries` : "") +
       (cur.wire_MB ? ` · ${fmtMB(cur.wire_MB)} wire` : "") +
       (cur.file_MB ? ` of a ${fmtMB(cur.file_MB)} file` : "")
-    : "waiting for the first file…";
+    : (s.done_files ? "" : "waiting for the first file…");
   $("dashphase").innerHTML = s.phase === "opening" && /handshake/.test(s.note || "")
     ? `<span class="warn">${esc(s.note)}</span>`
     : esc((s.phase || "") + (s.note ? " — " + s.note : ""));
