@@ -168,7 +168,7 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
   <span class="hint" style="margin:0">flips to the builder the moment a helper answers</span></div>
 </div>
 
-<div class="card"><h2>helper</h2><div id="status">checking…</div>
+<div class="card"><h2 id="helperh2">no proxy? no problem!</h2><div id="status"></div>
   <p class="hint" style="margin-top:10px">If you don't have a proxy but would still like
   to try the builder, you can do it with CMS open data after running helper.py:</p>
   <pre id="qspre">git clone https://gitlab.cern.ch/dgrove/rowver
@@ -399,6 +399,7 @@ function flip(){
   // reports to (#builderr, #dash) is inside the hidden builder — so with no helper a
   // click used to do nothing AT ALL. Off is better than silent.
   if ($("qspre")) $("qspre").hidden = UP;   // pointless once one answers
+  if ($("helperh2")) $("helperh2").textContent = UP ? "helper" : "no proxy? no problem!";
   $("qsgo").disabled = !UP;
   $("qsgo").title = UP ? QS_TITLE
     : "no helper is answering yet — start one with a recipe above and this lights up";
@@ -441,7 +442,7 @@ async function status(){
   } catch(e){
     UP = false;
     flip();
-    $("status").textContent = "not answering";
+    $("status").textContent = "";
     $("banner").hidden = true;
   }
 }
