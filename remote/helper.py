@@ -43,6 +43,7 @@ timings are recorded in remote/metrics/ — the study's numbers come from there.
 """
 from __future__ import annotations
 
+import contextlib
 import errno
 import hashlib
 import json
@@ -213,6 +214,33 @@ HANDSHAKE = {"done": False, "first_open_s": None}
 #: /ping every ~1.5 s per open tab; a browse-while-polling stress froze the helper in
 #: 22 s (macOS) and Derek's own helper wedged after five minutes. So the proxy is
 #: decoded IN-PROCESS, and cached by the file's mtime so a renewal is still noticed.
+#: ONE thread in xrootd at a time, and every handle closed on the thread that opened
+#: it. XRootD's python layer shares a file-handle cache that is NOT thread-safe: with
+#: two threads finishing files at once, one closes a handle the other just invalidated
+#: and the request dies with "Failed to submit File.close". MEASURED 2026-08-20 on the
+#: real helper: one browsing tab + a build = 0 failures in 15 calls, but TWO tabs = 12
+#: failures in 62 (19%), three tabs = 27%. Every open here was also relying on garbage
+#: collection to close, so closes fired on whatever thread the GC ran on — which is the
+#: race. Held per OPERATION and per FILE, never for a whole build, so a browse waits at
+#: most one file rather than the length of the job.
+XROOTD = threading.RLock()
+
+
+@contextlib.contextmanager
+def xrd_open(url: str, timeout: int = 300):
+    """uproot.open, serialised, and closed deterministically inside the lock."""
+    import uproot
+    with XROOTD:
+        f = uproot.open(url, timeout=timeout)
+        try:
+            yield f
+        finally:
+            try:
+                f.close()
+            except Exception:
+                pass
+
+
 PROXY_CACHE: dict = {}
 
 
@@ -316,35 +344,26 @@ def eos_files(path: str) -> list:
 
 
 def list_trees(url: str) -> dict:
-    """Every TTree in one file, so the console can offer the tree choice."""
-    import uproot
+    """Every TTree in one file, so a wrong tree name can be corrected against reality."""
     t0 = time.time()
-    f = uproot.open(url, timeout=180)
-    note_first_open(time.time() - t0)
-    out = []
-    for k, cls in f.classnames().items():
-        if cls == "TTree":
-            name = k.split(";")[0]
-            try:
-                out.append({"name": name, "entries": int(f[name].num_entries)})
-            except Exception:
-                out.append({"name": name, "entries": None})
-    seen, trees = set(), []
-    for t in out:
-        if t["name"] not in seen:
-            seen.add(t["name"])
-            trees.append(t)
-    return {"url": url, "trees": trees}
+    with xrd_open(url, 180) as f:
+        trees = sorted({k.split(";")[0] for k, cls in f.classnames().items()
+                        if cls == "TTree"})
+        note_first_open(time.time() - t0)
+        return {"file": url, "trees": trees}
 
 
 def branch_inventory(url: str, tree: str) -> dict:
-    import uproot
     t0 = time.time()
-    t = uproot.open(url, timeout=180)[tree]
-    note_first_open(time.time() - t0)
-    return {"entries": int(t.num_entries),
-            "branches": [{"name": b.name, "type": str(b.interpretation)}
-                         for b in t.branches]}
+    with xrd_open(url, 180) as f:
+        t = f[tree]
+        note_first_open(time.time() - t0)
+        return {"entries": int(t.num_entries),
+                "branches": [{"name": b.name, "type": str(b.interpretation),
+                              # the page greys out what the flat .rvr format cannot hold
+                              "flat": not any(k in str(b.interpretation)
+                                              for k in ("AsJagged", "AsObjects", "AsStrings"))}
+                             for b in t.branches]}
 
 
 def cache_inventory() -> list:
@@ -427,7 +446,12 @@ def read_file(task: tuple) -> tuple:
     import uproot
     idx, name, url, tree, want, branches, cut, limit = task
     t0 = time.time()
-    f = uproot.open(url, timeout=300)
+    with xrd_open(url, 300) as f:
+        return _read_open(f, task, t0)
+
+
+def _read_open(f, task, t0):
+    idx, name, url, tree, want, branches, cut, limit = task
     t = f[tree]
     missing = [b for b in want if b not in t]
     if missing:
@@ -603,10 +627,10 @@ def build_rvr(spec: dict, job: dict) -> Path:
             first_of.setdefault(tree, url)
         for tree, url in first_of.items():
             t0 = time.time()
-            f = uproot.open(url, timeout=300)
-            note_first_open(time.time() - t0)
-            trees = sorted({k.split(";")[0] for k, cls in f.classnames().items()
-                            if cls == "TTree"})
+            with xrd_open(url, 300) as f:
+                note_first_open(time.time() - t0)
+                trees = sorted({k.split(";")[0] for k, cls in f.classnames().items()
+                                if cls == "TTree"})
             if tree not in trees:
                 raise RuntimeError(
                     f"{name}: the spec asks for tree '{tree}' but "
