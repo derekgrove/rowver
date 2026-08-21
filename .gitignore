@@ -2,6 +2,14 @@ __pycache__/
 *.pyc
 .DS_Store
 
+# studies are deny-by-default: a new one is private until it is named here, so nothing
+# of mine can reach a public repo by being forgotten about
+studies/*
+!studies/dimuon_demo/
+!studies/template/
+!studies/remote_example/
+!studies/grid_example/
+
 # generated — CI rebuilds these from the committed .root; never commit them
 studies/*/*.pkl
 studies/*/*.rvr

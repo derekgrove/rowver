@@ -7,6 +7,12 @@
     view.py     how the page opens                                 (optional)
 
     python run_rowver.py <your study>
+
+    fileset.json holds local paths. For files that are not on this machine, two
+    worked studies ship beside this one, each with a config that matches its own files:
+
+        studies/remote_example/   root:// open data, no certificate needed
+        studies/grid_example/     CMS DAS through the CERN and Fermilab redirectors
 """
 import awkward as ak
 import numpy as np

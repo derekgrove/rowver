@@ -43,12 +43,18 @@ That is the whole list, and it is what this project is developed and tested agai
 |----------|--------------|-----------|---------------|
 | `uproot` | 5.7.5        | mandatory | reading your `.root` files |
 | `awkward`| 2.11 / 2.12  | mandatory | the jagged arrays a config operates on |
-| `numpy`  | 2.5.1        | mandatory | every column, and the packing |
-| `plotly` | 6.9.0        | mandatory | the page itself |
-| `vector` | 1.8.1        | optional  | 4-vectors, if your `config.py` wants them |
+| `numpy`  | 2.4.2        | mandatory | every column, and the packing |
+| `plotly` | 6.7.0        | mandatory | the page itself |
+| `vector` | 1.8.0        | optional  | 4-vectors, if your `config.py` wants them |
+| `fsspec-xrootd` | 0.5.2 | optional | only for `root://` paths — see `studies/remote_example/` |
+| `aiohttp`, `requests` | | optional | only for `https://` paths |
+| `xrootd` | 5.9.2 | optional | the `xrdcp` command, for copying files down |
+| a CA bundle | | optional | only for grid files — see `studies/grid_example/` |
 
 Only `numpy` and `plotly` are needed to build a page from an existing `.rvr`; the rest are
-for producing one. `vector` is used by a study's `config.py` rather than by RowVer itself —
+for producing one. Four studies ship as worked examples: `template` (local paths, the one
+to copy), `dimuon_demo` (local, the shipped demo), `remote_example` (`root://` open data)
+and `grid_example` (CMS DAS through a redirector, needs a proxy). `vector` is used by a study's `config.py` rather than by RowVer itself —
 `studies/dimuon_demo/` builds `Momentum4D` objects with it to get the dimuon invariant
 mass — a config that computes its own kinematics, as `studies/template/` does, does not
 need it.
@@ -92,11 +98,12 @@ cp -r studies/template studies/mine
 # edit studies/mine/fileset.json  -> your files and trees
 # edit studies/mine/config.py     -> KEEP and COLUMNS
 rm studies/mine/view.py           # RECOMMENDED
-python run_rowver.py mine --data
+python run_rowver.py mine
 ```
 
-This writes `studies/mine/mine.html` (the page, data inside) and `mine.rvr` (the data
-alone). Open the page, build your groups in the Sample grouping band, set cuts, make
+This writes `studies/mine/mine.rvr` — the data alone. Drop it on `viewer.html` (or add
+`--html` for a standalone `mine.html` with the viewer baked around the data). Open it,
+build your groups in the Sample grouping band, set cuts, make
 plots and tables, then `save configuration (.rvr)`. The saved file carries the entire
 setup.
 
@@ -113,13 +120,16 @@ and colours. Hand-tune in the browser, export, extract, rebuild: the loop needs 
 ## Run
 
 ```
-python run_rowver.py template            skim, then build the page
+python run_rowver.py template            skim, then write template.rvr
+python run_rowver.py template --html     also build the standalone template.html
 python run_rowver.py template --check    verify chunked == unchunked first
-python run_rowver.py template --no-page  skim only, leave the pikl
-python run_rowver.py template --no-skim  reuse the pikl, rebuild the page
-python run_rowver.py template --data     also write template.rvr
+python run_rowver.py template --no-skim  reuse the pikl, rewrite the .rvr
 python run_rowver.py --list             what studies exist
 ```
+
+The `.rvr` is the artifact — drop it on `viewer.html` and the page you already have reads
+it. `--html` bakes a private copy of that same viewer around the data, which doubles the
+size on disk, so it is asked for rather than assumed.
 
 `--samples "a,b"` puts a subset in the page; `--out NAME` renames the outputs.
 
@@ -455,6 +465,47 @@ than `5`. Every value present in the data needs an entry or the build refuses.
 ```python
 LABELS = {"jetcat": {0: "S jet", 1: "ISR jet"}}
 ```
+
+## Running on the grid
+
+`studies/remote_example/` reads public open data over `root://` and needs no certificate.
+`studies/grid_example/` goes through a redirector to CMS NanoAOD, which does — and from a
+laptop that means setting **both** of these before the run, in the shell you run it from:
+
+```
+export X509_USER_PROXY=/tmp/x509up_u$(id -u)
+export X509_CERT_DIR=/path/to/certificates
+```
+
+For getting a proxy onto your own machine in the first place — the certificate, the CA
+bundle, `voms-proxy-init` without a grid login — this walkthrough is the one that works:
+<https://hackmd.io/@andrzejnovak/SJxscCZvD>
+
+**`voms-proxy-init` ends in red even when it succeeds.** After `Your proxy is valid
+until …` it usually prints `Error: Certificate verification failed.` /
+`outdated CRL found` / `CRL has expired`. That is its own post-creation check tripping
+over the stale certificate revocation lists inside the conda CA bundle, which no laptop
+refreshes; the proxy itself is fine. The line that matters is `Your proxy is valid
+until …`. `remote/README.md` shows the full output and how to confirm.
+
+**Unset, the failure is a hang rather than an error.** XRootD prints
+
+```
+security protocol 'ztn' disallowed for non-TLS connections.
+```
+
+and then retries forever. That line is not the fault: it says the server offered token
+auth, which the client refuses without TLS, so it falls back to your proxy — and with no
+`X509_CERT_DIR` it cannot validate anything and has nothing left to try. Measured here:
+3.9 s to open the file with both set, against never with them unset. Ctrl-C needs several
+presses because the retry loop is inside XRootD's C++ layer. Meanwhile `xrdfs stat` on the
+same path keeps working, which makes it look like a bug in this project — it finds the CA
+bundle by itself, and uproot has to be told.
+
+Grid speed is not predictable: the same two files skimmed in 29 s on one run here and 15
+minutes on another the same afternoon, depending on which replica the redirector picks.
+If you are iterating on `KEEP`, copy the files down once with `xrdcp` and point
+`fileset.json` at the local copies.
 
 ## Things that will bite
 
