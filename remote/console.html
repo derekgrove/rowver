@@ -13,6 +13,11 @@ body{margin:0;background:var(--bg);color:var(--ink);font:13px var(--mono);paddin
 h1{font-size:20px;margin:0 0 2px}
 h1 span{color:var(--blue)}
 .sub{color:var(--ink3);margin:0 0 14px}
+/* the standing answer to "is it finding my helper?", on its own above
+   everything else — it is the first thing anyone wants to know */
+#looking{color:var(--ink2);font-size:12px;margin:0 0 14px;padding:8px 12px;
+  border:1px dashed var(--rule);border-radius:4px;background:var(--panel)}
+#looking:empty{display:none}
 .card{background:var(--panel);border:1px solid var(--rule);border-radius:4px;
   padding:12px 14px;margin:0 0 14px}
 .h2sub{text-transform:none;letter-spacing:0;color:var(--ink3);font-weight:400}
@@ -125,6 +130,7 @@ body.guided .guide{display:block}
 <body>
 <h1><span>RowVer</span> remote console</h1>
 <p class="sub">build .rvr files from CMS DAS or eos</p>
+<div id="looking"></div>
 
 <div id="banner" hidden></div>
 
@@ -176,8 +182,7 @@ python run_rowver.py mine                                 <span class="jnote"># 
   this: its <code>fileset.json</code> names a plain file path, no url and no credentials.
   The builder above only browses DAS and eos, so local files skip it entirely.</p>
 
-  <div class="row" style="margin-top:8px"><button class="go" id="recheck">check again</button>
-  <span class="hint" style="margin:0">flips to the builder the moment a helper answers</span></div>
+
 </div>
 
 <div class="card"><h2 id="helperh2">no proxy? no problem!</h2><div id="status"></div>
@@ -406,6 +411,9 @@ function flip(){
   // helper answers, the page flips into the builder (Derek's home->builder->options->
   // building path). The helper card stays put in both states.
   $("getstarted").hidden = UP;
+  if ($("looking")) $("looking").innerHTML = UP ? ""
+    : dots(`looking for helper.py on ${BASE.replace(/^https?:\/\//, "")}`) +
+      ' <span class="jnote">— checked every 5 s; this page flips to the builder as soon as one answers</span>';
   ["c_source", "c_build", "c_act"].forEach(id => { $(id).hidden = !UP; });
   // the quickstart button sits in the always-visible helper card, but everywhere it
   // reports to (#builderr, #dash) is inside the hidden builder — so with no helper a
@@ -460,7 +468,6 @@ async function status(){
 }
 status();
 setInterval(status, 5000);   // the flip should feel immediate once the helper starts
-$("recheck").onclick = status;
 
 /* ---------- 1: source — DAS and eos, two sides of the same coin ---------- */
 //: ONE panel, a toggle flipping the page (Derek, 2026-08-20). Shared everywhere:
