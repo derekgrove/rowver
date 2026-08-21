@@ -14,11 +14,11 @@ Streaming re-reads the network every skim. To iterate on KEEP, copy them down on
 xrdcp and point fileset.json at the local files instead — measured here, 22s to copy and
 then 0s a skim, against 15s on every run. For grid files see studies/grid_example/.
 """
+from cart import Cart
+
 import awkward as ak
 import numpy as np
 
-HAS_WEIGHTS = False
-WEIGHTS_BRANCH = ""
 
 PT_MIN = 5.0
 
@@ -45,3 +45,27 @@ COLUMNS = {
     "q_pair": lambda events: ak.values_astype(
         events.Muon_charge[:, 0] * events.Muon_charge[:, 1], np.int32),
 }
+
+FILESET = {
+    'H(125) -> ZZ -> 4l': {
+        "files": {
+            'root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/ForHiggsTo4Leptons/SMHiggsToZZTo4L.root': 'Events',
+        },
+        "metadata": {'isMC': True},
+    },
+    'ZZ -> 4mu': {
+        "files": {
+            'root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/ForHiggsTo4Leptons/ZZTo4mu.root': 'Events',
+        },
+        "metadata": {'isMC': True},
+    },
+}
+
+
+CART = Cart(
+    name='remote_example',
+    fileset=FILESET,
+    columns=COLUMNS,
+    keep=KEEP,
+    prepare=PREPARE,
+)

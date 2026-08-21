@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """Run a study: skim its files, then write the data file the viewer opens.
 
-Everything a study produces lands in studies/<name>/, beside the fileset and config that
-defined it: <name>.pkl (the skim), <name>.rvr (columns + view), <name>.html (the page).
+Everything a study produces lands in studies/<name>/, beside the cart.py that defined it:
+<name>.pkl (the skim), <name>.rvr (columns + view + the cartridge stamp), <name>.html.
 
 The .rvr is what you want almost always — drop it on viewer.html. The page is the same
 data with the whole viewer wrapped around it, twice the size, so it is asked for.
@@ -10,18 +10,17 @@ data with the whole viewer wrapped around it, twice the size, so it is asked for
     python run_rowver.py template                 skim, then write <name>.rvr
     python run_rowver.py template --html          also build the standalone <name>.html
     python run_rowver.py template --no-skim       reuse the pikl, rewrite the .rvr
-    python run_rowver.py --list                  what studies exist
+    python run_rowver.py --list                   what studies exist
 """
 import argparse
 import os
 import sys
 import time
 
+import cart as cart_module
 import load
 import page
 import pikl
-import samples
-import study
 
 
 def parse(argv: list[str] | None = None) -> argparse.Namespace:
@@ -43,6 +42,12 @@ def parse(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--threads", type=int, default=0,
                    help="uproot decompression threads within each sample")
     return p.parse_args(argv)
+
+
+def view_of(cart):
+    """The study's view.py, or None when it has none."""
+    path = cart.dir / "view.py" if cart.dir else None
+    return cart_module.module(path, f"studies.{cart.name}.view") if path and path.exists() else None
 
 
 def tabs_for(meta: dict, mod) -> tuple[list | None, dict | None]:
@@ -83,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     """Skim, then build, reporting what each step cost."""
     args = parse(argv)
     if args.list or not args.study:
-        print("studies:", ", ".join(study.available()) or "none")
+        print("studies:", ", ".join(cart_module.available()) or "none")
         return 0 if args.list else 2
 
     cores = os.cpu_count() or 1
@@ -92,26 +97,25 @@ def main(argv: list[str] | None = None) -> int:
         f"these skims — so the ceiling is memory before it is cores; --jobs 10 was killed by "
         f"the OS on a 26 GB machine.")
 
-    st = study.load(args.study)
-    name = args.out or st["name"]
-    print(study.summary(st))
+    cart = cart_module.Cart.load(args.study)
+    name = args.out or cart.name
+    print(cart.summary())
+    print(cart.warn_mixed(), end="")
 
-    files = samples.files(st["fileset"])
-    check_view(st["view"], list(files), st["dir"] / "view.py")
-    print(f"\n{samples.check(st['fileset'], st['dir'] / 'fileset.json')} files "
-          f"across {len(files)} samples")
+    view = view_of(cart)
+    check_view(view, list(cart.fileset), f"{cart.dir}/view.py")
+    print(f"\n{cart.check()} files across {len(cart.fileset)} samples")
 
     if args.check:
-        one = min(files, key=lambda n: len(files[n]))
+        one = min(cart.fileset, key=lambda n: len(cart.files()[n]))
         t = time.time()
-        pikl.check(st["config"], files[one], samples.meta(st["fileset"])[one])
+        pikl.check(cart, one)
         print(f"check: chunked == unchunked on {one}  [{time.time()-t:.1f}s]")
 
     if not args.no_skim:
         t = time.time()
-        rows = pikl.pikl(name, files, st["config"], args.step,
-                         samples.meta(st["fileset"]), dest=st["dir"], jobs=args.jobs, threads=args.threads)
-        print(f"\nskim -> {st['dir']}/{name}.pkl  [{time.time()-t:.0f}s]")
+        rows = cart.skim(args.step, jobs=args.jobs, threads=args.threads)
+        print(f"\nskim -> {cart.dir}/{cart.name}.pkl  [{time.time()-t:.0f}s]")
         # any column gives the row count — a weightless study has no "weight" to ask
         nrows = lambda v: len(next(iter(v.values())))
         for s, v in rows.items():
@@ -121,32 +125,31 @@ def main(argv: list[str] | None = None) -> int:
     if args.viewer:
         print("\nviewer:", page.viewer())
 
-    rows = load.load(name, st["dir"])
+    rows = load.load(cart.name, cart.dir)
     if args.samples:
         want = [s.strip() for s in args.samples.split(",")]
         missing = [s for s in want if s not in rows]
         assert not missing, f"not in the pikl: {missing} — have {list(rows)}"
         rows = {s: rows[s] for s in want}
 
-    labels = getattr(st["config"], "LABELS", None)
-    wcol = study.weights(st["config"], st["dir"] / "config.py")
-    meta, _ = page.pack(rows, labels, wcol)
-    tabs, extra = tabs_for(meta, st["view"])
+    meta, _ = page.pack(rows, cart.labels, cart.weights)
+    tabs, extra = tabs_for(meta, view)
     if tabs:
         print(f"view.py: {len(tabs)} tabs — {', '.join(t['name'] for t in tabs)}")
 
-    print("\ndata:", page.data(rows, name, labels=labels, dest=st["dir"],
-                               weights=wcol, tabs=tabs, extra=extra))
+    print("\ndata:", cart.write(rows, name=name, tabs=tabs, extra=extra))
     # the page used to be rebuilt every run, so it could not fall behind the data. It can
     # now: an old .html beside a fresh .rvr opens on the numbers from the previous skim.
-    stale = st["dir"] / f"{name}.html"
+    stale = cart.dir / f"{name}.html"
     if not args.html and stale.exists():
         print(f"  note: {stale.name} was NOT rebuilt — it still holds the data from the run "
               f"that made it. Add --html to rebuild it, or delete it")
     if args.html:
-        print("page:", page.export(rows, name, title=f"RowVer — {st['name']}",
-                                   labels=labels, dest=st["dir"],
-                                   weights=wcol, tabs=tabs, extra=extra))
+        counts = {s: len(next(iter(v.values()))) for s, v in rows.items()}
+        print("page:", page.export(rows, name, title=f"RowVer — {cart.name}",
+                                   labels=cart.labels, dest=cart.dir,
+                                   weights=cart.weights, tabs=tabs, extra=extra,
+                                   cart=cart.stamp(counts)))
     return 0
 
 

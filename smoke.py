@@ -1759,10 +1759,10 @@ def run(html: str, rowver: str | None = None, probe: str = "") -> str:
 def roundtrip(name: str) -> str:
     """Write a .rvr carrying a view, read it back, and compare the view and every column."""
     import numpy as np
-    import load, page, study
+    import cart, load, page
     columns = load.load(name)
-    # the study says whether these events carry weights; a data skim has none
-    wcol = study.weights(study.load(name)["config"], f"{name}/config.py")
+    # the cart says whether these events carry weights; a data skim has none
+    wcol = cart.Cart.load(name).weights
     names = list(columns)
     first, second = names[0], names[min(1, len(names) - 1)]   # a study may have one sample
     want = {"v": 2, "cuts": {"0": [1.5, 9.5]}, "chips": {}, "show": {"0": False},
@@ -1818,6 +1818,20 @@ TABLE_PROBE = (
     "  bkgs:TBL.bkgs, channel:TBL.channel, err:TBL.err, plots:TBL.plots.length,"
     "  met:tblMets(), cellN:cn9, shelfN:TBLY.bn});"
 )
+
+#: A cart holding both real data and weighted MC. Counted through the page's OWN cutflow,
+#: at two luminosities, because the property being pinned is that one of them does not move:
+#: a sample declaring no weights is never multiplied by a luminosity, whatever its group says.
+MIXED_PROBE = (
+    "\nS.wt = 'w'; S.lumi = 10; lumiTable();"
+    "\nvar c9 = cutflow(), a9 = c9.rows[0];"
+    "\nS.lumi = 400; lumiTable();"
+    "\nvar d9 = cutflow(), b9 = d9.rows[0];"
+    "\nreturn 'MIXED OK ' + JSON.stringify({unw: UNW, sumw: Array.from(SUMWDS),"
+    "  lumis: META.datasets.map(function(d, i){ return LUMI(i); }),"
+    "  groups: c9.gs, raw: a9.raw, at10: a9.by, at400: b9.by});"
+)
+
 
 #: Enter the tab the FILE carries a partition on and report what the MAP itself computed,
 #: so the counts pinned below are checked against the page's own arithmetic as well as
@@ -2157,6 +2171,23 @@ GOLDEN = {
     },
     #: the reason v4 exists — no weights column at all. Every pinned number here is an
     #: integer the page reaches without ever touching a weight.
+    #: rowver 5's reason to exist: real data and weighted MC on one cart. Both samples
+    #: read the same open-data file, so they hold the same events and only the weighting
+    #: differs — data must read its raw count at EVERY luminosity, MC must scale.
+    "golden_0.34.0_mixed.rvr": {
+        "sha256": "a279233ee7a75a863c5c98f983b0f1ee7e2ecb6b32e7ae8e7c62c0211121b1cf",
+        "rowver": 5, "n": 1000858, "datasets": 2, "tabs": 1, "tab": 0,
+        "made_by": "0.34.0", "weights": "weight", "shown": 1000858,
+        "mixed": {
+            "unw": [True, False],
+            "sumw": [500429, 1000858],
+            "lumis": [1, 400],
+            "groups": ["data", "MC"],
+            "raw": 1000858,
+            "at10": {"data": 500429, "MC": 10008580},
+            "at400": {"data": 500429, "MC": 400343200},
+        },
+    },
     "golden_0.13.0_data.rvr": {
         "sha256": "5d4889c5b32e35000686133b0c9f4544c08b4c26c0fb6a6b1310fd36e2b83f17",
         "rowver": 4, "n": 31315, "datasets": 1, "tabs": 2, "tab": 0,
@@ -2334,6 +2365,17 @@ def golden() -> str:
                     return f"{name}: the map says {key}={said[key]!r}, pinned {pin[key]!r}"
             note = (f", {len(counts)} regions summing to {sum(counts):,} exactly"
                     f", area=events to {said['area']:.0e}{note}")
+        if "mixed" in want:
+            pin = want["mixed"]
+            t = run(str(here / "viewer.html"), str(f), probe=MIXED_PROBE)
+            if not t.startswith("MIXED OK "):
+                return f"{name}: the mixed cart — {t}"
+            said = json.loads(t[len("MIXED OK "):])
+            bad = {k: f"{said.get(k)!r} != {v!r}" for k, v in pin.items() if said.get(k) != v}
+            if bad:
+                return f"{name}: the mixed cart reads differently: {bad}"
+            note = (f", data holds {pin['at10']['data']:,} at BOTH 10 and 400 fb-1 while "
+                    f"MC scales{note}")
         if "pages" in want:
             t = run(str(here / "viewer.html"), str(f), probe=PAGES_PROBE)
             if not t.startswith("PAGES OK "):

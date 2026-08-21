@@ -1,6 +1,6 @@
 """Write the viewer: the columns, plotly.js and the controls, as one HTML file or as two.
 
-THE .rvr FORMAT, version 4
+THE .rvr FORMAT, version 5
 
 A gzip stream. Uncompressed it is:
 
@@ -26,14 +26,46 @@ NanoAOD branches; full-entropy f8 and every i4 column compress identically eithe
 
 META:
 
-    rowver      4                format version; a reader refuses anything else
+    rowver      5                format version; a reader refuses anything else
     n           int              events in every column
     bytes       int              length of the column buffer
     datasets    [str]            sample names, in the order the dataset index uses
     ds_offset   int              byte offset of the dataset index, one int32 per event
     cols        [{...}]          one entry per column, NOT counting the weights
-    weights     str | false      name of the weights column, or false for unweighted data
+    weights     str | false      name of the weights column, or false when NO sample
+                                 on the file carries weights
     w_offset    int              its byte offset, whenever weights is a name
+    cart        {...}            optional: the cartridge stamp — what this file is made
+                                 of and what was done to it. New in 5; see below.
+
+WEIGHTS ARE PER SAMPLE, and that is what version 5 is for. The buffer still holds ONE
+weights column, but a sample carrying no weights branch — real data — has 1.0 in every
+row of it, and `cart.samples[name].weights` is null. A reader must NOT scale such a
+sample by luminosity: its rows are counts, not yields, and multiplying them by 137.93
+is the whole failure this version exists to make impossible. A v4 file has no `cart`,
+so every one of its samples reads as weighted and it opens exactly as it always did.
+
+    cart {
+      name      str                    the study
+      built     str                    ISO-8601 UTC — when this file was burned
+      samples   {name: {n, weights, files: {path: tree}, metadata: {...}}}
+                                       coffea's fileset, globs already expanded, complete
+                                       paths; `weights` is the branch (or the function
+                                       source) that filled this sample's weights, or null
+                                       for data; `n` is its share of the events
+      columns   {name: str}            per column, how it was made: the branch it copied,
+                                       or the source of the function that computed it
+      keep      str                    the selection's name and first docstring line
+      prepare   str | null             the same for the prepare hook
+      config    {path, mtime, sha256, source}
+                                       the file that defined the cart, and its text
+    }
+
+`cart` is what makes a .rvr inspectable on its own: `cart.Cart.open(f)` hands back the
+whole fileset with complete paths, local or remote. It is a record, never a promise —
+a config that imports a private module is not reproducible from its text, and nothing
+here re-runs. It is also why a merge can refuse: two files whose `columns` or `keep`
+disagree must not be concatenated.
 
     NOTE  a plot's `cmt` is its note and is saved; `cmton`, whether that note is on
           screen, is NOT — it is posture. A saved one is accepted and ignored, and the
@@ -171,9 +203,9 @@ def get_plotlyjs() -> str:
 
 TEMPLATE: Path = Path(__file__).with_name("page_template.html")
 PAGES: Path = Path(__file__).with_name("pages")
-VERSION: str = "0.33.1"   # the tool, shown on every page it builds; bump when the page changes
-ROWVER: int = 4           # .rvr format version, which moves separately
-READS: tuple = (4,)       # v2 and v3 are gone: their weights were undeclared
+VERSION: str = "0.34.0"   # the tool, shown on every page it builds; bump when the page changes
+ROWVER: int = 5           # .rvr format version, which moves separately
+READS: tuple = (4, 5)     # v2 and v3 are gone: their weights were undeclared
 MAX_MB: int = 40
 MAX_CHIPS: int = 25
 
@@ -341,10 +373,13 @@ def build(columns_by_sample: dict[str, dict[str, np.ndarray]],
           labels: dict | None = None,
           weights: str | None = "weight",
           tabs: list | None = None,
-          extra: dict | None = None) -> tuple[dict[str, object], bytes]:
+          extra: dict | None = None,
+          cart: dict | None = None) -> tuple[dict[str, object], bytes]:
     """Pack the columns and attach the opening view — the part export() and data() share."""
     meta, buf = pack(columns_by_sample, labels, weights)
     meta["made_by"] = VERSION
+    if cart:
+        meta["cart"] = cart
     if not tabs:
         return meta, buf
 
@@ -653,13 +688,14 @@ def data(columns_by_sample: dict[str, dict[str, np.ndarray]], name: str = "rowve
          dest: str | Path | None = None,
          weights: str | None = "weight",
          tabs: list | None = None,
-         extra: dict | None = None) -> dict[str, object]:
+         extra: dict | None = None,
+         cart: dict | None = None) -> dict[str, object]:
     """Write <dest>/<name>.rvr, the data on its own, to drop onto viewer.html."""
     where = Path(dest) if dest else PAGES
     where.mkdir(parents=True, exist_ok=True)
     out = where / f"{name}.rvr"
 
-    meta, buf = build(columns_by_sample, labels, weights, tabs, extra)
+    meta, buf = build(columns_by_sample, labels, weights, tabs, extra, cart)
     meta["title"] = f"{name}.rvr"
     meta["path"] = str(out.resolve())
     header = json.dumps(meta).encode()
@@ -674,12 +710,13 @@ def export(columns_by_sample: dict[str, dict[str, np.ndarray]], name: str = "row
            dest: str | Path | None = None,
            weights: str | None = "weight",
            tabs: list | None = None,
-           extra: dict | None = None) -> dict[str, object]:
+           extra: dict | None = None,
+           cart: dict | None = None) -> dict[str, object]:
     """Write <dest>/<name>.html, the page with its data inside — one file to send."""
     where = Path(dest) if dest else PAGES
     out = where / f"{name}.html"
 
-    meta, buf = build(columns_by_sample, labels, weights, tabs, extra)
+    meta, buf = build(columns_by_sample, labels, weights, tabs, extra, cart)
     meta["title"] = f"{name}.html"
     meta["path"] = str(out.resolve())
     blob = base64.b64encode(gzip.compress(buf, 6)).decode()

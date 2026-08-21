@@ -3,22 +3,22 @@ This is a demo of formatting a .rvr file from CMS Open Data, found here: https:/
 
 In this config file we will see how we set up this file from start to finish.
 
-There are 6 things you can define in a config file. Only KEEP and COLUMNS are required —
-the framework looks every one of these up by name, and carries on without the others:
+A cart is one file. It holds the FILESET — which ROOT files, which trees, and whatever
+metadata you want to hang on each sample — and the selection that turns them into columns.
+Only KEEP and COLUMNS are required; the Cart carries on without the rest:
 
 LABELS: dict (optional)
     - changes the in-page labelling of a particular column, ex. renaming the charge of the
       dimuon pair from -1 and 1 to "opposite sign" and "same sign"
     - if you leave it out it'll just show the -1 and 1 as toggles but it may not be clear to a user what they are selecting
 
-HAS_WEIGHTS: bool (defaults to True if you leave it out, so always write it)
-    - whether these samples will have event weights (basically, is it MC or data?)
-    - one .rvr is either weighted or it is not; weighted and unweighted samples cannot be
-      mixed in a single file (at this time...)
-
-WEIGHTS_BRANCH: str (optional)
-    - if HAS_WEIGHTS == True, the name of the COLUMNS entry holding the weights
-    - defaults to "weight", and is ignored entirely when HAS_WEIGHTS == False
+FILESET: dict (mandatory)
+    - coffea's shape: {sample: {"files": {path: tree}, "metadata": {...}}}
+    - metadata["weights"] says what fills THAT sample's weights column — a branch name or
+      a function, and every sample may name a different one
+    - a sample declaring no weights is real data: its rows are 1.0 and the page never
+      scales them by a luminosity, so data and MC belong on the same cart
+    - this study is CMS Open Data, so it declares none
 
 PREPARE: function (optional)
     - modifies your events, ex. reordering every muon field by descending pT
@@ -31,6 +31,8 @@ COLUMNS: dict (mandatory)
     - the names and columns for your .rvr file, one number per event
     - these become everything you can cut on and plot
 """
+
+from cart import Cart
 
 import awkward as ak
 import numpy as np
@@ -48,8 +50,6 @@ LABELS = {
 
 # Since this will be run on real data there is no generator weight to apply and no
 # cross-section to scale to. This will disable the luminosity scaling in the page.
-HAS_WEIGHTS = False
-WEIGHTS_BRANCH = ""      # ignored while HAS_WEIGHTS is False
 
 
 # for simplicity I'm going to write some max values that I want to filter the events on
@@ -107,3 +107,21 @@ COLUMNS = {
     "nMuon": lambda events: ak.values_astype(events.nMuon, np.int32),
 }
 
+FILESET = {
+    'Data · CMS Open DoubleMuParked 2012': {
+        "files": {
+            'studies/dimuon_demo/open_data_slice.root': 'Events',
+        },
+        "metadata": {'isRun3': False},
+    },
+}
+
+
+CART = Cart(
+    name='dimuon_demo',
+    fileset=FILESET,
+    columns=COLUMNS,
+    keep=KEEP,
+    prepare=PREPARE,
+    labels=LABELS,
+)

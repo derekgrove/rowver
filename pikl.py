@@ -1,25 +1,16 @@
 """Skim ROOT trees into the pikl of columns that load.py reads.
 
-The `skim_config` argument these functions take is a module with two things in it:
-KEEP, a function saying which events to keep, and COLUMNS, a dict saying what to
-store for each one. configs/ holds them; skim_config.py loads them.
-
-A config may also define PREPARE(chunk), which runs once per chunk before KEEP and
-returns a chunk with whatever it needs attached — derived objects both KEEP and COLUMNS
-want, computed once instead of per column.
-
-KEEP and PREPARE may take a second argument, the sample's metadata from the fileset.
-Take it if you need it (is_2018, isRun3); leave it off and the one-argument form still
-works.
+The Cart says which files to read, which events to keep, and what to store for each one.
+Every hook it holds — keep, prepare, and any column that is a function — may take a
+second argument, that sample's metadata, with the file being read folded into it. See
+cart.py for the whole contract.
 """
 import gzip
-import importlib.util
 import pickle
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from types import ModuleType
 
 import awkward as ak
 import numpy as np
@@ -48,6 +39,7 @@ def progress(label: str, done: int, total: int, since: float, end: bool = False)
     sys.stdout.flush()   # stdout block-buffers into a pipe; without this the bar jumps ahead
     print(line if not tty else f"\r{line}", end="\n" if end or not tty else "",
           file=sys.stderr, flush=True)
+
 
 def reject_masked(dict_key: str, values: np.ndarray) -> np.ndarray:
     """
@@ -102,43 +94,51 @@ def _closest(want: str, have, n: int = 6) -> list[str]:
     return hit or sorted(have)[:n]
 
 
-def columns(skim_config: ModuleType, chunk: ak.Array) -> dict[str, np.ndarray]:
-    """
-    Evaluate COLUMNS on one chunk:
-    a str is a predefined branch name,
-    a lambda is computed and the corresponding column is filled with its output.
-    """
+def value_of(spec, chunk: ak.Array, meta: dict, where: str):
+    """One column's values: a string names a branch to copy, anything else is called."""
+    if not isinstance(spec, str):
+        return with_meta(spec, chunk, meta)
+    # awkward raises with the whole array in the message; say which branch and what the
+    # file does have, because a cart written for other files lands here first
+    if spec not in chunk.fields:
+        raise KeyError(
+            f"{where} reads branch {spec!r}, which {meta.get('file') or 'this file'} does "
+            f"not have.\n  It has {len(chunk.fields)} branches; the closest names are "
+            f"{_closest(spec, chunk.fields)}.\n  Edit your study's cart.py.")
+    return chunk[spec]
+
+
+def columns(cart, chunk: ak.Array, meta: dict) -> dict[str, np.ndarray]:
+    """Evaluate every column of the cart on one chunk, weights included."""
     out = {}
-    for column_name, branch_or_lambda in skim_config.COLUMNS.items():
-        if isinstance(branch_or_lambda, str):
-            # awkward raises with the whole array in the message; say which branch and what
-            # the file does have, because a config written for other files lands here first
-            if branch_or_lambda not in chunk.fields:
-                raise KeyError(
-                    f"COLUMNS[{column_name!r}] reads branch {branch_or_lambda!r}, which this "
-                    f"file does not have.\n  It has {len(chunk.fields)} branches; the closest "
-                    f"names are {_closest(branch_or_lambda, chunk.fields)}.\n"
-                    f"  Edit COLUMNS in your study's config.py.")
-            values = chunk[branch_or_lambda] # just fill our column with the branch that is already in the skim
-        else:
-            values = branch_or_lambda(chunk) # compute the lambda on the events of the skim, fill column with result
-        out[column_name] = reject_masked(column_name, ak.to_numpy(values)) # actually filling the column here (writing to dict)
+    for name, spec in cart.columns.items():
+        values = value_of(spec, chunk, meta, f"columns[{name!r}]")
+        out[name] = reject_masked(name, ak.to_numpy(values))
+    if cart.weights:
+        out[cart.weights] = weights_for(cart, chunk, meta)
 
     lengths = {len(v) for v in out.values()}
     assert len(lengths) == 1, f"columns disagree on length: {sorted(lengths)}"
     return out
 
 
-def skim(skim_config: ModuleType, files: dict[str, str],
-         step: int = STEP, metadata: dict | None = None,
-         threads: int = 0, label: str = "") -> dict[str, np.ndarray]:
-    """
-    Read one sample, keeping only the events that pass skim_config.KEEP.
+def weights_for(cart, chunk: ak.Array, meta: dict) -> np.ndarray:
+    """This sample's weights: its branch, its function, or ones where it declares none."""
+    spec = cart.weights_spec(meta["sample"])
+    if spec is None:
+        return np.ones(len(chunk), np.float64)
+    values = value_of(spec, chunk, meta, f"{meta['sample']}: metadata['weights']")
+    return reject_masked(cart.weights, ak.to_numpy(values)).astype(np.float64)
 
-    `files` is {path: tree name} — coffea's shape, and what samples.files() gives per
-    sample. A NanoAOD sample split over 32 files is one call. Read in chunks of `step`
-    events so memory stays flat however big the file is, and `virtual=True` means only
-    the branches COLUMNS actually touches come off disk (lazy, no wasted loading).
+
+def skim(cart, sample: str, step: int = STEP, threads: int = 0,
+         label: str = "") -> dict[str, np.ndarray]:
+    """
+    Read one sample, keeping only the events that pass the cart's keep.
+
+    A sample split over 32 files is one call. Read in chunks of `step` events so memory
+    stays flat however big the file is, and `virtual=True` means only the branches the
+    columns actually touch come off disk (lazy, no wasted loading).
 
     `threads` above 0 hands uproot a thread pool for basket decompression, which it
     otherwise does on the calling thread — its default is a TrivialExecutor. Decompression
@@ -148,7 +148,8 @@ def skim(skim_config: ModuleType, files: dict[str, str],
     opened up front to know that total, which is the same one open per file the loop
     below would do anyway — it does not cost a remote read.
     """
-    assert files, "no files given"
+    files = cart.files()[sample]
+    assert files, f"{sample}: no files given"
 
     pool = uproot.ThreadPoolExecutor(threads) if threads else None
     trees = {path: uproot.open(path)[tree] for path, tree in files.items()}
@@ -157,17 +158,17 @@ def skim(skim_config: ModuleType, files: dict[str, str],
 
     per_chunk = []
     for path, ttree in trees.items():
-        tree = files[path]
-        assert ttree.num_entries, f"{tree} in {path} is empty"
+        meta = cart.meta(sample, path, files[path])
+        assert ttree.num_entries, f"{files[path]} in {path} is empty"
         for start in range(0, ttree.num_entries, step):
             lazy = {"virtual": True} if supports_virtual(ttree) else {}
             chunk = ttree.arrays(entry_start=start,
                                  entry_stop=min(start + step, ttree.num_entries),
                                  decompression_executor=pool, **lazy)
-            if hasattr(skim_config, "PREPARE"):
-                chunk = with_meta(skim_config.PREPARE, chunk, metadata or {})
-            kept = chunk[with_meta(skim_config.KEEP, chunk, metadata or {})]
-            per_chunk.append(columns(skim_config, kept))
+            if cart.prepare:
+                chunk = with_meta(cart.prepare, chunk, meta)
+            kept = chunk[with_meta(cart.keep, chunk, meta)]
+            per_chunk.append(columns(cart, kept, meta))
             seen = min(seen + step, total)
             if label:
                 progress(label, seen, total, began)
@@ -180,42 +181,34 @@ def skim(skim_config: ModuleType, files: dict[str, str],
 
 
 def _one(job: tuple) -> tuple:
-    """Skim one sample in a worker process, re-importing the config there."""
-    config_path, sample, files, step, meta, threads = job
-    spec = importlib.util.spec_from_file_location("rowver_worker_config", config_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return sample, skim(mod, files, step, meta, threads)
+    """Skim one sample in a worker process, re-importing the cart there."""
+    import cart as cart_module
+    source, sample, step, threads = job
+    held = cart_module.module(Path(source), "rowver_worker_cart").CART
+    return sample, skim(held, sample, step, threads)
 
 
-def pikl(name: str, fileset: dict[str, dict[str, str]], skim_config: ModuleType,
-         step: int = STEP, metadata: dict[str, dict] | None = None,
-         dest: str | Path | None = None,
+def pikl(cart, name: str, step: int = STEP, dest: str | Path | None = None,
          jobs: int = 1, threads: int = 0) -> dict[str, dict[str, np.ndarray]]:
     """
-    Skim every sample and write them all into <dest>/<name>.pkl.
+    Skim every sample of the cart and write them all into <dest>/<name>.pkl.
 
-    `fileset` is what samples.files() returns: {sample name: {path: tree name}}.
-    `metadata` is samples.meta(fs) — each sample's metadata, handed to KEEP and PREPARE.
     `jobs` above 1 skims samples in parallel processes and `threads` above 0 decompresses
-    baskets in parallel within each one; they compose. The result is ordered as the fileset
-    is whichever you use, so the pikl does not depend on how it was built.
+    baskets in parallel within each one; they compose. The result is ordered as the cart's
+    fileset is whichever you use, so the pikl does not depend on how it was built.
     """
-    meta_of = lambda s: (metadata or {}).get(s)
-    if jobs > 1 and getattr(skim_config, "__file__", None):
-        work = [(skim_config.__file__, s, f, step, meta_of(s), threads)
-                for s, f in fileset.items()]
+    if jobs > 1 and cart.source:
+        work = [(cart.source, sample, step, threads) for sample in cart.fileset]
         with ProcessPoolExecutor(max_workers=jobs) as pool:
             done = dict(pool.map(_one, work))
-        columns_by_sample = {s: done[s] for s in fileset}      # fileset order, not finish order
+        columns_by_sample = {s: done[s] for s in cart.fileset}   # fileset order, not finish order
     else:
         # only the serial path reports progress: parallel workers cannot share one line,
         # and interleaved bars from N processes are worse than silence
         columns_by_sample = {}
-        for i, (sample, files) in enumerate(fileset.items(), 1):
+        for i, sample in enumerate(cart.fileset, 1):
             columns_by_sample[sample] = skim(
-                skim_config, files, step, meta_of(sample), threads,
-                label=f"[{i}/{len(fileset)}] {sample}")
+                cart, sample, step, threads, label=f"[{i}/{len(cart.fileset)}] {sample}")
 
     # the "results" key is the shape load.py expects; keep the two in step
     where = Path(dest) if dest else PIKLS
@@ -225,17 +218,16 @@ def pikl(name: str, fileset: dict[str, dict[str, str]], skim_config: ModuleType,
     return columns_by_sample
 
 
-def check(skim_config: ModuleType, files: dict[str, str],
-          metadata: dict | None = None) -> dict[str, np.ndarray]:
+def check(cart, sample: str) -> dict[str, np.ndarray]:
     """
-    Skim one tree twice, in chunks and in a single pass, and require identical results.
+    Skim one sample twice, in chunks and in a single pass, and require identical results.
 
     This is what catches a stitching bug in skim(). Getting the concatenation wrong
     still gives you the right NUMBER of events, so only comparing element by element,
     against a run whose chunk boundaries fall elsewhere, would notice.
     """
-    chunked = skim(skim_config, files, metadata=metadata)
-    unchunked = skim(skim_config, files, step=10 ** 9, metadata=metadata)  # bigger than any tree
+    chunked = skim(cart, sample)
+    unchunked = skim(cart, sample, step=10 ** 9)      # bigger than any tree
 
     assert chunked.keys() == unchunked.keys(), "chunked and unchunked disagree on columns"
     for column_name in chunked:

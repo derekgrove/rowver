@@ -1072,6 +1072,7 @@ function sumwScaled(){
   return a;
 }
 let WCOL = "weight";   // the weights column's name, or null when the file has none
+let UNW = [];          // per dataset: true where it declares no weights of its own
 const $ = id => document.getElementById(id);
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const PAL = () => ["--s1","--s2","--s3","--s4","--s5","--s6","--s7","--s8"].map(css);
@@ -1111,6 +1112,11 @@ function unpack(buf){
     D[c.name] = c.kind === "f8" ? new Float64Array(buf, c.offset, n)
                                 : new Int32Array(buf, c.offset, n);
   D.__ds = new Int32Array(buf, META.ds_offset, n);
+  // Which datasets carry no weights of their own. A v5 cart names the branch that filled
+  // each sample's weights, or null for real data; a v4 file has no cart, so every one of
+  // its samples reads as weighted and it opens exactly as it always did.
+  const held = (META.cart && META.cart.samples) || null;
+  UNW = META.datasets.map(d => !!held && !(held[d] && held[d].weights));
   // with no weights every event counts once, so the file total IS the event count
   SUMW = 0;
   SUMWDS = new Float64Array(META.datasets.length);
@@ -3648,7 +3654,11 @@ function lumiTable(){
   const m = S.lumis || {};
   for (let i = 0; i < META.datasets.length; i++){
     const sg = S.sub ? S.sub[i] : null, g = S.group ? S.group[i] : null;
-    out[i] = (sg != null && m[sg] != null && isFinite(m[sg])) ? m[sg]
+    // A dataset with no weights of its own is DATA: its rows are counts, not yields, and
+    // no luminosity may touch them however its group is set. This is the one place that
+    // decides, so every loop that counts obeys it without a branch of its own.
+    out[i] = UNW[i] ? 1
+           : (sg != null && m[sg] != null && isFinite(m[sg])) ? m[sg]
            : (g != null && m[g] != null && isFinite(m[g])) ? m[g]
            : (S.lumi || 1);
   }
@@ -5148,7 +5158,7 @@ function gunzip(stream){
 }
 
 const ROWVER = 4;   // the .rvr version this viewer writes; page.py holds the same number.
-const READS = [4];   // v2 and v3 are gone: their weights were undeclared
+const READS = [4, 5];   // v2 and v3 are gone: their weights were undeclared
 const MADEBY = "__VERSION__";   // the tool version stamped into files this page writes
                     // v2 is still read — initTabs lifts its single state to one tab.
 
