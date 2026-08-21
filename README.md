@@ -45,7 +45,7 @@ That is the whole list, and it is what this project is developed and tested agai
 | `awkward`| 2.11 / 2.12  | mandatory | the jagged arrays a config operates on |
 | `numpy`  | 2.4.2        | mandatory | every column, and the packing |
 | `plotly` | 6.7.0        | mandatory | the page itself |
-| `vector` | 1.8.0        | optional  | 4-vectors, if your `config.py` wants them |
+| `vector` | 1.8.0        | optional  | 4-vectors, if your `cart.py` wants them |
 | `fsspec-xrootd` | 0.5.2 | optional | only for `root://` paths — see `studies/remote_example/` |
 | `aiohttp`, `requests` | | optional | only for `https://` paths |
 | `xrootd` | 5.9.2 | optional | the `xrdcp` command, for copying files down |
@@ -54,7 +54,7 @@ That is the whole list, and it is what this project is developed and tested agai
 Only `numpy` and `plotly` are needed to build a page from an existing `.rvr`; the rest are
 for producing one. Four studies ship as worked examples: `template` (local paths, the one
 to copy), `dimuon_demo` (local, the shipped demo), `remote_example` (`root://` open data)
-and `grid_example` (CMS DAS through a redirector, needs a proxy). `vector` is used by a study's `config.py` rather than by RowVer itself —
+and `grid_example` (CMS DAS through a redirector, needs a proxy). `vector` is used by a study's `cart.py` rather than by RowVer itself —
 `studies/dimuon_demo/` builds `Momentum4D` objects with it to get the dimuon invariant
 mass — a config that computes its own kinematics, as `studies/template/` does, does not
 need it.
@@ -83,11 +83,16 @@ cd RowVer
 ```
 
 ## how it works:
-`.rvr` files are generated from "studies", which is really just three things:
+`.rvr` files are generated from "studies", which is really just two files:
 
-- `config.py` (preselection cuts, which branches to use, basic selections to toggle later)
-- `fileset.json` (which `.root` files to use and paths to them, one path per sample, globs allowed)
+- `cart.py` (the whole study: which `.root` files, which trees, per-sample metadata, and
+  the preselection and columns that turn them into a page)
 - `view.py` (**optional** initial file setup: every tab, its plots, cuts, boards and sample groupings)
+
+A **cart** is one object holding all of that. The fileset is an ordinary python dict in
+coffea's shape — there is no `fileset.json` riding alongside — and the `.rvr` it burns
+carries the whole thing with it, so a built file can always tell you exactly what went
+into it.
 
 **It is highly recommended you generate your first `.rvr` file without a `view.py`**, this simplifies everything and you can configure the cuts/plots in the browser page upon first loading anyways, you lose nothing by skipping it. This is mainly useful for if you wanted to duplicate your page setup exactly but after rerunning the data skim.
 
@@ -95,9 +100,8 @@ cd RowVer
 
 ```
 cp -r studies/template studies/mine
-# edit studies/mine/fileset.json  -> your files and trees
-# edit studies/mine/config.py     -> KEEP and COLUMNS
-rm studies/mine/view.py           # RECOMMENDED
+# edit studies/mine/cart.py   -> your files and trees, then KEEP and COLUMNS
+rm studies/mine/view.py       # RECOMMENDED
 python run_rowver.py mine
 ```
 
@@ -186,6 +190,41 @@ st = page.state(meta, cuts={"PT_mu_lead": [20, 500], "nJet": [1, 2, 3]},
                 fom=("signal", "background"), lumi=400, varx="MET", nb=24)
 page.data(d, "mine", defaults=st, dest="studies/mine")
 ```
+
+## What a built file remembers
+
+A `.rvr` is a cartridge: plug it into the viewer and it plays, and it also tells you —
+with no other file, on any machine — exactly what was put on it.
+
+```
+python cart.py studies/mine/mine.rvr          the cartridge label
+python cart.py studies/mine/mine.rvr --json   its whole fileset, as JSON
+```
+
+```
+cart mixed_demo  (/…/studies/mixed_demo/cart.py)
+  Data 2012 DoubleMuParked    1 files  Events   weights=NONE (data)
+  MC stand-in x2              1 files  Events   weights=stand_in_weight() — A stand-in …
+  3 columns, keep: KEEP() — Both muons measured.
+```
+
+Under `META.cart` the file carries its whole fileset — every sample, every complete path
+local or remote, tree names, per-sample metadata, the branch that filled each sample's
+weights and how many events it contributed — plus how each column was made (the branch it
+copied, or the source of the function that computed it), the selection's name and
+docstring, when it was built, and the `cart.py` that defined it with its sha256.
+
+It is a record, never a promise. A cart that imports a private module is not reproducible
+from its text, and nothing here re-runs anything. But it is enough to answer "which files
+is this?" a year later, and enough for a merge to refuse two files whose columns or
+selection disagree.
+
+It costs little: the repetitive fileset JSON gzips about 16:1, so a **1,000-file fileset
+adds ~15 KB** — about 0.15% of a realistic 10 MB study — and a `cart.py`'s text is ~1 KB
+gzipped.
+
+⚠️ It also means **your paths and your cart's source travel with a file you send someone**:
+eos paths, usernames, directory layout, and whatever your `cart.py` says.
 
 ## The Sample grouping band
 
@@ -297,10 +336,12 @@ python smoke.py golden=golden                     the frozen files still open, u
 `golden/` holds .rvr files frozen at the version that wrote them (open data, built by
 `golden/make_goldens_0_13_0.py`, never re-run). The `golden` check opens each with
 today's viewer and compares exact integers against pins in `smoke.py`; the day a page
-reads different numbers out of one, the battery goes red. Four are frozen, and each
+reads different numbers out of one, the battery goes red. Ten are frozen, and each
 guards something different: `_tabs` every optional key, `_table` a board with no `met`
 key (absence must keep meaning all three FOMs), `_met` a `met` list deliberately out of
-canonical order, and `_data` a file with no weights at all. A new format capability
+canonical order, `_data` a file with no weights at all, and `_mixed` real data and
+weighted MC on ONE cart — counted through the page's own cutflow at two luminosities,
+because the property it pins is that one of them does not move. A new format capability
 should add a new golden beside the old ones, never replace one.
 
 A page holds roughly 150k-800k events; over 40 MB `export` refuses with the size
@@ -309,8 +350,7 @@ rather than truncating. Build several pages from one pikl instead.
 ## Layout
 
 ```
-studies/<name>/fileset.json   which files, which trees, per-sample metadata
-studies/<name>/config.py      one skim definition: KEEP, COLUMNS, optional PREPARE
+studies/<name>/cart.py        the whole study: the fileset, KEEP, COLUMNS, PREPARE
 studies/<name>/view.py        how the page opens: VIEW, GROUPS, FOM, COLOUR    (optional)
 studies/<name>/<name>.pkl     the skim, native dtypes, every sample   (generated)
 studies/<name>/<name>.rvr     columns + the opening view              (generated)
@@ -322,48 +362,58 @@ The pikl comes first and the .rvr is packed from it. Keeping both is deliberate:
 pikl holds every sample in its native dtypes, the .rvr holds the cut you ship, in the
 only two types the page has (float64, int32). `--samples` is what makes them differ.
 
-A study is self-contained. Two studies that share physics should import it —
-`from studies.other.config import KEEP` — rather than copy it.
+A study is self-contained. Two studies that share physics should re-use it rather than
+copy it — a cart is an object, so `CART.keep` and `CART.columns` can be handed straight
+to another `Cart(...)`. `studies/ku_2l_run2` does exactly that.
 
-Note that a study may need packages the tool does not. A config is ordinary python
+Note that a study may need packages the tool does not. A cart is ordinary python
 and may import whatever your selection needs. `studies/template/` needs nothing beyond
 uproot and awkward.
 
 ## Adding a study
 
-Copy `studies/template/`, rename it, and edit the three files in it. Everything in it is
-a placeholder marked mandatory or optional; point `fileset.json` at your own files and
-edit the branch names to match.
+Copy `studies/template/`, rename it, and edit the one file in it. Everything in it is
+a placeholder marked mandatory or optional; point `FILESET` at your own files and edit
+the branch names to match.
 
 ```
 cp -r studies/template studies/mine
-# edit studies/mine/fileset.json to point at your ROOT files
+# edit studies/mine/cart.py to point at your ROOT files
 python run_rowver.py mine
 ```
 
-A study is `studies/<name>/` with a `fileset.json` and a `config.py`, plus an
-optional `view.py`.
+A study is `studies/<name>/` with a `cart.py`, plus an optional `view.py`.
 
 Every fileset shipped here holds machine-local paths, so a study fails on a fresh
 clone until you point it at your own ROOT files; the error says which file to edit.
 `template` ships with placeholder paths for the same reason — it is a starting point to
 copy, not a study to run.
 
-### fileset.json
+### FILESET
 
-Coffea's shape. A path may be a glob; each path names its own tree, so one file
-holding many trees can supply several samples.
+Coffea's shape, as an ordinary python dict. A path may be a glob; each path names its own
+tree, so one file holding many trees can supply several samples. A path may also be a
+remote URL — `root://` through an XRootD redirector, or `https://` — which is read in
+place and never globbed.
 
-```json
-{
-  "ttbar 2024": {
-    "files": {"/data/TTto2L2Nu_2024/*.root": "Events"},
-    "metadata": {"isRun3": true}
-  }
+```python
+FILESET = {
+    "ttbar 2024": {
+        "files": {"/data/TTto2L2Nu_2024/*.root": "Events"},
+        "metadata": {"isRun3": True, "weights": "genWeight"},
+    },
 }
 ```
 
-### config.py
+`metadata` is yours to fill and reaches every hook (see below). `weights` is the one key
+the cart reads itself.
+
+`python cart.py mine --json` prints the fileset as JSON whenever you want to read it that
+way, and `python cart.py studies/mine/mine.rvr` prints what a **built** file holds — every
+sample, every complete path, which branch filled its weights, how many events it
+contributed, and the config it was built from.
+
+### the selection
 
 A config declares three things. The difference between them is not stylistic — it is what
 the skim does with each one:
@@ -393,9 +443,22 @@ branch that is already one-per-event — `nJet`, `MET_pt` — can be named direc
 branch cannot: `Muon_pt` is `float[nMuon]`, one value per *muon*, so it needs a reduction
 to one number per event first. That reduction is what the lambda is for.
 
-`KEEP` and `PREPARE` may take a second argument, that sample's `metadata` from
-`fileset.json` — `def PREPARE(a, meta):` — which is how a per-sample cross-section or
-scale factor reaches the events.
+**Every hook may take a second argument**, that sample's `metadata` — `def KEEP(a, meta):`,
+`def PREPARE(a, meta):`, and any `COLUMNS` entry that is a function. Write the
+one-argument form and it still works. That is how a per-sample cross-section or scale
+factor reaches the events.
+
+The metadata handed over is the sample's own, plus three keys the skim knows and the
+fileset cannot: `sample`, `file` — the complete path of the file this chunk came from —
+and `tree`. A column can therefore depend on which file it is reading, which is what
+`studies/ku_2l_run2` needs: each era has its own luminosity, so its weight is
+
+```python
+"weights": lambda a, m: a.weight * m["eras"][era_of(m["file"])] / 137.93
+```
+
+Those three names are reserved; a fileset that already uses one fails at load rather than
+having its value quietly overwritten.
 
 #### Why the split matters, worked through
 
@@ -435,26 +498,42 @@ import awkward as ak
 def KEEP(a):
     return a.nMuon >= 2
 
-HAS_WEIGHTS    = True         # False for real data — nothing scales an event
-WEIGHTS_BRANCH = "genWeight"  # only read when HAS_WEIGHTS; defaults to "weight"
-
 COLUMNS = {
-    "genWeight": "genWeight",
     "MET": "PuppiMET_pt",
     "nJet": "nJet",
     "PT_mu_lead": lambda a: ak.max(a.Muon_pt, axis=1),
 }
 ```
 
-**Weights are optional, and declared.** `WEIGHTS_BRANCH` names the `COLUMNS` entry
-holding the per-event weights; the file records that name and the column's byte offset,
-so nothing has to already know where the weights are. Set `HAS_WEIGHTS = False` and no
-weights column is written at all — the page then hides the weighted/raw toggle and the
-luminosity box, counts every event once, and drops the MC-statistical term from
-`S/sqrt(B+sigma^2)`, which on unweighted events would just be B's own Poisson error
-counted twice. Saying both things at once (`HAS_WEIGHTS = False` beside a `COLUMNS`
-entry that computes weights) is refused at build time rather than silently resolved.
-`studies/dimuon_demo/` is the worked example: it is CMS open data, so it carries none.
+**Weights are per sample, which is how data and MC share one file.** Each sample's
+`metadata["weights"]` says what fills its weights column, in exactly the grammar `COLUMNS`
+uses — a branch name, or a function — so every sample may name a different branch:
+
+```python
+FILESET = {
+    "ttbar 2018":      {"files": {...}, "metadata": {"weights": "genWeight"}},
+    "DY 2018":         {"files": {...}, "metadata": {"weights": "LHEWeight_originalXWGTUP"}},
+    "SingleMuon 2018": {"files": {...}, "metadata": {}},
+}
+```
+
+**A sample that declares none is real data**: its rows are 1.0 and **the page never scales
+them by a luminosity**, whatever its group is set to. So its number is its event count,
+always, and there is no per-group luminosity to remember to set to 1.
+
+If no sample on the cart declares weights, no weights column is written at all — the page
+then hides the weighted/raw toggle and the luminosity box, counts every event once, and
+drops the MC-statistical term from `S/sqrt(B+sigma^2)`, which on unweighted events would
+just be B's own Poisson error counted twice. `studies/dimuon_demo/` is the worked example:
+it is CMS open data, so it carries none. `studies/mixed_demo/` is the other one: the same
+file read twice, once as data and once weighted, so only the weighting differs.
+
+⚠️ **Mixing the two INSIDE one group makes a total that is part yield and part count.**
+That is legitimate — a data-driven background estimate looks like this — but it is worth
+knowing, so the page puts a `!` in the corner of every plot, table and region map that
+draws such a group, naming the samples with no weights. Unweighted samples on their own,
+grouped with each other, or drawn beside weighted ones in their own group say nothing.
+`run_rowver.py` prints the same warning at build time.
 
 A lambda that can return nothing for some events is rejected at skim time, naming the
 column; give `KEEP` a condition that guarantees a value.
@@ -505,7 +584,7 @@ bundle by itself, and uproot has to be told.
 Grid speed is not predictable: the same two files skimmed in 29 s on one run here and 15
 minutes on another the same afternoon, depending on which replica the redirector picks.
 If you are iterating on `KEEP`, copy the files down once with `xrdcp` and point
-`fileset.json` at the local copies.
+`FILESET` at the local copies.
 
 ## Things that will bite
 
@@ -513,9 +592,13 @@ If you are iterating on `KEEP`, copy the files down once with `xrdcp` and point
   leave it out. The packer refuses rather than wrapping silently.
 - Every sample opens ungrouped unless `view.py` says otherwise. Group them in the
   Sample grouping band.
-- `skim_config` cannot see fileset metadata, so `KEEP` cannot branch on `isRun3` yet.
+- An unweighted sample is never scaled by luminosity. That is the point, but it means a
+  group holding one beside a weighted sample has a total that is part yield and part raw
+  count — the page marks exactly that case with a `!`.
 - The `.rvr` format is versioned (`ROWVER` in `page.py`, `const ROWVER` in
-  `page_template.html`). They must change together.
+  `page_template.html`). They must change together, and `READS` on both sides says which
+  versions still open. A file saved from the page is written at the viewer's own version
+  and keeps whatever cart stamp it arrived with.
 
 ## Licence
 

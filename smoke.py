@@ -1837,10 +1837,13 @@ MIXED_PROBE = (
     "\nvar plot9 = NOTES[PLOTS[0].id];"
     "\nS.wt = 'raw';"
     "\nvar raw9 = mixedNote();"
+    #: and what the PAGE would write back out: its own version, with the stamp still on it
+    "\nvar out9 = tunedMeta();"
     "\nreturn 'MIXED OK ' + JSON.stringify({unw: UNW, sumw: Array.from(SUMWDS),"
     "  lumis: lum9,"
     "  groups: c9.gs, raw: a9.raw, at10: a9.by, at400: b9.by,"
     "  apart: apart9, both: both9, rawmode: raw9,"
+    "  saves: out9.rowver, keepsStamp: !!(out9.cart && out9.cart.samples),"
     "  onplot: plot9.indexOf(both9) === 0 && plot9.length > both9.length});"
 )
 
@@ -2207,6 +2210,9 @@ GOLDEN = {
                      "yield and part count."),
             #: and it PREFIXES the plot's own caveat rather than replacing it
             "onplot": True,
+            #: a page re-save writes THIS viewer's version and carries the stamp through
+            "saves": 5,
+            "keepsStamp": True,
         },
     },
     "golden_0.13.0_data.rvr": {

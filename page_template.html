@@ -5185,7 +5185,11 @@ function gunzip(stream){
   return new Response(stream.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
 }
 
-const ROWVER = 4;   // the .rvr version this viewer writes; page.py holds the same number.
+const ROWVER = 5;   // the .rvr version this viewer writes; page.py holds the same number.
+// A v4 file re-saved from the page is written as v5, which is right: v5 is v4 plus an
+// OPTIONAL cart stamp, and a file without one reads as every-sample-weighted — exactly
+// what v4 meant. A file that HAS a stamp keeps it: Object.assign copies META, and the
+// stamp describes what produced the columns, which a re-save does not change.
 const READS = [4, 5];   // v2 and v3 are gone: their weights were undeclared
 const MADEBY = "__VERSION__";   // the tool version stamped into files this page writes
                     // v2 is still read — initTabs lifts its single state to one tab.
