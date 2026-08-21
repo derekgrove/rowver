@@ -148,9 +148,9 @@ body.guided .guide{display:block}
 
   <b>Option 1 — proxy installed locally</b>
   <pre>voms-proxy-init -voms cms --valid 192:00
-git clone https://gitlab.cern.ch/dgrove/rowver
+git clone https://gitlab.cern.ch/dgrove/rowver            <span class="jnote"># clone RowVer to your laptop</span>
 python3 -m pip install --user numpy uproot fsspec-xrootd
-cd rowver &amp;&amp; python3 remote/helper.py</pre>
+cd rowver &amp;&amp; python3 remote/helper.py                     <span class="jnote"># run helper.py on your laptop, now this browser can talk to the grid</span></pre>
 
   <b>Option 2 — tunneling to a cluster</b>
   <pre>ssh -L 8271:localhost:8271 username@cmslpc-el9.fnal.gov
@@ -164,6 +164,18 @@ cd rowver &amp;&amp; python3 remote/helper.py                     <span class="j
 
   <p class="hint">Your browser will ask to allow <b>local network access</b> — this page
   communicates with the helper through that connection, on <code>127.0.0.1</code>.</p>
+
+  <b>What if my .root files are on my laptop and not in remote storage?</b>
+  <p class="hint">Then you need none of the above — no proxy, no helper, and no browser
+  to drive it. RowVer reads local paths directly; point a study at them and run it:</p>
+  <pre>git clone https://gitlab.cern.ch/dgrove/rowver
+cd rowver
+cp -r studies/template studies/mine                       <span class="jnote"># then edit its fileset.json and config.py</span>
+python run_rowver.py mine                                 <span class="jnote"># writes studies/mine/mine.rvr — drop that on the RowVer page</span></pre>
+  <p class="hint"><code>studies/dimuon_demo/</code> ships as a worked example of exactly
+  this: its <code>fileset.json</code> names a plain file path, no url and no credentials.
+  The builder above only browses DAS and eos, so local files skip it entirely.</p>
+
   <div class="row" style="margin-top:8px"><button class="go" id="recheck">check again</button>
   <span class="hint" style="margin:0">flips to the builder the moment a helper answers</span></div>
 </div>
