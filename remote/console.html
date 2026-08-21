@@ -163,13 +163,9 @@ cd rowver &amp;&amp; python3 remote/helper.py                     <span class="j
 git clone https://gitlab.cern.ch/dgrove/rowver            <span class="jnote"># clone RowVer to the remote machine</span>
 python3 -m pip install --user numpy uproot fsspec-xrootd
 cd rowver &amp;&amp; python3 remote/helper.py                     <span class="jnote"># run helper.py on the remote machine, now your laptop browser can talk to the grid</span></pre>
-  <p class="hint">More setup, but your credentials and the data are already there — and
-  it can be much faster: if your files are stored in eos at the LPC, you can expect much
-  faster load times of your root files while tunneled into the LPC. Keep the ssh session
-  open; the helper stops with it.</p>
-
-  <p class="hint">Your browser will ask to allow <b>local network access</b> — this page
-  communicates with the helper through that connection, on <code>127.0.0.1</code>.</p>
+  <p class="hint">In certain scenarios this can be much faster: if your files are stored
+  in eos at the LPC, you can expect much faster processing of your root files while
+  tunneled into the LPC.</p>
 
   <b>What if my .root files are on my laptop and not in remote storage?</b>
   <p class="hint">Then you need none of the above — no proxy, no helper, and no browser
