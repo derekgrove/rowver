@@ -48,6 +48,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import socket
 import ssl
 import sys
@@ -364,6 +365,74 @@ def branch_inventory(url: str, tree: str) -> dict:
                               "flat": not any(k in str(b.interpretation)
                                               for k in ("AsJagged", "AsObjects", "AsStrings"))}
                              for b in t.branches]}
+
+
+def parse_config(source: str) -> dict:
+    """Read a study's config.py well enough to refill the builder — or refuse.
+
+    Parsed with `ast`, never executed: this is a file the user hands us, and importing
+    it would run it. The builder can only express columns that are branch names copied
+    straight across plus a one-line KEEP, so anything richer (a lambda column, a
+    PREPARE, a helper the columns call) is REFUSED rather than half-imported. Half an
+    import is a config that quietly does something other than what the file says, and
+    the user would have no way to see the difference."""
+    import ast
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        raise RuntimeError(f"that file is not valid python: line {e.lineno}, {e.msg}")
+
+    out = {"columns": [], "weights": "", "keep": "", "title": ""}
+    cannot = []
+    seen = set()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            seen.add(node.name)
+            if node.name == "PREPARE":
+                cannot.append("a PREPARE() hook")
+            elif node.name == "KEEP":
+                body = [b for b in node.body if not (isinstance(b, ast.Expr)
+                        and isinstance(b.value, ast.Constant))]
+                if len(body) == 1 and isinstance(body[0], ast.Return):
+                    expr = ast.unparse(body[0].value)
+                    # KEEP speaks `<its own arg>.<branch>`; the builder speaks bare
+                    # columns. Use the argument the file actually declares — plenty of
+                    # configs call it `e`, and assuming "events" leaves `e.a > 1`.
+                    arg = node.args.args[0].arg if node.args.args else "events"
+                    out["keep"] = re.sub(rf"\b{re.escape(arg)}\.(\w+)", r"\1", expr)
+                    if "events[" in expr or "ak." in expr:
+                        cannot.append("a KEEP that indexes or uses awkward")
+                else:
+                    cannot.append("a multi-line KEEP")
+            elif node.name not in ("KEEP",):
+                cannot.append(f"a helper function {node.name}()")
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+            if name == "COLUMNS":
+                if not isinstance(node.value, ast.Dict):
+                    cannot.append("a COLUMNS that is not a literal dict")
+                    continue
+                for k, v in zip(node.value.keys, node.value.values):
+                    key = k.value if isinstance(k, ast.Constant) else "?"
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                        out["columns"].append(v.value)
+                    else:
+                        cannot.append(f"column {key!r} is computed, not a branch")
+            elif name == "WEIGHTS_BRANCH" and isinstance(node.value, ast.Constant):
+                out["weights"] = node.value.value or ""
+            elif name == "LABELS":
+                cannot.append("a LABELS map")
+    if "COLUMNS" not in source:
+        raise RuntimeError("no COLUMNS in that file — is it a RowVer config.py?")
+    if cannot:
+        raise RuntimeError(
+            "the builder cannot represent this config, so it will not half-import it: "
+            + "; ".join(sorted(set(cannot)))
+            + ". Keep the file and run it with  python run_rowver.py <study>  instead.")
+    doc = ast.get_docstring(tree) or ""
+    out["title"] = doc.split("—")[0].strip().split("\n")[0][:40]
+    return out
 
 
 def cache_inventory() -> list:
@@ -822,6 +891,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             u = urllib.parse.urlparse(self.path)
+            if u.path == "/parseconfig":
+                n = int(self.headers.get("Content-Length", "0"))
+                return self._json(parse_config(json.loads(self.rfile.read(n))["source"]))
             if u.path == "/dataless":
                 # the spec back as a data-less .rvr, for the console's download button
                 import make_dataless

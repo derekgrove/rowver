@@ -111,7 +111,7 @@ body.guided .guide{display:block}
 .livecard{flex:1 1 380px;min-width:320px;border:1px solid var(--rule);border-radius:3px;
   background:var(--sunk);padding:8px 10px}
 .livecard .lhead{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-#livejson{margin:0;max-height:440px;overflow:auto;font:11.5px/1.5 var(--mono);
+#livejson,#livecfg{margin:0;max-height:340px;overflow:auto;font:11.5px/1.5 var(--mono);
   white-space:pre;color:var(--ink)}
 .jnote{color:var(--ink3);user-select:none}
 .jexp{color:var(--blue);cursor:pointer;user-select:none}
@@ -252,11 +252,23 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
   <div id="builddone" hidden></div>
  </div>
  <div class="livecard">
-  <div class="lhead"><span class="tag">live build json</span>
-    <button class="mini" id="livecopy">copy json</button>
-    <span class="hint" style="margin:0">exactly what “build .rvr” sends</span></div>
+  <div class="lhead"><span class="tag">fileset.json</span>
+    <button class="mini" id="livecopy">copy</button>
+    <button class="mini" id="livedl">download</button>
+    <span class="hint" style="margin:0">the real thing — this is the file a study keeps</span></div>
   <div id="liveprob"></div>
   <pre id="livejson"></pre>
+  <div class="lhead" style="margin-top:12px"><span class="tag">config.py</span>
+    <button class="mini" id="cfgcopy">copy</button>
+    <button class="mini" id="cfgdl">download</button>
+    <label class="mini" style="cursor:pointer;border:1px solid var(--rule);padding:2px 7px;
+      border-radius:3px">load yours<input type="file" id="cfgload" accept=".py" hidden></label></div>
+  <pre id="livecfg"></pre>
+  <p class="hint">Save both into <code>studies/&lt;name&gt;/</code> and
+  <code>python run_rowver.py &lt;name&gt;</code> runs them. The builder writes the
+  simplest config there is — columns copied from branches and a one-line KEEP. For a
+  PREPARE, lambda columns or LABELS, write your own from
+  <code>studies/template/config.py</code>.</p>
   <p class="hint" title="DAS entries resolve through the redirector at build time — each
   listed file url already names the redirector it will use">long file lists collapse —
   click to expand; “copy json” always carries everything.</p>
@@ -920,13 +932,79 @@ function jsonHtml(sp){
   return out.join("\n");
 }
 
+//: fileset.json EXACTLY as a study keeps it: {sample: {files: {path: tree}, metadata}}.
+//: The spec the helper builds from carries the same fileset, so what you read here is
+//: not a mock-up of the file — it IS the file, and run_rowver.py takes it as is.
+function filesetJson(sp){
+  const out = {};
+  Object.entries(sp.fileset).forEach(([n, e]) => {
+    out[n] = e.dataset ? {dataset: e.dataset, tree: e.tree, limit: e.limit,
+                          metadata: {isMC: true}}
+                       : {files: e.files, metadata: {isMC: true}};
+  });
+  return out;
+}
+
+//: the builder's cut is a numpy expression over COLUMN names; KEEP is a function over
+//: awkward `events` with BRANCH names. The builder only ever copies branches straight
+//: across, so the rename is identity and this is a faithful translation — which is why
+//: the builder is limited to configs simple enough for that to stay true.
+function keepBody(cut, cols){
+  if (!cut) return "np.ones(len(events), dtype=bool)";
+  return cut.replace(/\b[A-Za-z_]\w*\b/g,
+    m => cols.indexOf(m) >= 0 ? "events." + m : m);
+}
+
+function configPy(sp){
+  const cols = Object.keys(sp.branches || {});
+  const w = sp.weights;
+  const q = t => JSON.stringify(String(t));
+  const L = [];
+  L.push(`"""${sp.title} — written by the RowVer builder.`);
+  L.push("");
+  L.push("    Save this and fileset.json into studies/" + sp.title + "/ and run:");
+  L.push("");
+  L.push("        python run_rowver.py " + sp.title);
+  L.push("");
+  L.push("    This is the simplest config there is: every column is a branch copied");
+  L.push("    straight across, and KEEP is one line. For a PREPARE, a lambda column or");
+  L.push("    LABELS, write your own — studies/template/config.py shows all of it.");
+  L.push('"""');
+  L.push("import awkward as ak");
+  L.push("import numpy as np");
+  L.push("");
+  L.push("");
+  L.push("HAS_WEIGHTS = " + (w ? "True" : "False"));
+  L.push("WEIGHTS_BRANCH = " + q(w || ""));
+  L.push("");
+  L.push("");
+  L.push("def KEEP(events: ak.Array) -> ak.Array:");
+  L.push('    """Which events to keep."""');
+  L.push("    return " + keepBody(sp.cut, cols));
+  L.push("");
+  L.push("");
+  L.push("COLUMNS = {");
+  cols.forEach(c => L.push(`    ${q(c)}: ${q(sp.branches[c])},`));
+  L.push("}");
+  return L.join("\n") + "\n";
+}
+
 function renderLive(){
   const box = $("livejson");
   if (!box) return;
   const got = buildSpec(false);
   $("liveprob").innerHTML = got.problems.map(p =>
     `<div class="warn">· ${esc(p)}</div>`).join("");
-  box.innerHTML = jsonHtml(got.spec);
+  box.innerHTML = jsonHtml({fileset: filesetJson(got.spec)});
+  const cfg = $("livecfg");
+  if (cfg) cfg.textContent = configPy(got.spec);
+}
+
+function download(name, text, type){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type: type}));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 $("livejson").onclick = e => {
   const x = e.target.closest("[data-jx]");
@@ -936,18 +1014,44 @@ $("livejson").onclick = e => {
   renderLive();
 };
 $("livecopy").onclick = async () => {
-  const txt = JSON.stringify(buildSpec(false).spec, null, 1);
-  try{ await navigator.clipboard.writeText(txt); }
-  catch(e){
-    const ta = document.createElement("textarea");
-    ta.value = txt;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    ta.remove();
+  const txt = JSON.stringify(filesetJson(buildSpec(false).spec), null, 2);
+  try{ await navigator.clipboard.writeText(txt); $("livecopy").textContent = "copied"; }
+  catch(e){ $("livecopy").textContent = "copy failed"; }
+  setTimeout(() => { $("livecopy").textContent = "copy"; }, 1500);
+};
+$("livedl").onclick = () =>
+  download("fileset.json", JSON.stringify(filesetJson(buildSpec(false).spec), null, 2),
+           "application/json");
+$("cfgcopy").onclick = async () => {
+  try{ await navigator.clipboard.writeText(configPy(buildSpec(false).spec));
+       $("cfgcopy").textContent = "copied"; }
+  catch(e){ $("cfgcopy").textContent = "copy failed"; }
+  setTimeout(() => { $("cfgcopy").textContent = "copy"; }, 1500);
+};
+$("cfgdl").onclick = () =>
+  download("config.py", configPy(buildSpec(false).spec), "text/x-python");
+
+//: loading a config REPLACES what you were building. The helper parses it, because the
+//: helper is python and a regex is not — and it REFUSES anything the builder cannot
+//: represent (a lambda column, a PREPARE) rather than importing half of it. Half an
+//: import is a config that quietly does something other than what the file says.
+$("cfgload").onchange = async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  e.target.value = "";
+  try{
+    const got = await api("/parseconfig", {source: await file.text()});
+    $("cols").value = (got.columns || []).join(" ");
+    $("wcol").value = got.weights || "";
+    $("cut").value = got.keep || "";
+    if (got.title) $("title").value = got.title;
+    renderLive();
+    $("builderr").textContent = "";
+    $("buildstate").textContent = `loaded ${esc(file.name)} — ` +
+      `${(got.columns || []).length} columns` + (got.keep ? ", KEEP translated" : "");
+  } catch(err){
+    $("builderr").textContent = explain(err.message);
   }
-  $("livecopy").textContent = "copied";
-  setTimeout(() => { $("livecopy").textContent = "copy json"; }, 1200);
 };
 ["cols", "cut", "wcol", "title"].forEach(id => {
   $(id).addEventListener("input", renderLive);
