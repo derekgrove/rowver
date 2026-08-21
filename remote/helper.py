@@ -35,10 +35,13 @@ name resolved at build time, smallest files first — or {files: {url: tree}} �
 explicit list, which is also how a chosen file SUBSET is represented), branches
 {column: branch}, optional cut string (numpy expression over the columns, evaluated
 here so the page never swallows raw event counts), optional labels/weights,
-tabs = [{name, view}] passed to page.state. Every freshly built .rvr records its
-provenance under the optional META key `origin`: the spec as submitted AND the
-resolved {url: tree} fileset it was actually read from (no timestamp, so identical
-specs still build byte-identical files).
+tabs = [{name, view}] passed to page.state. A fileset entry may also carry its own
+`weights` — a branch name, or null to say this sample is real data and carries none,
+which is how one build holds data and MC together. Every freshly built .rvr carries
+the cartridge stamp under META `cart`: per sample the resolved {url: tree} it was read
+from, its weights branch and its event count, plus the columns, the cut, and the spec
+itself. It has a `built` timestamp, so two builds of one spec are no longer
+byte-identical — the cache is keyed on the spec's sha, not the bytes.
 Finished files are cached in remote/cache/<sha16>.rvr keyed by the whole spec, so a
 second drop of the same file is served in milliseconds. Per-file wire bytes and
 timings are recorded in remote/metrics/ — the study's numbers come from there.
@@ -58,6 +61,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -617,6 +621,18 @@ def _read_open(f, task, t0):
     return out, stats
 
 
+def sample_weights(spec: dict, entry: dict) -> str | None:
+    """The branch filling this sample's weights column: its own, the spec's, or none.
+
+    A fileset entry may carry its own `weights` — a branch name, or null to say this
+    sample has none and is real data. Absent, it falls back to whatever the spec's
+    `branches` maps the weights column to, which is how every sample used to be read."""
+    column = spec.get("weights")
+    if not column:
+        return None
+    return entry["weights"] if "weights" in entry else (spec.get("branches") or {}).get(column)
+
+
 def load_dataset(name: str, entry: dict, branches: dict, cut: str | None, job: dict):
     """All requested branches of one dataset, cut applied, as {column: array}.
     Files are read serially or across worker processes — tune_workers decides which,
@@ -778,11 +794,19 @@ def build_rvr(spec: dict, job: dict) -> Path:
     # not threads — revisit with a ProcessPool if parallel ever matters here.
     columns, dropped = {}, []
     for name, entry in fileset.items():
-        cols = load_dataset(name, entry, branches, cut, job)
+        # a sample declaring no weights is real data: its weights column is never read off
+        # a branch, it is filled with ones, and the page never scales it by a luminosity
+        branch = sample_weights(spec, entry)
+        mine = {c: b for c, b in branches.items() if c != weights}
+        if branch:
+            mine[weights] = branch
+        cols = load_dataset(name, entry, mine, cut, job)
         first = next(iter(cols.values()))
         if len(first) == 0:
             dropped.append(name)
             continue
+        if weights and not branch:
+            cols[weights] = np.ones(len(first), np.float64)
         columns[name] = cols
     if not columns:
         raise RuntimeError("every dataset came back empty after the cut")
@@ -802,16 +826,29 @@ def build_rvr(spec: dict, job: dict) -> Path:
     if grouping:
         meta["grouping"] = grouping
     meta["title"] = spec.get("title", "remote") + ".rvr"
-    # PROVENANCE (Derek's question, 2026-08-20): the built file records BOTH the spec as
-    # submitted (dataset names, subsets, cut, branches, weights, tabs) and the RESOLVED
-    # fileset it was actually read from — post-DAS-resolution, subset included, exactly
-    # the {url: tree} map load_dataset consumed. `origin` is an optional META key; the
-    # format stays rowver 4, readers ignore it, old files are untouched. Deliberately no
-    # timestamp: two builds of one spec stay byte-identical (the R3 determinism property)
-    # unless DAS itself changed.
-    meta["origin"] = {"spec": submitted,
-                      "resolved": {name: entry["files"]
-                                   for name, entry in fileset.items()}}
+    # THE CARTRIDGE STAMP (rowver 5, replacing `origin`): what this file is made of and
+    # what was done to it. Per sample the RESOLVED {url: tree} it was actually read from —
+    # post-DAS-resolution, subset included, exactly what load_dataset consumed — its own
+    # weights branch, and how many events it contributed. The submitted spec rides under
+    # `config`, which is what a builder file has instead of a config.py.
+    # ⚠️ `built` ENDS the R3 property that two builds of one spec are byte-identical.
+    # Nothing operational changes: the cache is keyed on the spec's sha, not on the bytes,
+    # so a second request for the same spec is served the first build, timestamp and all.
+    spec_json = json.dumps(submitted, indent=1)
+    meta["cart"] = {
+        "name": spec.get("title", "remote"),
+        "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "samples": {name: {"n": int(len(next(iter(columns[name].values())))),
+                           "weights": sample_weights(spec, entry),
+                           "files": entry["files"],
+                           "metadata": entry.get("metadata") or {}}
+                    for name, entry in fileset.items() if name in columns},
+        "columns": dict(branches),
+        "keep": cut or "",
+        "prepare": None,
+        "config": {"path": None,
+                   "sha256": hashlib.sha256(spec_json.encode()).hexdigest(),
+                   "source": spec_json}}
     header = json.dumps(meta).encode()
     import gzip as gz
     out = CACHE / f"{sha}.rvr"

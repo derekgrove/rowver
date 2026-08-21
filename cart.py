@@ -268,8 +268,12 @@ class Cart:
         stamp = header.get("cart") or {}
         cart = cls.__new__(cls)
         cart.name = stamp.get("name") or Path(path).stem
+        # the stamp keeps each sample's weights in its own field, which is the schema and
+        # the only place a builder-made file records them; put it back where the cart
+        # reads it, so an opened file answers weights_spec() like the one that wrote it
         cart.fileset = {n: {"files": s.get("files") or {},
-                            "metadata": s.get("metadata") or {}}
+                            "metadata": {**(s.get("metadata") or {}),
+                                         "weights": s.get("weights")}}
                         for n, s in (stamp.get("samples") or {}).items()}
         cart.columns = stamp.get("columns") or {c["name"]: "?" for c in header["cols"]}
         cart.keep = stamp.get("keep") or ""

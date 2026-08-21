@@ -1,11 +1,15 @@
 """Write a DATA-LESS .rvr: the study's identity without its columns.
 
-The file is a normal rowver-4 container whose buffer is empty (n=0, cols=[]) and whose
+The file is a normal rowver container whose buffer is empty (n=0, cols=[]) and whose
 META carries ONE optional key, `remote` — everything the local helper needs to build
 the real file: fileset, branch map, optional cut, labels/weights, and the tabs (as
 page.state kwargs, applied AFTER the pack when column metadata exists). Old files are
 untouched by construction: no reader ever required the key, and the page only enters
 the remote path when it sees it.
+
+A fileset entry may carry its own `weights` — a branch name, or null to say that sample
+is real data and has none. That is how one spec builds data and MC into one file; absent,
+every sample reads the weights column off the spec's own branch map, as before.
 
     from make_dataless import write
     write("my_study.rvr", spec)
