@@ -250,10 +250,15 @@ STUB_ONLY = ("DOC", "OPENIDS")
 
 def kinds(columns_by_sample: dict[str, dict[str, np.ndarray]],
           weights: str | None = "weight") -> dict[str, str]:
-    """Per column, 'i4' for an integer or boolean axis, 'f8' for a continuous one."""
+    """Per column, 'i4' for an integer or boolean axis, 'f8' for a continuous one.
+
+    EVERY sample votes, and one float makes the column float. Reading only the first
+    sample wrote a column as int32 whenever a later sample held floats — 1.7 stored as 1,
+    silently, which two samples from different productions can do to each other."""
     first = next(iter(columns_by_sample.values()))
     is_int = lambda a: a.dtype == bool or np.issubdtype(a.dtype, np.integer)
-    return {c: ("i4" if is_int(first[c]) else "f8") for c in first if c != weights}
+    return {c: ("i4" if all(is_int(s[c]) for s in columns_by_sample.values()) else "f8")
+            for c in first if c != weights}
 
 
 def bump(hi: float, integer: bool = False, sig: int = 2) -> float:
@@ -296,6 +301,12 @@ def named(column: str, values: np.ndarray, kind: str, labels: dict | None) -> li
 def column_meta(name: str, values: np.ndarray, kind: str, offset: int,
                 labels: dict | None) -> dict:
     """One entry of META.cols: where the column sits, and everything the controls need."""
+    # a NaN reaches the header as a bare `NaN`, which json.dumps writes and JSON.parse
+    # refuses — the file is written, reported as a success, and cannot be opened
+    assert np.isfinite(values).all(), (
+        f"column {name}: {int((~np.isfinite(values)).sum())} of {len(values)} values are "
+        f"NaN or infinite. The page cannot open a file whose header carries one — give "
+        f"KEEP a condition that guarantees a value, or drop the column.")
     lo, hi = float(values.min()), float(values.max())
     distinct = np.unique(values) if kind == "i4" else ()
     return {"name": name, "kind": kind, "offset": offset,
@@ -446,13 +457,8 @@ def read(path: str | Path) -> tuple[dict[str, object], dict[str, np.ndarray]]:
     return meta, columns
 
 
-def rows(path: str | Path) -> tuple[dict[str, object], dict[str, dict[str, np.ndarray]]]:
-    """A .rvr back as (META, {sample: {column: ndarray}}) — the shape pack() takes in.
-
-    read() hands back one array per column over every event at once, which is what the
-    page wants; this splits them by the dataset index, which is what anything rebuilding
-    a file wants. The file is decompressed twice, once here and once in read(); a merge
-    is not a hot path and the alternative is changing read()'s shape for every caller."""
+def read_by_sample(path: str | Path) -> tuple[dict[str, object], dict[str, dict[str, np.ndarray]]]:
+    """A .rvr back as (META, {sample: {column: ndarray}}) — the shape pack() takes in."""
     meta, columns = read(path)
     raw = gzip.decompress(Path(path).read_bytes())
     length = int.from_bytes(raw[:4], "little")

@@ -61,9 +61,10 @@ COLUMNS = {
 #:
 #: `metadata["weights"]` is the one key the cart reads itself: it says what fills THIS
 #: sample's weights column, in the same grammar as COLUMNS — a branch name, or a function.
-#: Every sample may name a different branch. A sample that declares none is real data: its
-#: rows are 1.0 and the page never scales them by a luminosity, which is how data and MC
-#: live on one cart.
+#: Every sample may name a different branch. `None` means real data: its rows are 1.0 and
+#: the page never scales them by a luminosity, which is how data and MC live on one cart.
+#: EVERY sample must say one or the other — silence is refused, because silence and "no
+#: weights" look identical in a dict and that is how MC quietly ships at weight 1.0.
 FILESET = {
     "some signal sample": {
         "files": {"/path/to/your/signal/*.root": "Events"},
@@ -75,7 +76,7 @@ FILESET = {
     },
     "some data sample": {
         "files": {"/path/to/your/data/*.root": "Events"},
-        "metadata": {"is_MC": False},
+        "metadata": {"is_MC": False, "weights": None},   # real data — say so OUT LOUD
     },
 }
 

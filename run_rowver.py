@@ -50,12 +50,22 @@ def view_of(cart):
     return cart_module.module(path, f"studies.{cart.name}.view") if path and path.exists() else None
 
 
-def tabs_for(meta: dict, mod) -> tuple[list | None, dict | None]:
+def only(spec, names: list[str]):
+    """A GROUPS or SUBGROUPS map with the samples a --samples subset dropped taken out."""
+    if not spec:
+        return spec
+    kept = {g: [w for w in v if w in names or any(c in w for c in "*?[")]
+            for g, v in spec.items()}
+    return {g: v for g, v in kept.items() if v}
+
+
+def tabs_for(meta: dict, mod, names: list[str]) -> tuple[list | None, dict | None]:
     """Turn a study's view.py into the page's tabs, or (None, None) when it has none."""
     if mod is None:
         return None, None
-    tabs = page.tabs(meta, mod.VIEW, getattr(mod, "GROUPS", None),
-                     getattr(mod, "SUBGROUPS", None))
+    subs = only(getattr(mod, "SUBGROUPS", None), names)
+    tabs = page.tabs(meta, mod.VIEW, only(getattr(mod, "GROUPS", None), list(subs or {}) + names),
+                     subs)
     extra = {"tab": getattr(mod, "OPENS_ON", 0), "colour": getattr(mod, "COLOUR", None)}
     extra.update(getattr(mod, "LOCKS", None) or {})
     return tabs, extra
@@ -100,17 +110,18 @@ def main(argv: list[str] | None = None) -> int:
     cart = cart_module.Cart.load(args.study)
     name = args.out or cart.name
     print(cart.summary())
-    print(cart.warn_mixed(), end="")
+    print(cart.mixed_warning(), end="")
 
     view = view_of(cart)
     check_view(view, list(cart.fileset), f"{cart.dir}/view.py")
     print(f"\n{cart.check()} files across {len(cart.fileset)} samples")
 
     if args.check:
-        one = min(cart.fileset, key=lambda n: len(cart.files()[n]))
+        per_sample = cart.files()
+        smallest = min(per_sample, key=lambda n: len(per_sample[n]))
         t = time.time()
-        pikl.check(cart, one)
-        print(f"check: chunked == unchunked on {one}  [{time.time()-t:.1f}s]")
+        pikl.verify_chunking(cart, smallest)
+        print(f"check: chunked == unchunked on {smallest}  [{time.time()-t:.1f}s]")
 
     if not args.no_skim:
         t = time.time()
@@ -125,19 +136,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.viewer:
         print("\nviewer:", page.viewer())
 
-    rows = load.load(cart.name, cart.dir)
+    pikld = load.read(cart.name, cart.dir)
+    rows, skim = pikld["results"], {k: pikld.get(k) for k in ("recipe", "skimmed")}
     if args.samples:
         want = [s.strip() for s in args.samples.split(",")]
         missing = [s for s in want if s not in rows]
         assert not missing, f"not in the pikl: {missing} — have {list(rows)}"
         rows = {s: rows[s] for s in want}
 
-    meta, _ = page.pack(rows, cart.labels, cart.weights)
-    tabs, extra = tabs_for(meta, view)
+    meta, _ = page.pack(rows, cart.labels,
+                        cart.weights_column if any(map(cart.weighted, rows)) else None)
+    tabs, extra = tabs_for(meta, view, list(rows))
     if tabs:
         print(f"view.py: {len(tabs)} tabs — {', '.join(t['name'] for t in tabs)}")
 
-    print("\ndata:", cart.write(rows, name=name, tabs=tabs, extra=extra))
+    print("\ndata:", cart.write(rows, name=name, tabs=tabs, extra=extra, skim=skim))
     # the page used to be rebuilt every run, so it could not fall behind the data. It can
     # now: an old .html beside a fresh .rvr opens on the numbers from the previous skim.
     stale = cart.dir / f"{name}.html"
@@ -148,8 +161,9 @@ def main(argv: list[str] | None = None) -> int:
         counts = {s: len(next(iter(v.values()))) for s, v in rows.items()}
         print("page:", page.export(rows, name, title=f"RowVer — {cart.name}",
                                    labels=cart.labels, dest=cart.dir,
-                                   weights=cart.weights, tabs=tabs, extra=extra,
-                                   cart=cart.stamp(counts)))
+                                   weights=cart.weights_column if any(map(cart.weighted, rows))
+                                           else None, tabs=tabs, extra=extra,
+                                   cart=cart.stamp(counts, skim)))
     return 0
 
 

@@ -1762,7 +1762,7 @@ def roundtrip(name: str) -> str:
     import cart, load, page
     columns = load.load(name)
     # the cart says whether these events carry weights; a data skim has none
-    wcol = cart.Cart.load(name).weights
+    wcol = cart.Cart.load(name).weights_column
     names = list(columns)
     first, second = names[0], names[min(1, len(names) - 1)]   # a study may have one sample
     want = {"v": 2, "cuts": {"0": [1.5, 9.5]}, "chips": {}, "show": {"0": False},
@@ -1824,27 +1824,27 @@ TABLE_PROBE = (
 #: a sample declaring no weights is never multiplied by a luminosity, whatever its group says.
 MIXED_PROBE = (
     "\nS.wt = 'w'; S.lumi = 10; lumiTable();"
-    "\nvar c9 = cutflow(), a9 = c9.rows[0];"
+    "\nvar flow10 = cutflow(), row10 = flow10.rows[0];"
     "\nS.lumi = 400; lumiTable();"
-    "\nvar d9 = cutflow(), b9 = d9.rows[0];"
-    "\nvar lum9 = META.datasets.map(function(d, i){ return LUMI(i); });"
+    "\nvar flow400 = cutflow(), row400 = flow400.rows[0];"
+    "\nvar perDataset = META.datasets.map(function(d, i){ return LUMI(i); });"
     #: and the badge: silent while data and MC sit in DIFFERENT groups, loud the moment one
     #: group holds both, silent again in raw mode where nothing is scaled at all
-    "\nvar apart9 = mixedNote();"
+    "\nvar apart = mixedNote();"
     "\nS.group[0] = 'both'; S.group[1] = 'both';"
-    "\nvar both9 = mixedNote();"
+    "\nvar together = mixedNote();"
     "\ndrawAll();"
-    "\nvar plot9 = NOTES[PLOTS[0].id];"
+    "\nvar onPlot = NOTES[PLOTS[0].id];"
     "\nS.wt = 'raw';"
-    "\nvar raw9 = mixedNote();"
+    "\nvar rawMode = mixedNote();"
     #: and what the PAGE would write back out: its own version, with the stamp still on it
-    "\nvar out9 = tunedMeta();"
+    "\nvar saved = tunedMeta();"
     "\nreturn 'MIXED OK ' + JSON.stringify({unw: UNW, sumw: Array.from(SUMWDS),"
-    "  lumis: lum9,"
-    "  groups: c9.gs, raw: a9.raw, at10: a9.by, at400: b9.by,"
-    "  apart: apart9, both: both9, rawmode: raw9,"
-    "  saves: out9.rowver, keepsStamp: !!(out9.cart && out9.cart.samples),"
-    "  onplot: plot9.indexOf(both9) === 0 && plot9.length > both9.length});"
+    "  lumis: perDataset,"
+    "  groups: flow10.gs, raw: row10.raw, at10: row10.by, at400: row400.by,"
+    "  apart: apart, both: together, rawmode: rawMode,"
+    "  saves: saved.rowver, keepsStamp: !!(saved.cart && saved.cart.samples),"
+    "  onplot: onPlot.indexOf(together) === 0 && onPlot.length > together.length});"
 )
 
 
@@ -2184,8 +2184,6 @@ GOLDEN = {
             "refuses": "yes",
         },
     },
-    #: the reason v4 exists — no weights column at all. Every pinned number here is an
-    #: integer the page reaches without ever touching a weight.
     #: rowver 5's reason to exist: real data and weighted MC on one cart. Both samples
     #: read the same open-data file, so they hold the same events and only the weighting
     #: differs — data must read its raw count at EVERY luminosity, MC must scale.
@@ -2201,7 +2199,7 @@ GOLDEN = {
             "raw": 1000858,
             "at10": {"data": 500429, "MC": 10008580},
             "at400": {"data": 500429, "MC": 400343200},
-            #: the badge Derek asked for: only a group holding BOTH kinds earns it
+            #: the badge: only a group holding BOTH kinds earns it
             "apart": "",
             "rawmode": "",
             "both": ('group "both" mixes weighted and unweighted samples. No weights: '
@@ -2215,6 +2213,8 @@ GOLDEN = {
             "keepsStamp": True,
         },
     },
+    #: no weights column at all. Every pinned number here is an integer the page
+    #: reaches without ever touching a weight.
     "golden_0.13.0_data.rvr": {
         "sha256": "5d4889c5b32e35000686133b0c9f4544c08b4c26c0fb6a6b1310fd36e2b83f17",
         "rowver": 4, "n": 31315, "datasets": 1, "tabs": 2, "tab": 0,
@@ -2494,6 +2494,7 @@ USAGE = """boot a page, or drop a .rvr on one, or round-trip a pikl through the 
     smoke.py rowver:template=rt
     smoke.py golden=golden                       the frozen files still open, unchanged
     smoke.py merge:mixed_demo=merge              split a study apart and merge it back
+    smoke.py guards=guards                       every route to a silently wrong yield
 """
 
 
@@ -2530,35 +2531,35 @@ def viewtrip(rvr: str) -> str:
 
 
 def mergetrip(name: str) -> str:
-    """Split a study into one file per sample, merge them back, and demand the original.
+    """Split a study into part file per sample, merge them back, and demand the original.
 
     The closure a merge has to satisfy: adding a sample to a built file must give exactly
     what building all of them at once would have. It is checked on a study that MIXES —
-    one sample with weights and one without — because that is the case v4 could not hold
-    and the one where a merge has to invent a column rather than copy it."""
+    part sample with weights and part without — because that is the case v4 could not hold
+    and the part where a merge has to invent a column rather than copy it."""
     import tempfile
     import numpy as np
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
     import cart, load, page
-    held = cart.Cart.load(name)
-    rows = load.load(name, held.dir)
+    original = cart.Cart.load(name)
+    rows = load.load(name, original.dir)
     if len(rows) < 2:
-        return f"{name} holds one sample — nothing to merge"
+        return f"{name} holds part sample — nothing to merge"
 
     tmp = pathlib.Path(tempfile.mkdtemp())
-    parts = []
+    part_files = []
     for sample, columns in rows.items():
-        one = cart.Cart(name=f"part{len(parts)}", fileset={sample: held.fileset[sample]},
-                        columns=held.columns, keep=held.keep, prepare=held.prepare)
-        one.source, one.dir = held.source, held.dir     # else the stamp quotes THIS file
+        part = cart.Cart(name=f"part{len(part_files)}", fileset={sample: original.fileset[sample]},
+                        columns=original.columns, keep=original.keep, prepare=original.prepare)
+        part.source, part.dir = original.source, original.dir     # else the stamp quotes THIS file
         # on its own, a sample declaring no weights has no weights column at all
-        mine = columns if one.weights else {c: v for c, v in columns.items()
-                                            if c != held.weights}
-        parts.append(one.write({sample: mine}, dest=tmp)["file"])
+        to_write = columns if part.weights_column else {c: v for c, v in columns.items()
+                                                   if c != original.weights_column}
+        part_files.append(part.write({sample: to_write}, dest=tmp)["file"])
 
-    out = cart.Cart.merge(parts, name="merged", dest=tmp)
-    _, want = page.rows(pathlib.Path(held.dir) / f"{name}.rvr")
-    meta, got = page.rows(out["file"])
+    out = cart.Cart.merge(part_files, name="merged", dest=tmp)
+    _, want = page.read_by_sample(pathlib.Path(original.dir) / f"{name}.rvr")
+    meta, got = page.read_by_sample(out["file"])
     if sorted(want) != sorted(got):
         return f"merged holds {sorted(got)}, the original holds {sorted(want)}"
     for sample in want:
@@ -2569,16 +2570,77 @@ def mergetrip(name: str) -> str:
                         f"differ between the merge and the one-shot build")
     stamped = {n: (v or {}).get("weights") for n, v in meta["cart"]["samples"].items()}
     if len([w for w in stamped.values() if w]) != len(
-            [s for s in held.fileset if held.weighted(s)]):
+            [s for s in original.fileset if original.weighted(s)]):
         return f"the merged stamp lost a sample's weights: {stamped}"
-    return (f"{len(parts)} parts merged back into {meta['n']:,} events, identical to the "
+    return (f"{len(part_files)} parts merged back into {meta['n']:,} events, identical to the "
             f"one-shot build, {len(want)} samples, weights kept per sample")
+
+
+def guardtrip(_: str = "") -> str:
+    """Every way a cart can quietly produce the wrong yield, and the refusal that stops it.
+
+    These are regressions, not hypotheticals: each one built cleanly at some point on this
+    branch and shipped numbers that were silently wrong."""
+    import tempfile
+    import numpy as np
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    import cart, page
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    one = {"files": {"x.root": "Events"}, "metadata": {"weights": "w"}}
+    keep, cols = (lambda a: a), {"x": "x"}
+    made = lambda fs, **kw: cart.Cart(name="g", fileset=fs, columns=cols, keep=keep, **kw)
+
+    refusals = {
+        "a silent sample beside a declared one":
+            lambda: made({"mc": one, "data": {"files": {"y.root": "E"}, "metadata": {}}}),
+        "weights still sitting in COLUMNS":
+            lambda: cart.Cart(name="g", fileset={"s": {"files": {"x.root": "E"},
+                              "metadata": {}}}, columns={"weight": "w"}, keep=keep),
+        "'weight' singular in metadata":
+            lambda: made({"s": {"files": {"x.root": "E"}, "metadata": {"weight": "w"}}}),
+        "a misspelt 'metadata' key":
+            lambda: made({"s": {"files": {"x.root": "E"}, "metdata": {}}}),
+        "weights declared but no column to put them in":
+            lambda: made({"mc": one}, weights_column=None),
+        "a weights spec that is neither branch, function nor None":
+            lambda: made({"s": {"files": {"x.root": "E"}, "metadata": {"weights": 7}}}),
+    }
+    for what, build in refusals.items():
+        try:
+            build()
+            return f"NOT REFUSED: {what}"
+        except AssertionError:
+            pass
+
+    # a merged file must never turn weighted MC into data, however little its sources said
+    _, rows = page.read_by_sample(pathlib.Path(__file__).parent / "golden" / "golden_0.13.0_tabs.rvr")
+    name = list(rows)[0]
+    parts = [page.data({f"{name} {tag}": rows[name]}, f"g{tag}", dest=tmp, weights="weight")
+             for tag in "AB"]                      # stamp-less, and genuinely weighted
+    merged = cart.Cart.merge([p["file"] for p in parts], name="g", dest=tmp)
+    said = page.read(merged["file"])[0]["cart"]["samples"]
+    if any(s.get("weights") is None for s in said.values()):
+        return f"a stamp-less weighted source merged as DATA: {said}"
+
+    ints = {"S1": {"w": np.ones(3), "x": np.array([1, 2, 3], np.int32)}}
+    floats = {"S2": {"w": np.ones(3), "x": np.array([1.7, 2.5, 3.9])}}
+    pair = [page.data(d, f"k{i}", dest=tmp, weights="w")["file"]
+            for i, d in enumerate((ints, floats))]
+    try:
+        cart.Cart.merge(pair, name="k", dest=tmp)
+        return "an int column merged into a float one — the floats are truncated"
+    except AssertionError:
+        pass
+    return (f"{len(refusals)} silent-yield routes refused, a stamp-less merge stays "
+            f"weighted, and a kind mismatch is caught")
 
 
 def check(path: str) -> str:
     """Dispatch one argument to the boot, drop, round-trip or golden check."""
     if path == "golden":
         return golden()
+    if path == "guards":
+        return guardtrip()
     if path.startswith("merge:"):
         return mergetrip(path[len("merge:"):])
     if path.startswith("view:"):

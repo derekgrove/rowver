@@ -1113,11 +1113,13 @@ function unpack(buf){
     D[c.name] = c.kind === "f8" ? new Float64Array(buf, c.offset, n)
                                 : new Int32Array(buf, c.offset, n);
   D.__ds = new Int32Array(buf, META.ds_offset, n);
-  // Which datasets carry no weights of their own. A v5 cart names the branch that filled
-  // each sample's weights, or null for real data; a v4 file has no cart, so every one of
-  // its samples reads as weighted and it opens exactly as it always did.
-  const held = (META.cart && META.cart.samples) || null;
-  UNW = META.datasets.map(d => !!held && !(held[d] && held[d].weights));
+  // A sample is UNWEIGHTED only where the stamp says so outright. No stamp, or an entry
+  // that never mentions weights, is UNKNOWN — and unknown must mean weighted, because
+  // that is what every file before v5 was, and guessing "data" silently stops the page
+  // scaling real MC by luminosity.
+  const stamped = (META.cart && META.cart.samples) || null;
+  UNW = META.datasets.map(d => !!(stamped && stamped[d] && "weights" in stamped[d])
+                               && !stamped[d].weights);
   // with no weights every event counts once, so the file total IS the event count
   SUMW = 0;
   SUMWDS = new Float64Array(META.datasets.length);

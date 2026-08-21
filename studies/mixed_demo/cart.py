@@ -44,7 +44,7 @@ COLUMNS = {
 FILESET = {
     "Data 2012 DoubleMuParked": {
         "files": {SLICE: "Events"},
-        "metadata": {"is_MC": False},
+        "metadata": {"is_MC": False, "weights": None},   # real data: no weights, ever scaled
     },
     "MC stand-in x2": {
         "files": {SLICE: "Events"},

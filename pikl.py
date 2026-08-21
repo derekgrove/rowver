@@ -9,6 +9,7 @@ import gzip
 import pickle
 import sys
 import time
+from datetime import datetime, timezone
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -41,7 +42,7 @@ def progress(label: str, done: int, total: int, since: float, end: bool = False)
           file=sys.stderr, flush=True)
 
 
-def reject_masked(dict_key: str, values: np.ndarray) -> np.ndarray:
+def reject_masked(column: str, values: np.ndarray) -> np.ndarray:
     """
     Take in an array (column) and convert to an ordinary numpy array, refuse if any value is missing.
 
@@ -56,12 +57,12 @@ def reject_masked(dict_key: str, values: np.ndarray) -> np.ndarray:
     if not isinstance(values, np.ma.MaskedArray):
         return values
     miss = int(np.ma.getmaskarray(values).sum())
-    assert not miss, (f"column {dict_key}: {miss} of {len(values)} events have no value. "
+    assert not miss, (f"column {column}: {miss} of {len(values)} events have no value. "
                       f"Might need to add a condition to KEEP that guarantees events pass this column.")
     return values.data # This converts a MaskedArray to normal ndarray, saving size when pikl'd
 
 
-def with_meta(fn, chunk: ak.Array, meta: dict):
+def call_hook(fn, chunk: ak.Array, meta: dict):
     """Call fn(chunk) or fn(chunk, meta), whichever it was written to take."""
     return fn(chunk, meta) if fn.__code__.co_argcount >= 2 else fn(chunk)
 
@@ -97,29 +98,45 @@ def _closest(want: str, have, n: int = 6) -> list[str]:
 def value_of(spec, chunk: ak.Array, meta: dict, where: str):
     """One column's values: a string names a branch to copy, anything else is called."""
     if not isinstance(spec, str):
-        return with_meta(spec, chunk, meta)
+        try:
+            return call_hook(spec, chunk, meta)
+        except Exception as e:
+            # awkward raises 20 frames deep with no idea which column or sample it was in
+            raise AssertionError(
+                f"{where} on sample {meta['sample']!r} raised {type(e).__name__}: {e}\n"
+                f"  (a hook taking two arguments is handed the metadata as the second)") from e
     # awkward raises with the whole array in the message; say which branch and what the
     # file does have, because a cart written for other files lands here first
     if spec not in chunk.fields:
-        raise KeyError(
+        # AssertionError, not KeyError, whose repr escapes the newlines out of what is
+        # three lines of the most useful text in the tool
+        raise AssertionError(
             f"{where} reads branch {spec!r}, which {meta.get('file') or 'this file'} does "
             f"not have.\n  It has {len(chunk.fields)} branches; the closest names are "
             f"{_closest(spec, chunk.fields)}.\n  Edit your study's cart.py.")
     return chunk[spec]
 
 
-def columns(cart, chunk: ak.Array, meta: dict) -> dict[str, np.ndarray]:
+def evaluate_columns(cart, chunk: ak.Array, meta: dict) -> dict[str, np.ndarray]:
     """Evaluate every column of the cart on one chunk, weights included."""
     out = {}
     for name, spec in cart.columns.items():
         values = value_of(spec, chunk, meta, f"columns[{name!r}]")
-        out[name] = reject_masked(name, ak.to_numpy(values))
-    if cart.weights:
-        out[cart.weights] = weights_for(cart, chunk, meta)
+        out[name] = one_per_event(name, reject_masked(name, ak.to_numpy(values)))
+    if cart.weights_column:
+        out[cart.weights_column] = weights_for(cart, chunk, meta)
 
     lengths = {len(v) for v in out.values()}
     assert len(lengths) == 1, f"columns disagree on length: {sorted(lengths)}"
     return out
+
+
+def one_per_event(column: str, values: np.ndarray) -> np.ndarray:
+    """Refuse a column holding more than one number per event."""
+    assert values.ndim == 1, (
+        f"column {column} has shape {values.shape}: {values.shape[1:]} numbers per event, "
+        f"not one. Reduce it — ak.max(..., axis=1), [:, 0] — before storing it.")
+    return values
 
 
 def weights_for(cart, chunk: ak.Array, meta: dict) -> np.ndarray:
@@ -128,7 +145,7 @@ def weights_for(cart, chunk: ak.Array, meta: dict) -> np.ndarray:
     if spec is None:
         return np.ones(len(chunk), np.float64)
     values = value_of(spec, chunk, meta, f"{meta['sample']}: metadata['weights']")
-    return reject_masked(cart.weights, ak.to_numpy(values)).astype(np.float64)
+    return reject_masked(cart.weights_column, ak.to_numpy(values)).astype(np.float64)
 
 
 def skim(cart, sample: str, step: int = STEP, threads: int = 0,
@@ -166,9 +183,9 @@ def skim(cart, sample: str, step: int = STEP, threads: int = 0,
                                  entry_stop=min(start + step, ttree.num_entries),
                                  decompression_executor=pool, **lazy)
             if cart.prepare:
-                chunk = with_meta(cart.prepare, chunk, meta)
-            kept = chunk[with_meta(cart.keep, chunk, meta)]
-            per_chunk.append(columns(cart, kept, meta))
+                chunk = call_hook(cart.prepare, chunk, meta)
+            kept = chunk[call_hook(cart.keep, chunk, meta)]
+            per_chunk.append(evaluate_columns(cart, kept, meta))
             seen = min(seen + step, total)
             if label:
                 progress(label, seen, total, began)
@@ -180,15 +197,15 @@ def skim(cart, sample: str, step: int = STEP, threads: int = 0,
             for column_name in per_chunk[0]}
 
 
-def _one(job: tuple) -> tuple:
+def _skim_one_sample(job: tuple) -> tuple:
     """Skim one sample in a worker process, re-importing the cart there."""
     import cart as cart_module
     source, sample, step, threads = job
-    held = cart_module.module(Path(source), "rowver_worker_cart").CART
-    return sample, skim(held, sample, step, threads)
+    cart = cart_module.import_file(Path(source), "rowver_worker_cart").CART
+    return sample, skim(cart, sample, step, threads)
 
 
-def pikl(cart, name: str, step: int = STEP, dest: str | Path | None = None,
+def skim_all(cart, name: str, step: int = STEP, dest: str | Path | None = None,
          jobs: int = 1, threads: int = 0) -> dict[str, dict[str, np.ndarray]]:
     """
     Skim every sample of the cart and write them all into <dest>/<name>.pkl.
@@ -200,7 +217,7 @@ def pikl(cart, name: str, step: int = STEP, dest: str | Path | None = None,
     if jobs > 1 and cart.source:
         work = [(cart.source, sample, step, threads) for sample in cart.fileset]
         with ProcessPoolExecutor(max_workers=jobs) as pool:
-            done = dict(pool.map(_one, work))
+            done = dict(pool.map(_skim_one_sample, work))
         columns_by_sample = {s: done[s] for s in cart.fileset}   # fileset order, not finish order
     else:
         # only the serial path reports progress: parallel workers cannot share one line,
@@ -210,15 +227,20 @@ def pikl(cart, name: str, step: int = STEP, dest: str | Path | None = None,
             columns_by_sample[sample] = skim(
                 cart, sample, step, threads, label=f"[{i}/{len(cart.fileset)}] {sample}")
 
-    # the "results" key is the shape load.py expects; keep the two in step
+    # the "results" key is the shape load.py expects; keep the two in step. `config` and
+    # `skimmed` ride with it so a later --no-skim build stamps the cart that actually
+    # produced these columns, not whatever cart.py happens to say today
     where = Path(dest) if dest else PIKLS
     where.mkdir(parents=True, exist_ok=True)
     with gzip.open(where / f"{name}.pkl", "wb", compresslevel=1) as pickle_file:
-        pickle.dump({"results": columns_by_sample}, pickle_file)
+        pickle.dump({"results": columns_by_sample,
+                     "recipe": cart.recipe(),
+                     "skimmed": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")},
+                    pickle_file)
     return columns_by_sample
 
 
-def check(cart, sample: str) -> dict[str, np.ndarray]:
+def verify_chunking(cart, sample: str) -> dict[str, np.ndarray]:
     """
     Skim one sample twice, in chunks and in a single pass, and require identical results.
 
