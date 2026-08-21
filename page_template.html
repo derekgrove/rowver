@@ -849,7 +849,7 @@ pre.rgndoc{background:var(--panel);border:1px solid var(--rule);border-radius:7p
   <div id="drop" hidden>
     <p><b>Drop a .rvr file here</b></p>
     <p>or <label class="pick">choose one<input type="file" id="pick" accept=".rvr" hidden></label></p>
-    <p class="hint">Never written one before? The <a href="" id="bldlink">builder</a>
+    <p class="hint">Never written one before? The <a href="" id="bldhint">builder</a>
       browses your storage, shows you the branches, and writes the
       <code>fileset.json</code> and <code>config.py</code> a study is made of.</p>
     <p class="hint">Built with <code>page.data(columns, "name")</code>. Your data is never
@@ -10478,7 +10478,7 @@ function rgnWire(){
       ? "remote/console.html" : "console.html");
     if ($("bldlink")) $("bldlink").onclick = () => { location.href = consoleAt(); };
     if ($("qsgo")) $("qsgo").onclick = () => { location.href = consoleAt() + "?guided"; };
-    if ($("bldlink")) $("bldlink").href = consoleAt();
+    if ($("bldhint")) $("bldhint").href = consoleAt();
     // A demo goes live only when its .rvr has been reviewed ON the deployed page, and it
     // needs a served page: file:// has nowhere to fetch the demo file from.
     const DEMOS = {demo: true};
