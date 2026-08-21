@@ -78,6 +78,7 @@ td.num,th.num{text-align:right}
 .tag{background:var(--sunk);border:1px solid var(--rule);border-radius:3px;
   padding:1px 6px;font-size:10.5px;color:var(--ink2)}
 .branchpick{cursor:pointer}
+tr.jagged td{opacity:.42;cursor:not-allowed}
 .branchpick:hover{color:var(--blue)}
 a{color:var(--blue)}
 details{margin:2px 0}
@@ -146,7 +147,7 @@ body.guided .guide{display:block}
   browser will find it and handshake, and voilà — it works.</p>
 
   <b>Option 1 — proxy installed locally</b>
-  <pre>voms-proxy-init -voms cms --valid 192:00     <span class="jnote"># skip if you only want open data</span>
+  <pre>voms-proxy-init -voms cms --valid 192:00
 git clone https://gitlab.cern.ch/dgrove/rowver
 python3 -m pip install --user numpy uproot fsspec-xrootd
 cd rowver &amp;&amp; python3 remote/helper.py</pre>
@@ -216,6 +217,7 @@ cd rowver &amp;&amp; python3 remote/helper.py</pre>
   <div id="branchbox" hidden>
     <div class="row" style="margin-top:8px">
       <span class="tag" id="branchhead"></span>
+      <p class="hint" id="branchnote" style="margin:6px 0 0"></p>
       <input id="branchfilter" size="24" placeholder="filter branches" autocomplete="off">
     </div>
     <div class="wrap" id="branchwrap"><table id="branchout"></table></div>
@@ -769,11 +771,23 @@ async function branches(url, tree){
 function drawBranches(){
   const f = $("branchfilter").value.trim().toLowerCase();
   const rows = BRANCHES.filter(b => !f || b.name.toLowerCase().indexOf(f) >= 0);
+  //: a .rvr column is ONE NUMBER PER EVENT, so a jagged branch (PT_lep, Charge_lep —
+  //: one value per lepton) cannot be a column. The helper reports `flat` per branch, so
+  //: say so HERE rather than let the build discover it after reading gigabytes.
+  const jag = BRANCHES.filter(b => b.flat === false).length;
   $("branchout").innerHTML = `<tr><th>branch (${rows.length})</th><th>type</th></tr>` +
-    rows.slice(0, 400).map(b =>
-      `<tr><td class="branchpick" data-b="${esc(b.name)}">${esc(b.name)}</td>` +
-      `<td>${esc(b.type)}</td></tr>`).join("") +
+    rows.slice(0, 400).map(b => b.flat === false
+      ? `<tr class="jagged" title="one value per object, not per event — the .rvr format is flat">` +
+        `<td>${esc(b.name)}</td><td>${esc(b.type)} · not selectable</td></tr>`
+      : `<tr><td class="branchpick" data-b="${esc(b.name)}">${esc(b.name)}</td>` +
+        `<td>${esc(b.type)}</td></tr>`).join("") +
     (rows.length > 400 ? `<tr><td colspan="2">… ${rows.length-400} more — filter to see them</td></tr>` : "");
+  $("branchnote").innerHTML = jag
+    ? `${jag} of these are greyed out: the builder can only use <b>flattened columns</b> ` +
+      `(one number per event) for now. To use a jagged branch — a per-lepton or per-jet ` +
+      `array — reduce it in your own <code>config.py</code> and run ` +
+      `<code>python run_rowver.py &lt;study&gt;</code>.`
+    : "";
   $("branchout").onclick = e => {
     const b = e.target.closest("[data-b]");
     if (!b) return;
