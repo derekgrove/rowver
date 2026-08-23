@@ -97,20 +97,30 @@ different. Three keys, and two of them are optional:
 
 THE LOCK. Locked means the concern lives in `view` instead of on the tabs. There is no
 lock flag: `"cuts" in view` IS the flag. Locking moves one object, so "write the change to
-every tab at once" stops being an operation and becomes an address; the per-tab copies
-stay in the file, dormant, which is why unlocking survives a save where today's runtime
-stash does not.
+every tab at once" stops being an operation and becomes an address.
 
-    ⚠️ PRECEDENCE IS DEREK'S OPEN CALL — the one thing this module cannot decide.
-       LOCK_WINS False (the default here): effective(tab, k) = tab.get(k, view.get(k))
-           a lock is a shared DEFAULT. A tab that carries its own copy keeps it — which
-           is what a study whose region tabs are deliberately uncut needs, where the
-           tree alone defines its bins. Costs: an edit on one tab does not reach a tab
-           that has opted out, so the rail must show which.
-       LOCK_WINS True: effective(tab, k) = view.get(k, tab.get(k))
-           a lock is a shared TRUTH, no exceptions. Simpler, and it silently gives such
-           a tab every cut it was authored not to have.
-    Flip the constant, and say so in the file's `made.note`.
+A LOCK IS A SHARED TRUTH (Derek, 2026-08-23), and it is PROMOTE-AND-SHADOW, never a copy
+into every tab:
+
+    lock(k)     the tab you are looking at wins: its value is promoted into `view`.
+                Nothing is deleted. Every tab keeps its own copy, dormant.
+    while on    effective(tab, k) = view.get(k, tab.get(k, NEUTRAL[k])) — the shared value,
+                for every tab, no exceptions and no per-tab opt-out.
+    unlock(k)   `view[k]` is dropped and every tab wakes up with the value it had before.
+                A tab CREATED while locked has nothing to wake up to, so it keeps a copy of
+                what was on screen — never the neutral value, because dropping to "no cuts"
+                would silently widen a selection nobody widened.
+
+That is why the dormant copies live in the FILE rather than in a session variable: today's
+`setLock` stashes them on a runtime object, which is why its own message has to admit
+"unticking reverts every tab, but only in this session: an exported .rvr keeps what is on
+screen". Under 6 unlocking behaves the same before and after a save.
+
+⚠️ While a lock is on, a tab whose own value was deliberately different is SHOWING the
+shared one, and so is every consumer that reads the file — `yields.py`, the Combine bridge.
+That is correct under shared truth (the exporters must agree with the page) but it means a
+locked file can compute different numbers from the same tab than an unlocked one. The
+per-tab value is still in the file, so nothing is lost; it is simply not in effect.
 
 `made` — provenance, and the only drawer you can delete and still have a working file.
 
@@ -152,10 +162,15 @@ VERSION: str = "0.35.0-v6"
 VIEWER: str = "https://rowver.web.cern.ch"
 MAX_CHIPS: int = 25
 
-#: See THE LOCK above. False = a lock is a shared default a tab may override.
-LOCK_WINS: bool = False
+#: See THE LOCK above. A lock is a shared TRUTH (Derek, 2026-08-23): while it is on, the
+#: shared value is what every tab shows, with no per-tab opt-out.
+LOCK_WINS: bool = True
 
 DRAWERS = ("about", "data", "view", "tabs", "opens_on", "made")
+
+#: the concerns a lock can move between a tab and `view`, and what "not set" means for each
+NEUTRAL = {"cuts": {}, "stage": []}
+LOCKABLE = tuple(NEUTRAL)
 
 
 def frame(meta: dict, buf: bytes) -> bytes:
@@ -244,10 +259,40 @@ def cut_of(spec) -> str:
 
 
 def effective(tab: dict, view: dict, key: str, neutral=None):
-    """One tab's value for a lockable concern. See THE LOCK: LOCK_WINS decides which side."""
+    """What this tab actually shows. A lock is a shared truth, so `view` wins while it is on."""
+    if neutral is None:
+        neutral = NEUTRAL.get(key)
     if LOCK_WINS:
         return view.get(key, tab.get(key, neutral))
     return tab.get(key, view.get(key, neutral))
+
+
+def locked(view: dict, key: str) -> bool:
+    """Presence IS the flag — and presence, not truthiness: a locked empty dict is a state."""
+    return key in view
+
+
+def lock(meta: dict, key: str, from_tab: int = 0) -> dict:
+    """Promote one tab's value to the shared truth. Nothing is deleted; every tab keeps its own."""
+    assert key in LOCKABLE, f"{key!r} is not lockable — have: {list(LOCKABLE)}"
+    src = meta["tabs"][from_tab] if meta["tabs"] else {}
+    meta["view"][key] = _clone(src.get(key, NEUTRAL[key]))   # merge, never rebuild (W1)
+    return meta
+
+
+def unlock(meta: dict, key: str) -> dict:
+    """Hand every tab back what it had. A tab born under the lock keeps what was on screen."""
+    if not locked(meta["view"], key):
+        return meta
+    shared = meta["view"].pop(key)                    # the explicit delete (W2)
+    for tab in meta["tabs"]:
+        tab.setdefault(key, _clone(shared))           # never drops to neutral: that would widen
+    return meta
+
+
+def _clone(o):
+    """A value that shares nothing with the one it came from."""
+    return json.loads(json.dumps(o))
 
 
 def compact(o, indent: int = 0, width: int = 88) -> str:
@@ -422,12 +467,44 @@ def demo() -> None:
         else:
             raise AssertionError("a self-contradicting header was accepted")
 
-        # the lock: with LOCK_WINS False a tab's own value wins, and either way an
-        # absent tab key falls through to the page
-        view, tab = {"cuts": {"x": [0, 1]}}, {"cuts": {"x": [5, 6]}}
-        assert effective(tab, view, "cuts") == (view if LOCK_WINS else tab)["cuts"]
-        assert effective({}, view, "cuts") == view["cuts"]
+    _lock_demo()
     print("rvr6 demo ok")
+
+
+def _lock_demo() -> None:
+    """Promote-and-shadow, end to end: lock, read through it, unlock, and get everything back."""
+    m = {"view": {},
+         "tabs": [{"name": "a", "cuts": {"x": [0, 1]}},
+                  {"name": "b", "cuts": {}},              # authored EMPTY — the case that matters
+                  {"name": "c"}]}                         # never narrowed anything
+    before = _clone(m["tabs"])
+
+    lock(m, "cuts", from_tab=0)
+    assert locked(m["view"], "cuts"), "locking did not put the value in view"
+    assert m["view"]["cuts"] == {"x": [0, 1]}, "the tab you were looking at did not win"
+    # a shared TRUTH: every tab shows it, including the one authored with no cuts at all
+    for tab in m["tabs"]:
+        assert effective(tab, m["view"], "cuts") == {"x": [0, 1]}, "a tab opted out of the lock"
+    # and nothing was destroyed on the way in
+    assert m["tabs"] == before, "locking overwrote a tab's own cuts"
+
+    m["view"]["cuts"]["y"] = [2, 3]                       # an edit while locked: ONE object
+    m["tabs"].append({"name": "d"})                       # a tab born under the lock
+
+    unlock(m, "cuts")
+    assert not locked(m["view"], "cuts"), "unlocking left the value in view"
+    # the two tabs that HAD their own copy get exactly it back, edits under the lock discarded
+    assert [t["cuts"] for t in m["tabs"][:2]] == [b["cuts"] for b in before[:2]], \
+        "a tab did not get its own cuts back"
+    assert m["tabs"][1]["cuts"] == {}, "an authored-empty tab was widened, not restored"
+    assert m["tabs"][2]["cuts"] == {"x": [0, 1], "y": [2, 3]}, \
+        "a tab that never had cuts should keep what was on screen, not drop to none"
+    assert m["tabs"][3]["cuts"] == {"x": [0, 1], "y": [2, 3]}, \
+        "a tab born under the lock should keep what was on screen"
+
+    # an absent tab key falls through to the page whichever way LOCK_WINS points
+    assert effective({}, {"cuts": {"x": [0, 1]}}, "cuts") == {"x": [0, 1]}
+    assert effective({}, {}, "cuts") == {}                # the neutral value, from NEUTRAL
 
 
 USAGE = """usage:
