@@ -60,7 +60,10 @@ an absent key means its neutral value, so a barebones file is `"view": {}`.
     groups   {of: {sample: group}, sub: {sample: subgroup}, order: [group]}
              RESOLVED, never globs. A glob belongs in cart.py, where python expands it;
              putting one here would make every JS reader reimplement fnmatch.
-    shown    [sample]      absent = every sample drawn
+    shown    [sample]      LOCKABLE, like cuts and stage. Absent means every sample is
+             drawn; an EMPTY LIST means none. Three states, and the difference moves a
+             number: on one shipped study the tabs naming 13 of 23 samples draw 626 rows
+             where the tab naming none draws 1,388.
     cats     {column: {names: {value: label}, bands: [{label, vals, at?}]}}
              Keyed by column NAME. `names` is what one value means; `bands` is a NAME FOR
              A SET of values, which had nowhere to live before. Both are editable in the
@@ -74,11 +77,15 @@ an absent key means its neutral value, so a barebones file is `"view": {}`.
 
     cuts     PRESENT MEANS LOCKED. See THE LOCK below.
     stage    PRESENT MEANS THE PLOTS ARE LOCKED. Same rule.
+    shown    PRESENT MEANS THE VISIBLE SAMPLES ARE LOCKED. Same rule again — one
+             mechanism, three concerns, and a fourth costs one entry in NEUTRAL.
 
 `tabs` — a flat ordered list. Each entry is one page setup and holds only what makes it
 different. Three keys, and two of them are optional:
 
     name   str    required; also the folder name in a multi-tab zip export
+    shown  [str]  absent means this tab draws every sample. A tab is its own world,
+                  including which samples it draws (Derek, 2026-08-23).
     stage  [...]  ordered, and it IS the on-screen order: the plots, the yields board and
                   the region map as kind-tagged peers in one list. Absent means an EMPTY
                   stage — never inheritance. A fresh tab is empty on purpose.
@@ -186,8 +193,10 @@ LOCK_WINS: bool = True
 
 DRAWERS = ("about", "data", "view", "tabs", "opens_on", "made")
 
-#: the concerns a lock can move between a tab and `view`, and what "not set" means for each
-NEUTRAL = {"cuts": {}, "stage": []}
+#: the concerns a lock can move between a tab and `view`, and what "not set" means for each.
+#: `shown` is None rather than [] on purpose: absent means every sample is drawn, while an
+#: EMPTY LIST means draw none. Three states, as with a region map's `srcs`.
+NEUTRAL = {"cuts": {}, "stage": [], "shown": None}
 LOCKABLE = tuple(NEUTRAL)
 
 
@@ -230,10 +239,36 @@ def check(meta: dict, buf: bytes) -> None:
     assert sum(s["rows"] for s in d["samples"]) == d["rows"], (
         f"the samples sum to {sum(s['rows'] for s in d['samples']):,} rows, "
         f"data says {d['rows']:,}")
+    # absent is not a third state: whichever way a reader defaults it, the other reader
+    # scales that sample by a luminosity the first one does not, and both open the file
+    for s in d["samples"]:
+        assert isinstance(s.get("weighted"), bool), (
+            f"sample {s.get('name')!r} does not say whether it is weighted. There is no "
+            f"default that is safe — true scales real data by a luminosity, false stops "
+            f"scaling MC — so the key is required.")
+    seen = set()
     for c in d["cols"]:
         width = 4 if c["kind"] == "i4" else 8
         assert c["at"] % width == 0, \
             f"column {c['name']} starts at byte {c['at']}, not a multiple of {width}"
+        assert c["at"] + width * d["rows"] <= d["bytes"], \
+            f"column {c['name']} runs past the end of the buffer"
+        assert c["name"] not in seen, (
+            f"two columns are called {c['name']!r}. A name-keyed cut cannot say which it "
+            f"means, and a reader building a dict by name silently keeps the last one.")
+        seen.add(c["name"])
+    # the docstring promises this and nothing was enforcing it: a cut naming a column that
+    # is not here would be skipped, which WIDENS the selection instead of failing
+    for where, holder in [("view", meta.get("view") or {}),
+                          *((f"tab {i} ({t.get('name')!r})", t)
+                            for i, t in enumerate(meta.get("tabs") or []))]:
+        stray = sorted(set(holder.get("cuts") or {}) - seen)
+        assert not stray, (
+            f"{where} cuts on {stray}, which this file has no column for. Skipping it "
+            f"would silently widen the selection — rename the cut or re-skim.")
+    tabs = meta.get("tabs") or []
+    assert 0 <= int(meta.get("opens_on") or 0) < max(len(tabs), 1), \
+        f"opens_on is {meta.get('opens_on')} but the file has {len(tabs)} tabs"
 
 
 def read(path: str | Path) -> tuple[dict, bytes]:
@@ -401,6 +436,12 @@ def _cuts_of(state: dict, cols: list) -> dict:
     return out
 
 
+def _shown_of(state: dict, datasets: list) -> list | None:
+    """Which samples a tab draws, as names. None means all — an EMPTY MAP is no opinion."""
+    visible = [d for d, on in (state.get("show") or {}).items() if on]
+    return None if not visible or len(visible) == len(datasets) else visible
+
+
 def _stage_of(state: dict) -> list:
     """plots + the board + the region map as ONE ordered kind-tagged list, in screen order."""
     items, blocks = [], {}
@@ -445,11 +486,17 @@ def _tabs_of(old: dict, view: dict) -> list:
     if len(states) > 1 and all(c == cuts[0] for c in cuts):
         view["cuts"] = cuts[0]                           # identical on every tab == LOCKED
 
+    shown = [_shown_of(s, old["datasets"]) for s in states]
+    if len(states) > 1 and all(v == shown[0] for v in shown) and shown[0] is not None:
+        view["shown"] = shown[0]
+
     tabs = []
-    for saved, state, cut in zip(old["tabs"], states, cuts):
+    for saved, state, cut, vis in zip(old["tabs"], states, cuts, shown):
         tab = {"name": saved.get("name") or "tab"}
         if not locked(view, "cuts"):
             tab["cuts"] = cut
+        if not locked(view, "shown") and vis is not None:
+            tab["shown"] = vis
         for key in PAGE_KEYS:
             if key not in view and state.get(key) not in (None, "", {}, []):
                 tab[key] = state[key]                    # a genuine per-tab difference
@@ -535,18 +582,22 @@ def demo() -> None:
     import tempfile
     meta = {"rowver": 6,
             "about": {"name": "demo", "title": "demo", "viewer": VIEWER},
-            "data": {"rows": 2, "bytes": 24, "weight_col": None, "sample_at": 16,
+            # TWO columns on purpose: a one-column fixture cannot tell a duplicate NAME
+            # apart from a size mismatch, so that refusal would pass for the wrong reason
+            "data": {"rows": 2, "bytes": 40, "weight_col": None, "sample_at": 32,
                      "samples": [{"name": "a", "rows": 1, "weighted": True},
                                  {"name": "b", "rows": 1, "weighted": False}],
                      "cols": [{"name": "x", "kind": "f8", "at": 0, "lim": [1.0, 2.0],
-                               "nice": [0.0, 2.0], "p95": 2.0, "p99": 2.0}]},
+                               "nice": [0.0, 2.0], "p95": 2.0, "p99": 2.0},
+                              {"name": "y", "kind": "f8", "at": 16, "lim": [3.0, 4.0],
+                               "nice": [0.0, 4.0], "p95": 4.0, "p99": 4.0}]},
             "view": {"cats": {}, "zz_probe": 1},
             "tabs": [{"name": "t", "stage": [], "zz_probe": 1}],
             "opens_on": 0,
             "made": {"by": VERSION, "built": _now(), "skimmed": None},
             "zz_probe": 1}
     import struct
-    buf = struct.pack("<dd", 1.0, 2.0) + struct.pack("<ii", 0, 1)
+    buf = struct.pack("<dddd", 1.0, 2.0, 3.0, 4.0) + struct.pack("<ii", 0, 1)
 
     with tempfile.TemporaryDirectory() as d:
         out = Path(d) / "demo.rvr"
@@ -560,15 +611,27 @@ def demo() -> None:
             assert site.get("zz_probe") == 1, "a writer rebuilt from a literal"
         assert back["data"] == meta["data"], "data was rewritten"
 
-        # the header must be refused when it contradicts the bytes
-        bad = json.loads(json.dumps(meta))
-        bad["data"]["rows"] = 3
-        try:
-            write(Path(d) / "bad.rvr", bad, buf)
-        except AssertionError:
-            pass
-        else:
-            raise AssertionError("a self-contradicting header was accepted")
+        # each of these is a silent wrong number if it is accepted, so each must throw
+        for what, break_it in (
+            ("a header that contradicts the bytes",
+             lambda m: m["data"].__setitem__("rows", 3)),
+            ("a sample that does not say whether it is weighted",
+             lambda m: m["data"]["samples"][0].pop("weighted")),
+            ("a cut naming a column the file does not have",
+             lambda m: m["tabs"][0].__setitem__("cuts", {"no_such_column": [0, 1]})),
+            # rename, never append: the size must stay right so the NAME is what fails
+            ("two columns with the same name",
+             lambda m: m["data"]["cols"][1].__setitem__("name", "x")),
+            ("opens_on past the end of the tabs",
+             lambda m: m.__setitem__("opens_on", 7)),
+        ):
+            bad = json.loads(json.dumps(meta))
+            break_it(bad)
+            try:
+                write(Path(d) / "bad.rvr", bad, buf)
+            except AssertionError:
+                continue
+            raise AssertionError(f"{what} was accepted")
 
     _lock_demo()
     print("rvr6 demo ok")
