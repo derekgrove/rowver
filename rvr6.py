@@ -356,7 +356,79 @@ def show(path: str | Path) -> str:
     return "\n".join(out)
 
 
-def from_rvr(path: str | Path, name: str = "", note: str = "", keep_view: bool = True) -> tuple:
+#: v5 tab-state keys that are page-global in 6 — one copy in `view`, not N+1 in the tabs
+PAGE_KEYS = ("lumi", "lumis", "wt", "syst", "cms", "exp", "rlabel", "cflog")
+
+#: v5 tab-state keys 6 drops outright. `v` is the whole file's `rowver`; `scale` and
+#: `expcuts` are export posture (and `scale` was already read once, not per tab);
+#: `cutorder` is a drag order over the tab's own cuts and rides with them.
+DROP_KEYS = ("v", "scale", "expcuts", "cutorder", "group", "sub", "order", "show",
+             "cuts", "chips", "plots", "table", "regions", "fomn", "fomd")
+
+
+def _cuts_of(state: dict, cols: list) -> dict:
+    """v5's index-keyed cuts + chips as ONE name-keyed dict, keeping only what narrows."""
+    out = {}
+    for i, span in (state.get("cuts") or {}).items():
+        col = cols[int(i)]
+        stop_lo, stop_hi = col.get("nice") or col["lim"]
+        lo = span[0] if span[0] > stop_lo else None      # a handle at its stop is OPEN,
+        hi = span[1] if span[1] < stop_hi else None      # not a bound the mask applies
+        if lo is not None or hi is not None:
+            out[col["name"]] = [lo, hi]
+    for i, vals in (state.get("chips") or {}).items():
+        col = cols[int(i)]
+        if len(vals) < len(col.get("vals") or ()):       # every chip on = no cut
+            out[col["name"]] = {"in": sorted(int(v) for v in vals)}
+    return out
+
+
+def _stage_of(state: dict) -> list:
+    """plots + the board + the region map as ONE ordered kind-tagged list, in screen order."""
+    items = []
+    for plot in (state.get("plots") or []):
+        spec = {k: v for k, v in plot.items() if k not in ("id", "opts", "cmton")}
+        items.append((0, {"kind": spec.pop("mode", "1d"), **spec}))
+    for key, kind in (("table", "board"), ("regions", "map")):
+        block = state.get(key)
+        if block:
+            items.append((block.get("at", 0),
+                          {"kind": kind, **{k: v for k, v in block.items() if k != "at"}}))
+    items.sort(key=lambda pair: pair[0])                 # `at` indexed the block stack; the
+    return [spec for _, spec in items]                   # list's own order replaces it
+
+
+def _tabs_of(old: dict, view: dict) -> list:
+    """v5's tabs as v6 delta tabs, hoisting into `view` everything that never differs."""
+    states = [t.get("state") or {} for t in (old.get("tabs") or [])]
+    if not states:
+        return []
+    agree = lambda k: len({json.dumps(s.get(k), sort_keys=True) for s in states}) == 1
+    for key in PAGE_KEYS:
+        if agree(key) and states[0].get(key) not in (None, "", {}, []):
+            view[key] = states[0][key]
+    if states[0].get("fomn"):
+        view["fom"] = [states[0]["fomn"], states[0].get("fomd")]
+
+    cuts = [_cuts_of(s, old["cols"]) for s in states]
+    if len(states) > 1 and all(c == cuts[0] for c in cuts):
+        view["cuts"] = cuts[0]                           # identical on every tab == LOCKED
+
+    tabs = []
+    for saved, state, cut in zip(old["tabs"], states, cuts):
+        tab = {"name": saved.get("name") or "tab"}
+        if not locked(view, "cuts"):
+            tab["cuts"] = cut
+        for key in PAGE_KEYS:
+            if key not in view and state.get(key) not in (None, "", {}, []):
+                tab[key] = state[key]                    # a genuine per-tab difference
+        tab["stage"] = _stage_of(state)
+        tabs.append(tab)
+    return tabs
+
+
+def from_rvr(path: str | Path, name: str = "", note: str = "", keep_view: bool = True,
+             tabs: bool = False) -> tuple:
     """Transcode a v4/v5 file to v6 — the columns are passed through, never recomputed."""
     old, buf = unframe(gzip.decompress(Path(path).read_bytes()))
     assert old.get("rowver") in (4, 5), f"{path}: rowver {old.get('rowver')}, expected 4 or 5"
@@ -401,8 +473,8 @@ def from_rvr(path: str | Path, name: str = "", note: str = "", keep_view: bool =
                   "viewer": VIEWER},
         "data": data,
         "view": view,
-        "tabs": [],
-        "opens_on": 0,
+        "tabs": _tabs_of(old, view) if tabs else [],
+        "opens_on": int(old.get("tab") or 0) if tabs else 0,
         "made": {"by": VERSION, "built": _now(),
                  "skimmed": stamp.get("skimmed"),
                  "source": {"file": Path(path).name, "rowver": old["rowver"],
