@@ -85,7 +85,25 @@ different. Three keys, and two of them are optional:
     cuts   {}     absent means this tab does not narrow anything of its own
     plot   {}     optional: settings every plot-kind entry on this tab shares
 
-    a stage entry:  {"kind": "1d"|"2d"|"board"|"map", ...}
+    a stage entry:  {"kind": "1d"|"2d"|"board"|"map"|"block", ...}
+
+    A BLOCK is up to four plots drawn on one canvas, and it is ONE stage entry with
+    children rather than a tag shared between siblings:
+
+        {"kind": "block", "cells": [{"kind": "1d", ...}, {"kind": "2d", ...}, null, {...}]}
+
+    `cells` is ordered and POSITION IS THE SLOT — 0 top-left, 1 top-right, 2 bottom-left,
+    3 bottom-right — with null for a slot left empty. One to four entries; the arrangement
+    follows the count (one solo, two side by side, three or four a 2x2), so there is no
+    layout key to keep in sync with the contents. `cells` holds plot kinds only, and a
+    block may NOT contain a block: one level, so a stage stays something you can read.
+
+    This is deliberately NOT v5's `sheet`/`quad`, and not just in the naming. Those were
+    a group id and a slot stamped on sibling entries, which meant `sheetPlan()` gathered a
+    canvas by id and the list's own order stopped being the screen's order — the exact
+    defect that folding plots, boards and maps into one `stage` exists to remove. A
+    container keeps list order == screen order, makes "up to four" a length rather than a
+    convention, and makes deleting a block one splice instead of a sweep.
 
 `cuts` — ONE dict, keyed by column NAME, holding both grammars:
 
@@ -385,10 +403,23 @@ def _cuts_of(state: dict, cols: list) -> dict:
 
 def _stage_of(state: dict) -> list:
     """plots + the board + the region map as ONE ordered kind-tagged list, in screen order."""
-    items = []
+    items, blocks = [], {}
     for plot in (state.get("plots") or []):
         spec = {k: v for k, v in plot.items() if k not in ("id", "opts", "cmton")}
-        items.append((0, {"kind": spec.pop("mode", "1d"), **spec}))
+        sheet, quad = spec.pop("sheet", None), spec.pop("quad", None)
+        entry = {"kind": spec.pop("mode", "1d"), **spec}
+        if sheet is None:
+            items.append((0, entry))
+            continue
+        # v5 stamped a group id and a slot on siblings; 6 makes the block a container, and
+        # sheetPlan drew a sheet where its FIRST member sat, so that is where it goes
+        if sheet not in blocks:
+            blocks[sheet] = {"kind": "block", "cells": []}
+            items.append((0, blocks[sheet]))
+        cells = blocks[sheet]["cells"]
+        slot = len(cells) if quad is None else int(quad)
+        cells.extend([None] * (slot + 1 - len(cells)))
+        cells[slot] = entry
     for key, kind in (("table", "board"), ("regions", "map")):
         block = state.get(key)
         if block:
