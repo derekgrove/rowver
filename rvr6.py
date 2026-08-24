@@ -72,8 +72,28 @@ an absent key means its neutral value, so a barebones file is `"view": {}`.
              smallest member sits".
     look     {colour: {sample|group|sub: hex}, style: {...}}  typed by namespace, so a
              rename can carry its entry and an import can say exactly what missed
-    lumi     float      lumis {group|subgroup: float}   fom [numerator, denominator]
-    syst     float      label {exp, tag, right}         prefs {theme, ts, scale}
+    lumis    {sample: {name: fb}, sub: {name: fb}, group: {name: fb}}
+             TYPED BY NAMESPACE, and that is not decoration. Luminosity is set in the sample
+             tool against samples, subgroups and groups (Derek, 2026-08-23), and a flat
+             {name: fb} map cannot say which of the three a key meant — real v4/v5 files
+             already mix them (one golden keys a GROUP and a subgroup together; the Run 2
+             cross-check keys four ERAS, which are subgroups). A sample named like a group
+             is then unresolvable, and no ordering rule can rescue it. Typing the keys makes
+             every entry unambiguous whichever way the order below is settled.
+
+             ⚠️ THE ORDER IS DEREK'S OPEN CALL. When a sample sits in a subgroup inside a
+             group and more than one names a luminosity, does the MOST SPECIFIC win
+             (sample > sub > group) or the OUTERMOST? A divergence means one .rvr reads two
+             ways. The front end currently implements most-specific-wins. Nothing is written
+             down here until he rules, because writing down a guess is how two readers end
+             up disagreeing quietly.
+
+             There is NO `view.lumi` scalar. A page-wide default was the thing Derek removed,
+             and keeping it as a fallback would put a resolution rule in every reader — which
+             is exactly how the `weighted` default went wrong. A file that needs every group
+             at one luminosity says so explicitly, once, per group.
+    fom      [numerator, denominator]        syst  float
+    label    {exp, tag, right}               prefs {theme, ts, scale}
 
     cuts     PRESENT MEANS LOCKED. See THE LOCK below.
     stage    PRESENT MEANS THE PLOTS ARE LOCKED. Same rule.
