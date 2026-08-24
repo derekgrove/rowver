@@ -81,12 +81,21 @@ an absent key means its neutral value, so a barebones file is `"view": {}`.
              is then unresolvable, and no ordering rule can rescue it. Typing the keys makes
              every entry unambiguous whichever way the order below is settled.
 
-             ⚠️ THE ORDER IS DEREK'S OPEN CALL. When a sample sits in a subgroup inside a
-             group and more than one names a luminosity, does the MOST SPECIFIC win
-             (sample > sub > group) or the OUTERMOST? A divergence means one .rvr reads two
-             ways. The front end currently implements most-specific-wins. Nothing is written
-             down here until he rules, because writing down a guess is how two readers end
-             up disagreeing quietly.
+             THE OUTERMOST WINS (Derek, 2026-08-23). A GROUP's luminosity covers everything
+             inside it; only where the group sets none does its SUBGROUP get a say, and only
+             then the SAMPLE. Nothing anywhere is 1, never 0. `lumi_of()` below is the rule.
+
+             "Sets none" means an ABSENT key or an explicit NULL — the two are identical here.
+             ⚠️ Do not generalise that: `shown` deliberately distinguishes them (absent = draw
+             everything, [] = draw nothing). Absent-means-null is a per-key decision, not a
+             format-wide one, and the difference is the difference between a default and a
+             choice.
+
+             A consequence worth designing for rather than discovering: under outermost-wins a
+             luminosity can be SET and OVERRULED. On one shipped fixture four sample entries
+             are beaten by their group while ten ungrouped ones are live. Such a value is real
+             and becomes live the moment the tier above it is cleared, so it must be shown as
+             overruled rather than hidden or silently ignored.
 
              There is NO `view.lumi` scalar. A page-wide default was the thing Derek removed,
              and keeping it as a fallback would put a resolution rule in every reader — which
@@ -339,6 +348,22 @@ def effective(tab: dict, view: dict, key: str, neutral=None):
         return view.get(key, tab.get(key, neutral))
     return tab.get(key, view.get(key, neutral))
 
+
+def lumi_of(sample: str, view: dict) -> float:
+    """The luminosity for one sample. THE OUTERMOST WINS: group, then subgroup, then sample.
+
+    A tier "sets none" when its key is absent OR explicitly null — identical here, unlike
+    `shown`. Nothing anywhere is 1, so an unconfigured file scales by unity rather than
+    annihilating every yield."""
+    lumis = view.get("lumis") or {}
+    groups = view.get("groups") or {}
+    for tier, key in (("group", (groups.get("of") or {}).get(sample)),
+                      ("sub", (groups.get("sub") or {}).get(sample)),
+                      ("sample", sample)):
+        value = (lumis.get(tier) or {}).get(key) if key is not None else None
+        if value is not None:
+            return float(value)
+    return 1.0
 
 def locked(view: dict, key: str) -> bool:
     """Presence IS the flag — and presence, not truthiness: a locked empty dict is a state."""
@@ -679,6 +704,7 @@ def demo() -> None:
 
     _lock_demo()
     _lumi_demo()
+    _lumi_order_demo()
     print("rvr6 demo ok")
 
 
@@ -700,6 +726,26 @@ def _lumi_demo() -> None:
     view = {"lumi": 1}
     _expand_lumi(view, old, ["a"])
     assert "lumis" not in view and "lumi" not in view, "lumi 1 invented an entry"
+
+
+def _lumi_order_demo() -> None:
+    """THE OUTERMOST WINS — group beats subgroup beats sample, and null == absent."""
+    view = {"groups": {"of": {"s": "sig", "loose": None}, "sub": {"s": "era18"}},
+            "lumis": {"group": {"sig": 400}, "sub": {"era18": 59.8}, "sample": {"s": 10}}}
+    assert lumi_of("s", view) == 400, "the group must beat the subgroup and the sample"
+
+    view["lumis"]["group"] = {}                      # group sets none -> the subgroup speaks
+    assert lumi_of("s", view) == 59.8, "the subgroup must beat the sample"
+    view["lumis"]["sub"] = {}                        # and then the sample
+    assert lumi_of("s", view) == 10
+
+    # an explicit null is the same as an absent key HERE (unlike `shown`, where [] != absent)
+    view["lumis"]["group"] = {"sig": None}
+    assert lumi_of("s", view) == 10, "an explicit null must read as 'this tier sets none'"
+
+    # nothing anywhere is 1, never 0 — a 0 would annihilate every yield silently
+    assert lumi_of("nobody", {}) == 1.0
+    assert lumi_of("loose", {"groups": {"of": {"loose": None}}, "lumis": {}}) == 1.0
 
 
 def _lock_demo() -> None:
