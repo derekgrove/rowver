@@ -456,6 +456,25 @@ def _cuts_of(state: dict, cols: list) -> dict:
     return out
 
 
+def _expand_lumi(view: dict, old: dict, samples: list) -> None:
+    """A v4/v5 GLOBAL luminosity becomes explicit namespaced entries — 6 has no scalar.
+
+    Onto every group, and onto any sample that has none, so the resolved value is unchanged
+    whichever way the sample>sub>group order is later settled: nothing else holds an entry
+    yet, so there is nothing for an order to arbitrate."""
+    lumi = view.pop("lumi", None)
+    if lumi in (None, "", 1):                        # 1 is the no-op default, not a choice
+        view.pop("lumi", None)
+        return
+    of = ((old.get("grouping") or {}).get("group")) or {}
+    lumis = view.setdefault("lumis", {"sample": {}, "sub": {}, "group": {}})
+    for group in dict.fromkeys(of.values()):
+        lumis["group"].setdefault(group, lumi)
+    for name in samples:
+        if name not in of:
+            lumis["sample"].setdefault(name, lumi)
+
+
 def _shown_of(state: dict, datasets: list) -> list | None:
     """Which samples a tab draws, as names. None means all — an EMPTY MAP is no opinion."""
     visible = [d for d, on in (state.get("show") or {}).items() if on]
@@ -563,6 +582,11 @@ def from_rvr(path: str | Path, name: str = "", note: str = "", keep_view: bool =
         view["groups"] = {"of": g.get("group") or {}, "sub": g.get("sub") or {},
                           "order": g.get("order") or []}
 
+    # tabs first: _tabs_of hoists the per-tab lumi into `view`, and only then is there a
+    # global to expand away. 6 has no scalar, so it must not survive into the file.
+    built_tabs = _tabs_of(old, view) if tabs else []
+    _expand_lumi(view, old, list(old["datasets"]))
+
     meta = {
         "rowver": ROWVER,
         "about": {"name": name or stamp.get("name") or Path(path).stem,
@@ -571,7 +595,7 @@ def from_rvr(path: str | Path, name: str = "", note: str = "", keep_view: bool =
                   "viewer": VIEWER},
         "data": data,
         "view": view,
-        "tabs": _tabs_of(old, view) if tabs else [],
+        "tabs": built_tabs,
         "opens_on": int(old.get("tab") or 0) if tabs else 0,
         "made": {"by": VERSION, "built": _now(),
                  "skimmed": stamp.get("skimmed"),
@@ -654,7 +678,28 @@ def demo() -> None:
             raise AssertionError(f"{what} was accepted")
 
     _lock_demo()
+    _lumi_demo()
     print("rvr6 demo ok")
+
+
+def _lumi_demo() -> None:
+    """A v4/v5 global becomes namespaced entries that resolve to the SAME luminosity."""
+    old = {"grouping": {"group": {"a": "sig", "b": "bkg"}}}
+    view = {"lumi": 400}
+    _expand_lumi(view, old, ["a", "b", "loose"])
+    assert "lumi" not in view, "the global survived into a v6 file, which has no scalar"
+    assert view["lumis"]["group"] == {"sig": 400, "bkg": 400}, "a group did not get the global"
+    assert view["lumis"]["sample"] == {"loose": 400}, \
+        "an ungrouped sample must carry it itself, or it silently resolves to 1"
+    assert "a" not in view["lumis"]["sample"], "a grouped sample should not also be named"
+
+    # an entry that already exists is never overwritten, and lumi 1 is a default not a choice
+    view = {"lumi": 400, "lumis": {"sample": {}, "sub": {}, "group": {"sig": 10}}}
+    _expand_lumi(view, old, ["a", "b"])
+    assert view["lumis"]["group"] == {"sig": 10, "bkg": 400}, "the expansion clobbered a real entry"
+    view = {"lumi": 1}
+    _expand_lumi(view, old, ["a"])
+    assert "lumis" not in view and "lumi" not in view, "lumi 1 invented an entry"
 
 
 def _lock_demo() -> None:
