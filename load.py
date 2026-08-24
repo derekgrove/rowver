@@ -13,12 +13,17 @@ def available() -> list[str]:
     return sorted(f"{p.parent.name}/{p.stem}" for p in STUDIES.glob("*/*.pkl"))
 
 
-def load(name: str, dest: str | Path | None = None) -> dict[str, dict[str, np.ndarray]]:
-    """Read <dest>/<name>.pkl into {sample: {column name: ndarray}}."""
+def read(name: str, dest: str | Path | None = None) -> dict:
+    """The whole pikl: its columns under 'results', and what skimmed them."""
     path = (Path(dest) if dest else STUDIES / name) / f"{name}.pkl"
     assert path.exists(), f"no pikl at {path} — have: {available()}"
     with gzip.open(path, "rb") as f:
-        return pickle.load(f)["results"]
+        return pickle.load(f)
+
+
+def load(name: str, dest: str | Path | None = None) -> dict[str, dict[str, np.ndarray]]:
+    """Read <dest>/<name>.pkl into {sample: {column name: ndarray}}."""
+    return read(name, dest)["results"]
 
 
 def n_events(columns: dict[str, np.ndarray]) -> int:

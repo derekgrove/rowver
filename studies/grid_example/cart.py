@@ -16,10 +16,10 @@ The second is the one people forget, and the symptom misleads: `xrdfs stat` work
 uproot refuses the same path, because xrdfs finds the CA bundle itself and uproot has to
 be told. Grid reads are slow — copy files down with xrdcp if you will iterate on KEEP.
 """
+from cart import Cart
+
 import awkward as ak
 
-HAS_WEIGHTS = False
-WEIGHTS_BRANCH = ""
 
 
 def KEEP(events: ak.Array) -> ak.Array:
@@ -34,3 +34,26 @@ COLUMNS = {
     "PT_jet_lead": lambda events: events.Jet_pt[:, 0],
     "AbsEta_jet_lead": lambda events: abs(events.Jet_eta[:, 0]),
 }
+
+FILESET = {
+    'JetMET Run2022C': {
+        "files": {
+            'root://cms-xrd-global.cern.ch//store/data/Run2022C/JetMET/NANOAOD/22Sep2023-v1/2530000/0b6815d2-5fd6-4b55-9374-a32b052c129b.root': 'Events',
+        },
+        "metadata": {},
+    },
+    'JetMET Run2022D': {
+        "files": {
+            'root://cmsxrootd.fnal.gov//store/data/Run2022D/JetMET/NANOAOD/22Sep2023-v1/2550000/03b788ce-72e2-4602-982a-7d042081ab89.root': 'Events',
+        },
+        "metadata": {},
+    },
+}
+
+
+CART = Cart(
+    name='grid_example',
+    fileset=FILESET,
+    columns=COLUMNS,
+    keep=KEEP,
+)

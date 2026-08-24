@@ -9,6 +9,7 @@ studies/*
 !studies/template/
 !studies/remote_example/
 !studies/grid_example/
+!studies/mixed_demo/
 
 # generated — CI rebuilds these from the committed .root; never commit them
 studies/*/*.pkl

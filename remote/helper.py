@@ -35,10 +35,13 @@ name resolved at build time, smallest files first — or {files: {url: tree}} �
 explicit list, which is also how a chosen file SUBSET is represented), branches
 {column: branch}, optional cut string (numpy expression over the columns, evaluated
 here so the page never swallows raw event counts), optional labels/weights,
-tabs = [{name, view}] passed to page.state. Every freshly built .rvr records its
-provenance under the optional META key `origin`: the spec as submitted AND the
-resolved {url: tree} fileset it was actually read from (no timestamp, so identical
-specs still build byte-identical files).
+A built file opens with nothing set up. A fileset entry may also carry its own
+`weights` — a branch name, or null to say this sample is real data and carries none,
+which is how one build holds data and MC together. Every freshly built .rvr carries
+the cartridge stamp under META `cart`: per sample the resolved {url: tree} it was read
+from, its weights branch and its event count, plus the columns, the cut, and the spec
+itself. It has a `built` timestamp, so two builds of one spec are no longer
+byte-identical — the cache is keyed on the spec's sha, not the bytes.
 Finished files are cached in remote/cache/<sha16>.rvr keyed by the whole spec, so a
 second drop of the same file is served in milliseconds. Per-file wire bytes and
 timings are recorded in remote/metrics/ — the study's numbers come from there.
@@ -58,6 +61,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -72,11 +76,11 @@ except ImportError as e:
              "fsspec-xrootd:\n    python3 -m pip install --user numpy uproot fsspec-xrootd")
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))          # the repo root, for page.py
+sys.path.insert(0, str(HERE.parent))          # the repo root, for rvr6.py
 try:
-    import page                               # noqa: E402
+    import rvr6                              # noqa: E402
 except ImportError:
-    sys.exit("helper.py needs page.py from the repo root one directory up — run it "
+    sys.exit("helper.py needs rvr6.py from the repo root one directory up — run it "
              "from a clone:\n    git clone https://gitlab.cern.ch/dgrove/rowver\n"
              "    python3 rowver/remote/helper.py")
 
@@ -427,8 +431,27 @@ def branch_inventory(url: str, tree: str) -> dict:
                              for n in names]}
 
 
+def fileset_weights(node) -> list:
+    """Every weights branch a FILESET literal names, or [None] where a sample declares none."""
+    import ast
+    out = []
+    for sample in getattr(node, "values", []):
+        if not isinstance(sample, ast.Dict):
+            return ["?"]
+        meta = next((v for k, v in zip(sample.keys, sample.values)
+                     if isinstance(k, ast.Constant) and k.value == "metadata"), None)
+        if not isinstance(meta, ast.Dict):
+            out.append(None)
+            continue
+        spec = next((v for k, v in zip(meta.keys, meta.values)
+                     if isinstance(k, ast.Constant) and k.value == "weights"), None)
+        out.append(spec.value if isinstance(spec, ast.Constant) else
+                   (None if spec is None else "?"))
+    return out
+
+
 def parse_config(source: str) -> dict:
-    """Read a study's config.py well enough to refill the builder — or refuse.
+    """Read a study's cart.py well enough to refill the builder — or refuse.
 
     Parsed with `ast`, never executed: this is a file the user hands us, and importing
     it would run it. The builder can only express columns that are branch names copied
@@ -469,6 +492,7 @@ def parse_config(source: str) -> dict:
         elif isinstance(node, ast.Assign) and len(node.targets) == 1 \
                 and isinstance(node.targets[0], ast.Name):
             name = node.targets[0].id
+            seen.add(name)
             if name == "COLUMNS":
                 if not isinstance(node.value, ast.Dict):
                     cannot.append("a COLUMNS that is not a literal dict")
@@ -479,12 +503,24 @@ def parse_config(source: str) -> dict:
                         out["columns"].append(v.value)
                     else:
                         cannot.append(f"column {key!r} is computed, not a branch")
-            elif name == "WEIGHTS_BRANCH" and isinstance(node.value, ast.Constant):
-                out["weights"] = node.value.value or ""
+            elif name == "FILESET":
+                # weights are per sample; the builder has one field, so it can only take
+                # a cart where every weighted sample names the SAME branch
+                said = fileset_weights(node.value)
+                named = sorted({w for w in said if w})
+                if "?" in named or len(named) > 1:
+                    cannot.append("samples with different or computed weights branches")
+                out["weights"] = named[0] if named else ""
             elif name == "LABELS":
                 cannot.append("a LABELS map")
     if "COLUMNS" not in source:
-        raise RuntimeError("no COLUMNS in that file — is it a RowVer config.py?")
+        raise RuntimeError("no COLUMNS in that file — is it a RowVer cart.py?")
+    for retired in ("HAS_WEIGHTS", "WEIGHTS_BRANCH"):
+        if retired in seen or f"\n{retired}" in source:
+            raise RuntimeError(
+                f"that file still declares {retired}, which nothing reads. Weights are "
+                f"per sample: name the branch in each sample's metadata as "
+                f"{{'weights': '<branch>'}}. Left as it is every sample builds at 1.0.")
     if cannot:
         raise RuntimeError(
             "the builder cannot represent this config, so it will not half-import it: "
@@ -617,6 +653,14 @@ def _read_open(f, task, t0):
     return out, stats
 
 
+def sample_weights(spec: dict, entry: dict) -> str | None:
+    """The branch filling this sample's weights column: its own, the spec's, or none."""
+    column = spec.get("weights")
+    if not column:
+        return None
+    return entry["weights"] if "weights" in entry else (spec.get("branches") or {}).get(column)
+
+
 def load_dataset(name: str, entry: dict, branches: dict, cut: str | None, job: dict):
     """All requested branches of one dataset, cut applied, as {column: array}.
     Files are read serially or across worker processes — tune_workers decides which,
@@ -726,7 +770,7 @@ def load_dataset(name: str, entry: dict, branches: dict, cut: str | None, job: d
 
 
 def build_rvr(spec: dict, job: dict) -> Path:
-    """The whole build: load every dataset, pack with page.py, write the cache file."""
+    """The whole build: load every dataset, pack with rvr6, write the cache file."""
     sha = job["sha"]
     submitted = json.loads(json.dumps(spec))   # the spec as received, for provenance
     fileset = spec["fileset"]
@@ -778,40 +822,52 @@ def build_rvr(spec: dict, job: dict) -> Path:
     # not threads — revisit with a ProcessPool if parallel ever matters here.
     columns, dropped = {}, []
     for name, entry in fileset.items():
-        cols = load_dataset(name, entry, branches, cut, job)
+        # a sample declaring no weights is real data: its weights column is never read off
+        # a branch, it is filled with ones, and the page never scales it by a luminosity
+        branch = sample_weights(spec, entry)
+        mine = {c: b for c, b in branches.items() if c != weights}
+        if branch:
+            mine[weights] = branch
+        cols = load_dataset(name, entry, mine, cut, job)
         first = next(iter(cols.values()))
         if len(first) == 0:
             dropped.append(name)
             continue
+        if weights and not branch:
+            cols[weights] = np.ones(len(first), np.float64)
         columns[name] = cols
     if not columns:
         raise RuntimeError("every dataset came back empty after the cut")
     load_s = time.time() - t0
 
     job["phase"] = "packing"
-    meta, buf = page.pack(columns, labels, weights)
-    meta["made_by"] = page.VERSION
-    tabs = []
-    for t in spec.get("tabs") or [{"name": "remote", "view": {}}]:
-        view = dict(t.get("view") or {})
-        plots = view.pop("plots", None) or [{"varx": meta["cols"][0]["name"], "nb": 40}]
-        tabs.append({"name": t.get("name", "remote"),
-                     "state": page.state(meta, plots=plots, **view)})
-    meta["tabs"], meta["tab"] = tabs, int(spec.get("tab", 0))
-    grouping = page.page_grouping(tabs[0]["state"])
-    if grouping:
-        meta["grouping"] = grouping
-    meta["title"] = spec.get("title", "remote") + ".rvr"
-    # PROVENANCE (Derek's question, 2026-08-20): the built file records BOTH the spec as
-    # submitted (dataset names, subsets, cut, branches, weights, tabs) and the RESOLVED
-    # fileset it was actually read from — post-DAS-resolution, subset included, exactly
-    # the {url: tree} map load_dataset consumed. `origin` is an optional META key; the
-    # format stays rowver 4, readers ignore it, old files are untouched. Deliberately no
-    # timestamp: two builds of one spec stay byte-identical (the R3 determinism property)
-    # unless DAS itself changed.
-    meta["origin"] = {"spec": submitted,
-                      "resolved": {name: entry["files"]
-                                   for name, entry in fileset.items()}}
+    # a sample that declares no weights is real DATA; the flag is stored, never inferred
+    weighted = {n: bool(sample_weights(spec, e)) for n, e in fileset.items()}
+    data, buf, cats = rvr6.pack(columns, lambda n: weighted.get(n, True), labels, weights)
+    spec_json = json.dumps(submitted, indent=1)
+    meta = {
+        "rowver": rvr6.ROWVER,
+        "about": {"name": spec.get("title", "remote"),
+                  "title": spec.get("title", "remote"), "viewer": rvr6.VIEWER},
+        "data": data,
+        "view": {"cats": cats} if cats else {},
+        # a built file opens with NOTHING set up: the page configures itself and saves
+        "tabs": [], "opens_on": 0,
+        "made": {
+            "by": rvr6.VERSION,
+            "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "skimmed": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "samples": {name: {"n": int(len(next(iter(columns[name].values())))),
+                               "weights": sample_weights(spec, entry),
+                               "files": entry["files"],
+                               "metadata": entry.get("metadata") or {}}
+                        for name, entry in fileset.items() if name in columns},
+            "columns": dict(branches),
+            "keep": cut or "",
+            "prepare": None,
+            "cart": {"path": None,
+                     "sha256": hashlib.sha256(spec_json.encode()).hexdigest(),
+                     "source": spec_json}}}
     header = json.dumps(meta).encode()
     import gzip as gz
     out = CACHE / f"{sha}.rvr"
@@ -823,7 +879,7 @@ def build_rvr(spec: dict, job: dict) -> Path:
     job["metrics"] = {
         "spec_sha": sha, "title": spec.get("title", ""),
         "datasets": len(columns), "dropped_empty": dropped,
-        "files": job["total_files"], "events_kept": int(meta["n"]),
+        "files": job["total_files"], "events_kept": int(meta["data"]["rows"]),
         "wire_MB": round(job["wire_bytes"] / 1e6, 3),
         "load_seconds": round(load_s, 1),
         "total_seconds": round(time.time() - t0, 1),
@@ -886,7 +942,7 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/ping":
                 pinfo = proxy_info()
                 return self._json({"ok": True, "helper": "rowver-remote",
-                                   "version": page.VERSION, "port": PORT, "eos": EOS,
+                                   "version": rvr6.VERSION, "port": PORT, "eos": EOS,
                                    "workers": WORKERS, "tuned": TUNED,
                                    "proxy_expires": ("EXPIRED " + pinfo["expires"])
                                                     if pinfo["expired"] else pinfo["expires"],

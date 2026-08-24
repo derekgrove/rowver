@@ -2,7 +2,7 @@
 
 Source: CMS DoubleMuParked 2012B+C, the AOD2NanoAODOutreachTool NanoAOD-derived file
 on opendata.cern.ch (CC0). It holds 61.5M entries; the first N_ENTRIES stream over
-HTTPS into open_data_slice.root next to this script, which is what fileset.json
+HTTPS into open_data_slice.root next to this script, which is what the cart
 points at. Needs uproot plus aiohttp: python studies/dimuon_demo/make_slice.py
 """
 import pathlib
