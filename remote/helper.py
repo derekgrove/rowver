@@ -35,7 +35,7 @@ name resolved at build time, smallest files first — or {files: {url: tree}} �
 explicit list, which is also how a chosen file SUBSET is represented), branches
 {column: branch}, optional cut string (numpy expression over the columns, evaluated
 here so the page never swallows raw event counts), optional labels/weights,
-tabs = [{name, view}] passed to page.state. A fileset entry may also carry its own
+A built file opens with nothing set up. A fileset entry may also carry its own
 `weights` — a branch name, or null to say this sample is real data and carries none,
 which is how one build holds data and MC together. Every freshly built .rvr carries
 the cartridge stamp under META `cart`: per sample the resolved {url: tree} it was read
@@ -76,11 +76,11 @@ except ImportError as e:
              "fsspec-xrootd:\n    python3 -m pip install --user numpy uproot fsspec-xrootd")
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))          # the repo root, for page.py
+sys.path.insert(0, str(HERE.parent))          # the repo root, for rvr6.py
 try:
-    import page                               # noqa: E402
+    import rvr6                              # noqa: E402
 except ImportError:
-    sys.exit("helper.py needs page.py from the repo root one directory up — run it "
+    sys.exit("helper.py needs rvr6.py from the repo root one directory up — run it "
              "from a clone:\n    git clone https://gitlab.cern.ch/dgrove/rowver\n"
              "    python3 rowver/remote/helper.py")
 
@@ -770,7 +770,7 @@ def load_dataset(name: str, entry: dict, branches: dict, cut: str | None, job: d
 
 
 def build_rvr(spec: dict, job: dict) -> Path:
-    """The whole build: load every dataset, pack with page.py, write the cache file."""
+    """The whole build: load every dataset, pack with rvr6, write the cache file."""
     sha = job["sha"]
     submitted = json.loads(json.dumps(spec))   # the spec as received, for provenance
     fileset = spec["fileset"]
@@ -841,36 +841,33 @@ def build_rvr(spec: dict, job: dict) -> Path:
     load_s = time.time() - t0
 
     job["phase"] = "packing"
-    meta, buf = page.pack(columns, labels, weights)
-    meta["made_by"] = page.VERSION
-    tabs = []
-    for t in spec.get("tabs") or [{"name": "remote", "view": {}}]:
-        view = dict(t.get("view") or {})
-        plots = view.pop("plots", None) or [{"varx": meta["cols"][0]["name"], "nb": 40}]
-        tabs.append({"name": t.get("name", "remote"),
-                     "state": page.state(meta, plots=plots, **view)})
-    meta["tabs"], meta["tab"] = tabs, int(spec.get("tab", 0))
-    grouping = page.page_grouping(tabs[0]["state"])
-    if grouping:
-        meta["grouping"] = grouping
-    meta["title"] = spec.get("title", "remote") + ".rvr"
-    # the cartridge stamp: per sample the resolved {url: tree} actually read, its weights
-    # branch and its event count; the submitted spec rides under `config`
+    # a sample that declares no weights is real DATA; the flag is stored, never inferred
+    weighted = {n: bool(sample_weights(spec, e)) for n, e in fileset.items()}
+    data, buf, cats = rvr6.pack(columns, lambda n: weighted.get(n, True), labels, weights)
     spec_json = json.dumps(submitted, indent=1)
-    meta["cart"] = {
-        "name": spec.get("title", "remote"),
-        "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "samples": {name: {"n": int(len(next(iter(columns[name].values())))),
-                           "weights": sample_weights(spec, entry),
-                           "files": entry["files"],
-                           "metadata": entry.get("metadata") or {}}
-                    for name, entry in fileset.items() if name in columns},
-        "columns": dict(branches),
-        "keep": cut or "",
-        "prepare": None,
-        "config": {"path": None,
-                   "sha256": hashlib.sha256(spec_json.encode()).hexdigest(),
-                   "source": spec_json}}
+    meta = {
+        "rowver": rvr6.ROWVER,
+        "about": {"name": spec.get("title", "remote"),
+                  "title": spec.get("title", "remote"), "viewer": rvr6.VIEWER},
+        "data": data,
+        "view": {"cats": cats} if cats else {},
+        # a built file opens with NOTHING set up: the page configures itself and saves
+        "tabs": [], "opens_on": 0,
+        "made": {
+            "by": rvr6.VERSION,
+            "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "skimmed": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "samples": {name: {"n": int(len(next(iter(columns[name].values())))),
+                               "weights": sample_weights(spec, entry),
+                               "files": entry["files"],
+                               "metadata": entry.get("metadata") or {}}
+                        for name, entry in fileset.items() if name in columns},
+            "columns": dict(branches),
+            "keep": cut or "",
+            "prepare": None,
+            "cart": {"path": None,
+                     "sha256": hashlib.sha256(spec_json.encode()).hexdigest(),
+                     "source": spec_json}}}
     header = json.dumps(meta).encode()
     import gzip as gz
     out = CACHE / f"{sha}.rvr"
@@ -882,7 +879,7 @@ def build_rvr(spec: dict, job: dict) -> Path:
     job["metrics"] = {
         "spec_sha": sha, "title": spec.get("title", ""),
         "datasets": len(columns), "dropped_empty": dropped,
-        "files": job["total_files"], "events_kept": int(meta["n"]),
+        "files": job["total_files"], "events_kept": int(meta["data"]["rows"]),
         "wire_MB": round(job["wire_bytes"] / 1e6, 3),
         "load_seconds": round(load_s, 1),
         "total_seconds": round(time.time() - t0, 1),
@@ -945,7 +942,7 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/ping":
                 pinfo = proxy_info()
                 return self._json({"ok": True, "helper": "rowver-remote",
-                                   "version": page.VERSION, "port": PORT, "eos": EOS,
+                                   "version": rvr6.VERSION, "port": PORT, "eos": EOS,
                                    "workers": WORKERS, "tuned": TUNED,
                                    "proxy_expires": ("EXPIRED " + pinfo["expires"])
                                                     if pinfo["expired"] else pinfo["expires"],

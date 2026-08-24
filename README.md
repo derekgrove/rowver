@@ -1,4 +1,4 @@
-# RowVer
+# RowVer — the backend
 
 A slim data analysis tool for exploring high-energy physics data. RowVer allows you to roam the rows of phase space, enabling you to rapidly iterate on cuts and selections of your samples and see how they affect histograms and yields in real time. At the end of your tuning, you may export the final plots and cuts and move back to your original framework. The only overhead is one initial conversion: `.root` files in, one slim and interactive `.rvr` file out.
 
@@ -10,6 +10,17 @@ A slim data analysis tool for exploring high-energy physics data. RowVer allows 
 
 If you would like to get started with generating your own `.rvr` file, follow the below instructions.
 ___
+> **This repo builds `.rvr` files. It does not draw them.**
+>
+> The viewer moved to its own repo (`rowver_dmg`) and this one kept the half that reads
+> ROOT, applies a selection, and writes the columns with a record of where they came from.
+> There is no `page.py`, no template and no site build here any more.
+>
+> The format is **rowver 6** and `rvr6.py` is its whole definition — the spec lives in that
+> file's docstring, which is the thing to read before writing a reader. `python gate.py` is
+> the battery.
+
+
 # Install
 
 *Python 3.10 or newer is required*
@@ -105,8 +116,8 @@ rm studies/mine/view.py       # RECOMMENDED
 python run_rowver.py mine
 ```
 
-This writes `studies/mine/mine.rvr` — the data alone. Drop it on `viewer.html` (or add
-`--html` for a standalone `mine.html` with the viewer baked around the data). Open it,
+This writes `studies/mine/mine.rvr` — the data and where it came from, and nothing set up:
+no tabs, no plots. Open it in the viewer (`rowver_dmg`),
 build your groups in the Sample grouping band, set cuts, make
 plots and tables, then `save configuration (.rvr)`. The saved file carries the entire
 setup.
@@ -114,7 +125,6 @@ setup.
 To make that setup the default for future builds, extract it:
 
 ```
-python page.py extract mine_2026-08-14_10-30-00.rvr > studies/mine/view.py
 python run_rowver.py mine --no-skim
 ```
 
@@ -125,14 +135,13 @@ and colours. Hand-tune in the browser, export, extract, rebuild: the loop needs 
 
 ```
 python run_rowver.py template            skim, then write template.rvr
-python run_rowver.py template --html     also build the standalone template.html
 python run_rowver.py template --check    verify chunked == unchunked first
 python run_rowver.py template --no-skim  reuse the pikl, rewrite the .rvr
 python run_rowver.py --list             what studies exist
 ```
 
-The `.rvr` is the artifact — drop it on `viewer.html` and the page you already have reads
-it. `--html` bakes a private copy of that same viewer around the data, which doubles the
+The `.rvr` is the artifact, and it is the only thing this repo produces. The viewer lives in
+the `rowver_dmg` repo and reads rowver 6; nothing here draws anything. What used to double the
 size on disk, so it is asked for rather than assumed.
 
 `--samples "a,b"` puts a subset in the page; `--out NAME` renames the outputs.
@@ -146,50 +155,6 @@ from cart import Cart
 mine = Cart.load("template")      # studies/template/cart.py
 mine.skim()                       # -> studies/template/template.pkl
 mine.write(load.load(mine.name, mine.dir))   # -> studies/template/template.rvr
-```
-
-## Three artifacts
-
-```python
-page.export(columns, "name", dest=d)  # <d>/name.html   ~20 MB, data inside — one file to send
-page.data(columns, "name", dest=d)    # <d>/name.rvr    ~11 MB, data alone
-page.viewer()                         # viewer.html      ~5 MB, no data — drop a .rvr on it
-```
-
-Send the viewer once, then only `.rvr` files. `page.read(path)` opens one in python;
-`page.extract(path)` recovers the setup it carries.
-
-## The file carries the view
-
-A `.rvr` holds the columns and how the page opens: the grouping, every tab, and for
-each tab which plots in what order and how each is drawn, which samples are shown,
-the cuts, the luminosity. It records the analysis only. Which tab was focused, which
-folds were open, theme and text size are page posture and deliberately not saved: a
-`.rvr` always opens on its first tab with the chrome folded. `studies/<name>/view.py`
-is where that starts; the file carries it from there. Both `data()` and `export()`
-write the same `tabs` into META, so the single HTML and the `.rvr` cannot drift.
-
-In the page:
-
-- The reset arrow on a plot returns that plot to what the file says, or to a fresh
-  plot if you spawned it yourself.
-- The reset arrow beside Cuts returns the cuts to the file's. Samples and plots stay.
-- `save configuration (.rvr)` writes a new file: the same events, every tab, opening
-  on the current one. Send it and the recipient gets your view.
-
-A page cannot write over the file it was opened from (outside Chromium no browser
-offers that at all), so the export downloads a new file and you replace the original
-yourself.
-
-Programmatic defaults, when you want them in code rather than extracted:
-
-```python
-meta, _ = page.pack(d)
-st = page.state(meta, cuts={"PT_mu_lead": [20, 500], "nJet": [1, 2, 3]},
-                groups={"signal": ["some_signal_sample"],
-                        "background": ["some_background_sample"]},
-                fom=("signal", "background"), lumi=400, varx="MET", nb=24)
-page.data(d, "mine", tabs=[{"name": "mine", "state": st}], dest="studies/mine")
 ```
 
 ## What a built file remembers
@@ -260,117 +225,18 @@ Weights are per sample, so **a weightless data file merges into a weighted MC on
 data samples get a column of ones, and the page still never scales them. Under v4 this
 was impossible — one global weights key, no way to say "these rows are counts".
 
-`smoke.py merge:<study>=merge` gates it by splitting a study into one file per sample and
+`python gate.py merge` gates it by splitting a study into one file per sample and
 merging it back: the result must equal the one-shot build, column for column.
-
-## The Sample grouping band
-
-Grouping is set up once, in the band across the top, and used everywhere: every tab,
-every plot, every table. A group draws as one curve. A group can be dragged inside
-another group, where it becomes a bundle: one folded chip that toggles and moves as a
-unit, with a chevron that unfolds its samples. Depth stops at two. There is no
-separate subgroup concept in the page; a bundle is simply a group living inside
-another one, and `SUBGROUPS` in view.py declares exactly that.
-
-Chips drag. A sample chip moves between rows to regroup; dropping it inside a
-bundle's dashed box files it into that bundle; a group chip dropped on another group
-nests. The same chips drop onto table cells and onto plots. Enabling and disabling
-samples happens here and only here; a family with some members off wears a hatched
-halfway state so it cannot be mistaken for dead or fully live.
-
-```python
-SUBGROUPS = {"QCD": "QCD HT *", "ttbar": "ttbar *"}
-GROUPS    = {"signal": ["some_signal_sample"],
-             "background": ["QCD", "ttbar", "diboson"]}
-FOM       = ("signal", "background")   # optional: which group is S and which is B
-```
-
-A string is a glob over sample names, a list is explicit, and a `GROUPS` entry may
-name a bundle, a sample, or a glob.
-
-Naming a `FOM` pair adds three cells: S/B, S/sqrt(B+sigma^2), and Z binomial. sigma is
-B's own MC statistical error, sqrt(sum w^2). ZBI is Cousins-Linnemann-Tucker: the
-background is treated as measured in an off region of size B^2/sigma^2, so B's finite
-MC statistics cost significance rather than being assumed away. The incomplete beta
-and inverse normal behind it are checked against `scipy.stats` to 2e-9 relative.
-
-- A sample named by nothing draws on its own, so a study with no `view.py` draws
-  every sample separately.
-- A sample belongs to exactly one group. Overlap raises at build time, naming both;
-  every total stays a sum over disjoint parts.
-- **Untick a member and the curve says so** — `QCD [2 of 3]`, in the legend and in
-  `export cuts`. A curve labelled `QCD` that is two of three HT bins is wrong in a way
-  the plot cannot show you.
-- There is no signal/background concept in the code. Name a group `signal` if you
-  want one; nothing privileges the name.
-- `SHOWN` lists what is visible when the page opens, by name or glob. Everything else
-  is present but switched off. Leave it out and all samples are on.
-
-## Tabs, plots and tables
-
-The bar above the stage holds tabs: independent views of the same events. Each tab
-keeps its own cuts, plots, shown samples and luminosity; the grouping and the data
-are shared. `+ new` opens a factory tab, `+ copy` duplicates the current one,
-`+ table` opens a table tab. The Tabs fold offers three locks — cuts, plots, samples —
-each meaning: the tab you are on becomes the shared copy, and unticking returns every
-tab to its own configuration.
-
-Plots are built in a three-page dialog: arrange the sheet, then pick mode, variables
-and members with no rendering, then preview and adjust on the style page. A plot's
-membership is an explicit list of names — groups, bundles, or single samples — each
-drawn as its own curve in 1D; a 2D or 3D map sums its members into one distribution
-and says so. Members arrive by dragging chips from the tray onto a plot card, by the
-`add:` dropdown, or later by dropping chips onto the live plot. To sum samples into
-one curve, group them: grouping is the one way things combine.
-
-A table tab is a board of cells over a background shelf. The shelf states its own
-arithmetic — the tiles are added, with a `+` between them and an `=` before the total —
-and it refuses to count anything twice: drop a group onto a shelf that already holds one
-of its members and the group replaces the member, because a shelf that held both would
-sum those events into the background twice.
-
-Each cell names a source and reports its yield with errors, or one to three figures of
-merit against the summed shelf, or a miniature of the current plot channel; double-click
-expands a cell into a full plot. A board opens on S/B alone; `FOMs per cell` takes it to
-two or three, each slot cycling through the figures the others are not showing, and the
-slots reorder by dragging them. Cells fill by drag or dropdown and swap by dragging one
-onto another, the board grows and shrinks one row or column at a time up to 4x4, and
-everything rides the `.rvr`.
-
-- A plot opens with no error bars. Its bar offers sqrt(sum w^2), mean(w)sqrt(N) and two
-  Poisson forms, per plot; a saved `.rvr` keeps whichever it was given.
-- Anything a plot has to say about itself — events piled into the end bin, a log axis
-  refused, bins that fell back to sqrt(sum w^2) — is a round badge beside the plot's x,
-  amber when it is a warning, with the words in its tooltip. It is a badge rather than a
-  line of text so that a long remark cannot make one plot in a pair taller than the
-  other.
-- `export all plots` in the rail writes TWO PNGs per plot at the scale set above it:
-  the figure, and `<name>_cuts.png`, the same figure captioned with the selection that
-  produced it. Which one a given audience wants is not knowable in advance and the
-  second one is nearly free. The caption is a band above the frame, not a box on the
-  data — the top margin grows to hold it — and it wraps to the figure's width rather
-  than being truncated. A single plot's camera button follows the `stamp the cuts on
-  exported plots` checkbox instead.
-  plotly.js has no PDF writer; the browser's print dialog produces a vector PDF
-  because plotly renders SVG.
-- 3D is the 2D plot on its side: same bins, same colour scale, drawn as a surface.
-  Every 2D control applies, including the comparison views.
-- Colours wrap at eight. Loose samples take the palette in order, then groups.
-
-Column and sample names are checked against the data, so a typo raises at build time
-rather than being ignored in the browser.
 
 ## Checking a build
 
 ```
-python -c "import page; page.viewer()"            build viewer.html — drop/golden need it
-python smoke.py studies/x/x.html=boot             boot it in JavaScriptCore
-python smoke.py viewer.html+studies/x/x.rvr=drop  what dropping that file does
-python smoke.py rowver:x=rt                       write, read back, compare
-python smoke.py golden=golden                     the frozen files still open, unchanged
-python smoke.py merge:mixed_demo=merge            split a study apart and merge it back
-python smoke.py guards=guards                     every route to a silently wrong yield
-python smoke.py build:mixed_demo=build            run_rowver.py itself, end to end
+python gate.py                 every lane
+python gate.py format          the frame, the refusals, the lock, the lumi ladder
+python gate.py build           a pikl through the packer and back, element for element
+python gate.py merge           split a study apart and merge it back
+python gate.py unweighted      observed data is never scaled by a luminosity
+python gate.py keys            an unknown key survives a rewrite
 ```
 
 `guards` is the one to read if you are changing how weights work: it pins six ways a cart
@@ -381,8 +247,6 @@ hypothetical.
 
 `golden/` holds .rvr files frozen at the version that wrote them (open data, built by
 `golden/make_goldens_0_13_0.py`, never re-run). The `golden` check opens each with
-today's viewer and compares exact integers against pins in `smoke.py`; the day a page
-reads different numbers out of one, the battery goes red. Ten are frozen, and each
 guards something different: `_tabs` every optional key, `_table` a board with no `met`
 key (absence must keep meaning all three FOMs), `_met` a `met` list deliberately out of
 canonical order, `_data` a file with no weights at all, and `_mixed` real data and
@@ -397,16 +261,13 @@ rather than truncating. Build several pages from one pikl instead.
 
 ```
 studies/<name>/cart.py        the whole study: the fileset, KEEP, COLUMNS, PREPARE
-studies/<name>/view.py        how the page opens: VIEW, GROUPS, FOM, COLOUR    (optional)
 studies/<name>/<name>.pkl     the skim, native dtypes, every sample   (generated)
-studies/<name>/<name>.rvr     columns + the opening view              (generated)
-studies/<name>/<name>.html    the page, data inside                   (generated)
-viewer.html                   no data — drop a .rvr on it             (generated)
+studies/<name>/<name>.rvr     the columns and where they came from    (generated)
 ```
 
 The pikl comes first and the .rvr is packed from it. Keeping both is deliberate: the
 pikl holds every sample in its native dtypes, the .rvr holds the cut you ship, in the
-only two types the page has (float64, int32). `--samples` is what makes them differ.
+only two types the format has (float64, int32). `--samples` is what makes them differ.
 
 A study is self-contained. Two studies that share physics should re-use it rather than
 copy it — a cart is an object, so `CART.keep` and `CART.columns` can be handed straight
@@ -669,8 +530,8 @@ If you are iterating on `KEEP`, copy the files down once with `xrdcp` and point
 - An unweighted sample is never scaled by luminosity. That is the point, but it means a
   group holding one beside a weighted sample has a total that is part yield and part raw
   count — the page marks exactly that case with a `!`.
-- The `.rvr` format is versioned (`ROWVER` in `page.py`, `const ROWVER` in
-  `page_template.html`). They must change together, and `READS` on both sides says which
+- The `.rvr` format is versioned (`ROWVER` in `rvr6.py`, and the reader in `rowver_dmg`).
+  They must change together, and `READS` on both sides says which
   versions still open. A file saved from the page is written at the viewer's own version
   and keeps whatever cart stamp it arrived with.
 

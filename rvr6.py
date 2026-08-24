@@ -328,6 +328,127 @@ def write(path: str | Path, meta: dict, buf: bytes) -> dict:
     return {"file": str(path), "mb": len(payload) / 1e6, "rows": meta["data"]["rows"]}
 
 
+# ─── building a v6 file from columns ──────────────────────────────────────────────
+# The packer, which used to live in page.py. It is the whole reason this repo exists now:
+# turn {sample: {column: ndarray}} into the buffer and the `data` drawer that describes it.
+
+def _bump(hi: float, integer: bool = False, sig: int = 2) -> float:
+    """hi truncated to `sig` significant figures then raised one unit there: 2.2998 -> 2.3."""
+    import math
+    if hi == 0 or not math.isfinite(hi):
+        return float(hi)
+    step = 10.0 ** (math.floor(math.log10(abs(hi))) - (sig - 1))
+    if integer:
+        step = max(1.0, round(step))
+    return math.ceil(hi / step) * step
+
+
+def _nice_range(lo: float, hi: float, integer: bool = False) -> list:
+    """A slider span: the low end floored on a 1-2-2.5-5 step, the top just clear of the data."""
+    import math
+    if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+        return [float(lo), float(hi)]
+    magnitude = 10.0 ** math.floor(math.log10((hi - lo) / 8))
+    step = next(magnitude * m for m in (1, 2, 2.5, 5, 10) if magnitude * m >= (hi - lo) / 8)
+    if integer:
+        step = max(1.0, round(step))
+    return [float(f"{v:.12g}") for v in (math.floor(lo / step) * step, _bump(hi, integer))]
+
+
+def _kinds(by_sample: dict, weights: str | None) -> dict:
+    """Per column, i4 for an integer or boolean axis, f8 otherwise. EVERY sample votes:
+    reading only the first wrote a column as int32 whenever a later one held floats."""
+    import numpy as np
+    first = next(iter(by_sample.values()))
+    is_int = lambda a: a.dtype == bool or np.issubdtype(a.dtype, np.integer)
+    return {c: ("i4" if all(is_int(s[c]) for s in by_sample.values()) else "f8")
+            for c in first if c != weights}
+
+
+def pack(by_sample: dict, weighted, labels: dict | None = None,
+         weights: str | None = "weight") -> tuple[dict, bytes, dict]:
+    """{sample: {column: ndarray}} -> (the `data` drawer, the buffer, the `cats` overlay).
+
+    `weighted` says, per sample name, whether it carries real weights — a bool or a callable.
+    It is required, never inferred: a sample whose weights happen to be 1.0 is still MC."""
+    import numpy as np
+    every = list(next(iter(by_sample.values())))
+    if weights is not None:
+        assert weights in every, (
+            f"the weights column is declared as {weights!r}, which this skim does not "
+            f"produce — it has: {every}")
+    kind = _kinds(by_sample, weights)
+    axes = [c for c in every if c != weights]
+    assert axes, "a file needs at least one column that is not the weights"
+
+    joined = {c: np.concatenate([s[c] for s in by_sample.values()]) for c in every}
+    joined = {c: v.astype(np.int32) if v.dtype == bool else v for c, v in joined.items()}
+    index = np.concatenate([np.full(len(s[every[0]]), i, np.int32)
+                            for i, s in enumerate(by_sample.values())])
+
+    floats = ([weights] if weights is not None else []) + [c for c in axes if kind[c] == "f8"]
+    ints = [c for c in axes if kind[c] == "i4"]
+    for c in ints:
+        lo, hi = int(joined[c].min()), int(joined[c].max())
+        assert -2 ** 31 <= lo and hi < 2 ** 31, (
+            f"column {c} spans {lo}..{hi}, which does not fit int32 — store it as a float "
+            f"column, or bin it first")
+
+    blocks, at, offset = [], 0, {}
+    for c in floats + ints:                    # all floats before all ints: that is what
+        block = np.ascontiguousarray(          # keeps every offset a multiple of its width
+            joined[c], np.float64 if c in floats else np.int32)
+        offset[c], at = at, at + block.nbytes
+        blocks.append(block)
+    sample_at, at = at, at + index.nbytes
+    blocks.append(index)
+
+    cols = []
+    for c in axes:
+        v = joined[c]
+        assert np.isfinite(v).all(), (
+            f"column {c}: {int((~np.isfinite(v)).sum())} of {len(v)} values are NaN or "
+            f"infinite. json.dumps writes a bare NaN and every JSON parser refuses it, so "
+            f"the file would be written, reported as a success, and be unopenable.")
+        lo, hi = float(v.min()), float(v.max())
+        distinct = np.unique(v) if kind[c] == "i4" else ()
+        entry = {"name": c, "kind": kind[c], "at": offset[c], "lim": [lo, hi],
+                 "nice": _nice_range(lo, hi, kind[c] == "i4"),
+                 "p95": float(np.percentile(v, 95)), "p99": float(np.percentile(v, 99))}
+        if 0 < len(distinct) <= MAX_CHIPS:
+            entry["vals"] = [int(x) for x in distinct]
+        cols.append(entry)
+
+    is_weighted = weighted if callable(weighted) else (lambda n: bool(weighted))
+    data = {"rows": int(len(index)), "bytes": at,
+            "weight_col": weights, **({"weight_at": offset[weights]} if weights else {}),
+            "sample_at": sample_at,
+            "samples": [{"name": n, "rows": int(len(v[every[0]])),
+                         "weighted": bool(is_weighted(n))}
+                        for n, v in by_sample.items()],
+            "cols": cols}
+    # LABELS name a value; in 6 that is an opinion and lives in view.cats, never in `data`
+    cats = {}
+    for c in cols:
+        named = (labels or {}).get(c["name"])
+        if named and c.get("vals"):
+            missing = sorted(set(c["vals"]) - set(named))
+            assert not missing, (
+                f"column {c['name']}: no label for {missing}. Every value present in the "
+                f"data needs one, or a chip shows a bare number.")
+            cats[c["name"]] = {"names": {str(v): str(named[v]) for v in c["vals"]}}
+    return data, b"".join(b.tobytes() for b in blocks), cats
+
+
+def read_by_sample(path) -> tuple[dict, dict]:
+    """A v6 file back as (META, {sample: {column: ndarray}}) — the shape pack() takes in."""
+    import numpy as np
+    meta, buf = read(path)
+    cols, d = columns(meta, buf), meta["data"]
+    index = np.frombuffer(buf, np.int32, d["rows"], d["sample_at"])
+    return meta, {s["name"]: {c: v[index == i] for c, v in cols.items()}
+                  for i, s in enumerate(d["samples"])}
+
 def cut_of(spec) -> str:
     """One cut in the format's grammar, as words — the shape both readers must agree on."""
     if isinstance(spec, dict):

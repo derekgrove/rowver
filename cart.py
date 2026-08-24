@@ -34,8 +34,8 @@ from pathlib import Path
 import numpy as np
 import uproot
 
-import page
 import pikl
+import rvr6
 
 STUDIES: Path = Path(__file__).with_name("studies")
 
@@ -82,14 +82,15 @@ def expand_globs(fileset: dict) -> dict:
 
 
 def recover_labels(header: dict) -> dict | None:
-    """The LABELS a built file implies, read back off its chip columns."""
-    return {c["name"]: dict(zip(c["vals"], c["names"]))
-            for c in header["cols"] if c.get("names")} or None
+    """The LABELS a built file implies — in 6 they are an opinion, so they live in view.cats."""
+    cats = (header.get("view") or {}).get("cats") or {}
+    return {col: {int(v): name for v, name in (c.get("names") or {}).items()}
+            for col, c in cats.items() if c.get("names")} or None
 
 
 def column_shape(header: dict) -> list[tuple]:
     """Each column a built file declares, as (name, kind), in order."""
-    return [(c["name"], c["kind"]) for c in header["cols"]]
+    return [(c["name"], c["kind"]) for c in header["data"]["cols"]]
 
 
 def describe(spec) -> str:
@@ -314,15 +315,37 @@ class Cart:
         return json.dumps(self.fileset, indent=2, default=describe)
 
     def write(self, rows: dict, dest: str | Path | None = None, name: str = "",
-              tabs: list | None = None, extra: dict | None = None,
               skim: dict | None = None) -> dict:
-        """Burn the cart: the skimmed columns and everything known about them, as one .rvr."""
+        """Burn the cart: the skimmed columns and everything known about them, as one .rvr.
+
+        The file opens with NOTHING set up — no tabs, no plots. A page configures itself and
+        saves; this repo writes the data and says where it came from."""
         counts = {s: len(next(iter(c.values()))) for s, c in rows.items()}
-        # a SUBSET may hold none of the weighted samples, and then the file has no weights
+        # a SUBSET may hold none of the weighted samples, and then the file has no weights.
+        # The skim still produced the column, so DROP it rather than let it fall through as a
+        # plottable axis: it is ones by construction, it carries nothing, and a file whose
+        # column list differs from its weighted sibling's cannot be merged back with it.
         column = self.weights_column if any(map(self.weighted, rows)) else None
-        return page.data(rows, name or self.name, labels=self.labels,
-                         dest=dest or self.dir, weights=column,
-                         tabs=tabs, extra=extra, cart=self.stamp(counts, skim))
+        if column is None and self.weights_column:
+            rows = {s: {c: v for c, v in cols.items() if c != self.weights_column}
+                    for s, cols in rows.items()}
+        data, buf, cats = rvr6.pack(rows, self.weighted, self.labels, column)
+        stamp = self.stamp(counts, skim)
+        where = Path(dest) if dest else self.dir
+        where.mkdir(parents=True, exist_ok=True)
+        out = where / f"{name or self.name}.rvr"
+        meta = {"rowver": rvr6.ROWVER,
+                "about": {"name": name or self.name, "title": name or self.name,
+                          "viewer": rvr6.VIEWER},
+                "data": data,
+                "view": {"cats": cats} if cats else {},
+                "tabs": [], "opens_on": 0,
+                "made": {"by": rvr6.VERSION, "built": stamp["built"],
+                         "skimmed": stamp.get("skimmed"),
+                         "keep": stamp.get("keep"), "prepare": stamp.get("prepare"),
+                         "columns": stamp.get("columns"), "samples": stamp.get("samples"),
+                         "cart": stamp.get("config")}}
+        return rvr6.write(out, meta, buf)
 
     @classmethod
     def load(cls, name: str) -> "Cart":
@@ -344,21 +367,21 @@ class Cart:
     @classmethod
     def open(cls, path: str | Path) -> "Cart":
         """Read a built .rvr back: what is on it, where it came from, and its columns."""
-        header, _ = page.read(path)
-        stamp = header.get("cart") or {}
+        header, _ = rvr6.read(path)
+        stamp = header.get("made") or {}
         cart = cls.__new__(cls)
-        cart.name = stamp.get("name") or Path(path).stem
+        cart.name = (header.get("about") or {}).get("name") or Path(path).stem
         # the stamp keeps weights in their own field; put them where weights_spec reads
         cart.fileset = {n: {"files": s.get("files") or {},
                             "metadata": {**(s.get("metadata") or {}),
                                          "weights": s.get("weights")}}
                         for n, s in (stamp.get("samples") or {}).items()}
-        cart.columns = stamp.get("columns") or {c["name"]: "?" for c in header["cols"]}
+        cart.columns = stamp.get("columns") or {c["name"]: "?" for c in header["data"]["cols"]}
         cart.keep = stamp.get("keep") or ""
         cart.prepare = stamp.get("prepare")
         cart.labels = recover_labels(header)
-        cart.weights_column = header.get("weights") or None
-        cart.source = (stamp.get("config") or {}).get("path")
+        cart.weights_column = header["data"].get("weight_col") or None
+        cart.source = (stamp.get("cart") or {}).get("path")
         cart.dir, cart.header = None, header
         return cart
 
@@ -367,7 +390,7 @@ class Cart:
               dest: str | Path | None = None) -> dict:
         """Put the samples of several .rvr files on one cart, re-skimming none of them."""
         assert len(paths) >= 2, "merge needs at least two files"
-        loaded = [(str(path), *page.read_by_sample(path)) for path in paths]
+        loaded = [(str(path), *rvr6.read_by_sample(path)) for path in paths]
         first_path, first, _ = loaded[0]
 
         for path, header, _ in loaded[1:]:
@@ -387,13 +410,14 @@ class Cart:
 
         # one weights column across the merged file: whoever declares one must agree, and
         # a file declaring none contributes ones — which is exactly what its samples are
-        declared = {h["weights"] for _, h, _ in loaded if h.get("weights")}
+        declared = {h["data"]["weight_col"] for _, h, _ in loaded
+                    if h["data"].get("weight_col")}
         assert len(declared) <= 1, f"the files disagree on the weights column: {sorted(declared)}"
         weights = declared.pop() if declared else None
 
-        columns_by_sample, stamp_samples, merged_from = {}, {}, []
+        columns_by_sample, stamp_samples, merged_from, was = {}, {}, [], {}
         for path, header, samples in loaded:
-            source_stamp = header.get("cart") or {}
+            source_stamp = header.get("made") or {}
             for sample, columns in samples.items():
                 assert sample not in columns_by_sample, (
                     f"both {path} and an earlier file hold a sample called {sample!r}. "
@@ -407,31 +431,40 @@ class Cart:
                 # stop scaling genuinely weighted MC by luminosity
                 stamp_samples[sample] = (source_stamp.get("samples") or {}).get(sample) or {
                     "n": int(len(next(iter(columns.values())))),
-                    "weights": header.get("weights") or None,
+                    "weights": header["data"]["weight_col"] or None,
                     "files": {}, "metadata": {}}
+                # `weighted` is DECLARED per sample in 6 and must survive the merge: a data
+                # sample gaining a column of ones must not start reading as weighted MC
+                was[sample] = next(x["weighted"] for x in header["data"]["samples"]
+                                   if x["name"] == sample)
             merged_from.append({"file": Path(path).name,
                                 "name": source_stamp.get("name"),
                                 "built": source_stamp.get("built"),
                                 "config": (source_stamp.get("config") or {}).get("sha256")})
 
         labels = recover_labels(first)
-        first_stamp = first.get("cart") or {}
-        stamp = {"name": name,
-                 "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        first_stamp = first.get("made") or {}
+        stamp = {"built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                  "samples": stamp_samples,
                  "columns": first_stamp.get("columns") or {},
                  "keep": first_stamp.get("keep", ""),
                  "prepare": first_stamp.get("prepare"),
-                 "config": first_stamp.get("config"),
+                 "cart": first_stamp.get("cart"),
                  "merged": merged_from}
-        # the first file's view carries over — its cuts index columns, and the columns are
-        # the same list in the same order or this would have refused above
-        kept = ("colour", "style", "grouping", "lockcuts", "lockplots", "lockshow")
-        return page.data(columns_by_sample, name, labels=labels, dest=dest, weights=weights,
-                         tabs=first.get("tabs"),
-                         extra={"tab": first.get("tab", 0),
-                                **{k: first[k] for k in kept if first.get(k)}},
-                         cart=stamp)
+        data, buf, cats = rvr6.pack(columns_by_sample, lambda n: was[n], labels, weights)
+        # the first file's page-global view carries over: its cuts are name-keyed and the
+        # column list is identical, or this would have refused above
+        view = dict(first.get("view") or {})
+        if cats:
+            view["cats"] = cats
+        meta = {"rowver": rvr6.ROWVER,
+                "about": {"name": name, "title": name, "viewer": rvr6.VIEWER},
+                "data": data, "view": view,
+                "tabs": first.get("tabs") or [], "opens_on": first.get("opens_on", 0),
+                "made": {"by": rvr6.VERSION, **stamp}}
+        out = (Path(dest) if dest else Path.cwd()) / f"{name}.rvr"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        return rvr6.write(out, meta, buf)
 
 USAGE = """usage:
     python cart.py <study>                    the cartridge label of a study
