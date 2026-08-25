@@ -1,0 +1,9 @@
+name: rowver
+channels:
+  - conda-forge
+dependencies:
+  - python >=3.11,<3.14
+  - numpy =2.4
+  - awkward =2.11
+  - uproot =5.7
+  - aiohttp =3.13

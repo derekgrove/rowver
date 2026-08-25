@@ -1,486 +1,381 @@
-"""A cart: one study's fileset and config in one object, and the .rvr it burns to.
+"""The one-file study definition used to build a RowVer cartridge.
 
-A study is ONE file, studies/<name>/cart.py, holding a Cart named CART. There is no
-fileset.json riding alongside — the fileset is an ordinary python dict in coffea's shape,
+A study lives at ``studies/<name>/cart.py`` and exports one ``CART``.  The copied
+directory name is the study name; users do not repeat it inside the file.
 
-    {sample name: {"files": {path: tree name, ...}, "metadata": {...}}}
+The fileset follows Coffea's familiar shape::
 
-and `CART.fileset_json()` dumps it whenever you want to read it as JSON.
+    {"sample": {"files": {"file.root": "Events"},
+                "metadata": {"weights": "genWeight"}}}
 
-A path may be a glob, so a sample split over 32 files is one entry, and each path carries
-its own tree name — which is how one file holding 231 mass-point trees supplies several
-samples. A path may also be a remote URL (root://, https://), read in place, never globbed.
-
-EVERY HOOK MAY TAKE A SECOND ARGUMENT, that sample's metadata: KEEP, PREPARE, and any
-COLUMNS entry that is a function. Write the one-argument form and it still works. The
-metadata handed over is the sample's own plus three keys the skim knows and the fileset
-cannot — `sample`, `file` and `tree` — so a column can depend on which file it is reading.
-
-WEIGHTS ARE PER SAMPLE. `metadata["weights"]` says what fills this sample's weights
-column, in the same grammar as COLUMNS: a branch name, or a function. A sample that
-declares none is UNWEIGHTED — its rows are 1.0 and the page never scales them by
-luminosity — which is how real data and MC live in one cart.
+Every sample must explicitly declare ``metadata['weights']``.  Use a branch name or a
+callable for weighted simulation and ``None`` for observed data.  Silence is refused even
+when every sample is silent: forgotten MC weights and intentional data are not the same
+state.
 """
 from __future__ import annotations
 
 import glob
 import hashlib
+import importlib.util
 import inspect
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable, Mapping
 
+import awkward as ak
 import numpy as np
 import uproot
 
-import pikl
 import rvr6
 
-STUDIES: Path = Path(__file__).with_name("studies")
-
-#: keys the skim adds to every sample's metadata; a fileset may not also use them
-RESERVED = ("sample", "file", "tree")
-
-#: near-misses for `weights`; spelt any of these, a sample is silently unweighted
-NEARLY_WEIGHTS = ("weight", "Weights", "WEIGHTS", "weigths", "WEIGHTS_BRANCH", "HAS_WEIGHTS")
-
-#: column names that mean a config was half-converted — weights still live in COLUMNS
-WEIGHT_COLUMNS = ("weight", "weights", "genWeight", "Weight", "evtWeight")
+STUDIES = Path(__file__).with_name("studies")
+RESERVED_META = frozenset({"sample", "file", "tree"})
+WEIGHT_MISSPELLINGS = frozenset({
+    "weight", "Weights", "WEIGHTS", "weigths", "WEIGHTS_BRANCH", "HAS_WEIGHTS",
+})
 
 
-def is_remote(path: str) -> bool:
-    """A path with a scheme — root://, https:// — lives on the network, not this disk."""
+class CartError(ValueError):
+    """A study is ambiguous, unsafe to build, or produces invalid columns."""
+
+
+def study_names(root: Path = STUDIES) -> list[str]:
+    """Return study directories that contain a cart.py."""
+    return sorted(path.parent.name for path in root.glob("*/cart.py"))
+
+
+def _remote(path: str) -> bool:
     return "://" in path
 
 
-def expand_globs(fileset: dict) -> dict:
-    """Turn every local glob into the real paths it matches, leaving remote urls alone."""
-    out = {}
-    for name, sample in fileset.items():
-        assert isinstance(sample, dict) and "files" in sample, (
-            f"sample {name!r} is {type(sample).__name__}, not "
-            f"{{'files': {{path: tree}}, 'metadata': {{...}}}}")
-        unknown = sorted(set(sample) - {"files", "metadata"})
-        assert not unknown, (
-            f"sample {name!r} has unknown key(s) {unknown}. An entry holds 'files' and "
-            f"'metadata' — is one of those a typo? A misspelt 'metadata' is dropped whole, "
-            f"weights and all, and the sample builds silently at weight 1.0.")
-        assert isinstance(sample["files"], dict), (
-            f"sample {name!r}: 'files' is {type(sample['files']).__name__}, not a dict. "
-            f"Each path names its own tree: {{'/data/*.root': 'Events'}}")
-        paths = {}
-        for pattern, tree in sample["files"].items():
-            local_glob = not is_remote(pattern) and any(c in pattern for c in "*?[")
-            hits = sorted(glob.glob(pattern)) if local_glob else [pattern]
-            # a COMPLETE path, which is what the stamp promises: a relative one means
-            # nothing to whoever you send the file to, and glob returns relative hits
-            paths |= {hit if is_remote(hit) else str(Path(hit).resolve()): tree
-                      for hit in hits}
-        out[name] = {"files": paths, "metadata": dict(sample.get("metadata") or {})}
+def _call_shape(function: Callable[..., Any], where: str) -> int:
+    try:
+        signature = inspect.signature(function)
+    except (TypeError, ValueError) as exc:
+        raise CartError(f"{where} must have an inspectable one- or two-argument signature") from exc
+    positional = [p for p in signature.parameters.values()
+                  if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+    required = [p for p in positional if p.default is p.empty]
+    variadic = any(p.kind is p.VAR_POSITIONAL for p in signature.parameters.values())
+    if variadic or not 1 <= len(positional) <= 2 or len(required) > 2:
+        raise CartError(f"{where} must accept events, or events and metadata")
+    return len(positional)
+
+
+def _invoke(function: Callable[..., Any], events: ak.Array, meta: dict, where: str) -> Any:
+    return function(events, meta) if _call_shape(function, where) == 2 else function(events)
+
+
+def _source(value: Any) -> dict | None:
+    """Describe a branch or callable as data; never turn prose back into executable code."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return {"kind": "branch", "value": value}
+    try:
+        source = inspect.getsource(value).strip()
+    except (OSError, TypeError) as exc:
+        raise CartError(f"callable {value!r} has no recoverable Python source") from exc
+    return {"kind": "python", "name": getattr(value, "__name__", type(value).__name__),
+            "doc": inspect.getdoc(value) or "", "source": source}
+
+
+def _jsonable(value: Any, where: str) -> Any:
+    try:
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise CartError(f"{where} must be finite JSON data: {exc}") from exc
+    return value
+
+
+def _one_dimensional(value: Any, where: str, *, boolean: bool = False) -> np.ndarray:
+    """Convert an Awkward result without accepting missing or jagged values."""
+    try:
+        out = ak.to_numpy(value, allow_missing=True)
+    except (TypeError, ValueError) as exc:
+        raise CartError(f"{where} must contain exactly one regular value per event") from exc
+    if np.ma.isMaskedArray(out) and np.ma.getmaskarray(out).any():
+        raise CartError(f"{where} contains missing values")
+    out = np.asarray(out)
+    if out.ndim != 1:
+        raise CartError(f"{where} must contain exactly one value per event, not shape {out.shape}")
+    if boolean:
+        if out.dtype.kind != "b":
+            raise CartError(f"{where} must be boolean")
+        return out
+    if out.dtype.kind not in "biuf":
+        raise CartError(f"{where} must be numeric")
+    if out.dtype.kind == "f" and not np.isfinite(out).all():
+        raise CartError(f"{where} contains NaN or infinity")
     return out
 
 
-def recover_labels(header: dict) -> dict | None:
-    """The LABELS a built file implies — in 6 they are an opinion, so they live in view.cats."""
-    cats = (header.get("view") or {}).get("cats") or {}
-    return {col: {int(v): name for v, name in (c.get("names") or {}).items()}
-            for col, c in cats.items() if c.get("names")} or None
-
-
-def column_shape(header: dict) -> list[tuple]:
-    """Each column a built file declares, as (name, kind), in order."""
-    return [(c["name"], c["kind"]) for c in header["data"]["cols"]]
-
-
-def describe(spec) -> str:
-    """How something was made, in words: a branch name, a lambda's source, or a function."""
-    if isinstance(spec, str):
-        return spec
-    if getattr(spec, "__name__", "<lambda>") != "<lambda>":
-        doc = (spec.__doc__ or "").strip().splitlines()
-        return f"{spec.__name__}()" + (f" — {doc[0]}" if doc else "")
-    try:
-        return " ".join(inspect.getsource(spec).split()).rstrip(",")
-    except (OSError, TypeError):
-        return "<lambda>"
-
-
-def study_names() -> list[str]:
-    """Names of every study in studies/ that has a cart.py."""
-    return sorted(p.name for p in STUDIES.iterdir() if (p / "cart.py").exists())
-
-
-def import_file(path: Path, name: str):
-    """Import a .py file that is not on the import path."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(mod)
-    except ModuleNotFoundError as e:
-        raise ModuleNotFoundError(
-            f"{path} imports {e.name!r}, which is not installed.\n"
-            f"  A cart is ordinary python and may import whatever your selection needs, "
-            f"so a study can require packages this tool does not. studies/template/ needs "
-            f"nothing beyond uproot and awkward — copy that one as a starting point.") from e
-    return mod
-
-
 class Cart:
-    """One study: its fileset, its selection, its columns — and the .rvr it burns to."""
+    """A ROOT fileset, one preselection, and the columns exposed in RowVer."""
 
-    def __init__(self, name: str, fileset: dict, columns: dict, keep,
-                 prepare=None, labels: dict | None = None,
-                 weights_column: str = "weight"):
-        """Hold a study, with its globs expanded and everything about it checked."""
-        self.name = name
-        self.fileset = expand_globs(fileset)
-        self.columns = columns
+    def __init__(self, *, fileset: Mapping[str, Mapping[str, Any]],
+                 columns: Mapping[str, str | Callable[..., Any]],
+                 keep: Callable[..., Any], prepare: Callable[..., Any] | None = None,
+                 labels: Mapping[str, Mapping[Any, str]] | None = None,
+                 title: str | None = None, note: str | None = None):
+        self.fileset = {name: dict(entry) for name, entry in fileset.items()}
+        self.columns = dict(columns)
         self.keep = keep
         self.prepare = prepare
-        self.labels = labels
-        declared = any(map(self.weights_spec, self.fileset))
-        assert weights_column or not declared, (
-            f"{name}: weights_column is None while samples declare weights — every one of "
-            f"those declarations would be dropped and every event stored at 1.0.")
-        # the column exists only if some sample declares weights; nothing else to set
-        self.weights_column = weights_column if declared else None
-        # the file the CART was written in, for the stamp — its caller's, not this module's
-        caller = inspect.currentframe().f_back
-        self.source = caller.f_globals.get("__file__") if caller else None
-        self.dir = Path(self.source).parent if self.source else None
-        self.validate()
+        self.labels = dict(labels or {})
+        self.title = title
+        self.note = note
+        self.name: str | None = None
+        self.dir: Path | None = None
+        self.source: Path | None = None
+        self._validated = False
+
+    @classmethod
+    def load(cls, study: str, root: Path = STUDIES) -> "Cart":
+        """Load ``studies/<study>/cart.py`` and bind paths relative to that file."""
+        if not study or Path(study).name != study:
+            raise CartError("study must be one directory name under studies/")
+        source = (root / study / "cart.py").resolve()
+        if not source.is_file():
+            raise CartError(f"no study {study!r}: expected {source}")
+        spec = importlib.util.spec_from_file_location(f"rowver_study_{study}", source)
+        if spec is None or spec.loader is None:
+            raise CartError(f"cannot import {source}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cart = getattr(module, "CART", None)
+        if not isinstance(cart, cls):
+            raise CartError(f"{source} must export CART = Cart(...)")
+        cart.name, cart.dir, cart.source = study, source.parent, source
+        cart.fileset = cart._expand_files(source.parent)
+        cart.validate()
+        return cart
+
+    def _expand_files(self, base: Path) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for sample_name, raw in self.fileset.items():
+            if not isinstance(raw, dict) or set(raw) - {"files", "metadata"}:
+                raise CartError(f'sample "{sample_name}" must contain only files and metadata')
+            files, metadata = raw.get("files"), raw.get("metadata")
+            if not isinstance(files, dict) or not isinstance(metadata, dict):
+                raise CartError(f'sample "{sample_name}" needs files and metadata objects')
+            expanded: dict[str, str] = {}
+            for pattern, tree in files.items():
+                if not isinstance(pattern, str) or not pattern or not isinstance(tree, str) or not tree:
+                    raise CartError(f'sample "{sample_name}" file paths and trees must be strings')
+                if _remote(pattern):
+                    matches = [pattern]
+                else:
+                    candidate = Path(pattern)
+                    if not candidate.is_absolute():
+                        candidate = base / candidate
+                    matches = sorted(glob.glob(str(candidate)))
+                    if not matches and not glob.has_magic(str(candidate)):
+                        matches = [str(candidate)]
+                for match in matches:
+                    expanded[str(Path(match).resolve()) if not _remote(match) else match] = tree
+            out[sample_name] = {"files": expanded, "metadata": dict(metadata)}
+        return out
 
     def validate(self) -> None:
-        """Refuse a cart that cannot skim, before anything slow starts."""
-        assert self.fileset, f"{self.name}: the fileset is empty"
-        assert self.columns, f"{self.name}: COLUMNS is empty"
-        assert callable(self.keep), f"{self.name}: keep is not a function"
-        assert self.prepare is None or callable(self.prepare), \
-            f"{self.name}: prepare is not a function"
+        """Reject ambiguous weights and bad hooks before any ROOT file is opened."""
+        if not self.fileset:
+            raise CartError("FILESET is empty")
+        if not self.columns:
+            raise CartError("COLUMNS is empty")
+        if any(not isinstance(name, str) or not name.strip() for name in self.fileset):
+            raise CartError("sample names must be non-empty strings")
+        if len(set(self.fileset)) != len(self.fileset):
+            raise CartError("sample names must be unique")
+        if any(not isinstance(name, str) or not name.strip() or name == "weight"
+               for name in self.columns):
+            raise CartError("column names must be non-empty and may not be 'weight'")
+        if not callable(self.keep):
+            raise CartError("KEEP must be callable")
+        _call_shape(self.keep, "KEEP")
+        if self.prepare is not None:
+            if not callable(self.prepare):
+                raise CartError("PREPARE must be callable or None")
+            _call_shape(self.prepare, "PREPARE")
+        for name, value in self.columns.items():
+            if not (isinstance(value, str) and value) and not callable(value):
+                raise CartError(f'COLUMNS["{name}"] must be a branch name or callable')
+            if callable(value):
+                _call_shape(value, f'COLUMNS["{name}"]')
+                _source(value)
         for sample, entry in self.fileset.items():
-            clash = sorted(set(RESERVED) & set(entry["metadata"]))
-            assert not clash, (
-                f"{self.name}: sample {sample!r} has metadata {clash}, which the skim sets "
-                f"itself — every hook is handed the file it is reading under those names. "
-                f"Rename them.")
-            nearly = sorted(set(NEARLY_WEIGHTS) & set(entry["metadata"]))
-            assert not nearly, (
-                f"{self.name}: sample {sample!r} has metadata {nearly}. The key is "
-                f"'weights', plural — spelt any other way the sample is silently given "
-                f"weight 1.0 and its yield is quietly wrong.")
-            spec = entry["metadata"].get("weights")
-            assert spec is None or callable(spec) or (isinstance(spec, str) and spec), (
-                f"{self.name}: sample {sample!r} metadata['weights'] is "
-                f"{spec!r} — it must be a branch name, a function, or None for real data.")
-        for column, spec in self.columns.items():
-            assert isinstance(spec, str) or callable(spec), (
-                f"{self.name}: columns[{column!r}] is neither a branch name nor a function")
-        self.check_weights_declared()
+            if not entry["files"]:
+                raise CartError(f'sample "{sample}" matched no files')
+            metadata = entry["metadata"]
+            collision = RESERVED_META & set(metadata)
+            if collision:
+                raise CartError(f'sample "{sample}" metadata uses reserved keys {sorted(collision)}')
+            near = WEIGHT_MISSPELLINGS & set(metadata)
+            if near:
+                raise CartError(f'sample "{sample}" misspells weights as {sorted(near)}')
+            if "weights" not in metadata:
+                raise CartError(
+                    f'sample "{sample}" must explicitly set metadata["weights"] to a branch, '
+                    "a callable, or None for observed data")
+            weight = metadata["weights"]
+            if not (weight is None or isinstance(weight, str) and weight or callable(weight)):
+                raise CartError(f'sample "{sample}" has an invalid weights declaration')
+            if callable(weight):
+                _call_shape(weight, f'{sample} weights')
+                _source(weight)
+            _jsonable({k: v for k, v in metadata.items() if k != "weights"},
+                      f'sample "{sample}" metadata')
+        for column, mapping in self.labels.items():
+            if column not in self.columns or not isinstance(mapping, Mapping):
+                raise CartError(f'LABELS["{column}"] must name a real column')
+        if self.title is not None and not isinstance(self.title, str):
+            raise CartError("title must be text")
+        if self.note is not None and not isinstance(self.note, str):
+            raise CartError("note must be text")
+        self._validated = True
 
-    def check_weights_declared(self) -> None:
-        """Refuse a fileset that is silent about weights, which is how a yield goes wrong."""
-        said = [s for s, e in self.fileset.items() if "weights" in e["metadata"]]
-        missing = sorted(set(self.fileset) - set(said))
-        assert not said or not missing, (
-            f"{self.name}: {len(said)} of {len(self.fileset)} samples declare weights, so "
-            f"{len(missing)} are silent — and silence is indistinguishable from data, "
-            f"which is how MC gets weight 1.0. Every sample must say: a branch name (or a "
-            f"function) for MC, or 'weights': None for real data. Silent: {missing[:6]}")
-        if self.weights_column:
-            assert self.weights_column not in self.columns, (
-                f"{self.name}: columns defines {self.weights_column!r}, which is the "
-                f"weights column. Put the branch name in each sample's metadata as "
-                f"{{'weights': '<branch>'}} and drop it from columns.")
-            return
-        stray = sorted(set(WEIGHT_COLUMNS) & set(self.columns))
-        assert not stray, (
-            f"{self.name}: no sample declares weights, but columns defines {stray} — this "
-            f"cart looks half-converted, and it would build cleanly with every event at "
-            f"weight 1.0. Put the branch name in each sample's metadata as "
-            f"{{'weights': '<branch>'}} and drop {stray} from columns; a real-data sample "
-            f"says {{'weights': None}}.")
-
-    def weights_spec(self, sample: str):
-        """What fills this sample's weights column — a branch, a function, or None."""
-        return self.fileset[sample]["metadata"].get("weights")
-
-    def weighted(self, sample: str) -> bool:
-        """Whether this sample carries real weights, or is data counted one event at a time."""
-        return self.weights_spec(sample) is not None
-
-    def files(self) -> dict[str, dict[str, str]]:
-        """{sample: {path: tree}} — the fileset with the metadata stripped off."""
-        return {name: entry["files"] for name, entry in self.fileset.items()}
-
-    def hook_meta(self, sample: str, path: str = "", tree: str = "") -> dict:
-        """What a hook is handed: this sample's metadata, plus the file being read."""
+    def _meta(self, sample: str, path: str, tree: str) -> dict:
         return {**self.fileset[sample]["metadata"],
                 "sample": sample, "file": path, "tree": tree}
 
-    def count_files(self) -> int:
-        """Confirm every sample matches a file and every file holds its tree; count them."""
-        problems = []
-        for name, paths in self.files().items():
-            if not paths:
-                problems.append(f"{name}: matched no files")
-            for path, tree in paths.items():
-                if not is_remote(path) and not os.path.exists(path):
-                    problems.append(f"{name}: no such file {path}")
-                    continue
+    @staticmethod
+    def _evaluate(spec: str | Callable[..., Any], events: ak.Array,
+                  meta: dict, where: str) -> Any:
+        return events[spec] if isinstance(spec, str) else _invoke(spec, events, meta, where)
+
+    def skim(self, step_size: int | str = "100 MB") -> tuple[dict, dict]:
+        """Read files sequentially, apply hooks, and materialise validated NumPy columns."""
+        if not self._validated:
+            self.validate()
+        output: dict[str, dict[str, np.ndarray]] = {}
+        output_weights: dict[str, np.ndarray] = {}
+        for sample, entry in self.fileset.items():
+            chunks: dict[str, list[np.ndarray]] = {name: [] for name in self.columns}
+            weight_chunks: list[np.ndarray] = []
+            for path, tree_name in entry["files"].items():
+                metadata = self._meta(sample, path, tree_name)
                 try:
-                    rootfile = uproot.open(path)
-                except Exception as e:
-                    problems.append(f"{name}: could not open {path} — {e}")
-                    continue
-                if tree not in rootfile:
-                    problems.append(f"{name}: {os.path.basename(path)} has no tree {tree!r}")
-        assert not problems, ("bad fileset:\n  " + "\n  ".join(problems)
-                         + f"\n\nPaths are absolute and machine-specific. Edit "
-                           f"{self.source} to point at your own files.")
-        return sum(len(p) for p in self.files().values())
+                    source = uproot.open({path: tree_name})
+                except Exception as exc:
+                    raise CartError(f'cannot open {sample} file "{path}": {exc}') from exc
+                with source as tree:
+                    if isinstance(step_size, int):
+                        entries_per_chunk = step_size
+                    elif hasattr(tree, "num_entries_for"):
+                        entries_per_chunk = int(tree.num_entries_for(step_size))
+                    else:
+                        entries_per_chunk = 100_000
+                    entries_per_chunk = max(entries_per_chunk, 1)
+                    for start in range(0, int(tree.num_entries), entries_per_chunk):
+                        stop = min(start + entries_per_chunk, int(tree.num_entries))
+                        try:
+                            # Uproot 5.7 virtual arrays materialise only branches a hook
+                            # touches. This matters on thousand-branch NanoAOD files.
+                            events = tree.arrays(entry_start=start, entry_stop=stop,
+                                                 library="ak", virtual=True)
+                        except TypeError:
+                            # RNTuple implementations without virtual arrays still stay
+                            # bounded to one chunk; correctness is unchanged.
+                            events = tree.arrays(entry_start=start, entry_stop=stop, library="ak")
+                        prepared = (_invoke(self.prepare, events, metadata, "PREPARE")
+                                    if self.prepare is not None else events)
+                        try:
+                            prepared_rows = len(prepared)
+                        except TypeError as exc:
+                            raise CartError("PREPARE must return an event array") from exc
+                        mask = _one_dimensional(
+                            _invoke(self.keep, prepared, metadata, "KEEP"),
+                            f'{sample} KEEP for {Path(path).name}', boolean=True)
+                        if len(mask) != prepared_rows:
+                            raise CartError(f'{sample} KEEP returned {len(mask)} values for '
+                                            f'{prepared_rows} events')
+                        selected = prepared[mask]
+                        for name, spec in self.columns.items():
+                            value = self._evaluate(spec, selected, metadata, f'COLUMNS["{name}"]')
+                            column = _one_dimensional(value, f'{sample}.{name}')
+                            if len(column) != len(selected):
+                                raise CartError(f'{sample}.{name} returned {len(column)} values for '
+                                                f'{len(selected)} selected events')
+                            chunks[name].append(column)
+                        weight = entry["metadata"]["weights"]
+                        if weight is not None:
+                            values = _one_dimensional(
+                                self._evaluate(weight, selected, metadata, f'{sample} weights'),
+                                f'{sample}.weight').astype(np.float64, copy=False)
+                            if len(values) != len(selected):
+                                raise CartError(f'{sample}.weight length does not match its events')
+                            if not np.isfinite(values).all():
+                                raise CartError(f'{sample}.weight contains NaN or infinity')
+                            weight_chunks.append(values)
+            output[sample] = {
+                name: np.concatenate(values) if values else np.empty(0, dtype=np.float64)
+                for name, values in chunks.items()
+            }
+            if entry["metadata"]["weights"] is not None:
+                output_weights[sample] = (np.concatenate(weight_chunks) if weight_chunks
+                                          else np.empty(0, dtype=np.float64))
+        return output, output_weights
+
+    def _provenance(self, rows: Mapping[str, Mapping[str, np.ndarray]], built: str) -> dict:
+        if self.source is None:
+            config = None
+        else:
+            text = self.source.read_text(encoding="utf-8")
+            stat = self.source.stat()
+            config = {"path": str(self.source), "mtime": stat.st_mtime,
+                      "sha256": hashlib.sha256(text.encode()).hexdigest(), "source": text}
+        samples = []
+        for name, entry in self.fileset.items():
+            samples.append({
+                "name": name,
+                "rows": len(next(iter(rows[name].values()))),
+                "files": [{"path": path, "tree": tree}
+                          for path, tree in entry["files"].items()],
+                "metadata": {k: v for k, v in entry["metadata"].items() if k != "weights"},
+                "weights": _source(entry["metadata"]["weights"]),
+            })
+        return {
+            "by": f"RowVer {rvr6.VERSION}", "built": built, "skimmed": built,
+            "samples": samples,
+            "keep": _source(self.keep),
+            "prepare": _source(self.prepare),
+            "columns": {name: _source(value) for name, value in self.columns.items()},
+            "cart": config,
+        }
+
+    def build(self, destination: str | Path | None = None,
+              *, step_size: int | str = "100 MB") -> dict:
+        """Skim and atomically write ``<study>.rvr``.  This is the normal public API."""
+        if self.name is None or self.dir is None:
+            raise CartError("load the cart with Cart.load(<study>) before building it")
+        rows, weights = self.skim(step_size)
+        built = datetime.now(timezone.utc).isoformat()
+        about = {"name": self.name}
+        if self.title:
+            about["title"] = self.title
+        if self.note:
+            about["note"] = self.note
+        meta, buf = rvr6.pack(
+            rows,
+            weighted={name: self.fileset[name]["metadata"]["weights"] is not None
+                      for name in self.fileset},
+            weights=weights,
+            labels=self.labels,
+            about=about,
+            made=self._provenance(rows, built),
+        )
+        target = Path(destination) if destination else self.dir / f"{self.name}.rvr"
+        if target.suffix != ".rvr":
+            target = target / f"{self.name}.rvr"
+        return rvr6.write(target, meta, buf)
 
     def summary(self) -> str:
-        """The cartridge label: what is on this cart and what was done to it."""
-        lines = [f"cart {self.name}" + (f"  ({self.source})" if self.source else "")]
-        for name, entry in self.fileset.items():
-            trees = ",".join(sorted(set(entry["files"].values())))
-            spec = self.weights_spec(name)
-            lines.append(f"  {name:34s} {len(entry['files']):>3} files  {trees:14s} "
-                         f"weights={describe(spec) if spec is not None else 'NONE (data)'}")
-        lines.append(f"  {len(self.columns)} columns, keep: {describe(self.keep)}")
+        """Return a terse pre-build summary."""
+        name = self.name or "unbound study"
+        lines = [f"{name}: {len(self.fileset)} samples, {len(self.columns)} columns"]
+        for sample, entry in self.fileset.items():
+            mode = "data" if entry["metadata"].get("weights") is None else "weighted"
+            lines.append(f"  {sample}: {len(entry['files'])} file(s), {mode}")
         return "\n".join(lines)
-
-    def unweighted_samples(self) -> list[str]:
-        """Every sample carrying no weights — the ones the page counts one event at a time."""
-        return [s for s in self.fileset if not self.weighted(s)]
-
-    def mixed_warning(self) -> str:
-        """The line to print when a cart holds both weighted and unweighted samples."""
-        data, mc = self.unweighted_samples(), [s for s in self.fileset if self.weighted(s)]
-        if not (data and mc):
-            return ""
-        return (f"\n  NOTE: {len(data)} sample(s) declare no weights and are counted one "
-                f"event at a time,\n        never scaled by luminosity: "
-                f"{', '.join(data[:4])}{' ...' if len(data) > 4 else ''}\n"
-                f"        Group them apart from the {len(mc)} weighted sample(s), or the "
-                f"page will flag the mix.")
-
-    def skim(self, step: int = pikl.STEP, dest: str | Path | None = None,
-             jobs: int = 1, threads: int = 0) -> dict:
-        """Read every sample, keep what passes, and write the pikl of columns."""
-        return pikl.skim_all(self, self.name, step, dest or self.dir, jobs, threads)
-
-    def recipe(self) -> dict:
-        """How this cart makes columns: the selection, the columns, and the file saying so."""
-        return {"columns": {c: describe(spec) for c, spec in self.columns.items()},
-                "keep": describe(self.keep),
-                "prepare": describe(self.prepare) if self.prepare else None,
-                "config": self.config_stamp()}
-
-    def stamp(self, counts: dict[str, int] | None = None, skim: dict | None = None) -> dict:
-        """What goes in META['cart']: everything this file can still say about itself."""
-        counts, skim = counts or {}, skim or {}
-        samples = {}
-        # a subset build carries only the samples it wrote — the stamp describes THIS file
-        for name in (counts or self.fileset):
-            entry, spec = self.fileset[name], self.weights_spec(name)
-            samples[name] = {
-                "n": counts.get(name),
-                "weights": describe(spec) if spec is not None else None,
-                "files": entry["files"],
-                "metadata": {k: describe(v) if callable(v) else v
-                             for k, v in entry["metadata"].items()}}
-        # the recipe the SKIM ran: cart.py may have been edited since it produced these
-        return {"name": self.name,
-                "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "skimmed": skim.get("skimmed"),
-                "samples": samples,
-                **(skim.get("recipe") or self.recipe())}
-
-    def config_stamp(self) -> dict | None:
-        """The file that defined this cart: where it was, when, its hash, and its text."""
-        if not self.source or not Path(self.source).exists():
-            return None
-        text = Path(self.source).read_text()
-        return {"path": str(self.source),
-                "mtime": datetime.fromtimestamp(Path(self.source).stat().st_mtime,
-                                                timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "sha256": hashlib.sha256(text.encode()).hexdigest(),
-                "source": text}
-
-    def fileset_json(self) -> str:
-        """The fileset as JSON — for reading, for diffing, for handing to something else."""
-        return json.dumps(self.fileset, indent=2, default=describe)
-
-    def write(self, rows: dict, dest: str | Path | None = None, name: str = "",
-              skim: dict | None = None) -> dict:
-        """Burn the cart: the skimmed columns and everything known about them, as one .rvr.
-
-        The file opens with NOTHING set up — no tabs, no plots. A page configures itself and
-        saves; this repo writes the data and says where it came from."""
-        counts = {s: len(next(iter(c.values()))) for s, c in rows.items()}
-        # a SUBSET may hold none of the weighted samples, and then the file has no weights.
-        # The skim still produced the column, so DROP it rather than let it fall through as a
-        # plottable axis: it is ones by construction, it carries nothing, and a file whose
-        # column list differs from its weighted sibling's cannot be merged back with it.
-        column = self.weights_column if any(map(self.weighted, rows)) else None
-        if column is None and self.weights_column:
-            rows = {s: {c: v for c, v in cols.items() if c != self.weights_column}
-                    for s, cols in rows.items()}
-        data, buf, cats = rvr6.pack(rows, self.weighted, self.labels, column)
-        stamp = self.stamp(counts, skim)
-        where = Path(dest) if dest else self.dir
-        where.mkdir(parents=True, exist_ok=True)
-        out = where / f"{name or self.name}.rvr"
-        meta = {"rowver": rvr6.ROWVER,
-                "about": {"name": name or self.name, "title": name or self.name,
-                          "viewer": rvr6.VIEWER},
-                "data": data,
-                "view": {"cats": cats} if cats else {},
-                "tabs": [], "opens_on": 0,
-                "made": {"by": rvr6.VERSION, "built": stamp["built"],
-                         "skimmed": stamp.get("skimmed"),
-                         "keep": stamp.get("keep"), "prepare": stamp.get("prepare"),
-                         "columns": stamp.get("columns"), "samples": stamp.get("samples"),
-                         "cart": stamp.get("config")}}
-        return rvr6.write(out, meta, buf)
-
-    @classmethod
-    def load(cls, name: str) -> "Cart":
-        """Read studies/<name>/cart.py and hand back the CART it defines."""
-        path = STUDIES / name / "cart.py"
-        assert path.exists(), f"no cart at {path} — have: {study_names()}"
-        mod = import_file(path, f"studies.{name}.cart")
-        for retired in ("HAS_WEIGHTS", "WEIGHTS_BRANCH"):
-            assert not hasattr(mod, retired), (
-                f"{path} still defines {retired}, which nothing reads any more. Weights "
-                f"are per sample: put the branch name in each sample's metadata as "
-                f"{{'weights': '<branch>'}}, and {{'weights': None}} for real data. Left "
-                f"as it is, every sample here would be built at weight 1.0.")
-        assert hasattr(mod, "CART"), (
-            f"{path} defines no CART. A study ends with one:\n\n"
-            f"    CART = Cart(name='{name}', fileset=FILESET, columns=COLUMNS, keep=KEEP)\n")
-        return mod.CART
-
-    @classmethod
-    def open(cls, path: str | Path) -> "Cart":
-        """Read a built .rvr back: what is on it, where it came from, and its columns."""
-        header, _ = rvr6.read(path)
-        stamp = header.get("made") or {}
-        cart = cls.__new__(cls)
-        cart.name = (header.get("about") or {}).get("name") or Path(path).stem
-        # the stamp keeps weights in their own field; put them where weights_spec reads
-        cart.fileset = {n: {"files": s.get("files") or {},
-                            "metadata": {**(s.get("metadata") or {}),
-                                         "weights": s.get("weights")}}
-                        for n, s in (stamp.get("samples") or {}).items()}
-        cart.columns = stamp.get("columns") or {c["name"]: "?" for c in header["data"]["cols"]}
-        cart.keep = stamp.get("keep") or ""
-        cart.prepare = stamp.get("prepare")
-        cart.labels = recover_labels(header)
-        cart.weights_column = header["data"].get("weight_col") or None
-        cart.source = (stamp.get("cart") or {}).get("path")
-        cart.dir, cart.header = None, header
-        return cart
-
-    @classmethod
-    def merge(cls, paths: list, name: str = "merged",
-              dest: str | Path | None = None) -> dict:
-        """Put the samples of several .rvr files on one cart, re-skimming none of them."""
-        assert len(paths) >= 2, "merge needs at least two files"
-        loaded = [(str(path), *rvr6.read_by_sample(path)) for path in paths]
-        first_path, first, _ = loaded[0]
-
-        for path, header, _ in loaded[1:]:
-            assert column_shape(header) == column_shape(first), (
-                f"{path} and {first_path} do not hold the same columns:\n"
-                f"  {column_shape(first)}\n  {column_shape(header)}\n"
-                f"These are different measurements; merging them would make a file whose "
-                f"columns mean different things for different samples.")
-            # names agreeing is not enough: two files can both call a column PT_lead and
-            # have built it from different branches, and the stamp is what can tell
-            for what in ("keep", "prepare", "columns"):
-                said = [(h.get("cart") or {}).get(what) for h in (first, header)]
-                assert said[0] == said[1], (
-                    f"{path} disagrees with {first_path} about {what}:\n"
-                    f"  {said[0]!r}\n  {said[1]!r}\n"
-                    f"Merging them would put differently-made numbers in one column.")
-
-        # one weights column across the merged file: whoever declares one must agree, and
-        # a file declaring none contributes ones — which is exactly what its samples are
-        declared = {h["data"]["weight_col"] for _, h, _ in loaded
-                    if h["data"].get("weight_col")}
-        assert len(declared) <= 1, f"the files disagree on the weights column: {sorted(declared)}"
-        weights = declared.pop() if declared else None
-
-        columns_by_sample, stamp_samples, merged_from, was = {}, {}, [], {}
-        for path, header, samples in loaded:
-            source_stamp = header.get("made") or {}
-            for sample, columns in samples.items():
-                assert sample not in columns_by_sample, (
-                    f"both {path} and an earlier file hold a sample called {sample!r}. "
-                    f"Rename one — a merged file cannot have two samples with one name.")
-                if weights and weights not in columns:
-                    columns = {weights: np.ones(len(next(iter(columns.values()))), np.float64),
-                               **columns}
-                columns_by_sample[sample] = columns
-                # a source with no stamp still DECLARES whether it carries weights; an
-                # empty entry would read as "no weights", i.e. data, and the page would
-                # stop scaling genuinely weighted MC by luminosity
-                stamp_samples[sample] = (source_stamp.get("samples") or {}).get(sample) or {
-                    "n": int(len(next(iter(columns.values())))),
-                    "weights": header["data"]["weight_col"] or None,
-                    "files": {}, "metadata": {}}
-                # `weighted` is DECLARED per sample in 6 and must survive the merge: a data
-                # sample gaining a column of ones must not start reading as weighted MC
-                was[sample] = next(x["weighted"] for x in header["data"]["samples"]
-                                   if x["name"] == sample)
-            merged_from.append({"file": Path(path).name,
-                                "name": source_stamp.get("name"),
-                                "built": source_stamp.get("built"),
-                                "config": (source_stamp.get("config") or {}).get("sha256")})
-
-        labels = recover_labels(first)
-        first_stamp = first.get("made") or {}
-        stamp = {"built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                 "samples": stamp_samples,
-                 "columns": first_stamp.get("columns") or {},
-                 "keep": first_stamp.get("keep", ""),
-                 "prepare": first_stamp.get("prepare"),
-                 "cart": first_stamp.get("cart"),
-                 "merged": merged_from}
-        data, buf, cats = rvr6.pack(columns_by_sample, lambda n: was[n], labels, weights)
-        # the first file's page-global view carries over: its cuts are name-keyed and the
-        # column list is identical, or this would have refused above
-        view = dict(first.get("view") or {})
-        if cats:
-            view["cats"] = cats
-        meta = {"rowver": rvr6.ROWVER,
-                "about": {"name": name, "title": name, "viewer": rvr6.VIEWER},
-                "data": data, "view": view,
-                "tabs": first.get("tabs") or [], "opens_on": first.get("opens_on", 0),
-                "made": {"by": rvr6.VERSION, **stamp}}
-        out = (Path(dest) if dest else Path.cwd()) / f"{name}.rvr"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        return rvr6.write(out, meta, buf)
-
-USAGE = """usage:
-    python cart.py <study>                    the cartridge label of a study
-    python cart.py <file>.rvr                 what a BUILT file holds
-    python cart.py <study | file>.rvr --json  its whole fileset, as JSON
-    python cart.py merge a.rvr b.rvr [...]    one file holding all their samples
-"""
-
-if __name__ == "__main__":
-    import sys
-    args = [a for a in sys.argv[1:] if not a.startswith("-")]
-    if not args:
-        sys.exit(USAGE + f"\nstudies: {', '.join(study_names()) or 'none'}")
-    if args[0] == "merge":
-        out = Cart.merge(args[1:], name="merged", dest=Path(args[1]).parent)
-        print(f"{out['file']}  —  {out['events']:,} events, {out['mb']:.1f} MB")
-    else:
-        opened = Cart.open(args[0]) if args[0].endswith(".rvr") else Cart.load(args[0])
-        print(opened.fileset_json() if "--json" in sys.argv else opened.summary())

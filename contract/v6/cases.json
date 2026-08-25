@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "buffer_b64": "AAAAAAAA4D8AAAAAAAAAQAAAAAAAAPA/AAAAAAAA8D8AAAAAAAAlQAAAAAAAADRAAAAAAAAAPkAAAAAAAABEQAAAAAABAAAAAgAAAAMAAAAAAAAAAAAAAAEAAAABAAAA",
+  "buffer_sha256": "cc354b0a4695692a6f7032c2882f3709a16f51c448c916a3261c6a3673f7049c",
+  "base": {
+    "rowver": 6,
+    "about": {"name": "contract", "zz_about": true},
+    "data": {
+      "rows": 4,
+      "bytes": 96,
+      "weight_col": "weight",
+      "weight_at": 0,
+      "sample_at": 80,
+      "samples": [
+        {"name": "mc", "rows": 2, "weighted": true},
+        {"name": "data", "rows": 2, "weighted": false}
+      ],
+      "cols": [
+        {"name": "pt", "kind": "f8", "at": 32, "lim": [10.5, 40.0], "nice": [10.0, 40.0], "p95": 38.5, "p99": 39.7},
+        {"name": "njet", "kind": "i4", "at": 64, "lim": [0, 3], "nice": [0, 3], "p95": 2.85, "p99": 2.97, "vals": [0, 1, 2, 3]}
+      ]
+    },
+    "view": {},
+    "tabs": [],
+    "opens_on": 0,
+    "made": {
+      "by": "RowVer 6.0.0",
+      "built": "2026-08-24T00:00:00+00:00",
+      "skimmed": "2026-08-24T00:00:00+00:00",
+      "samples": [
+        {"name": "mc", "rows": 2, "files": [{"path": "mc.root", "tree": "Events"}], "metadata": {}, "weights": {"kind": "branch", "value": "genWeight"}},
+        {"name": "data", "rows": 2, "files": [{"path": "data.root", "tree": "Events"}], "metadata": {}, "weights": null}
+      ],
+      "keep": {"kind": "python", "name": "keep", "doc": "baseline", "source": "def keep(events):\n    return events.pt > 0"},
+      "prepare": null,
+      "columns": {
+        "pt": {"kind": "branch", "value": "pt"},
+        "njet": {"kind": "branch", "value": "njet"}
+      },
+      "cart": {"path": "studies/contract/cart.py", "mtime": 0, "sha256": "probe", "source": "CART = ..."},
+      "zz_made": true
+    },
+    "zz_root": true
+  },
+  "cases": [
+    {"id": "valid.bare", "accept": true, "ops": []},
+    {"id": "valid.empty_group", "accept": true, "ops": [
+      {"op": "set", "path": ["view"], "value": {
+        "groups": {"of": {}, "sub": {}, "order": ["future"]},
+        "lumis": {"group": {"future": 100}},
+        "look": {"group": {"future": {"colour": "#123456", "draw": "bars"}}},
+        "stage": [{"kind": "map", "srcs": ["future"], "bkg": ["future"]}]
+      }}
+    ]},
+    {"id": "valid.full_hostile", "accept": true, "ops": [
+      {"op": "set", "path": ["view"], "value": {
+        "groups": {"of": {"mc": "__proto__"}, "sub": {"mc": "constructor"}, "order": ["__proto__"]},
+        "lumis": {"sample": {}, "sub": {}, "group": {"__proto__": 100}},
+        "look": {"sample": {"data": {"colour": "#111111", "draw": "points"}}, "sub": {}, "group": {"__proto__": {"colour": "#3366CC", "draw": "bars"}}},
+        "shown": null,
+        "zz_view": true
+      }},
+      {"op": "set", "path": ["tabs"], "value": [{
+        "name": "constructor",
+        "cuts": {"pt": [10.5, null], "njet": {"in": [0, 1, 2, 3]}},
+        "stage": [
+          {"kind": "1d", "varx": "pt", "zz_leaf": true},
+          {"kind": "3d", "varx": "pt", "vary": "njet"},
+          {"kind": "block", "layout": [3, 3, 6], "zz_block": true, "cells": [
+            {"kind": "2d", "varx": "pt", "vary": "njet"},
+            {"kind": "board", "rows": 1, "cols": 2, "cells": ["__proto__", "data"], "bkgs": ["data"], "channel": "metrics", "err": "sumw2", "met": ["sob", "sig"], "zz_board": true},
+            {"kind": "map", "srcs": ["__proto__", "data"], "sig": "__proto__", "bkg": ["data"], "root": {"cut": {"col": "pt", "lt": 25}, "yes": null, "no": null}, "zz_map": true}
+          ]}
+        ],
+        "zz_tab": true
+      }]}
+    ]},
+    {"id": "invalid.kind", "accept": false, "ops": [{"op": "set", "path": ["data", "cols", 0, "kind"], "value": "wat"}]},
+    {"id": "invalid.weight_at_missing", "accept": false, "ops": [{"op": "delete", "path": ["data", "weight_at"]}]},
+    {"id": "invalid.sample_count", "accept": false, "ops": [{"op": "set", "path": ["data", "samples", 0, "rows"], "value": 1}]},
+    {"id": "invalid.stats_reversed", "accept": false, "ops": [{"op": "set", "path": ["data", "cols", 0, "lim"], "value": [40, 10]}]},
+    {"id": "invalid.stats_payload", "accept": false, "ops": [{"op": "set", "path": ["data", "cols", 0, "lim"], "value": [10, 40]}]},
+    {"id": "invalid.vals_payload", "accept": false, "ops": [{"op": "set", "path": ["data", "cols", 1, "vals"], "value": [0, 1]}]},
+    {"id": "invalid.cut_kind_range", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "cuts": {"njet": [1, 1]}}]}]},
+    {"id": "invalid.cut_kind_members", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "cuts": {"pt": {"in": [20]}}}]}]},
+    {"id": "invalid.cut_unknown_value", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "cuts": {"njet": {"in": [8]}}}]}]},
+    {"id": "invalid.lumi_zero", "accept": false, "ops": [{"op": "set", "path": ["view"], "value": {"lumis": {"sample": {"mc": 0}, "sub": {}, "group": {}}}}]},
+    {"id": "invalid.source_name_collision", "accept": false, "ops": [{"op": "set", "path": ["view"], "value": {"groups": {"of": {"mc": "data"}, "sub": {}, "order": ["data"]}}}]},
+    {"id": "invalid.group_order_type", "accept": false, "ops": [{"op": "set", "path": ["view"], "value": {"groups": {"of": {}, "sub": {}, "order": [{}]}}}]},
+    {"id": "invalid.unsupported_lumi", "accept": false, "ops": [{"op": "set", "path": ["view"], "value": {"lumi": null}}]},
+    {"id": "invalid.plot_column", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "1d", "varx": "missing"}]}]}]},
+    {"id": "invalid.map_null_sources", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "srcs": null}]}]}]},
+    {"id": "invalid.map_null_backgrounds", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "bkg": null}]}]}]},
+    {"id": "invalid.map_null_signal", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "sig": null}]}]}]},
+    {"id": "invalid.map_source_type", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "srcs": [{}]}]}]}]},
+    {"id": "invalid.board_cell_type", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "board", "cells": [{}]}]}]}]},
+    {"id": "invalid.map_grid_type", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "grid": {"vars": {}}}]}]}]},
+    {"id": "invalid.map_grid_overlap", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "grid": {"vars": [{"col": "njet", "bands": [[0, 1], [1, 2]]}]}}]}]}]},
+    {"id": "invalid.map_grid_repeat", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "grid": {"vars": [{"col": "pt", "bands": [20]}, {"col": "pt", "bands": [30]}]}}]}]}]},
+    {"id": "invalid.map_category", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "root": {"cut": {"col": "njet", "in": [8]}, "yes": null, "no": null}}]}]}]},
+    {"id": "invalid.nested_block", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "block", "layout": [6], "cells": [{"kind": "block", "layout": [6], "cells": [{"kind": "1d", "varx": "pt"}]}]}]}]}]},
+    {"id": "invalid.duplicate_board", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "board"}, {"kind": "board"}]}]}]},
+    {"id": "invalid.opens_on", "accept": false, "ops": [{"op": "set", "path": ["opens_on"], "value": 2}]}
+  ]
+}

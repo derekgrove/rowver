@@ -1,0 +1,7 @@
+image: python:3.13-slim
+
+test:
+  before_script:
+    - pip install --disable-pip-version-check numpy==2.4.* awkward==2.11.* uproot==5.7.* aiohttp==3.13.*
+  script:
+    - python gate.py
