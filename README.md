@@ -51,6 +51,14 @@ python rvr6.py show /path/to/result.rvr
 python gate.py
 ```
 
+## Programmatic use
+
+`cart.py` is the front door, but a script can also write a cartridge directly:
+`meta, buf = rvr6.pack(by_sample, weighted=..., weights=...)` then
+`rvr6.write(path, meta, buf)`. Both `write` and `read` run `rvr6.check` internally, so an
+invalid file can be neither produced nor opened. `contract/v6/cases.json` holds the worked
+example of a valid header.
+
 The browser builder is experimental. After building the frontend's `viewer.html`, start its
 authenticated local helper with
 `python builder.py --root data=/path/to/ntuples --ui ../rowver_dmg/viewer.html`. The printed

@@ -9,13 +9,15 @@ gzip(u32 little-endian header length | UTF-8 JSON header | column buffer)
 All buffer values are little-endian. Columns are contiguous `f8` or `i4` arrays followed
 by one `i4` sample index per row; a mixed data/MC file also has one `f8` weight array.
 
-The header has `rowver: 6` and five drawers:
+The header has `rowver: 6`, an optional top-level `opens_on` tab index (when `tabs` is
+empty, a present `opens_on` must be the blank-page sentinel `0`), and five drawers. Every
+drawer key must be present; `view` (`{}`), `tabs` (`[]`), and `made` (`{}`) may be empty:
 
 - `about`: study name and human-facing description.
 - `data`: immutable offsets, types, sample counts, and weight policy.
 - `view`: settings shared by all tabs.
-- `tabs`: ordered page setups. `opens_on: 0` is the blank-page sentinel when this is empty.
-- `made`: optional provenance; removing it never changes a plotted number.
+- `tabs`: ordered page setups.
+- `made`: provenance; emptying it never changes a plotted number.
 
 Continuous columns use inclusive `[low, high]` cuts (`null` opens one end); categorical
 columns use `{ "in": [...] }` with declared values. Luminosity is a positive finite number

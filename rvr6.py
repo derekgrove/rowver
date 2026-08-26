@@ -888,7 +888,10 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", choices=("check", "show"))
     parser.add_argument("file", type=Path)
     args = parser.parse_args(argv)
-    meta, _ = read(args.file)
+    try:
+        meta, _ = read(args.file)
+    except (FormatError, OSError) as err:
+        parser.exit(1, f"{args.file}: {err}\n")
     if args.command == "show":
         print(json.dumps(meta, indent=2, ensure_ascii=False))
     else:
