@@ -61,7 +61,7 @@ example of a valid header.
 
 The browser builder is experimental. After building the frontend's `viewer.html`, start its
 authenticated local helper with
-`python builder.py --root data=/path/to/ntuples --ui ../rowver_dmg/viewer.html`. The printed
+`python builder.py --root data=/path/to/ntuples --ui ../rowver_web/viewer.html`. The printed
 URL contains the pairing token. Arbitrary Python expressions remain a `cart.py` feature and
 are never evaluated by the helper.
 
