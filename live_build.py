@@ -20,6 +20,7 @@ import argparse
 import shutil
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 import awkward as ak
@@ -47,9 +48,23 @@ def bar(done: int, total: int, width: int) -> str:
 
 
 def short(n: int) -> str:
-    if n >= 1_000_000: return f"{n / 1e6:.2f}M"
-    if n >= 1_000: return f"{n / 1e3:.0f}k"
+    """At most six characters at any magnitude, so no row can outgrow its budget."""
+    for div, unit in ((1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3, "k")):
+        if n >= div:
+            v = n / div
+            return f"{v:.2f}{unit}" if v < 100 else f"{v:.0f}{unit}"
     return str(n)
+
+
+def clip(name: str, width: int) -> str:
+    """Clip and pad by DISPLAY CELLS: east-asian wide glyphs occupy two columns."""
+    out, used = "", 0
+    for ch in name:
+        w = 2 if unicodedata.east_asian_width(ch) in "WF" else 1
+        if used + w > width:
+            break
+        out, used = out + ch, used + w
+    return out + " " * (width - used)
 
 
 def pct_of(done: int, total: int) -> str:
@@ -123,25 +138,29 @@ class Dashboard:
         rate = scanned / elapsed if elapsed > 0 else 0.0
         eta = (total - scanned) / rate if rate > 0 else 0.0
         # The frame must fit the physical terminal BOTH ways: a wrapped line or a frame
-        # taller than the screen breaks the cursor-up redraw. When the full board cannot
-        # fit, fall back to a three-line aggregate. (Known preview limit: widths are
-        # counted in characters, so double-cell CJK names can still wrap a row.)
+        # taller than the screen breaks the cursor-up redraw. Names are measured in
+        # display cells (CJK glyphs take two), counts are width-capped, and an EXACT
+        # vertical fit still scrolls one row off via the trailing newline — so the
+        # three-line fallback triggers at equality too.
         size = shutil.get_terminal_size((120, 40))
         cols, screen_rows = (size.columns, size.lines) if TTY else (120, 10 ** 9)
-        if TTY and (cols < 72 or len(self.order) + 5 > screen_rows):
+        if TTY and (cols < 72 or len(self.order) + 5 >= screen_rows):
             width = max(cols - 1, 20)
             here = self.current or "—"
             n, t = self.scanned.get(here, 0), self.total.get(here, 0)
             body = [f"┌{'─' * (width - 2)}┐",
                     f"│ {short(scanned)}/{short(total)} {pct_of(scanned, total)}"
                     f"  kept {short(kept)}  eta {clock(eta)}",
-                    f"│ now {here:.30s} {short(n)}/{short(t)}",
+                    f"│ now {clip(here, 30)} {short(n)}/{short(t)}",
                     f"└{'─' * (width - 2)}┘"]
             out.extend(paint(line[:width], DIM) for line in body)
             self._flush(out, final)
             return
-        wide = cols >= 100
-        rule = "─" * (78 if wide else 66)
+        # exact counts take whatever the biggest number needs; wide only when the whole
+        # row provably fits (52 fixed cells + three count fields)
+        wnum = len(f"{max([*self.total.values(), *self.scanned.values(), 1]):,}")
+        wide = cols >= max(100, 53 + 3 * wnum)
+        rule = "─" * ((50 + 3 * wnum) if wide else 66)
         out.append(paint(f"┌{rule}┐", DIM))
         for name in self.order:
             tag, colour = self.kind[name]
@@ -150,11 +169,11 @@ class Dashboard:
             gauge = paint(bar(n, t, gauge_w), OK_C if t and n >= t else colour)
             if wide:
                 eff = f"{100 * k / n:5.1f}%" if n else "     ·"
-                out.append(f"{paint('│', DIM)} {name:<22.22s} {paint(tag, colour)} "
-                           f"{gauge} {n:>10,}/{t:<10,} kept {k:>9,} {eff}")
+                out.append(f"{paint('│', DIM)} {clip(name, 22)} {paint(tag, colour)} "
+                           f"{gauge} {n:>{wnum},}/{t:<{wnum},} kept {k:>{wnum},} {eff}")
             else:
                 eff = f"{100 * k / n:4.0f}%" if n else "   ·"
-                out.append(f"{paint('│', DIM)} {name:<17.17s} {paint(tag, colour)} "
+                out.append(f"{paint('│', DIM)} {clip(name, 17)} {paint(tag, colour)} "
                            f"{gauge} {short(n):>6}/{short(t):<6} kept {short(k):>6} {eff}")
         out.append(paint(f"├{rule}┤", DIM))
         pct = f"{100 * scanned / total:5.1f}%" if total else "     ·"
