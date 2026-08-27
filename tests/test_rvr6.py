@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import gzip
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -115,6 +117,44 @@ class Rvr6Tests(unittest.TestCase):
         meta["zz"] = cycle
         with self.assertRaises(rvr6.FormatError):
             rvr6.frame(meta, self.buf)
+
+    def test_wire_numbers_read_identically_everywhere(self):
+        # 1e400 is inf to Python and null to a JavaScript save; 2**53 + 1 silently
+        # rounds in a JavaScript reader — neither may enter or leave a cartridge
+        for hdr in (b'{"rowver": 6, "zz": 1e400}',
+                    b'{"rowver": 6, "zz": 9007199254740993}'):
+            with self.assertRaises(rvr6.FormatError):
+                rvr6.unframe(len(hdr).to_bytes(4, "little") + hdr)
+        meta = copy.deepcopy(self.meta)
+        meta["zz"] = 2 ** 53 + 1
+        with self.assertRaises(rvr6.FormatError):
+            rvr6.frame(meta, self.buf)
+
+    def test_bool_is_not_a_row_count(self):
+        meta = copy.deepcopy(self.meta)
+        meta["made"]["samples"] = [
+            {"name": "mc", "rows": True, "files": [], "weights": None},
+            {"name": "data", "rows": 2, "files": [], "weights": None}]
+        with self.assertRaises(rvr6.FormatError):
+            rvr6.check(meta, self.buf)
+
+    def test_subnormal_columns_pack(self):
+        meta, buf = rvr6.pack({"data": {"x": np.array([5e-324])}},
+                              weighted={"data": False})
+        rvr6.check(meta, buf)
+
+    def test_cli_survives_hostile_names(self):
+        # a lone surrogate is unprintable UTF-8 and an escape sequence repaints the
+        # terminal; a validly framed file can carry both as ASCII escapes, and the CLI
+        # must neither crash nor let the name touch the terminal state
+        meta = copy.deepcopy(self.meta)
+        meta["about"]["name"] = "\ud800\x1b[2Jname"
+        header = json.dumps(meta, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+        raw = len(header).to_bytes(4, "little") + header + self.buf
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "study.rvr"
+            path.write_bytes(gzip.compress(raw, mtime=0))
+            self.assertEqual(rvr6._main(["check", str(path)]), 0)
 
     def test_refuses_structural_and_numeric_lies(self):
         mutations = []

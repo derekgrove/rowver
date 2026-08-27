@@ -26,6 +26,7 @@ import json
 import math
 import os
 import re
+import sys
 import tempfile
 import zlib
 from copy import deepcopy
@@ -134,6 +135,7 @@ def _made(made: dict, samples: list[dict], columns: list[dict]) -> None:
                 _fail(f"made.samples[{i}] must be an object")
             name = record.get("name")
             if (not isinstance(name, str) or name not in expected or name in seen
+                    or isinstance(record.get("rows"), bool)
                     or record.get("rows") != expected.get(name)):
                 _fail("made.samples names and row counts must match data.samples")
             seen.add(name)
@@ -155,40 +157,65 @@ def _made(made: dict, samples: list[dict], columns: list[dict]) -> None:
                 _fail(f"made.cart.{key} must be text")
 
 
-def _string_keyed(value: Any) -> bool:
-    # Iterative and cycle-tolerant: a circular reference passes through here so that
-    # json.dumps can refuse it with the circular-reference error frame() already catches.
+def _wire_clean(value: Any) -> str | None:
+    """None when the header holds only values both readers see identically; else why not.
+
+    Iterative and cycle-tolerant: a circular reference passes through here so that
+    json.dumps can refuse it with the circular-reference error frame() already catches.
+    """
     seen: set[int] = set()
     stack = [value]
     while stack:
         item = stack.pop()
-        if id(item) in seen:
-            continue
         if isinstance(item, dict):
+            if id(item) in seen:
+                continue
             seen.add(id(item))
             for key, inner in item.items():
                 if not isinstance(key, str):
-                    return False
+                    return "header mapping keys must be strings"
                 stack.append(inner)
         elif isinstance(item, (list, tuple)):
+            if id(item) in seen:
+                continue
             seen.add(id(item))
             stack.extend(item)
-    return True
+        elif isinstance(item, bool):
+            continue
+        elif isinstance(item, int) and abs(item) > 2 ** 53:
+            return "header integers must fit exactly in float64 (absolute value <= 2**53)"
+    return None
 
 
 def frame(meta: dict, buf: bytes) -> bytes:
     """Return the uncompressed v6 frame."""
-    if not _string_keyed(meta):
-        # json.dumps would coerce a non-string key and can silently collide it with a
-        # real one, losing metadata on a file that then reads back "successfully".
-        _fail("header mapping keys must be strings")
+    # json.dumps would coerce a non-string key and can silently collide it with a real
+    # one, and a JavaScript reader silently rounds an integer beyond 2**53 — both would
+    # lose metadata on a file that then reads back "successfully".
+    problem = _wire_clean(meta)
+    if problem:
+        _fail(problem)
     try:
         header = json.dumps(meta, allow_nan=False, separators=(",", ":")).encode("utf-8")
-    except (TypeError, ValueError, RecursionError) as exc:
+    except (TypeError, ValueError, RecursionError, UnicodeEncodeError) as exc:
         raise FormatError(f"header is not finite JSON: {exc}") from exc
     if not header or len(header) > MAX_HEADER_BYTES:
         _fail(f"header exceeds the {MAX_HEADER_BYTES}-byte limit")
     return len(header).to_bytes(4, "little") + header + bytes(buf)
+
+
+def _wire_float(text: str) -> float:
+    out = float(text)
+    if not math.isfinite(out):  # 1e400 parses as inf in Python and as null in a save
+        raise ValueError("number overflows float64")
+    return out
+
+
+def _wire_int(text: str) -> int:
+    out = int(text)
+    if abs(out) > 2 ** 53:  # a JavaScript reader would silently round it
+        raise ValueError("integer exceeds the float64-exact range")
+    return out
 
 
 def unframe(raw: bytes) -> tuple[dict, bytes]:
@@ -204,6 +231,7 @@ def unframe(raw: bytes) -> tuple[dict, bytes]:
         meta = json.loads(
             raw[4:4 + size].decode("utf-8"),
             parse_constant=lambda value: _fail(f"header contains {value}"),
+            parse_float=_wire_float, parse_int=_wire_int,
         )
     except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         # ValueError covers JSONDecodeError and the digit-limit guard a hostile header
@@ -708,6 +736,8 @@ def _bump(value: float, up: bool) -> float:
     if value == 0:
         return 0.0
     scale = 10 ** (math.floor(math.log10(abs(value))) - 1)
+    if scale == 0:  # a subnormal input underflows the scale; the value is its own bound
+        return value
     return (math.ceil(value / scale) if up else math.floor(value / scale)) * scale
 
 
@@ -928,12 +958,17 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", choices=("check", "show"))
     parser.add_argument("file", type=Path)
     args = parser.parse_args(argv)
+    # A hostile name may hold a lone surrogate (unprintable as UTF-8) or terminal
+    # control sequences; neither may crash or repaint the terminal.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     try:
         meta, _ = read(args.file)
         if args.command == "show":
             print(json.dumps(meta, indent=2, ensure_ascii=False))
         else:
-            print(f"ok: {meta['about']['name']} — {meta['data']['rows']:,} rows")
+            name = re.sub(r"[\x00-\x1f\x7f]", "�", meta["about"]["name"])
+            print(f"ok: {name} — {meta['data']['rows']:,} rows")
     except (FormatError, OSError, RecursionError) as err:
         parser.exit(1, f"{args.file}: {err or 'nesting exceeds the display depth'}\n")
     return 0
