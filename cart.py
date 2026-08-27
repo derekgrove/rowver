@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import glob
 import hashlib
+import re
 import importlib.util
 import inspect
 import json
@@ -62,6 +63,20 @@ def _call_shape(function: Callable[..., Any], where: str) -> int:
     if variadic or not 1 <= len(positional) <= 2 or len(required) > 2:
         raise CartError(f"{where} must accept events, or events and metadata")
     return len(positional)
+
+
+REMOTE = ("root://", "http://", "https://")
+
+
+def _byte_count(text: str) -> int:
+    """'100 MB' -> 100_000_000. Matches the grammar uproot step-size strings use,
+    scientific notation included."""
+    scale = {"b": 1, "kb": 10**3, "mb": 10**6, "gb": 10**9, "tb": 10**12,
+             "kib": 2**10, "mib": 2**20, "gib": 2**30, "tib": 2**40}
+    match = re.fullmatch(r"\s*([0-9.]+(?:[eE][+-]?[0-9]+)?)\s*([A-Za-z]+)\s*", text)
+    if not match or match.group(2).lower() not in scale:
+        raise CartError(f'cannot read step size "{text}"')
+    return int(float(match.group(1)) * scale[match.group(2).lower()])
 
 
 def _invoke(function: Callable[..., Any], events: ak.Array, meta: dict, where: str) -> Any:
@@ -266,13 +281,24 @@ class Cart:
             weight_chunks: list[np.ndarray] = []
             for path, tree_name in entry["files"].items():
                 metadata = self._meta(sample, path, tree_name)
+                opts = ({"handler": uproot.source.xrootd.XRootDSource}
+                        if path.startswith("root://") else {})
                 try:
-                    source = uproot.open({path: tree_name})
+                    source = uproot.open({path: tree_name}, **opts)
                 except Exception as exc:
                     raise CartError(f'cannot open {sample} file "{path}": {exc}') from exc
                 with source as tree:
                     if isinstance(step_size, int):
                         entries_per_chunk = step_size
+                    elif path.startswith(REMOTE):
+                        # num_entries_for reads every basket header of every branch —
+                        # thousands of round trips on a remote file (measured: minutes
+                        # against EOS). One byte ratio gives the same order of
+                        # magnitude for the cost of a single stat.
+                        per_entry = (tree.file.source.num_bytes
+                                     / max(int(tree.num_entries), 1))
+                        entries_per_chunk = int(_byte_count(step_size)
+                                                / max(per_entry, 1e-9))
                     elif hasattr(tree, "num_entries_for"):
                         entries_per_chunk = int(tree.num_entries_for(step_size))
                     else:
