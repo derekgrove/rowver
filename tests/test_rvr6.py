@@ -76,11 +76,43 @@ class Rvr6Tests(unittest.TestCase):
         meta["view"]["look"] = {"sample": {"data": {"draw": {}}}}
         with self.assertRaises(rvr6.FormatError):
             rvr6.check(meta, self.buf)
+        # unhashable values in the map grammar and in provenance names
+        for stage in ([{"kind": "map", "srcs": ["mc"], "bkg": ["mc"],
+                        "grid": {"vars": [{"col": {}, "bands": []}]}}],
+                      [{"kind": "map", "srcs": ["mc"], "bkg": ["mc"],
+                        "root": {"cut": {"col": {}, "lt": 1}, "yes": None, "no": None}}]):
+            meta = copy.deepcopy(self.meta)
+            meta["tabs"] = [{"name": "t", "stage": stage}]
+            with self.assertRaises(rvr6.FormatError):
+                rvr6.check(meta, self.buf)
+        meta = copy.deepcopy(self.meta)
+        meta["made"]["samples"] = [{"name": {}, "rows": 2, "files": [], "weights": None},
+                                   {"name": "data", "rows": 2, "files": [], "weights": None}]
+        with self.assertRaises(rvr6.FormatError):
+            rvr6.check(meta, self.buf)
+        # an integer below the digit-parse limit but far above float64 range
+        meta = copy.deepcopy(self.meta)
+        meta["data"]["cols"][0]["p95"] = 10 ** 400
+        with self.assertRaises(rvr6.FormatError):
+            rvr6.check(meta, self.buf)
+        # pathological nesting inside the byte limit (Python 3.13 parses a few thousand
+        # levels fine; fifty thousand exhausts the decoder's recursion budget)
+        deep = b"[" * 50_000 + b"]" * 50_000
+        hdr = b'{"rowver": 6, "zz": ' + deep + b"}"
+        with self.assertRaises(rvr6.FormatError):
+            rvr6.unframe(len(hdr).to_bytes(4, "little") + hdr)
 
     def test_frame_refuses_non_string_mapping_keys(self):
         # json.dumps would coerce 1 to "1" and silently collide with the real "1"
         meta = copy.deepcopy(self.meta)
         meta["zz"] = {1: "integer-key", "1": "string-key"}
+        with self.assertRaises(rvr6.FormatError):
+            rvr6.frame(meta, self.buf)
+        # a circular reference is left for json.dumps to refuse, not a stack overflow
+        meta = copy.deepcopy(self.meta)
+        cycle: dict = {}
+        cycle["self"] = cycle
+        meta["zz"] = cycle
         with self.assertRaises(rvr6.FormatError):
             rvr6.frame(meta, self.buf)
 

@@ -74,7 +74,10 @@ def _nat(value: Any, where: str) -> int:
 def _finite(value: Any, where: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         _fail(f"{where} must be a finite number")
-    out = float(value)
+    try:
+        out = float(value)
+    except OverflowError:  # an integer too large for float64 is not a finite number
+        _fail(f"{where} must be a finite number")
     if not math.isfinite(out):
         _fail(f"{where} must be a finite number")
     return out
@@ -130,7 +133,8 @@ def _made(made: dict, samples: list[dict], columns: list[dict]) -> None:
             if not isinstance(record, dict):
                 _fail(f"made.samples[{i}] must be an object")
             name = record.get("name")
-            if name not in expected or name in seen or record.get("rows") != expected.get(name):
+            if (not isinstance(name, str) or name not in expected or name in seen
+                    or record.get("rows") != expected.get(name)):
                 _fail("made.samples names and row counts must match data.samples")
             seen.add(name)
             files = record.get("files")
@@ -152,10 +156,23 @@ def _made(made: dict, samples: list[dict], columns: list[dict]) -> None:
 
 
 def _string_keyed(value: Any) -> bool:
-    if isinstance(value, dict):
-        return all(isinstance(k, str) and _string_keyed(v) for k, v in value.items())
-    if isinstance(value, (list, tuple)):
-        return all(_string_keyed(v) for v in value)
+    # Iterative and cycle-tolerant: a circular reference passes through here so that
+    # json.dumps can refuse it with the circular-reference error frame() already catches.
+    seen: set[int] = set()
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if id(item) in seen:
+            continue
+        if isinstance(item, dict):
+            seen.add(id(item))
+            for key, inner in item.items():
+                if not isinstance(key, str):
+                    return False
+                stack.append(inner)
+        elif isinstance(item, (list, tuple)):
+            seen.add(id(item))
+            stack.extend(item)
     return True
 
 
@@ -167,7 +184,7 @@ def frame(meta: dict, buf: bytes) -> bytes:
         _fail("header mapping keys must be strings")
     try:
         header = json.dumps(meta, allow_nan=False, separators=(",", ":")).encode("utf-8")
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise FormatError(f"header is not finite JSON: {exc}") from exc
     if not header or len(header) > MAX_HEADER_BYTES:
         _fail(f"header exceeds the {MAX_HEADER_BYTES}-byte limit")
@@ -188,9 +205,10 @@ def unframe(raw: bytes) -> tuple[dict, bytes]:
             raw[4:4 + size].decode("utf-8"),
             parse_constant=lambda value: _fail(f"header contains {value}"),
         )
-    except (UnicodeDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         # ValueError covers JSONDecodeError and the digit-limit guard a hostile header
-        # can trip with an enormous integer literal.
+        # can trip with an enormous integer literal; RecursionError covers pathological
+        # nesting depth inside the byte limit.
         raise FormatError("header is not valid UTF-8 JSON") from exc
     if not isinstance(meta, dict):
         _fail("header must be a JSON object")
@@ -326,7 +344,7 @@ def _stage(stage: Any, where: str, columns: Mapping[str, dict], sources: set[str
                     grid_columns: set[str] = set()
                     for variable in variables:
                         if (not isinstance(variable, dict)
-                                or variable.get("col") not in columns
+                                or not _option(variable.get("col"), columns)
                                 or not isinstance(variable.get("bands"), list)
                                 or len(variable["bands"]) > 64):
                             _fail(f"{where} map grid has an invalid variable")
@@ -370,7 +388,7 @@ def _stage(stage: Any, where: str, columns: Mapping[str, dict], sources: set[str
                     if not isinstance(root, dict) or set(root) - {"cut", "yes", "no"}:
                         _fail(f"{where} map has an invalid region node")
                     cut = root.get("cut")
-                    if not isinstance(cut, dict) or cut.get("col") not in columns:
+                    if not isinstance(cut, dict) or not _option(cut.get("col"), columns):
                         _fail(f"{where} map cuts on an unknown column")
                     if set(cut) == {"col", "lt"}:
                         _finite(cut["lt"], f"{where} map threshold")
@@ -912,12 +930,12 @@ def _main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         meta, _ = read(args.file)
-    except (FormatError, OSError) as err:
-        parser.exit(1, f"{args.file}: {err}\n")
-    if args.command == "show":
-        print(json.dumps(meta, indent=2, ensure_ascii=False))
-    else:
-        print(f"ok: {meta['about']['name']} — {meta['data']['rows']:,} rows")
+        if args.command == "show":
+            print(json.dumps(meta, indent=2, ensure_ascii=False))
+        else:
+            print(f"ok: {meta['about']['name']} — {meta['data']['rows']:,} rows")
+    except (FormatError, OSError, RecursionError) as err:
+        parser.exit(1, f"{args.file}: {err or 'nesting exceeds the display depth'}\n")
     return 0
 
 
