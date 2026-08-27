@@ -185,6 +185,39 @@ class Dashboard:
         size = shutil.get_terminal_size((120, 40))
         cols, screen_rows = (size.columns, size.lines) if TTY else (120, 10 ** 9)
         if TTY and (cols < 72 or len(self.order) + 5 >= screen_rows):
+            # EVERY sample keeps a live row: pack compact cells into as many columns
+            # as it takes to fit the screen. A finished cell sits full while the rest
+            # move. Only a truly minuscule window falls back to the summary box.
+            free = screen_rows - 6            # frame borders + footer + trailing newline
+            ncols = -(-len(self.order) // max(free, 1)) if self.order else 1
+            # every full grid row is EXACTLY ncols*(namew+13)-1 cells by construction
+            # (clip-padded name + 6-cell gauge + 4-cell pct + separators), so the right
+            # border is placed by arithmetic, not by measuring painted text
+            namew = min(max((len(n) for n in self.order), default=0),
+                        (cols - 4) // max(ncols, 1) - 13)
+            if free >= 1 and namew >= 8:
+                cells = []
+                for name in self.order:
+                    n, t = self.scanned[name], self.total.get(name, 0)
+                    gauge = paint(bar(n, t, 6),
+                                  OK_C if t and n >= t else self.kind[name][1])
+                    cells.append(f"{clip(name, namew)} {gauge} {pct_of(n, t):>4}")
+                inner = (namew + 13) * ncols - 1
+                rule = "─" * (inner + 2)
+                out.append(paint(f"┌{rule}┐", DIM))
+                edge = paint("│", DIM)
+                for i in range(0, len(cells), ncols):
+                    row = cells[i:i + ncols]
+                    pad = " " * ((ncols - len(row)) * (namew + 13))
+                    out.append(f"{edge} {' '.join(row)}{pad} {edge}")
+                out.append(paint(f"├{rule}┤", DIM))
+                foot = (f"{short(scanned)}/{short(total)} {pct_of(scanned, total)}"
+                        f"  kept {short(kept)}  "
+                        + (doing or f"eta {clock(eta)}  {spin}"))
+                out.append(f"{edge} {clip(foot, inner)} {edge}")
+                out.append(paint(f"└{rule}┘", DIM))
+                self._flush(out, final)
+                return
             width = max(8, min(cols - 1, 60))
             here = self.current or "—"
             n, t = self.scanned.get(here, 0), self.total.get(here, 0)
