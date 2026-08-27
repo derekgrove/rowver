@@ -69,6 +69,11 @@ def clip(name: str, width: int) -> str:
     return out + " " * (width - used)
 
 
+def cells(text: str) -> int:
+    """Display cells, not code points: east-asian wide glyphs occupy two."""
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
+
+
 def pct_of(done: int, total: int) -> str:
     return f"{100 * done / total:.0f}%" if total else "·"
 
@@ -77,6 +82,33 @@ def clock(seconds: float) -> str:
     minutes, sec = divmod(max(int(seconds), 0), 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours}:{minutes:02d}:{sec:02d}" if hours else f"{minutes:02d}:{sec:02d}"
+
+
+def R(*bits) -> tuple[str, str]:
+    """One box row from pieces: a str, or (str, colour). Returns (plain, painted) —
+    identical display cells, so the plain twin is what the box measures."""
+    plain, painted = "", ""
+    for bit in bits:
+        text, colour = bit if isinstance(bit, tuple) else (bit, None)
+        plain += text
+        painted += paint(text, colour) if colour else text
+    return plain, painted
+
+
+def box(sections: list[list[tuple[str, str]]]) -> list[str]:
+    """Draw borders AFTER the text: the frame is sized to the longest row, every
+    row is padded to it, and the right border always closes."""
+    width = max((cells(plain) for sec in sections for plain, _ in sec), default=0)
+    rule = paint("─" * (width + 2), DIM)
+    edge = paint("│", DIM)
+    lines = [paint("┌", DIM) + rule + paint("┐", DIM)]
+    for at, sec in enumerate(sections):
+        if at:
+            lines.append(paint("├", DIM) + rule + paint("┤", DIM))
+        for plain, painted in sec:
+            lines.append(f"{edge} {painted}{' ' * (width - cells(plain))} {edge}")
+    lines.append(paint("└", DIM) + rule + paint("┘", DIM))
+    return lines
 
 
 # --------------------------------------------------------------- dashboard ----
@@ -190,82 +222,72 @@ class Dashboard:
             # move. Only a truly minuscule window falls back to the summary box.
             free = screen_rows - 6            # frame borders + footer + trailing newline
             ncols = -(-len(self.order) // max(free, 1)) if self.order else 1
-            # every full grid row is EXACTLY ncols*(namew+13)-1 cells by construction
-            # (clip-padded name + 6-cell gauge + 4-cell pct + separators), so the right
-            # border is placed by arithmetic, not by measuring painted text
             namew = min(max((len(n) for n in self.order), default=0),
                         (cols - 4) // max(ncols, 1) - 13)
             if free >= 1 and namew >= 8:
                 cells = []
                 for name in self.order:
                     n, t = self.scanned[name], self.total.get(name, 0)
-                    gauge = paint(bar(n, t, 6),
-                                  OK_C if t and n >= t else self.kind[name][1])
-                    cells.append(f"{clip(name, namew)} {gauge} {pct_of(n, t):>4}")
-                inner = (namew + 13) * ncols - 1
-                rule = "─" * (inner + 2)
-                out.append(paint(f"┌{rule}┐", DIM))
-                edge = paint("│", DIM)
+                    cells.append(R(f"{clip(name, namew)} ",
+                                   (bar(n, t, 6),
+                                    OK_C if t and n >= t else self.kind[name][1]),
+                                   f" {pct_of(n, t):>4}"))
+                grid = []
                 for i in range(0, len(cells), ncols):
                     row = cells[i:i + ncols]
+                    plain = " ".join(p for p, _ in row)
+                    painted = " ".join(q for _, q in row)
                     pad = " " * ((ncols - len(row)) * (namew + 13))
-                    out.append(f"{edge} {' '.join(row)}{pad} {edge}")
-                out.append(paint(f"├{rule}┤", DIM))
-                foot = (f"{short(scanned)}/{short(total)} {pct_of(scanned, total)}"
-                        f"  kept {short(kept)}  "
-                        + (doing or f"eta {clock(eta)}  {spin}"))
-                out.append(f"{edge} {clip(foot, inner)} {edge}")
-                out.append(paint(f"└{rule}┘", DIM))
+                    grid.append((plain + pad, painted + pad))
+                foot = clip(f"{short(scanned)}/{short(total)} {pct_of(scanned, total)}"
+                            f"  kept {short(kept)}  "
+                            + (doing or f"eta {clock(eta)}  {spin}"),
+                            (namew + 13) * ncols - 1)
+                out.extend(box([grid, [R(foot)]]))
                 self._flush(out, final)
                 return
             width = max(8, min(cols - 1, 60))
             here = self.current or "—"
             n, t = self.scanned.get(here, 0), self.total.get(here, 0)
-            rows = [f"{short(scanned)}/{short(total)} {pct_of(scanned, total)}"
-                    f"  kept {short(kept)}  eta {clock(eta)}",
-                    doing or f"now {clip(here, 24)} {short(n)}/{short(t)} {spin}"]
-            # clip() pads to exact display cells, so the right border lines up
-            body = [f"┌{'─' * (width - 2)}┐",
-                    *(f"│ {clip(row, width - 4)} │" for row in rows),
-                    f"└{'─' * (width - 2)}┘"]
-            out.extend(paint(line, DIM) for line in body)
+            rows = [R(clip(f"{short(scanned)}/{short(total)} "
+                           f"{pct_of(scanned, total)}  kept {short(kept)}  "
+                           f"eta {clock(eta)}", width - 4)),
+                    R(clip(doing or f"now {clip(here, 24)} {short(n)}/{short(t)} {spin}",
+                           width - 4))]
+            out.extend(box([rows]))
             self._flush(out, final)
             return
         # exact counts take whatever the biggest number needs; wide only when the whole
-        # row provably fits (52 fixed cells + three count fields)
+        # row provably fits
         wnum = len(f"{max([*self.total.values(), *self.scanned.values(), 1]):,}")
-        wide = cols >= max(100, 53 + 3 * wnum)
-        rule = "─" * ((50 + 3 * wnum) if wide else 66)
-        out.append(paint(f"┌{rule}┐", DIM))
+        wide = cols >= max(100, 70 + 3 * wnum)   # closed wide row is 69 + 3*wnum cells
+        samples = []
         for name in self.order:
             tag, colour = self.kind[name]
             n, k, t = self.scanned[name], self.kept[name], self.total.get(name, 0)
-            gauge_w = 22 if wide else 12
-            gauge = paint(bar(n, t, gauge_w), OK_C if t and n >= t else colour)
+            gauge = (bar(n, t, 22 if wide else 12),
+                     OK_C if t and n >= t else colour)
             if wide:
                 eff = f"{100 * k / n:5.1f}%" if n else "     ·"
-                out.append(f"{paint('│', DIM)} {clip(name, 22)} {paint(tag, colour)} "
-                           f"{gauge} {n:>{wnum},}/{t:<{wnum},} kept {k:>{wnum},} {eff}")
+                samples.append(R(f"{clip(name, 22)} ", (tag, colour), " ", gauge,
+                                 f" {n:>{wnum},}/{t:<{wnum},} kept {k:>{wnum},} {eff}"))
             else:
                 eff = f"{100 * k / n:4.0f}%" if n else "   ·"
-                out.append(f"{paint('│', DIM)} {clip(name, 17)} {paint(tag, colour)} "
-                           f"{gauge} {short(n):>6}/{short(t):<6} kept {short(k):>6} {eff}")
-        out.append(paint(f"├{rule}┤", DIM))
+                samples.append(R(f"{clip(name, 17)} ", (tag, colour), " ", gauge,
+                                 f" {short(n):>6}/{short(t):<6} kept {short(k):>6} {eff}"))
         pct = f"{100 * scanned / total:5.1f}%" if total else "     ·"
         if wide:
-            out.append(f"{paint('│', DIM)} scanned {scanned:>11,}/{total:,}  {pct}   "
-                       f"kept {kept:>11,}   est. buffer "
-                       f"{kept * self.est_row_bytes / 2**20:7.1f} MiB")
-            out.append(f"{paint('│', DIM)} {rate / 1e6:4.2f}M rows/s   "
-                       f"elapsed {clock(elapsed)}   "
-                       + (doing or f"eta {clock(eta)}  {spin}"))
+            footer = [R(f"scanned {scanned:>11,}/{total:,}  {pct}   "
+                        f"kept {kept:>11,}   est. buffer "
+                        f"{kept * self.est_row_bytes / 2**20:7.1f} MiB"),
+                      R(f"{rate / 1e6:4.2f}M rows/s   elapsed {clock(elapsed)}   "
+                        + (doing or f"eta {clock(eta)}  {spin}"))]
         else:
-            out.append(f"{paint('│', DIM)} {short(scanned)}/{short(total)} {pct}  "
-                       f"kept {short(kept)}  ~{kept * self.est_row_bytes / 2**20:.0f} MiB")
-            out.append(f"{paint('│', DIM)} {rate / 1e6:4.2f}M rows/s  "
-                       f"{clock(elapsed)} gone  "
-                       + (doing or f"eta {clock(eta)}  {spin}"))
-        out.append(paint(f"└{rule}┘", DIM))
+            footer = [R(f"{short(scanned)}/{short(total)} {pct}  kept {short(kept)}  "
+                        f"~{kept * self.est_row_bytes / 2**20:.0f} MiB"),
+                      R(f"{rate / 1e6:4.2f}M rows/s  {clock(elapsed)} gone  "
+                        + (doing or f"eta {clock(eta)}  {spin}"))]
+        out.extend(box([samples, footer]))
         self._flush(out, final)
 
     def _flush(self, out: list[str], final: bool) -> None:

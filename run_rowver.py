@@ -13,7 +13,11 @@ from rvr6 import FormatError
 
 def parse(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("study", nargs="?", help="directory name under studies/")
+    parser.add_argument("study", nargs="?",
+                        help="directory name under studies/, or with --path any "
+                             "study directory wherever it lives")
+    parser.add_argument("--path", action="store_true",
+                        help="treat STUDY as a path to a study directory")
     parser.add_argument("--list", action="store_true", help="list studies and exit")
     parser.add_argument("--out", type=Path, help="output .rvr path or directory")
     parser.add_argument("--step-size", default="100 MB",
@@ -33,7 +37,12 @@ def main(argv: list[str] | None = None) -> int:
     step: int | str = int(args.step_size) if str(args.step_size).isdigit() else args.step_size
     board = None
     try:
-        cart = Cart.load(args.study)
+        if args.path:
+            # a study can live anywhere: STUDY is then the directory holding cart.py
+            where = Path(args.study).expanduser().resolve()
+            cart = Cart.load(where.name, where.parent)
+        else:
+            cart = Cart.load(args.study)
         print(cart.summary())
         if args.live:
             from dashboard import Dashboard
