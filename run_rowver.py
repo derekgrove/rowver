@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import time
 from pathlib import Path
 
@@ -40,8 +41,9 @@ def main(argv: list[str] | None = None) -> int:
             print("indexing files…")
             board.index(cart)          # totals for the bars and the ETA
             board.t0 = time.monotonic()
-        result = cart.build(args.out, step_size=step,
-                            progress=board.chunk if board else None)
+        with board.live() if board else contextlib.nullcontext():
+            result = cart.build(args.out, step_size=step,
+                                progress=board.chunk if board else None)
     except (CartError, FormatError) as exc:
         raise SystemExit(f"error: {exc}") from exc
     if board:

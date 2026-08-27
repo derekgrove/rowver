@@ -246,13 +246,16 @@ class Cart:
         return events[spec] if isinstance(spec, str) else _invoke(spec, events, meta, where)
 
     def skim(self, step_size: int | str = "100 MB",
-             progress: Callable[[str, int, int], None] | None = None) -> tuple[dict, dict]:
+             progress: Callable[[str | None, int, int], None] | None = None) -> tuple[dict, dict]:
         """Read files sequentially, apply hooks, and materialise validated NumPy columns.
 
         ``progress``, when given, is called after each fully processed chunk with
         ``(sample, raw_rows, kept_rows)`` — raw is the tree entries the chunk covered
         (pre-PREPARE, the same currency as ``num_entries``), kept is what survived KEEP.
-        An exception from the callback aborts the build; nothing is written.
+        ``build`` additionally calls it once with ``(None, 0, 0)`` when skimming ends
+        and the pack/compress/write phase begins — the long quiet stretch a watcher
+        would otherwise read as a hang. An exception from the callback aborts the
+        build; nothing is written.
         """
         if not self._validated:
             self.validate()
@@ -356,11 +359,13 @@ class Cart:
 
     def build(self, destination: str | Path | None = None,
               *, step_size: int | str = "100 MB",
-              progress: Callable[[str, int, int], None] | None = None) -> dict:
+              progress: Callable[[str | None, int, int], None] | None = None) -> dict:
         """Skim and atomically write ``<study>.rvr``.  This is the normal public API."""
         if self.name is None or self.dir is None:
             raise CartError("load the cart with Cart.load(<study>) before building it")
         rows, weights = self.skim(step_size, progress)
+        if progress is not None:
+            progress(None, 0, 0)          # skim done; packing and compressing now
         built = datetime.now(timezone.utc).isoformat()
         about = {"name": self.name}
         if self.title:

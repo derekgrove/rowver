@@ -12,8 +12,10 @@ chunk, so only the final frame shows its (full, 0/0) bar.
 """
 from __future__ import annotations
 
+import contextlib
 import shutil
 import sys
+import threading
 import time
 import unicodedata
 
@@ -31,6 +33,7 @@ def paint(text: str, code: str) -> str:
 
 
 DIM = "2"
+SPIN = "|/-\\"          # one tick per redraw: motion is the liveness signal
 DATA_C, MC_C, SIG_C, OK_C = "36", "33", "35", "32"   # cyan, yellow, magenta, green
 
 
@@ -71,8 +74,9 @@ def pct_of(done: int, total: int) -> str:
 
 
 def clock(seconds: float) -> str:
-    seconds = max(int(seconds), 0)
-    return f"{seconds // 60:02d}:{seconds % 60:02d}"
+    minutes, sec = divmod(max(int(seconds), 0), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{sec:02d}" if hours else f"{minutes:02d}:{sec:02d}"
 
 
 # --------------------------------------------------------------- dashboard ----
@@ -103,6 +107,9 @@ class Dashboard:
         self.lines = 0
         self.last_draw = 0.0
         self.current = ""
+        self.pressing = False    # skim finished; pack + gzip in progress
+        self.spins = 0
+        self.lock = threading.Lock()   # draw is called from chunk() and the ticker
 
     def index(self, cart: Cart) -> None:
         for name, entry in cart.fileset.items():
@@ -116,10 +123,15 @@ class Dashboard:
             self.total[name] = n
 
     # -- events from the build --------------------------------------------
-    def chunk(self, sample: str, scanned: int, kept: int) -> None:
-        self.scanned[sample] += scanned
-        self.kept[sample] += kept
-        self.current = sample
+    def chunk(self, sample: str | None, scanned: int, kept: int) -> None:
+        if sample is None:                 # build's signal: skim done, pressing now
+            self.pressing = True
+            self.draw()
+            return
+        with self.lock:                    # the ticker must never see a half-updated row
+            self.scanned[sample] += scanned
+            self.kept[sample] += kept
+            self.current = sample
         now = time.monotonic()
         boundary = self.scanned[sample] >= self.total.get(sample, 0)
         if TTY and (now - self.last_draw > 0.15 or boundary):
@@ -127,8 +139,32 @@ class Dashboard:
         elif not TTY and boundary:
             self.draw()
 
+    @contextlib.contextmanager
+    def live(self):
+        """Redraw twice a second while the build runs, so quiet stretches —
+        concatenating a sample, opening the next file, the final gzip — still
+        visibly tick. Daemon thread; exits with the context."""
+        if not TTY:
+            yield
+            return
+        stop = threading.Event()
+        def tick() -> None:
+            while not stop.wait(0.5):
+                self.draw()
+        thread = threading.Thread(target=tick, daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            thread.join()
+
     # -- rendering ---------------------------------------------------------
     def draw(self, final: bool = False) -> None:
+        with self.lock:
+            self._draw(final)
+
+    def _draw(self, final: bool) -> None:
         self.last_draw = time.monotonic()
         out: list[str] = []
         scanned = sum(self.scanned.values())
@@ -137,6 +173,10 @@ class Dashboard:
         elapsed = time.monotonic() - self.t0
         rate = scanned / elapsed if elapsed > 0 else 0.0
         eta = (total - scanned) / rate if rate > 0 else 0.0
+        self.spins += 1
+        spin = "" if final else SPIN[self.spins % len(SPIN)]
+        doing = (f"pressing the cartridge (pack + gzip)… {spin}"
+                 if self.pressing and not final else None)
         # The frame must fit the physical terminal BOTH ways: a wrapped line or a frame
         # taller than the screen breaks the cursor-up redraw. Names are measured in
         # display cells (CJK glyphs take two), counts are width-capped, and an EXACT
@@ -145,15 +185,17 @@ class Dashboard:
         size = shutil.get_terminal_size((120, 40))
         cols, screen_rows = (size.columns, size.lines) if TTY else (120, 10 ** 9)
         if TTY and (cols < 72 or len(self.order) + 5 >= screen_rows):
-            width = max(cols - 1, 20)
+            width = max(8, min(cols - 1, 60))
             here = self.current or "—"
             n, t = self.scanned.get(here, 0), self.total.get(here, 0)
-            body = [f"┌{'─' * (width - 2)}┐",
-                    f"│ {short(scanned)}/{short(total)} {pct_of(scanned, total)}"
+            rows = [f"{short(scanned)}/{short(total)} {pct_of(scanned, total)}"
                     f"  kept {short(kept)}  eta {clock(eta)}",
-                    f"│ now {clip(here, 30)} {short(n)}/{short(t)}",
+                    doing or f"now {clip(here, 24)} {short(n)}/{short(t)} {spin}"]
+            # clip() pads to exact display cells, so the right border lines up
+            body = [f"┌{'─' * (width - 2)}┐",
+                    *(f"│ {clip(row, width - 4)} │" for row in rows),
                     f"└{'─' * (width - 2)}┘"]
-            out.extend(paint(line[:width], DIM) for line in body)
+            out.extend(paint(line, DIM) for line in body)
             self._flush(out, final)
             return
         # exact counts take whatever the biggest number needs; wide only when the whole
@@ -182,21 +224,27 @@ class Dashboard:
                        f"kept {kept:>11,}   est. buffer "
                        f"{kept * self.est_row_bytes / 2**20:7.1f} MiB")
             out.append(f"{paint('│', DIM)} {rate / 1e6:4.2f}M rows/s   "
-                       f"elapsed {clock(elapsed)}   eta {clock(eta)}")
+                       f"elapsed {clock(elapsed)}   "
+                       + (doing or f"eta {clock(eta)}  {spin}"))
         else:
             out.append(f"{paint('│', DIM)} {short(scanned)}/{short(total)} {pct}  "
                        f"kept {short(kept)}  ~{kept * self.est_row_bytes / 2**20:.0f} MiB")
             out.append(f"{paint('│', DIM)} {rate / 1e6:4.2f}M rows/s  "
-                       f"{clock(elapsed)} gone  eta {clock(eta)}")
+                       f"{clock(elapsed)} gone  "
+                       + (doing or f"eta {clock(eta)}  {spin}"))
         out.append(paint(f"└{rule}┘", DIM))
         self._flush(out, final)
 
     def _flush(self, out: list[str], final: bool) -> None:
         if TTY and self.lines:
             sys.stdout.write(f"{ESC}{self.lines}A")
+        if TTY:
+            out = [line + f"{ESC}K" for line in out]
         sys.stdout.write("\n".join(out) + "\n")
         if not TTY and not final:
             sys.stdout.write("\n")
+        if TTY and self.lines > len(out):
+            sys.stdout.write(f"{ESC}0J")   # a shrinking frame erases what it uncovered
         sys.stdout.flush()
         self.lines = len(out)
 
