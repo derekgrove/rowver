@@ -57,9 +57,16 @@ def short(n: int) -> str:
 
 
 def clip(name: str, width: int) -> str:
-    """Clip and pad by DISPLAY CELLS: east-asian wide glyphs occupy two columns."""
+    """Clip and pad by DISPLAY CELLS: east-asian wide glyphs occupy two columns.
+
+    Control characters are replaced before measuring — a newline in a valid sample
+    name would add a physical line the redraw math cannot see, and an escape byte
+    could repaint the terminal.
+    """
     out, used = "", 0
     for ch in name:
+        if unicodedata.category(ch) in ("Cc", "Cf") or ch == "\x7f":
+            ch = "·"
         w = 2 if unicodedata.east_asian_width(ch) in "WF" else 1
         if used + w > width:
             break
