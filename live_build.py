@@ -9,12 +9,15 @@ branch without affecting the production build.
     python live_build.py jetmet_2018 --out /tmp/test.rvr
 
 In a real terminal the dashboard redraws in place; when piped, it prints a
-snapshot frame at each sample boundary instead.
+snapshot frame at each sample boundary instead. Known dev-preview limit: a
+PREPARE hook that changes row counts skews the scanned totals (the wrapper
+counts post-PREPARE rows) — the adoption path, a real skim callback, fixes
+that along with the provenance note below.
 """
 from __future__ import annotations
 
 import argparse
-import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -36,12 +39,17 @@ def paint(text: str, code: str) -> str:
 
 DIM, BOLD = "2", "1"
 DATA_C, MC_C, SIG_C, OK_C = "36", "33", "35", "32"   # cyan, yellow, magenta, green
-BAR_W = 22
 
 
-def bar(done: int, total: int) -> str:
-    fill = BAR_W if not total else round(BAR_W * min(done, total) / total)
-    return "█" * fill + "░" * (BAR_W - fill)
+def bar(done: int, total: int, width: int) -> str:
+    fill = width if not total else round(width * min(done, total) / total)
+    return "█" * fill + "░" * (width - fill)
+
+
+def short(n: int) -> str:
+    if n >= 1_000_000: return f"{n / 1e6:.2f}M"
+    if n >= 1_000: return f"{n / 1e3:.0f}k"
+    return str(n)
 
 
 def clock(seconds: float) -> str:
@@ -57,9 +65,13 @@ class Dashboard:
         self.order = list(cart.fileset)
         self.kind = {}
         for name, entry in cart.fileset.items():
+            # metadata "kind" is authoritative when present; the name check is only a
+            # cosmetic fallback for carts that declare nothing.
+            declared = str(entry["metadata"].get("kind", "")).lower()
             if entry["metadata"]["weights"] is None:
                 self.kind[name] = ("DATA", DATA_C)
-            elif name.lower().startswith(("tchi", "sms", "slep", "cascade", "sig")):
+            elif declared in {"signal", "sig"} or (not declared and name.lower()
+                    .startswith(("tchi", "sms", "slep", "cascade", "sig"))):
                 self.kind[name] = ("SIG ", SIG_C)
             else:
                 self.kind[name] = ("MC  ", MC_C)
@@ -75,8 +87,11 @@ class Dashboard:
         for name, entry in cart.fileset.items():
             n = 0
             for path, tree in entry["files"].items():
-                with uproot.open({path: tree}) as t:
-                    n += int(t.num_entries)
+                try:
+                    with uproot.open({path: tree}) as t:
+                        n += int(t.num_entries)
+                except Exception as exc:
+                    raise CartError(f'cannot open {name} file "{path}": {exc}') from exc
             self.total[name] = n
 
     # -- events from the wrapper ------------------------------------------
@@ -100,21 +115,38 @@ class Dashboard:
         elapsed = time.monotonic() - self.t0
         rate = scanned / elapsed if elapsed > 0 else 0.0
         eta = (total - scanned) / rate if rate > 0 else 0.0
-        rule = "─" * 76
+        # A frame line must not wrap: the in-place redraw counts logical lines, so a
+        # wrapped row on a narrow terminal would leave stale frames interleaved.
+        cols = shutil.get_terminal_size((120, 25)).columns if TTY else 120
+        wide = cols >= 100
+        rule = "─" * (78 if wide else 66)
         out.append(paint(f"┌{rule}┐", DIM))
         for name in self.order:
             tag, colour = self.kind[name]
             n, k, t = self.scanned[name], self.kept[name], self.total.get(name, 0)
-            eff = f"{100 * k / n:5.1f}%" if n else "     ·"
-            gauge = paint(bar(n, t), OK_C if t and n >= t else colour)
-            out.append(f"{paint('│', DIM)} {name:<22.22s} {paint(tag, colour)} "
-                       f"{gauge} {n:>10,}/{t:<10,} kept {k:>9,} {eff}")
+            gauge_w = 22 if wide else 12
+            gauge = paint(bar(n, t, gauge_w), OK_C if t and n >= t else colour)
+            if wide:
+                eff = f"{100 * k / n:5.1f}%" if n else "     ·"
+                out.append(f"{paint('│', DIM)} {name:<22.22s} {paint(tag, colour)} "
+                           f"{gauge} {n:>10,}/{t:<10,} kept {k:>9,} {eff}")
+            else:
+                eff = f"{100 * k / n:4.0f}%" if n else "   ·"
+                out.append(f"{paint('│', DIM)} {name:<17.17s} {paint(tag, colour)} "
+                           f"{gauge} {short(n):>6}/{short(t):<6} kept {short(k):>6} {eff}")
         out.append(paint(f"├{rule}┤", DIM))
         pct = f"{100 * scanned / total:5.1f}%" if total else "     ·"
-        out.append(f"{paint('│', DIM)} scanned {scanned:>11,}/{total:,}  {pct}   "
-                   f"kept {kept:>11,}   est. buffer {kept * self.est_row_bytes / 2**20:7.1f} MiB")
-        out.append(f"{paint('│', DIM)} {rate / 1e6:4.2f}M rows/s   elapsed {clock(elapsed)}   "
-                   f"eta {clock(eta)}")
+        if wide:
+            out.append(f"{paint('│', DIM)} scanned {scanned:>11,}/{total:,}  {pct}   "
+                       f"kept {kept:>11,}   est. buffer "
+                       f"{kept * self.est_row_bytes / 2**20:7.1f} MiB")
+            out.append(f"{paint('│', DIM)} {rate / 1e6:4.2f}M rows/s   "
+                       f"elapsed {clock(elapsed)}   eta {clock(eta)}")
+        else:
+            out.append(f"{paint('│', DIM)} {short(scanned)}/{short(total)} {pct}  "
+                       f"kept {short(kept)}  ~{kept * self.est_row_bytes / 2**20:.0f} MiB")
+            out.append(f"{paint('│', DIM)} {rate / 1e6:4.2f}M rows/s  "
+                       f"{clock(elapsed)} gone  eta {clock(eta)}")
         out.append(paint(f"└{rule}┘", DIM))
         if TTY and self.lines:
             sys.stdout.write(f"{ESC}{self.lines}A")
