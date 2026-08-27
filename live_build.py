@@ -52,6 +52,10 @@ def short(n: int) -> str:
     return str(n)
 
 
+def pct_of(done: int, total: int) -> str:
+    return f"{100 * done / total:.0f}%" if total else "·"
+
+
 def clock(seconds: float) -> str:
     seconds = max(int(seconds), 0)
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
@@ -65,13 +69,14 @@ class Dashboard:
         self.order = list(cart.fileset)
         self.kind = {}
         for name, entry in cart.fileset.items():
-            # metadata "kind" is authoritative when present; the name check is only a
-            # cosmetic fallback for carts that declare nothing.
+            # weights=None is the format's own data marker. SIG is strictly opt-in via
+            # metadata kind="signal": the template's kind distinguishes data from
+            # simulation, so every other weighted sample — declared or not — is MC.
+            # Guessing from names mislabels real carts and defines no contract.
             declared = str(entry["metadata"].get("kind", "")).lower()
             if entry["metadata"]["weights"] is None:
                 self.kind[name] = ("DATA", DATA_C)
-            elif declared in {"signal", "sig"} or (not declared and name.lower()
-                    .startswith(("tchi", "sms", "slep", "cascade", "sig"))):
+            elif declared in {"signal", "sig"}:
                 self.kind[name] = ("SIG ", SIG_C)
             else:
                 self.kind[name] = ("MC  ", MC_C)
@@ -82,6 +87,7 @@ class Dashboard:
         self.t0 = time.monotonic()
         self.lines = 0
         self.last_draw = 0.0
+        self.current = ""
 
     def index(self, cart: Cart) -> None:
         for name, entry in cart.fileset.items():
@@ -98,6 +104,7 @@ class Dashboard:
     def chunk(self, sample: str, scanned: int, kept: int) -> None:
         self.scanned[sample] += scanned
         self.kept[sample] += kept
+        self.current = sample
         now = time.monotonic()
         boundary = self.scanned[sample] >= self.total.get(sample, 0)
         if TTY and (now - self.last_draw > 0.15 or boundary):
@@ -115,9 +122,24 @@ class Dashboard:
         elapsed = time.monotonic() - self.t0
         rate = scanned / elapsed if elapsed > 0 else 0.0
         eta = (total - scanned) / rate if rate > 0 else 0.0
-        # A frame line must not wrap: the in-place redraw counts logical lines, so a
-        # wrapped row on a narrow terminal would leave stale frames interleaved.
-        cols = shutil.get_terminal_size((120, 25)).columns if TTY else 120
+        # The frame must fit the physical terminal BOTH ways: a wrapped line or a frame
+        # taller than the screen breaks the cursor-up redraw. When the full board cannot
+        # fit, fall back to a three-line aggregate. (Known preview limit: widths are
+        # counted in characters, so double-cell CJK names can still wrap a row.)
+        size = shutil.get_terminal_size((120, 40))
+        cols, screen_rows = (size.columns, size.lines) if TTY else (120, 10 ** 9)
+        if TTY and (cols < 72 or len(self.order) + 5 > screen_rows):
+            width = max(cols - 1, 20)
+            here = self.current or "—"
+            n, t = self.scanned.get(here, 0), self.total.get(here, 0)
+            body = [f"┌{'─' * (width - 2)}┐",
+                    f"│ {short(scanned)}/{short(total)} {pct_of(scanned, total)}"
+                    f"  kept {short(kept)}  eta {clock(eta)}",
+                    f"│ now {here:.30s} {short(n)}/{short(t)}",
+                    f"└{'─' * (width - 2)}┘"]
+            out.extend(paint(line[:width], DIM) for line in body)
+            self._flush(out, final)
+            return
         wide = cols >= 100
         rule = "─" * (78 if wide else 66)
         out.append(paint(f"┌{rule}┐", DIM))
@@ -148,6 +170,9 @@ class Dashboard:
             out.append(f"{paint('│', DIM)} {rate / 1e6:4.2f}M rows/s  "
                        f"{clock(elapsed)} gone  eta {clock(eta)}")
         out.append(paint(f"└{rule}┘", DIM))
+        self._flush(out, final)
+
+    def _flush(self, out: list[str], final: bool) -> None:
         if TTY and self.lines:
             sys.stdout.write(f"{ESC}{self.lines}A")
         sys.stdout.write("\n".join(out) + "\n")
