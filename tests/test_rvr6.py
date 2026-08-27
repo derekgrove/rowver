@@ -50,6 +50,40 @@ class Rvr6Tests(unittest.TestCase):
         np.testing.assert_array_equal(samples["data"]["weight"], [1.0, 1.0])
         np.testing.assert_array_equal(samples["data"]["pt"], [30.0, 40.0])
 
+    def test_hostile_input_fails_cleanly_not_with_a_crash(self):
+        # a corrupted deflate stream inside a plausible gzip file
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "study.rvr"
+            rvr6.write(path, self.meta, self.buf)
+            hurt = bytearray(path.read_bytes())
+            hurt[len(hurt) // 2] ^= 0xFF
+            path.write_bytes(bytes(hurt))
+            with self.assertRaises(rvr6.FormatError):
+                rvr6.read(path)
+        # an enormous integer literal in the header trips the digit-limit guard
+        digits = b'{"rowver": 6, "zz": ' + b"9" * 5000 + b"}"
+        with self.assertRaises(rvr6.FormatError):
+            rvr6.unframe(len(digits).to_bytes(4, "little") + digits)
+        # unhashable values wherever the format names an option
+        for stage in ([{"kind": "board", "met": [{}]}],
+                      [{"kind": "board", "channel": {}}],
+                      [{"kind": "1d", "varx": {}}]):
+            meta = copy.deepcopy(self.meta)
+            meta["tabs"] = [{"name": "t", "stage": stage}]
+            with self.assertRaises(rvr6.FormatError):
+                rvr6.check(meta, self.buf)
+        meta = copy.deepcopy(self.meta)
+        meta["view"]["look"] = {"sample": {"data": {"draw": {}}}}
+        with self.assertRaises(rvr6.FormatError):
+            rvr6.check(meta, self.buf)
+
+    def test_frame_refuses_non_string_mapping_keys(self):
+        # json.dumps would coerce 1 to "1" and silently collide with the real "1"
+        meta = copy.deepcopy(self.meta)
+        meta["zz"] = {1: "integer-key", "1": "string-key"}
+        with self.assertRaises(rvr6.FormatError):
+            rvr6.frame(meta, self.buf)
+
     def test_refuses_structural_and_numeric_lies(self):
         mutations = []
 

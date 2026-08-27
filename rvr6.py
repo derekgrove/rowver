@@ -27,6 +27,7 @@ import math
 import os
 import re
 import tempfile
+import zlib
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
@@ -57,6 +58,11 @@ class FormatError(ValueError):
 
 def _fail(message: str) -> None:
     raise FormatError(message)
+
+
+def _option(value: Any, allowed: Any) -> bool:
+    """Membership that treats an unhashable or non-string value as simply not a member."""
+    return isinstance(value, str) and value in allowed
 
 
 def _nat(value: Any, where: str) -> int:
@@ -145,8 +151,20 @@ def _made(made: dict, samples: list[dict], columns: list[dict]) -> None:
                 _fail(f"made.cart.{key} must be text")
 
 
+def _string_keyed(value: Any) -> bool:
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _string_keyed(v) for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return all(_string_keyed(v) for v in value)
+    return True
+
+
 def frame(meta: dict, buf: bytes) -> bytes:
     """Return the uncompressed v6 frame."""
+    if not _string_keyed(meta):
+        # json.dumps would coerce a non-string key and can silently collide it with a
+        # real one, losing metadata on a file that then reads back "successfully".
+        _fail("header mapping keys must be strings")
     try:
         header = json.dumps(meta, allow_nan=False, separators=(",", ":")).encode("utf-8")
     except (TypeError, ValueError) as exc:
@@ -170,7 +188,9 @@ def unframe(raw: bytes) -> tuple[dict, bytes]:
             raw[4:4 + size].decode("utf-8"),
             parse_constant=lambda value: _fail(f"header contains {value}"),
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, ValueError) as exc:
+        # ValueError covers JSONDecodeError and the digit-limit guard a hostile header
+        # can trip with an enormous integer literal.
         raise FormatError("header is not valid UTF-8 JSON") from exc
     if not isinstance(meta, dict):
         _fail("header must be a JSON object")
@@ -242,9 +262,9 @@ def _stage(stage: Any, where: str, columns: Mapping[str, dict], sources: set[str
                 if singletons[kind] > 1:
                     _fail(f"{where} contains more than one {kind}")
             if kind in {"1d", "2d", "3d"}:
-                if value.get("varx") not in columns:
+                if not _option(value.get("varx"), columns):
                     _fail(f"{where} {kind} plot names an unknown x column")
-                if kind in {"2d", "3d"} and value.get("vary") not in columns:
+                if kind in {"2d", "3d"} and not _option(value.get("vary"), columns):
                     _fail(f"{where} {kind} plot names an unknown y column")
             if kind == "board":
                 board_rows = value.get("rows", 2)
@@ -266,15 +286,16 @@ def _stage(stage: Any, where: str, columns: Mapping[str, dict], sources: set[str
                                    for name in bkgs)
                             or len(set(bkgs)) != len(bkgs)):
                         _fail(f"{where} board has invalid backgrounds")
-                if value.get("channel", "yield") not in {"yield", "metrics"}:
+                if not _option(value.get("channel", "yield"), {"yield", "metrics"}):
                     _fail(f"{where} board has an invalid channel")
-                if value.get("err", "poisson_neff") not in {
-                        "off", "sumw2", "sqrtn", "poisson_neff", "poisson_raw"}:
+                if not _option(value.get("err", "poisson_neff"),
+                               {"off", "sumw2", "sqrtn", "poisson_neff", "poisson_raw"}):
                     _fail(f"{where} board has an invalid uncertainty model")
                 if "met" in value:
                     metrics = value["met"]
                     if (not isinstance(metrics, list)
-                            or any(metric not in {"sob", "sig", "zbi"} for metric in metrics)
+                            or any(not _option(metric, {"sob", "sig", "zbi"})
+                                   for metric in metrics)
                             or len(set(metrics)) != len(metrics)):
                         _fail(f"{where} board has invalid metrics")
             if kind == "map":
@@ -575,7 +596,8 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
                 if colour is not None and (not isinstance(colour, str)
                         or re.fullmatch(r"#[0-9a-fA-F]{6}", colour) is None):
                     _fail(f"view.look.{namespace}.{name}.colour must be #RRGGBB")
-                if style.get("draw") is not None and style["draw"] not in {"bars", "points"}:
+                if style.get("draw") is not None and not _option(style["draw"],
+                                                                 {"bars", "points"}):
                     _fail(f"view.look.{namespace}.{name}.draw must be bars or points")
 
     tab_names: set[str] = set()
@@ -607,7 +629,7 @@ def read(path: str | Path) -> tuple[dict, bytes]:
             raw = stream.read(MAX_HEADER_BYTES + MAX_DATA_BYTES + 5)
             if stream.read(1):
                 _fail("cartridge exceeds the size limit")
-    except (OSError, EOFError) as exc:
+    except (OSError, EOFError, zlib.error) as exc:
         raise FormatError(f"cannot decompress cartridge: {exc}") from exc
     meta, buf = unframe(raw)
     check(meta, buf)
