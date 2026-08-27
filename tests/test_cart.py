@@ -69,6 +69,24 @@ class CartTests(unittest.TestCase):
         np.testing.assert_array_equal(split["data"]["pt"], [25, 35])
         np.testing.assert_array_equal(split["data"]["weight"], [1, 1])
 
+    def test_progress_reports_raw_tree_entries_even_when_prepare_drops_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ntuple = Path(directory) / "events.root"
+            with uproot.recreate(ntuple) as output:
+                output["Events"] = {"pt": np.array([5.0, 15.0, 25.0, 35.0])}
+            cart = Cart(
+                fileset={"mc": {"files": {str(ntuple): "Events"},
+                                "metadata": {"weights": None}}},
+                prepare=lambda events: events[events.pt > 10],
+                keep=lambda events: events.pt < 30,
+                columns={"pt": "pt"},
+            )
+            seen = []
+            cart.skim(step_size=2, progress=lambda *chunk: seen.append(chunk))
+        # raw counts the tree entries each chunk covered (the dashboard's totals
+        # currency), kept counts what survived PREPARE + KEEP
+        self.assertEqual(seen, [("mc", 2, 1), ("mc", 2, 1)])
+
 
 if __name__ == "__main__":
     unittest.main()

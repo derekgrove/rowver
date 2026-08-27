@@ -1,33 +1,25 @@
 #!/usr/bin/env python
-"""live_build.py — build a cartridge with a live terminal dashboard.  DEV PREVIEW.
+"""dashboard.py — the live terminal dashboard behind ``run_rowver.py --live``.
 
-Same build as ``run_rowver.py``; the only difference is what the terminal shows.
-The study's KEEP hook is wrapped so every chunk the skim reads is observed —
-``cart.py`` and ``run_rowver.py`` are untouched, so this file can live on a dev
-branch without affecting the production build.
+Purely an observer: ``Cart.build(progress=board.chunk)`` reports each processed chunk
+as ``(sample, raw_rows, kept_rows)``, and this module draws the press. It touches no
+hook and computes nothing the build depends on, so ``--live`` cannot change the file
+that is written.
 
-    python live_build.py jetmet_2018 --out /tmp/test.rvr
-
-In a real terminal the dashboard redraws in place; when piped, it prints a
-snapshot frame at each sample boundary instead. Known dev-preview limit: a
-PREPARE hook that changes row counts skews the scanned totals (the wrapper
-counts post-PREPARE rows) — the adoption path, a real skim callback, fixes
-that along with the provenance note below.
+In a real terminal the dashboard redraws in place; when piped, it prints a snapshot
+frame at each nonempty sample boundary instead — a zero-entry sample produces no
+chunk, so only the final frame shows its (full, 0/0) bar.
 """
 from __future__ import annotations
 
-import argparse
 import shutil
 import sys
 import time
 import unicodedata
-from pathlib import Path
 
-import awkward as ak
 import uproot
 
-from cart import Cart, CartError, _invoke
-from rvr6 import FormatError
+from cart import Cart, CartError
 
 # ---------------------------------------------------------------- terminal ----
 TTY = sys.stdout.isatty()
@@ -38,7 +30,7 @@ def paint(text: str, code: str) -> str:
     return f"{ESC}{code}m{text}{ESC}0m" if TTY else text
 
 
-DIM, BOLD = "2", "1"
+DIM = "2"
 DATA_C, MC_C, SIG_C, OK_C = "36", "33", "35", "32"   # cyan, yellow, magenta, green
 
 
@@ -85,9 +77,11 @@ def clock(seconds: float) -> str:
 
 # --------------------------------------------------------------- dashboard ----
 class Dashboard:
-    """Counts what the KEEP wrapper reports and draws the press."""
+    """Counts what the build's progress callback reports and draws the press."""
 
-    def __init__(self, cart: Cart, est_row_bytes: int) -> None:
+    def __init__(self, cart: Cart) -> None:
+        # f8 upper bound per column plus a weight/index share — for the buffer estimate
+        self.est_row_bytes = 8 * len(cart.columns) + 12
         self.order = list(cart.fileset)
         self.kind = {}
         for name, entry in cart.fileset.items():
@@ -105,7 +99,6 @@ class Dashboard:
         self.total = {}          # sample -> entries in its files
         self.scanned = {name: 0 for name in self.order}
         self.kept = {name: 0 for name in self.order}
-        self.est_row_bytes = est_row_bytes
         self.t0 = time.monotonic()
         self.lines = 0
         self.last_draw = 0.0
@@ -122,7 +115,7 @@ class Dashboard:
                     raise CartError(f'cannot open {name} file "{path}": {exc}') from exc
             self.total[name] = n
 
-    # -- events from the wrapper ------------------------------------------
+    # -- events from the build --------------------------------------------
     def chunk(self, sample: str, scanned: int, kept: int) -> None:
         self.scanned[sample] += scanned
         self.kept[sample] += kept
@@ -208,60 +201,3 @@ class Dashboard:
         self.lines = len(out)
 
 
-def wrap_keep(cart: Cart, board: Dashboard) -> None:
-    """Observe every chunk through the KEEP hook; the mask passes through untouched."""
-    original = cart.keep
-
-    # ponytail: the wrapper's source leaks into made.keep provenance; give cart.skim a
-    # real progress callback before adopting this beyond the dev branch.
-    def keep(events, metadata):
-        mask = _invoke(original, events, metadata, "KEEP")
-        try:
-            kept = int(ak.sum(mask))
-        except Exception:
-            kept = 0
-        board.chunk(metadata["sample"], len(events), kept)
-        return mask
-
-    cart.keep = keep
-
-
-# --------------------------------------------------------------------- run ----
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("study")
-    parser.add_argument("--out", type=Path)
-    parser.add_argument("--step-size", default="100 MB")
-    args = parser.parse_args(argv)
-    step: int | str = int(args.step_size) if str(args.step_size).isdigit() else args.step_size
-
-    try:
-        cart = Cart.load(args.study)
-        cart.validate()
-        columns = len(cart.columns)
-        est_row_bytes = 8 * columns + 12          # f8 upper bound + weight/index share
-        board = Dashboard(cart, est_row_bytes)
-        title = f" ROWVER CART PRESS · {cart.name} · {len(cart.fileset)} samples · " \
-                f"{columns} columns "
-        print(paint(title, BOLD))
-        print(paint("indexing files…", DIM))
-        board.index(cart)
-        wrap_keep(cart, board)
-        board.t0 = time.monotonic()
-        result = cart.build(args.out, step_size=step)
-    except (CartError, FormatError) as exc:
-        raise SystemExit(f"error: {exc}") from exc
-
-    board.draw(final=True)
-    size = result["compressed"] / 2**20
-    kept = sum(board.kept.values())
-    took = time.monotonic() - board.t0
-    print(paint(f" PRESSED  {result['file']}", OK_C))
-    print(paint(f"          {result['rows']:,} rows · {size:.1f} MiB gzip · "
-                f"{clock(took)} total · "
-                f"{kept / took / 1e6:.2f}M rows/s kept-side", OK_C))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

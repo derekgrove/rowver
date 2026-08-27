@@ -245,8 +245,15 @@ class Cart:
                   meta: dict, where: str) -> Any:
         return events[spec] if isinstance(spec, str) else _invoke(spec, events, meta, where)
 
-    def skim(self, step_size: int | str = "100 MB") -> tuple[dict, dict]:
-        """Read files sequentially, apply hooks, and materialise validated NumPy columns."""
+    def skim(self, step_size: int | str = "100 MB",
+             progress: Callable[[str, int, int], None] | None = None) -> tuple[dict, dict]:
+        """Read files sequentially, apply hooks, and materialise validated NumPy columns.
+
+        ``progress``, when given, is called after each fully processed chunk with
+        ``(sample, raw_rows, kept_rows)`` — raw is the tree entries the chunk covered
+        (pre-PREPARE, the same currency as ``num_entries``), kept is what survived KEEP.
+        An exception from the callback aborts the build; nothing is written.
+        """
         if not self._validated:
             self.validate()
         output: dict[str, dict[str, np.ndarray]] = {}
@@ -309,6 +316,8 @@ class Cart:
                             if not np.isfinite(values).all():
                                 raise CartError(f'{sample}.weight contains NaN or infinity')
                             weight_chunks.append(values)
+                        if progress is not None:
+                            progress(sample, stop - start, len(selected))
             output[sample] = {
                 name: np.concatenate(values) if values else np.empty(0, dtype=np.float64)
                 for name, values in chunks.items()
@@ -346,11 +355,12 @@ class Cart:
         }
 
     def build(self, destination: str | Path | None = None,
-              *, step_size: int | str = "100 MB") -> dict:
+              *, step_size: int | str = "100 MB",
+              progress: Callable[[str, int, int], None] | None = None) -> dict:
         """Skim and atomically write ``<study>.rvr``.  This is the normal public API."""
         if self.name is None or self.dir is None:
             raise CartError("load the cart with Cart.load(<study>) before building it")
-        rows, weights = self.skim(step_size)
+        rows, weights = self.skim(step_size, progress)
         built = datetime.now(timezone.utc).isoformat()
         about = {"name": self.name}
         if self.title:
