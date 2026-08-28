@@ -139,6 +139,27 @@
     ]},
     {"id": "invalid.look_lw", "accept": false, "ops": [
       {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"lw": 0}}}}}
+    ]},
+    {"id": "invalid.look_null_style", "accept": false, "ops": [
+      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": null}}}}
+    ]},
+    {"id": "invalid.look_dash_null", "accept": false, "ops": [
+      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"dash": null}}}}}
+    ]},
+    {"id": "invalid.look_lw_null", "accept": false, "ops": [
+      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"lw": null}}}}}
+    ]},
+    {"id": "invalid.map_metric", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "metric": "garbage"}]}]}
+    ]},
+    {"id": "invalid.map_flip", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "flip": "yes"}]}]}
+    ]},
+    {"id": "valid.grid_bands_increasing", "accept": true, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "grid": {"vars": [{"col": "pt", "bands": [20.0, 30.0]}]}}]}]}
+    ]},
+    {"id": "invalid.grid_bands_reversed", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "grid": {"vars": [{"col": "pt", "bands": [30.0, 20.0]}]}}]}]}
     ]}
   ]
 }

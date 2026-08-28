@@ -368,6 +368,11 @@ def _stage(stage: Any, where: str, columns: Mapping[str, dict], sources: set[str
                 if "sig" in value and (not isinstance(value["sig"], str)
                                         or value["sig"] not in sources):
                     _fail(f"{where} map has an unknown signal source")
+                if "metric" in value and not _option(value["metric"],
+                                                     {"yields", "sb", "zbi", "neff"}):
+                    _fail(f"{where} map has an invalid metric")
+                if "flip" in value and not isinstance(value["flip"], bool):
+                    _fail(f"{where} map flip must be boolean")
                 if "floor" in value and _finite(value["floor"], f"{where} map floor") < 0:
                     _fail(f"{where} map floor must be non-negative")
                 if "grid" in value:
@@ -409,8 +414,8 @@ def _stage(stage: Any, where: str, columns: Mapping[str, dict], sources: set[str
                                 taken.update(band)
                             else:
                                 threshold = _finite(band, f"{where} map grid threshold")
-                                if threshold in thresholds:
-                                    _fail(f"{where} map grid repeats a threshold")
+                                if thresholds and threshold <= max(thresholds):
+                                    _fail(f"{where} map grid thresholds must increase")
                                 thresholds.add(threshold)
 
                 node_count = 0
@@ -651,15 +656,18 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
             if not isinstance(mapping, dict):
                 _fail(f"view.look.{namespace} must be an object")
             for name, style in mapping.items():
-                if style.get("dash") is not None and style["dash"] not in (
-                        "solid", "dash", "dot"):
-                    _fail(f"view.look.{namespace}.{name} dash must be solid, dash, or dot")
-                lw = style.get("lw")
-                if lw is not None and (isinstance(lw, bool) or not isinstance(lw, (int, float))
-                        or not math.isfinite(lw) or lw <= 0 or lw > 32):
-                    _fail(f"view.look.{namespace}.{name} lw must be a positive number up to 32")
+                # SHAPE first — a null style must fail, not crash — then key
+                # PRESENCE, exactly as the browser tests it (dash: null is a
+                # broken key there, so it is a broken key here)
                 if name not in allowed[namespace] or not isinstance(style, dict):
                     _fail(f"view.look.{namespace}.{name} must style a known source")
+                if "dash" in style and style["dash"] not in ("solid", "dash", "dot"):
+                    _fail(f"view.look.{namespace}.{name} dash must be solid, dash, or dot")
+                if "lw" in style:
+                    lw = style["lw"]
+                    if (isinstance(lw, bool) or not isinstance(lw, (int, float))
+                            or not math.isfinite(lw) or lw <= 0 or lw > 32):
+                        _fail(f"view.look.{namespace}.{name} lw must be a positive number up to 32")
                 colour = style.get("colour")
                 if colour is not None and (not isinstance(colour, str)
                         or re.fullmatch(r"#[0-9a-fA-F]{6}", colour) is None):
