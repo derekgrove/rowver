@@ -668,6 +668,10 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
                     if (isinstance(lw, bool) or not isinstance(lw, (int, float))
                             or not math.isfinite(lw) or lw <= 0 or lw > 32):
                         _fail(f"view.look.{namespace}.{name} lw must be a positive number up to 32")
+                if "role" in style and style["role"] not in ("signal", "background", "data"):
+                    _fail(f"view.look.{namespace}.{name} role must be signal, background, or data")
+                if "errstyle" in style and style["errstyle"] not in ("ticks", "none"):
+                    _fail(f"view.look.{namespace}.{name} errstyle must be ticks or none")
                 colour = style.get("colour")
                 if colour is not None and (not isinstance(colour, str)
                         or re.fullmatch(r"#[0-9a-fA-F]{6}", colour) is None):

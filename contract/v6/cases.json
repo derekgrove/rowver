@@ -42,6 +42,16 @@
     },
     "zz_root": true
   },
+  "raw_numbers": [
+    {"id": "raw.int_below_2p53", "accept": true, "lexeme": "9007199254740991"},
+    {"id": "raw.int_exactly_2p53", "accept": true, "lexeme": "9007199254740992"},
+    {"id": "raw.int_past_2p53", "accept": false, "lexeme": "9007199254740993"},
+    {"id": "raw.int_negative_past_2p53", "accept": false, "lexeme": "-9007199254740993"},
+    {"id": "raw.float_spelling_rounds_by_definition", "accept": true, "lexeme": "9007199254740993.0"},
+    {"id": "raw.exponent_spelling_rounds_by_definition", "accept": true, "lexeme": "9.007199254740993e15"},
+    {"id": "raw.overflow_to_infinity", "accept": false, "lexeme": "1e400"},
+    {"id": "raw.negative_overflow", "accept": false, "lexeme": "-1e400"}
+  ],
   "cases": [
     {"id": "valid.bare", "accept": true, "ops": []},
     {"id": "valid.empty_group", "accept": true, "ops": [
@@ -215,6 +225,12 @@
     ]},
     {"id": "invalid.empty_sample_name", "accept": false, "ops": [
       {"op": "set", "path": ["data", "samples", 0, "name"], "value": ""}
+    ]},
+    {"id": "invalid.look_role", "accept": false, "ops": [
+      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"role": "hero"}}}}}
+    ]},
+    {"id": "invalid.look_errstyle", "accept": false, "ops": [
+      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"errstyle": "fat"}}}}}
     ]}
   ]
 }

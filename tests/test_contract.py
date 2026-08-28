@@ -40,6 +40,23 @@ class ContractCorpusTests(unittest.TestCase):
                     with self.assertRaises(rvr6.FormatError):
                         rvr6.check(meta, buf)
 
+    def test_shared_raw_number_lexemes(self):
+        # These probe the byte-level scanner, so they must ride the RAW path
+        # (unframe), never a parsed dict: the shared corpus carries the lexeme
+        # and the verdict, and each reader frames it into its own base header.
+        corpus = json.loads((Path(__file__).parents[1] / "contract/v6/cases.json").read_text())
+        buf = base64.b64decode(corpus["buffer_b64"])
+        base = json.dumps(corpus["base"], separators=(",", ":"))
+        for case in corpus["raw_numbers"]:
+            header = ('{"zz": ' + case["lexeme"] + "," + base[1:]).encode("utf-8")
+            frame = len(header).to_bytes(4, "little") + header + buf
+            with self.subTest(case=case["id"]):
+                if case["accept"]:
+                    rvr6.unframe(frame)
+                else:
+                    with self.assertRaises(rvr6.FormatError):
+                        rvr6.unframe(frame)
+
     def test_region_recipes_have_hard_complexity_limits(self):
         corpus = json.loads((Path(__file__).parents[1] / "contract/v6/cases.json").read_text())
         buf = base64.b64decode(corpus["buffer_b64"])

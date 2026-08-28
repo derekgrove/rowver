@@ -19,12 +19,20 @@ Conda can use the same file: `conda env create -f environment.yml`.
 
 Remote files (`root://…` in a fileset) additionally need the XRootD client —
 `mamba install -n rowver xrootd` — and, for GSI-protected redirectors such as
-FNAL EOS, a grid proxy in the shell that runs the press:
+FNAL EOS, a valid grid proxy in the shell that runs the press. To obtain one
+you need your grid certificate installed in `~/.globus/` (usercert.pem +
+userkey.pem, from your VO's certificate authority) and the VOMS client tools
+(`mamba install -n rowver voms` or your site's `voms-proxy-init`), then:
 
 ```bash
+voms-proxy-init --voms cms --valid 192:00   # your VO; renew when it expires
 export X509_USER_PROXY=/tmp/x509up_u$(id -u)
-export X509_CERT_DIR=<your CA certificates directory>
+export X509_CERT_DIR=<your CA certificates directory, e.g. /cvmfs/grid.cern.ch/etc/grid-security/certificates>
 ```
+
+`voms-proxy-info --timeleft` shows what remains on the proxy; rerun
+`voms-proxy-init` to renew it. On lxplus and most CMS/ATLAS interactive nodes
+the certificate tooling and `X509_CERT_DIR` are already in place.
 
 Purely local filesets need none of this.
 

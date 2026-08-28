@@ -3,9 +3,13 @@
 This document is the standard. `rvr6.py check` and the browser's `check6` are the
 two reference validators; where prose and validator disagree, that is a defect in
 one of them, pinned by the shared corpus `contract/v6/cases.json` (byte-identical
-in both repositories). Version 6 is FROZEN as of 2026-08-28: future changes may
-only ADD metadata under the extension policy below — no key may change meaning,
-type, or default.
+in both repositories). Rules marked *reader behaviour* describe what conforming
+readers DO with a value (clamping, defaulting) — the validators accept the wire
+value as written.
+
+Version 6 is a FREEZE CANDIDATE (2026-08-28). Once the owner declares the lock,
+future changes may only ADD metadata under the extension policy below — no key
+may change meaning, type, or default.
 
 ## 1. Container
 
@@ -14,10 +18,12 @@ gzip( u32 little-endian header length | UTF-8 JSON header | column buffer )
 ```
 
 - Header length: `1 ≤ len ≤ 8_388_608` bytes (8 MiB). The header is UTF-8 JSON.
-- Header JSON must not contain number lexemes a 64-bit double cannot hold
-  exactly where integer identity matters: integer lexemes (no `.`/`e`) with
-  magnitude above 2^53, and any lexeme overflowing to infinity, are refused by
-  readers. (This is what makes additive metadata round-trip-safe.)
+- Number lexemes: an INTEGER-spelled lexeme (no `.`/`e`) must be exactly
+  representable as a 64-bit double — magnitudes up to and including 2^53 are
+  legal, 2^53+1 is refused. Float-spelled lexemes are IEEE doubles by
+  definition (their nearest-double reading IS their value). Any lexeme
+  overflowing to infinity is refused. This is what makes additive metadata
+  round-trip-safe.
 - Column buffer: at most `1_073_741_824` bytes (1 GiB), little-endian throughout.
 - Compressed container cap in the browser: 512 MiB.
 
@@ -29,7 +35,7 @@ drawers, all REQUIRED (empty allowed where noted):
 
 | drawer  | type    | may be empty | holds |
 |---------|---------|--------------|-------|
-| `about` | object  | no (needs `name` or `title`) | study identity |
+| `about` | object  | no (needs non-empty `name`) | study identity |
 | `data`  | object  | no  | immutable buffer geometry |
 | `view`  | object  | yes | settings shared by every tab |
 | `tabs`  | array   | yes | ordered page setups |
@@ -66,8 +72,9 @@ Never rewritten by any writer (W3). Keys:
   - `nice`: `[lo, hi]`, finite, must ENCLOSE `lim` — slider endpoints.
   - `p95`, `p99`: finite, `lim[0] ≤ p95 ≤ p99 ≤ lim[1]` — exact whole-cart
     percentiles, computed by the packer.
-  - `p90` (optional; packers from 2026-08-28): finite, `lim[0] ≤ p90 ≤ p95`.
-    Readers fall back to measuring when absent.
+  - `p90` (optional; packers from 2026-08-28): finite with
+    `lim[0] ≤ p90 ≤ p95`, or `null` (reads as absent). Readers fall back to
+    measuring when absent.
   - `vals` (optional, `i4` only): the distinct values of a small categorical
     column — unique integers, at most 25 (`MAX_CHIPS`). Its presence makes the
     column categorical: cuts select values, plots bin one-per-value.
@@ -82,9 +89,11 @@ All optional unless noted.
   empty group, so a destination can exist before members). Group and subgroup
   names obey the one-namespace uniqueness rule. Nesting is exactly two levels:
   a sample may carry a group, a subgroup, or both; subgroups never nest.
-- `cats` — per-column value groupings for categorical cuts:
-  `{ colName: [{ label, vals, at? }] }`; `vals` are declared values, disjoint
-  per column.
+- `cats` — per-column categorical metadata:
+  `{ colName: { names?: { value → label }, bands?: [{ label, vals, at? }] } }`.
+  `names` are the display labels for declared values (readers take labels from
+  HERE, not from `data.cols`); `bands` group declared values for cutting, with
+  per-column-disjoint `vals`.
 - `lumis` — `{ sample|sub|group: { name: number|null } }`. Positive finite or
   `null`; names must exist in their namespace. The outermost configured tier
   wins (group over subgroup over sample).
@@ -97,10 +106,14 @@ All optional unless noted.
   - `errstyle`: `"ticks"` | `"none"` (points only).
   - `role`: `"signal"` | `"background"` | `"data"` — stored and preserved,
     read by nothing since 2026-08-28 (kept for round-trip fidelity).
-- `label` — `{ exp, tag, right }` strings: the experiment strip.
-- `fom` — `[numerator, denominator]` group names for the figure-of-merit pair.
-- `syst` — the ZBi relative systematic, number or numeric string; a garbled
-  value reads as the default `0.05`, never as `0`.
+  Unknown keys inside a style object currently RIDE THROUGH unvalidated (an
+  open interior; see §9's pending decision).
+- `label` — `{ exp, tag, right }` strings: the experiment strip. *Reader
+  behaviour*: malformed shapes are ignored, not refused.
+- `fom` — `[numerator, denominator]` group names for the figure-of-merit
+  pair. *Reader behaviour*: malformed shapes read as unset.
+- `syst` — the ZBi relative systematic, number or numeric string; *reader
+  behaviour*: a garbled value reads as the default `0.05`, never as `0`.
 - `shown` — array of sample names to draw; absent = all shown. (Also valid
   per-tab; a locked `view.shown` is the shared truth.)
 - `cuts`, `stage` — when present in `view`, these LOCK the concern: every tab
@@ -142,17 +155,20 @@ Each entry: `{ name, cuts?, chips?/shown?, stage?, plot?, … }`.
   (grouping is runtime-mutable; the name may return).
 - `mute` (optional): sources kept in the plot's panel but drawn as nothing.
   Same validation as `srcs`.
-- Binning: `nb` (2–200, default 40), `nby` (2D/3D; absent = follows `nb`),
-  `binspace`/`binspacey`: `"lin"`|`"log"`; absent = follow the log-axis flag.
+- Binning: `nb` (*reader behaviour*: clamped to 2–200, default 40), `nby`
+  (2D/3D; absent = follows `nb`, same clamp), `binspace`/`binspacey`:
+  `"lin"`|`"log"`; absent = follow the log-axis flag. Validators accept any
+  number on the wire; the clamps are how readers draw them.
 - Axes: `logx/logy/logz` booleans; `xauto/yauto/zauto` booleans (absent =
   auto); `xmin/xmax/ymin/ymax/zmin/zmax` numbers or numeric strings — a manual
   range is the HISTOGRAM range (overflow folds into end bins per `oflow`).
 - `oflow`: absent/`true` piles overflow into end bins; `false` drops it.
 - `norm`: `"yield"` (default) | `"shape"`.
 - `err`: `"off"` | `"sumw2"` | `"sqrtn"` | `"poisson_neff"` | `"poisson_raw"`.
-- Pull: `pull` boolean (draws only when a points source faces bars),
-  `pullref` (bars-source name or absent = the stack), `pullh` (12–45, % of
-  figure), `pmax` (σ window, default 5), `pulltitle`, `pullband` (absent=on).
+- Pull (1D only): `pull` boolean — draws only when a points source faces
+  bars; `pullref` (bars-source name or absent = the stack), `pullh` (*reader
+  behaviour*: clamped 12–45, % of figure), `pmax` (σ window, default 5),
+  `pulltitle`, `pullband` (absent = on).
 - Dressing: `stack`, `legend`, `legendmax` (≥2), `legendpos`
   (`below`|`right`|`float`), `legendxy`, `frame`, `inward`, `gridx/gridy`,
   `xtitle/ytitle`, `x/yticksize`, `x/ytitlesize`, `padauto/padl/padb`,
@@ -161,6 +177,9 @@ Each entry: `{ name, cuts?, chips?/shown?, stage?, plot?, … }`.
   (30–100), `hpx` (200–900), `rootui`.
 - Block membership: `sheet`, `quad`, `layout`, `shared` — see §5 block rules;
   `shared` broadcasts the whitelisted styling keys across the block.
+- Carried legacy keys — modeled by readers, unvalidated, preserved on save:
+  `span`, `pmin`, `decouple`, `compare`, `d3style`, `layer`, `layer2`, `view`,
+  `cmpmode`, `titles`, `anno`, `drawcol`, `draw`, `lines`, `merge`.
 
 ### 5.2 `board`
 
@@ -172,20 +191,28 @@ entries, each `null` or a known source; `bkgs` unique known sources;
 ### 5.3 `map`
 
 `srcs`/`bkg` unique known sources; `sig` a known source; `floor` ≥ 0;
-`metric`: `"yields"`|`"sb"`|`"zbi"`|`"neff"`; `flip` boolean; `view` key:
-`"bubbles"` selects the map face, absent = the yields table (rides as an
-extension key). `grid`: `{ vars: [{col, bands}], exhaustive? }` with ≤ 32
-variables, ≤ 64 bands each, product of `(bands+1)` ≤ 4096 regions; numeric
-thresholds finite and STRICTLY increasing; categorical bands are disjoint
-non-empty sets of declared values (≤ 25). `root`: a binary region tree of
-`{ cut: {col, lt|in}, yes, no }` nodes, depth ≤ 64, ≤ 8192 nodes.
+`metric`: `"yields"`|`"sb"`|`"zbi"`|`"neff"`; `flip` boolean; `view`: a free
+string riding as metadata — `"bubbles"` selects the map face, anything else
+reads as the yields table. `grid`: `{ vars: [{col, bands}], exhaustive? }`
+with ≤ 32 variables, ≤ 64 bands each, product of `(bands+1)` ≤ 4096 regions.
+A band entry is EITHER a finite numeric threshold (thresholds strictly
+increase) or a list — a disjoint non-empty set of declared categorical values
+(≤ 25); the validators type-check each entry by its own shape, so the editor,
+not the wire, keeps thresholds off categorical columns. `root`: a binary
+region tree of `{ cut: {col, lt|in}, yes, no }` nodes, depth ≤ 64, ≤ 8192
+nodes; an absent or `null` child is a leaf (a node may have none).
 
 ## 6. `about` and `made`
 
-`about` requires `name` or `title` (strings); other keys are free identity
-metadata. `made` is provenance — the backend records the pressed `cart.py`
-source, stamps, and tool versions; readers must treat it as opaque and
-preserve it. Neither drawer may influence a plotted number.
+`about` requires a non-empty string `name`; `title` and other keys are free
+identity metadata. `made` is provenance with an ENFORCED core schema when its
+keys are present: `built`/`skimmed` (ISO timestamps), `by` (string), `keep`/
+`prepare` (the pressed selection/derivation source), `columns` (the pressed
+column list), `cart` (the study's cart.py source), `merged`, and `samples` —
+records whose `name` and `rows` must MATCH `data.samples` one-to-one, each
+with `files` `[{path, tree}]`, `metadata`, and a `weights` declaration
+(`{kind: "branch", value}` or `{kind: "python", name}` or none). Additional
+keys ride as metadata. Neither drawer may influence a plotted number.
 
 ## 7. The column buffer
 
@@ -201,10 +228,12 @@ alignment; writers pass it through untouched (W3).
 - **W1 — merge, never rebuild.** A writer starts from the header exactly as it
   arrived and merges edits into it. Rebuilding any object from a literal is
   the defect class that silently drops keys.
-- **W2 — a no-op save is byte-identical.** Opening a file and saving without
-  edits must reproduce the header byte-for-byte (the one exception: nothing —
-  even the retired `"retro"` theme survives a no-op save; it migrates only on
-  an EDITED save).
+- **W2 — a no-op save is a fixed point.** Saving without edits re-emits the
+  writer's canonical serialization of the UNCHANGED header: every key, value
+  and order preserved (even the retired `"retro"` theme; it migrates only on
+  an edited save), and saving a writer's own output again is byte-identical.
+  Third-party formatting (pretty-printing, key spacing) canonicalizes on the
+  first save; strengthening W2 to raw-byte retention is on the pre-lock list.
 - **W3 — `data` is never written.** The drawer is immutable and the column
   buffer passes through as the same bytes.
 - **W4 — unknown keys survive.** A key the writer has never heard of survives

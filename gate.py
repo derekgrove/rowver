@@ -16,6 +16,12 @@ def main() -> int:
         return 1
     for name in production:
         compile((ROOT / name).read_text(encoding="utf-8"), name, "exec")
+    # the --live path must IMPORT, not merely compile — a missing runtime
+    # dependency in the dashboard would otherwise pass the gate
+    import importlib
+    sys.path.insert(0, str(ROOT))
+    for name in ("press", "dashboard"):
+        importlib.import_module(name)
     print(f"syntax: {len(production)} production modules")
 
     suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"))
