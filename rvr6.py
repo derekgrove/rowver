@@ -147,7 +147,9 @@ def _made(made: dict, samples: list[dict], columns: list[dict]) -> None:
                 _fail(f'made sample "{name}" has invalid files')
             if not isinstance(record.get("metadata"), dict):
                 _fail(f'made sample "{name}" metadata must be an object')
-            _made_source(record.get("weights"), f'made sample "{name}" weights')
+            if "weights" not in record:
+                _fail(f'made sample "{name}" needs a weights declaration (null = unweighted)')
+            _made_source(record["weights"], f'made sample "{name}" weights')
     if "cart" in made and made["cart"] is not None:
         cart = made["cart"]
         if not isinstance(cart, dict):
@@ -672,12 +674,12 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
                     _fail(f"view.look.{namespace}.{name} role must be signal, background, or data")
                 if "errstyle" in style and style["errstyle"] not in ("ticks", "none"):
                     _fail(f"view.look.{namespace}.{name} errstyle must be ticks or none")
-                colour = style.get("colour")
-                if colour is not None and (not isinstance(colour, str)
-                        or re.fullmatch(r"#[0-9a-fA-F]{6}", colour) is None):
-                    _fail(f"view.look.{namespace}.{name}.colour must be #RRGGBB")
-                if style.get("draw") is not None and not _option(style["draw"],
-                                                                 {"bars", "points"}):
+                if "colour" in style:
+                    colour = style["colour"]
+                    if (not isinstance(colour, str)
+                            or re.fullmatch(r"#[0-9a-fA-F]{6}", colour) is None):
+                        _fail(f"view.look.{namespace}.{name}.colour must be #RRGGBB")
+                if "draw" in style and not _option(style["draw"], {"bars", "points"}):
                     _fail(f"view.look.{namespace}.{name}.draw must be bars or points")
 
     tab_names: set[str] = set()

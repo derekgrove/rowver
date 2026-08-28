@@ -233,6 +233,18 @@
     ]},
     {"id": "invalid.look_errstyle", "accept": false, "ops": [
       {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"errstyle": "fat"}}}}}
+    ]},
+    {"id": "invalid.look_colour_null", "accept": false, "ops": [
+      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"colour": null}}}}}
+    ]},
+    {"id": "invalid.look_draw_null", "accept": false, "ops": [
+      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"draw": null}}}}}
+    ]},
+    {"id": "invalid.made_weights_missing", "accept": false, "ops": [
+      {"op": "delete", "path": ["made", "samples", 0, "weights"]}
+    ]},
+    {"id": "invalid.made_built_number", "accept": false, "ops": [
+      {"op": "set", "path": ["made", "built"], "value": 123}
     ]}
   ]
 }

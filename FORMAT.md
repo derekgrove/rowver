@@ -214,9 +214,9 @@ when present, `samples` must be records whose `name` and `rows` MATCH
 `data.samples` one-to-one (each with `files` `[{path, tree}]`, `metadata`,
 and a `weights` declaration — `{kind: "branch", value}`, `{kind: "python",
 name}`, or none), and the source-carrying fields (`keep`, `prepare`,
-`columns`, `cart`) are shape-checked. The remaining conventional keys —
-`built`/`skimmed` (ISO timestamps by convention), `by`, `merged` — ride as
-metadata, NOT validated. Additional keys ride as metadata. Neither drawer may influence a plotted number.
+`columns`, `cart`) are shape-checked. `built` is type-checked
+(text) when present; the remaining conventional keys — `skimmed` (ISO
+timestamp by convention), `by`, `merged` — ride as metadata, NOT validated. Additional keys ride as metadata. Neither drawer may influence a plotted number.
 
 ## 7. The column buffer
 
