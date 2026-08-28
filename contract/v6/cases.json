@@ -47,6 +47,8 @@
     {"id": "raw.int_exactly_2p53", "accept": true, "lexeme": "9007199254740992"},
     {"id": "raw.int_past_2p53", "accept": false, "lexeme": "9007199254740993"},
     {"id": "raw.int_negative_past_2p53", "accept": false, "lexeme": "-9007199254740993"},
+    {"id": "raw.int_exact_but_past_cap", "accept": false, "lexeme": "9007199254740994"},
+    {"id": "raw.int_negative_exact_but_past_cap", "accept": false, "lexeme": "-9007199254740994"},
     {"id": "raw.float_spelling_rounds_by_definition", "accept": true, "lexeme": "9007199254740993.0"},
     {"id": "raw.exponent_spelling_rounds_by_definition", "accept": true, "lexeme": "9.007199254740993e15"},
     {"id": "raw.overflow_to_infinity", "accept": false, "lexeme": "1e400"},

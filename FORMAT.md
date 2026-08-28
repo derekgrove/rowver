@@ -18,9 +18,10 @@ gzip( u32 little-endian header length | UTF-8 JSON header | column buffer )
 ```
 
 - Header length: `1 ≤ len ≤ 8_388_608` bytes (8 MiB). The header is UTF-8 JSON.
-- Number lexemes: an INTEGER-spelled lexeme (no `.`/`e`) must be exactly
-  representable as a 64-bit double — magnitudes up to and including 2^53 are
-  legal, 2^53+1 is refused. Float-spelled lexemes are IEEE doubles by
+- Number lexemes: an INTEGER-spelled lexeme (no `.`/`e`) must have magnitude
+  at most 2^53 — 2^53 is legal, anything beyond is refused, INCLUDING
+  even-valued integers a double could represent exactly (the cap is the rule,
+  not representability). Float-spelled lexemes are IEEE doubles by
   definition (their nearest-double reading IS their value). Any lexeme
   overflowing to infinity is refused. This is what makes additive metadata
   round-trip-safe.
@@ -78,7 +79,10 @@ Never rewritten by any writer (W3). Keys:
   - `vals` (optional, `i4` only): the distinct values of a small categorical
     column — unique integers, at most 25 (`MAX_CHIPS`). Its presence makes the
     column categorical: cuts select values, plots bin one-per-value.
-  - `names` (optional beside `vals`): display labels keyed by value.
+  - `names` (optional beside `vals`): the packer's labels keyed by value —
+    carried metadata. Readers DISPLAY labels from `view.cats[col].names`
+    (§4), never from here; writers copy these into `cats` when creating the
+    view.
 
 ## 4. `view` — shared page state
 
@@ -205,14 +209,14 @@ nodes; an absent or `null` child is a leaf (a node may have none).
 ## 6. `about` and `made`
 
 `about` requires a non-empty string `name`; `title` and other keys are free
-identity metadata. `made` is provenance with an ENFORCED core schema when its
-keys are present: `built`/`skimmed` (ISO timestamps), `by` (string), `keep`/
-`prepare` (the pressed selection/derivation source), `columns` (the pressed
-column list), `cart` (the study's cart.py source), `merged`, and `samples` —
-records whose `name` and `rows` must MATCH `data.samples` one-to-one, each
-with `files` `[{path, tree}]`, `metadata`, and a `weights` declaration
-(`{kind: "branch", value}` or `{kind: "python", name}` or none). Additional
-keys ride as metadata. Neither drawer may influence a plotted number.
+identity metadata. `made` is provenance with a PARTIALLY VALIDATED core:
+when present, `samples` must be records whose `name` and `rows` MATCH
+`data.samples` one-to-one (each with `files` `[{path, tree}]`, `metadata`,
+and a `weights` declaration — `{kind: "branch", value}`, `{kind: "python",
+name}`, or none), and the source-carrying fields (`keep`, `prepare`,
+`columns`, `cart`) are shape-checked. The remaining conventional keys —
+`built`/`skimmed` (ISO timestamps by convention), `by`, `merged` — ride as
+metadata, NOT validated. Additional keys ride as metadata. Neither drawer may influence a plotted number.
 
 ## 7. The column buffer
 
@@ -229,9 +233,12 @@ alignment; writers pass it through untouched (W3).
   arrived and merges edits into it. Rebuilding any object from a literal is
   the defect class that silently drops keys.
 - **W2 — a no-op save is a fixed point.** Saving without edits re-emits the
-  writer's canonical serialization of the UNCHANGED header: every key, value
-  and order preserved (even the retired `"retro"` theme; it migrates only on
-  an edited save), and saving a writer's own output again is byte-identical.
+  writer's canonical serialization of the UNCHANGED header: every key and
+  value preserved (even the retired `"retro"` theme; it migrates only on an
+  edited save), and saving a writer's own output again is byte-identical.
+  Member ORDER is preserved up to the host's canonical enumeration —
+  JavaScript sorts integer-like object keys first, so such keys may reorder
+  on the FIRST save; after that the order is fixed.
   Third-party formatting (pretty-printing, key spacing) canonicalizes on the
   first save; strengthening W2 to raw-byte retention is on the pre-lock list.
 - **W3 — `data` is never written.** The drawer is immutable and the column
@@ -248,9 +255,11 @@ Frozen-format changes are ADDITIVE ONLY, in these places:
 - New OPTIONAL keys on existing modeled objects require a spec revision here
   plus corpus cases in both repos before any writer emits them (as `p90`,
   `srcs`, `mute`, `dash`, `lw` were added).
-- Closed interiors: `view.look` styles, `view.lumis` tiers, region-tree nodes,
-  and categorical cut objects validate strictly — new keys there are a spec
-  revision, not free metadata.
+- Closed interiors: `view.lumis` tiers, region-tree nodes, and categorical
+  cut objects validate strictly — new keys there are a spec revision, not
+  free metadata. `view.look` styles validate their KNOWN keys strictly but
+  let unknown keys ride (§4) — an open interior until the owner decision
+  below lands.
 - [OWNER DECISION PENDING 2026-08-28]: whether to additionally freeze one
   designated `extensions` container at top level as the sole future home for
   free-form metadata. Until decided, put new free metadata at top level.
@@ -267,5 +276,5 @@ Frozen-format changes are ADDITIVE ONLY, in these places:
 | board | ≤ 4 × 4 |
 | grid variables / bands / regions | 32 / 64 / 4096 |
 | region tree depth / nodes | 64 / 8192 |
-| bins per axis | 2–200 |
+| bins per axis | 2–200 (*reader clamp*, not validated — §5.1) |
 | tabs `opens_on` | `< tabs.length` (0 when empty) |
