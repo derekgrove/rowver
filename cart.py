@@ -276,6 +276,12 @@ class Cart:
             self.validate()
         output: dict[str, dict[str, np.ndarray]] = {}
         output_weights: dict[str, np.ndarray] = {}
+        # Refuse a doomed build EARLY: the wire format caps the column buffer, and a
+        # press that will blow it should say so at the first offending chunk, not
+        # after an hour of skimming (measured: 80 minutes, then the pack refused).
+        # Worst case per kept row: every column plus the weight column, all f8.
+        kept_rows = 0
+        row_bytes = 8 * (len(self.columns) + 1)
         for sample, entry in self.fileset.items():
             chunks: dict[str, list[np.ndarray]] = {name: [] for name in self.columns}
             weight_chunks: list[np.ndarray] = []
@@ -345,6 +351,13 @@ class Cart:
                             if not np.isfinite(values).all():
                                 raise CartError(f'{sample}.weight contains NaN or infinity')
                             weight_chunks.append(values)
+                        kept_rows += len(selected)
+                        if kept_rows * row_bytes > rvr6.MAX_DATA_BYTES:
+                            raise CartError(
+                                f"the kept rows no longer fit the cartridge: "
+                                f"{kept_rows:,} rows x {row_bytes} bytes exceeds the "
+                                f"{rvr6.MAX_DATA_BYTES}-byte column limit (reached in "
+                                f'sample "{sample}") — tighten KEEP or trim the fileset')
                         if progress is not None:
                             progress(sample, stop - start, len(selected))
             output[sample] = {

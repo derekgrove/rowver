@@ -87,6 +87,26 @@ class CartTests(unittest.TestCase):
         # currency), kept counts what survived PREPARE + KEEP
         self.assertEqual(seen, [("mc", 2, 1), ("mc", 2, 1)])
 
+    def test_a_build_that_cannot_fit_the_cartridge_refuses_at_the_first_chunk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ntuple = Path(directory) / "events.root"
+            with uproot.recreate(ntuple) as output:
+                output["Events"] = {"pt": np.arange(64.0)}
+            cart = Cart(
+                fileset={"mc": {"files": {str(ntuple): "Events"},
+                                "metadata": {"weights": None}}},
+                keep=lambda events: events.pt >= 0,
+                columns={"pt": "pt"},
+            )
+            import rvr6 as _rvr6
+            original = _rvr6.MAX_DATA_BYTES
+            _rvr6.MAX_DATA_BYTES = 256          # 64 rows x 16 bytes = 1024 > 256
+            try:
+                with self.assertRaisesRegex(CartError, "no longer fit"):
+                    cart.skim(step_size=16)
+            finally:
+                _rvr6.MAX_DATA_BYTES = original
+
 
 if __name__ == "__main__":
     unittest.main()
