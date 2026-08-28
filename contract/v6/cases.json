@@ -124,6 +124,21 @@
     ]},
     {"id": "invalid.tab_defaults_srcs_null", "accept": false, "ops": [
       {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "plot": {"srcs": null}, "stage": [{"kind": "1d", "varx": "pt"}]}]}
+    ]},
+    {"id": "valid.plot_mute", "accept": true, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "mute case", "stage": [{"kind": "1d", "varx": "pt", "srcs": ["mc", "data"], "mute": ["data"]}]}]}
+    ]},
+    {"id": "invalid.plot_mute_unknown", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "mute case", "stage": [{"kind": "1d", "varx": "pt", "mute": ["ghost"]}]}]}
+    ]},
+    {"id": "invalid.tab_defaults_mute_null", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "mute case", "plot": {"mute": null}, "stage": [{"kind": "1d", "varx": "pt"}]}]}
+    ]},
+    {"id": "invalid.look_dash", "accept": false, "ops": [
+      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"dash": "wavy"}}}}}
+    ]},
+    {"id": "invalid.look_lw", "accept": false, "ops": [
+      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"lw": 0}}}}}
     ]}
   ]
 }

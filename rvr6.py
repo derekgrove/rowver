@@ -312,15 +312,17 @@ def _stage(stage: Any, where: str, columns: Mapping[str, dict], sources: set[str
                     _fail(f"{where} {kind} plot names an unknown x column")
                 if kind in {"2d", "3d"} and not _option(value.get("vary"), columns):
                     _fail(f"{where} {kind} plot names an unknown y column")
-                if "srcs" in value:
-                    # a plot's own source list: absent means every shown source;
-                    # present it must be unique known names
-                    srcs = value["srcs"]
-                    if (not isinstance(srcs, list)
+                for slot in ("srcs", "mute"):
+                    # a plot's own source/mute lists: absent means default;
+                    # present they must be unique known names
+                    if slot not in value:
+                        continue
+                    entries = value[slot]
+                    if (not isinstance(entries, list)
                             or any(not isinstance(entry, str) or entry not in sources
-                                   for entry in srcs)
-                            or len(set(srcs)) != len(srcs)):
-                        _fail(f"{where} {kind} plot has an invalid source list")
+                                   for entry in entries)
+                            or len(set(entries)) != len(entries)):
+                        _fail(f"{where} {kind} plot has an invalid {slot} list")
             if kind == "board":
                 board_rows = value.get("rows", 2)
                 board_cols = value.get("cols", 2)
@@ -649,6 +651,13 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
             if not isinstance(mapping, dict):
                 _fail(f"view.look.{namespace} must be an object")
             for name, style in mapping.items():
+                if style.get("dash") is not None and style["dash"] not in (
+                        "solid", "dash", "dot"):
+                    _fail(f"view.look.{namespace}.{name} dash must be solid, dash, or dot")
+                lw = style.get("lw")
+                if lw is not None and (isinstance(lw, bool) or not isinstance(lw, (int, float))
+                        or not math.isfinite(lw) or lw <= 0 or lw > 32):
+                    _fail(f"view.look.{namespace}.{name} lw must be a positive number up to 32")
                 if name not in allowed[namespace] or not isinstance(style, dict):
                     _fail(f"view.look.{namespace}.{name} must style a known source")
                 colour = style.get("colour")
@@ -675,15 +684,18 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
         _shown(tab.get("shown"), sample_names, f'tab "{name}"')
         _stage(tab.get("stage"), f'tab "{name}"', by_column, sources)
         defaults = tab.get("plot")
-        # "in", not .get(): a null srcs must fail here exactly as the browser
+        # "in", not .get(): a null list must fail here exactly as the browser
         # fails it, or a backend-approved cart cannot open
-        if isinstance(defaults, dict) and "srcs" in defaults:
-            srcs = defaults["srcs"]
-            if (not isinstance(srcs, list)
-                    or any(not isinstance(entry, str) or entry not in sources
-                           for entry in srcs)
-                    or len(set(srcs)) != len(srcs)):
-                _fail(f'tab "{name}" plot defaults carry an invalid source list')
+        if isinstance(defaults, dict):
+            for slot in ("srcs", "mute"):
+                if slot not in defaults:
+                    continue
+                entries = defaults[slot]
+                if (not isinstance(entries, list)
+                        or any(not isinstance(entry, str) or entry not in sources
+                               for entry in entries)
+                        or len(set(entries)) != len(entries)):
+                    _fail(f'tab "{name}" plot defaults carry an invalid {slot} list')
     if "opens_on" in meta:
         opens = _nat(meta["opens_on"], "opens_on")
         if (tabs and opens >= len(tabs)) or (not tabs and opens != 0):
