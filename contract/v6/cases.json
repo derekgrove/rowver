@@ -160,6 +160,61 @@
     ]},
     {"id": "invalid.grid_bands_reversed", "accept": false, "ops": [
       {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "grid": {"vars": [{"col": "pt", "bands": [30.0, 20.0]}]}}]}]}
+    ]},
+    {"id": "valid.look_lw_edge", "accept": true, "ops": [
+      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"lw": 32}}}}}
+    ]},
+    {"id": "invalid.look_lw_over", "accept": false, "ops": [
+      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"lw": 32.5}}}}}
+    ]},
+    {"id": "invalid.look_lw_bool", "accept": false, "ops": [
+      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"lw": true}}}}}
+    ]},
+    {"id": "valid.p90_at_p95", "accept": true, "ops": [
+      {"op": "set", "path": ["data", "cols", 0, "p90"], "value": 38.5}
+    ]},
+    {"id": "invalid.p90_above_p95", "accept": false, "ops": [
+      {"op": "set", "path": ["data", "cols", 0, "p90"], "value": 39.0}
+    ]},
+    {"id": "valid.p90_null", "accept": true, "ops": [
+      {"op": "set", "path": ["data", "cols", 0, "p90"], "value": null}
+    ]},
+    {"id": "valid.opens_on_last", "accept": true, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "a"}, {"name": "b"}]},
+      {"op": "set", "path": ["opens_on"], "value": 1}
+    ]},
+    {"id": "invalid.opens_on_out", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "a"}]},
+      {"op": "set", "path": ["opens_on"], "value": 1}
+    ]},
+    {"id": "valid.board_4x4", "accept": true, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "b", "stage": [{"kind": "board", "rows": 4, "cols": 4}]}]}
+    ]},
+    {"id": "invalid.board_5", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "b", "stage": [{"kind": "board", "rows": 5, "cols": 1}]}]}
+    ]},
+    {"id": "valid.block_6", "accept": true, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "s", "stage": [{"kind": "block", "layout": [2, 2, 2, 2, 2, 2], "cells": [{"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}]}]}]}
+    ]},
+    {"id": "invalid.block_7", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "s", "stage": [{"kind": "block", "layout": [2, 2, 2, 2, 2, 2], "cells": [{"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}]}]}]}
+    ]},
+    {"id": "valid.grid_bands_64", "accept": true, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "grid": {"vars": [{"col": "pt", "bands": [10.5, 10.9, 11.3, 11.7, 12.1, 12.5, 12.9, 13.3, 13.7, 14.1, 14.5, 14.9, 15.3, 15.7, 16.1, 16.5, 16.9, 17.3, 17.7, 18.1, 18.5, 18.9, 19.3, 19.700000000000003, 20.1, 20.5, 20.9, 21.3, 21.700000000000003, 22.1, 22.5, 22.9, 23.3, 23.700000000000003, 24.1, 24.5, 24.9, 25.3, 25.700000000000003, 26.1, 26.5, 26.900000000000002, 27.3, 27.7, 28.1, 28.5, 28.900000000000002, 29.3, 29.700000000000003, 30.1, 30.5, 30.900000000000002, 31.3, 31.700000000000003, 32.1, 32.5, 32.900000000000006, 33.3, 33.7, 34.1, 34.5, 34.900000000000006, 35.3, 35.7]}]}}]}]}
+    ]},
+    {"id": "invalid.grid_bands_65", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "grid": {"vars": [{"col": "pt", "bands": [10.5, 10.9, 11.3, 11.7, 12.1, 12.5, 12.9, 13.3, 13.7, 14.1, 14.5, 14.9, 15.3, 15.7, 16.1, 16.5, 16.9, 17.3, 17.7, 18.1, 18.5, 18.9, 19.3, 19.700000000000003, 20.1, 20.5, 20.9, 21.3, 21.700000000000003, 22.1, 22.5, 22.9, 23.3, 23.700000000000003, 24.1, 24.5, 24.9, 25.3, 25.700000000000003, 26.1, 26.5, 26.900000000000002, 27.3, 27.7, 28.1, 28.5, 28.900000000000002, 29.3, 29.700000000000003, 30.1, 30.5, 30.900000000000002, 31.3, 31.700000000000003, 32.1, 32.5, 32.900000000000006, 33.3, 33.7, 34.1, 34.5, 34.900000000000006, 35.3, 35.7, 36.1]}]}}]}]}
+    ]},
+    {"id": "valid.unicode_sample_name", "accept": true, "ops": [
+      {"op": "set", "path": ["data", "samples", 0, "name"], "value": "mc → t̄t̅ 🚀"},
+      {"op": "set", "path": ["made", "samples", 0, "name"], "value": "mc → t̄t̅ 🚀"}
+    ]},
+    {"id": "valid.awkward_sample_name", "accept": true, "ops": [
+      {"op": "set", "path": ["data", "samples", 0, "name"], "value": "mc \"quoted\"\nline two"},
+      {"op": "set", "path": ["made", "samples", 0, "name"], "value": "mc \"quoted\"\nline two"}
+    ]},
+    {"id": "invalid.empty_sample_name", "accept": false, "ops": [
+      {"op": "set", "path": ["data", "samples", 0, "name"], "value": ""}
     ]}
   ]
 }

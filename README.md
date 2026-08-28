@@ -17,6 +17,17 @@ mamba activate rowver
 
 Conda can use the same file: `conda env create -f environment.yml`.
 
+Remote files (`root://…` in a fileset) additionally need the XRootD client —
+`mamba install -n rowver xrootd` — and, for GSI-protected redirectors such as
+FNAL EOS, a grid proxy in the shell that runs the press:
+
+```bash
+export X509_USER_PROXY=/tmp/x509up_u$(id -u)
+export X509_CERT_DIR=<your CA certificates directory>
+```
+
+Purely local filesets need none of this.
+
 ## Build your cartridge
 
 ```bash
@@ -62,7 +73,9 @@ example of a valid header.
 
 The browser builder is experimental. After building the frontend's `viewer.html`, start its
 authenticated local helper with
-`python builder.py --root data=/path/to/ntuples --ui ../rowver_web/viewer.html`. The printed
+`python builder.py --root data=/path/to/ntuples --ui ../rowver_web/viewer.html`
+(or, without a local frontend checkout, pair against the hosted page:
+`--ui https://rowver.web.cern.ch`). The printed
 URL contains the pairing token. Arbitrary Python expressions remain a `cart.py` feature and
 are never evaluated by the helper.
 

@@ -1,45 +1,242 @@
-# `.rvr` 6
+# `.rvr` 6 — the normative specification
 
-The only supported container is:
+This document is the standard. `rvr6.py check` and the browser's `check6` are the
+two reference validators; where prose and validator disagree, that is a defect in
+one of them, pinned by the shared corpus `contract/v6/cases.json` (byte-identical
+in both repositories). Version 6 is FROZEN as of 2026-08-28: future changes may
+only ADD metadata under the extension policy below — no key may change meaning,
+type, or default.
 
-```text
-gzip(u32 little-endian header length | UTF-8 JSON header | column buffer)
-```
-
-All buffer values are little-endian. Columns are contiguous `f8` or `i4` arrays followed
-by one `i4` sample index per row; a mixed data/MC file also has one `f8` weight array.
-
-The header has `rowver: 6`, an optional top-level `opens_on` tab index (when `tabs` is
-empty, a present `opens_on` must be the blank-page sentinel `0`), and five drawers. Every
-drawer key must be present; `view` (`{}`), `tabs` (`[]`), and `made` (`{}`) may be empty:
-
-- `about`: study name and human-facing description.
-- `data`: immutable offsets, types, sample counts, and weight policy.
-- `view`: settings shared by all tabs.
-- `tabs`: ordered page setups.
-- `made`: provenance; emptying it never changes a plotted number.
-
-Continuous columns use inclusive `[low, high]` cuts (`null` opens one end); categorical
-columns use `{ "in": [...] }` with declared values. Luminosity is a positive finite number
-or `null`, namespaced as `view.lumis.{sample,sub,group}`; the outermost configured value
-wins. Appearance is likewise namespaced as `view.look.{sample,sub,group}` so each tier's
-settings stay explicit. Sample, subgroup, and group names are unique across those namespaces
-because stage source references are strings. `view.groups.order` may declare an
-empty group so a page can create a destination before samples are moved into it.
-`weighted: false` means observed counts and is never scaled.
-
-A stage is ordered. Its leaves are `1d`, `2d`, `3d`, `board`, or `map`. A `block` contains
-one to six non-nested leaves or interior `null` holes and an explicit layout chosen from:
+## 1. Container
 
 ```text
-[6] [3,3] [2,2,2] [3,3,6] [6,3,3] [3,3,3,3] [2,2,2,2,2,2]
+gzip( u32 little-endian header length | UTF-8 JSON header | column buffer )
 ```
 
-An effective stage contains at most one `board` and one `map`. Plot and map column names
-must resolve in `data.cols`. Boards are at most 4 × 4 and may reference only declared
-sources. Map source/background/signal references must likewise resolve; region membership
-cuts use declared categorical values, and stored grid recipes are bounded and non-overlapping.
+- Header length: `1 ≤ len ≤ 8_388_608` bytes (8 MiB). The header is UTF-8 JSON.
+- Header JSON must not contain number lexemes a 64-bit double cannot hold
+  exactly where integer identity matters: integer lexemes (no `.`/`e`) with
+  magnitude above 2^53, and any lexeme overflowing to infinity, are refused by
+  readers. (This is what makes additive metadata round-trip-safe.)
+- Column buffer: at most `1_073_741_824` bytes (1 GiB), little-endian throughout.
+- Compressed container cap in the browser: 512 MiB.
 
-Writers merge edits into the parsed metadata, preserve unknown keys, never rewrite
-`data`, and pass the column buffer through byte-for-byte. `rvr6.check` is normative for
-validation limits and invariants.
+## 2. Header shape
+
+Top level: `rowver: 6` (required), optional `opens_on` (natural number; with
+empty `tabs` it must be `0`; otherwise `< tabs.length`), and exactly these five
+drawers, all REQUIRED (empty allowed where noted):
+
+| drawer  | type    | may be empty | holds |
+|---------|---------|--------------|-------|
+| `about` | object  | no (needs `name` or `title`) | study identity |
+| `data`  | object  | no  | immutable buffer geometry |
+| `view`  | object  | yes | settings shared by every tab |
+| `tabs`  | array   | yes | ordered page setups |
+| `made`  | object  | yes | provenance; emptying it never changes a plotted number |
+
+Unknown keys: see §9 (extension policy).
+
+## 3. `data` — the immutable drawer
+
+Never rewritten by any writer (W3). Keys:
+
+- `rows` — natural number of entries (events). One buffer row = one entry.
+- `bytes` — exact byte length of the column buffer. Must equal the sum of all
+  declared spans, and every span must fit inside it without overlap.
+- `weight_col` — string name of the weight column, or `null` for none.
+  When non-null, `weight_at` is required: an 8-aligned byte offset of a
+  contiguous `f8[rows]` array. The weight column name must not collide with a
+  data column name.
+- `sample_at` — 4-aligned byte offset of the per-row sample-index column:
+  `i4[rows]`, each value a valid index into `samples`. (It locates the
+  sample-membership array, NOT "where the data begins" — every column carries
+  its own offset.)
+- `samples` — non-empty array of `{ name, rows, weighted }`:
+  - `name`: non-empty string, unique across samples AND across every
+    group/subgroup name (stage references are strings, so the namespace is one).
+  - `rows`: natural; the per-sample values must sum to `data.rows`.
+  - `weighted`: boolean. `false` means observed counts, never scaled.
+- `cols` — non-empty array of column records:
+  - `name`: non-empty unique string (same shared namespace).
+  - `kind`: `"f8"` or `"i4"` only. Width 8 or 4 bytes.
+  - `at`: byte offset, aligned to the column width; span `width × rows` must
+    fit the buffer and overlap nothing.
+  - `lim`: `[min, max]`, finite, `min ≤ max` — the measured extremes.
+  - `nice`: `[lo, hi]`, finite, must ENCLOSE `lim` — slider endpoints.
+  - `p95`, `p99`: finite, `lim[0] ≤ p95 ≤ p99 ≤ lim[1]` — exact whole-cart
+    percentiles, computed by the packer.
+  - `p90` (optional; packers from 2026-08-28): finite, `lim[0] ≤ p90 ≤ p95`.
+    Readers fall back to measuring when absent.
+  - `vals` (optional, `i4` only): the distinct values of a small categorical
+    column — unique integers, at most 25 (`MAX_CHIPS`). Its presence makes the
+    column categorical: cuts select values, plots bin one-per-value.
+  - `names` (optional beside `vals`): display labels keyed by value.
+
+## 4. `view` — shared page state
+
+All optional unless noted.
+
+- `groups` — `{ of: {sample→group}, sub: {sample→subgroup}, order: [group…] }`.
+  Referenced samples must exist; `order` lists top-level groups (may include an
+  empty group, so a destination can exist before members). Group and subgroup
+  names obey the one-namespace uniqueness rule. Nesting is exactly two levels:
+  a sample may carry a group, a subgroup, or both; subgroups never nest.
+- `cats` — per-column value groupings for categorical cuts:
+  `{ colName: [{ label, vals, at? }] }`; `vals` are declared values, disjoint
+  per column.
+- `lumis` — `{ sample|sub|group: { name: number|null } }`. Positive finite or
+  `null`; names must exist in their namespace. The outermost configured tier
+  wins (group over subgroup over sample).
+- `look` — `{ sample|sub|group: { name: style } }`. A style is an object; the
+  modeled keys are:
+  - `colour`: `"#rrggbb"` exactly (6 hex digits).
+  - `draw`: `"bars"` | `"points"`.
+  - `dash`: `"solid"` | `"dash"` | `"dot"` (bars only; absent = solid).
+  - `lw`: number, `0 < lw ≤ 32` — this source's own line width.
+  - `errstyle`: `"ticks"` | `"none"` (points only).
+  - `role`: `"signal"` | `"background"` | `"data"` — stored and preserved,
+    read by nothing since 2026-08-28 (kept for round-trip fidelity).
+- `label` — `{ exp, tag, right }` strings: the experiment strip.
+- `fom` — `[numerator, denominator]` group names for the figure-of-merit pair.
+- `syst` — the ZBi relative systematic, number or numeric string; a garbled
+  value reads as the default `0.05`, never as `0`.
+- `shown` — array of sample names to draw; absent = all shown. (Also valid
+  per-tab; a locked `view.shown` is the shared truth.)
+- `cuts`, `stage` — when present in `view`, these LOCK the concern: every tab
+  shows the shared copy and each tab's own copy lies dormant
+  (promote-and-shadow; unlocking restores the dormant copies).
+- `prefs`:
+  - `theme`: `"professional"` | `"graphite"` | `"cgb"` | `"pocket"`. The
+    retired wire value `"retro"` reads as `"cgb"` and migrates on an edited
+    save while surviving a no-op save byte-for-byte. Unknown theme ids ride
+    through saves untouched.
+  - `textScale`: display size hint (string).
+  - `exportScale`: PNG export scale, number 1–8.
+
+## 5. `tabs`
+
+Each entry: `{ name, cuts?, chips?/shown?, stage?, plot?, … }`.
+
+- `name`: non-empty string, unique among tabs.
+- `cuts`: `{ columnIndex: [lo, hi] }` for continuous columns (inclusive; `null`
+  opens one end) and `{ columnIndex: { "in": [values…] } }` for categorical
+  columns (declared values only). Present-but-`null` cuts are invalid.
+- `shown`: as in `view`.
+- `plot`: DEFAULTS merged into every plot leaf of this tab's stage. Any plot
+  key is legal here; `srcs`/`mute` obey the same rules as on a leaf (below).
+- `stage`: ordered array of leaves and blocks (never `null`):
+  - Leaf kinds: `1d`, `2d`, `3d`, `board`, `map`.
+  - `block`: `{ kind: "block", cells: [leaf|null ×1–6], layout }` with layout
+    one of `[6] [3,3] [2,2,2] [3,3,6] [6,3,3] [3,3,3,3] [2,2,2,2,2,2]`;
+    blocks never nest; at least one cell is non-null.
+  - At most one `board` and one `map` per effective stage.
+
+### 5.1 Plot leaves (`1d`/`2d`/`3d`)
+
+- `varx` required, and `vary` for `2d`/`3d` — must name declared columns.
+- `srcs` (optional): the sources THIS plot draws — unique known source names
+  (sample/subgroup/group namespace). Absent = every shown source (the meaning
+  of every file from before the key). `[]` is a real state: an empty skeleton.
+  A name that is not currently a top-level drawn source is INERT, not invalid
+  (grouping is runtime-mutable; the name may return).
+- `mute` (optional): sources kept in the plot's panel but drawn as nothing.
+  Same validation as `srcs`.
+- Binning: `nb` (2–200, default 40), `nby` (2D/3D; absent = follows `nb`),
+  `binspace`/`binspacey`: `"lin"`|`"log"`; absent = follow the log-axis flag.
+- Axes: `logx/logy/logz` booleans; `xauto/yauto/zauto` booleans (absent =
+  auto); `xmin/xmax/ymin/ymax/zmin/zmax` numbers or numeric strings — a manual
+  range is the HISTOGRAM range (overflow folds into end bins per `oflow`).
+- `oflow`: absent/`true` piles overflow into end bins; `false` drops it.
+- `norm`: `"yield"` (default) | `"shape"`.
+- `err`: `"off"` | `"sumw2"` | `"sqrtn"` | `"poisson_neff"` | `"poisson_raw"`.
+- Pull: `pull` boolean (draws only when a points source faces bars),
+  `pullref` (bars-source name or absent = the stack), `pullh` (12–45, % of
+  figure), `pmax` (σ window, default 5), `pulltitle`, `pullband` (absent=on).
+- Dressing: `stack`, `legend`, `legendmax` (≥2), `legendpos`
+  (`below`|`right`|`float`), `legendxy`, `frame`, `inward`, `gridx/gridy`,
+  `xtitle/ytitle`, `x/yticksize`, `x/ytitlesize`, `padauto/padl/padb`,
+  `lw`, `ms`, `fillop` (0–100), `explabel`, `showcuts`, `cmt`, `backend`
+  (`root`|`plotly`), `aspect` (`free`|`16:9`|`3:2`|`4:3`|`1:1`), `wfrac`
+  (30–100), `hpx` (200–900), `rootui`.
+- Block membership: `sheet`, `quad`, `layout`, `shared` — see §5 block rules;
+  `shared` broadcasts the whitelisted styling keys across the block.
+
+### 5.2 `board`
+
+`rows`/`cols` integers 1–4 (default 2×2); `cells` at most `rows × cols`
+entries, each `null` or a known source; `bkgs` unique known sources;
+`channel`: `"yield"`|`"metrics"`; `err`: the uncertainty enum above (default
+`poisson_neff`); `met`: unique subset of `["sob","sig","zbi"]` (absent = all).
+
+### 5.3 `map`
+
+`srcs`/`bkg` unique known sources; `sig` a known source; `floor` ≥ 0;
+`metric`: `"yields"`|`"sb"`|`"zbi"`|`"neff"`; `flip` boolean; `view` key:
+`"bubbles"` selects the map face, absent = the yields table (rides as an
+extension key). `grid`: `{ vars: [{col, bands}], exhaustive? }` with ≤ 32
+variables, ≤ 64 bands each, product of `(bands+1)` ≤ 4096 regions; numeric
+thresholds finite and STRICTLY increasing; categorical bands are disjoint
+non-empty sets of declared values (≤ 25). `root`: a binary region tree of
+`{ cut: {col, lt|in}, yes, no }` nodes, depth ≤ 64, ≤ 8192 nodes.
+
+## 6. `about` and `made`
+
+`about` requires `name` or `title` (strings); other keys are free identity
+metadata. `made` is provenance — the backend records the pressed `cart.py`
+source, stamps, and tool versions; readers must treat it as opaque and
+preserve it. Neither drawer may influence a plotted number.
+
+## 7. The column buffer
+
+Contiguous little-endian arrays at the declared offsets: each data column
+(`f8`/`i4`), the optional weight column (`f8` at `weight_at`), and the sample
+index (`i4[rows]` at `sample_at`, values `0 ≤ v < samples.length`, with the
+per-sample row counts matching `samples[].rows`). Spans must tile `data.bytes`
+exactly — no gaps, no overlaps. Readers may copy the buffer to obtain 8-byte
+alignment; writers pass it through untouched (W3).
+
+## 8. The writer contract
+
+- **W1 — merge, never rebuild.** A writer starts from the header exactly as it
+  arrived and merges edits into it. Rebuilding any object from a literal is
+  the defect class that silently drops keys.
+- **W2 — a no-op save is byte-identical.** Opening a file and saving without
+  edits must reproduce the header byte-for-byte (the one exception: nothing —
+  even the retired `"retro"` theme survives a no-op save; it migrates only on
+  an EDITED save).
+- **W3 — `data` is never written.** The drawer is immutable and the column
+  buffer passes through as the same bytes.
+- **W4 — unknown keys survive.** A key the writer has never heard of survives
+  a save wherever the extension policy (§9) admits it.
+
+## 9. Extension policy (additive metadata)
+
+Frozen-format changes are ADDITIVE ONLY, in these places:
+
+- Any new key at the top level, inside `about`, `made`, `view.prefs`, on a tab
+  entry, or on any stage leaf/block — readers preserve and ignore them.
+- New OPTIONAL keys on existing modeled objects require a spec revision here
+  plus corpus cases in both repos before any writer emits them (as `p90`,
+  `srcs`, `mute`, `dash`, `lw` were added).
+- Closed interiors: `view.look` styles, `view.lumis` tiers, region-tree nodes,
+  and categorical cut objects validate strictly — new keys there are a spec
+  revision, not free metadata.
+- [OWNER DECISION PENDING 2026-08-28]: whether to additionally freeze one
+  designated `extensions` container at top level as the sole future home for
+  free-form metadata. Until decided, put new free metadata at top level.
+- Extension values must obey §1's number-safety rule.
+
+## 10. Limits (both validators)
+
+| limit | value |
+|---|---|
+| header bytes | 8 MiB |
+| column buffer | 1 GiB |
+| categorical values / band members | 25 |
+| block cells | 1–6, layouts as listed |
+| board | ≤ 4 × 4 |
+| grid variables / bands / regions | 32 / 64 / 4096 |
+| region tree depth / nodes | 64 / 8192 |
+| bins per axis | 2–200 |
+| tabs `opens_on` | `< tabs.length` (0 when empty) |
