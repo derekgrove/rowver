@@ -121,6 +121,9 @@
     ]},
     {"id": "invalid.tab_defaults_srcs", "accept": false, "ops": [
       {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "plot": {"srcs": ["ghost"]}, "stage": [{"kind": "1d", "varx": "pt"}]}]}
+    ]},
+    {"id": "invalid.tab_defaults_srcs_null", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "plot": {"srcs": null}, "stage": [{"kind": "1d", "varx": "pt"}]}]}
     ]}
   ]
 }

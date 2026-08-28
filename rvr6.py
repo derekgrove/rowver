@@ -675,7 +675,9 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
         _shown(tab.get("shown"), sample_names, f'tab "{name}"')
         _stage(tab.get("stage"), f'tab "{name}"', by_column, sources)
         defaults = tab.get("plot")
-        if isinstance(defaults, dict) and defaults.get("srcs") is not None:
+        # "in", not .get(): a null srcs must fail here exactly as the browser
+        # fails it, or a backend-approved cart cannot open
+        if isinstance(defaults, dict) and "srcs" in defaults:
             srcs = defaults["srcs"]
             if (not isinstance(srcs, list)
                     or any(not isinstance(entry, str) or entry not in sources
