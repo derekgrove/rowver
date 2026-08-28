@@ -53,7 +53,8 @@ python gate.py
 
 ## Programmatic use
 
-`cart.py` is the front door, but a script can also write a cartridge directly:
+A study's `cart.py` recipe is the front door (the library that presses it is
+`press.py`), but a script can also write a cartridge directly:
 `meta, buf = rvr6.pack(by_sample, weighted=..., weights=...)` then
 `rvr6.write(path, meta, buf)`. Both `write` and `read` run `rvr6.check` internally, so an
 invalid file can be neither produced nor opened. `contract/v6/cases.json` holds the worked

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 
 
 def main() -> int:
-    production = ["cart.py", "rvr6.py", "run_rowver.py", "builder_spec.py", "builder.py"]
+    production = ["press.py", "cart.py", "rvr6.py", "run_rowver.py", "builder_spec.py", "builder.py"]
     missing = [name for name in production if not (ROOT / name).is_file()]
     if missing:
         print(f"missing production files: {', '.join(missing)}", file=sys.stderr)
