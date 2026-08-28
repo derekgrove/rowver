@@ -279,9 +279,17 @@ class Cart:
         # Refuse a doomed build EARLY: the wire format caps the column buffer, and a
         # press that will blow it should say so at the first offending chunk, not
         # after an hour of skimming (measured: 80 minutes, then the pack refused).
-        # Worst case per kept row: every column plus the weight column, all f8.
+        # The estimate mirrors pack's own layout — 4-byte sample index per row, one
+        # 8-byte weight slab when any sample is weighted, and per column 4 bytes
+        # while its chunks stay integer-typed inside int32 (pack narrows those to
+        # i4) or 8 once anything wider appears. A column can only WIDEN, so the
+        # running total is a lower bound tightening toward pack's exact size:
+        # a refusal here is certain, never premature.
         kept_rows = 0
-        row_bytes = 8 * (len(self.columns) + 1)
+        col_wide: dict[str, bool] = {name: False for name in self.columns}
+        any_weighted = any(entry["metadata"]["weights"] is not None
+                           for entry in self.fileset.values())
+        i32 = np.iinfo(np.int32)
         for sample, entry in self.fileset.items():
             chunks: dict[str, list[np.ndarray]] = {name: [] for name in self.columns}
             weight_chunks: list[np.ndarray] = []
@@ -341,6 +349,11 @@ class Cart:
                                 raise CartError(f'{sample}.{name} returned {len(column)} values for '
                                                 f'{len(selected)} selected events')
                             chunks[name].append(column)
+                            if not col_wide[name] and (
+                                    column.dtype.kind not in "biu" or
+                                    (column.size and (column.min() < i32.min or
+                                                      column.max() > i32.max))):
+                                col_wide[name] = True
                         weight = entry["metadata"]["weights"]
                         if weight is not None:
                             values = _one_dimensional(
@@ -352,6 +365,9 @@ class Cart:
                                 raise CartError(f'{sample}.weight contains NaN or infinity')
                             weight_chunks.append(values)
                         kept_rows += len(selected)
+                        row_bytes = (4 + (8 if any_weighted else 0)
+                                     + sum(8 if wide else 4
+                                           for wide in col_wide.values()))
                         if kept_rows * row_bytes > rvr6.MAX_DATA_BYTES:
                             raise CartError(
                                 f"the kept rows no longer fit the cartridge: "

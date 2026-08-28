@@ -100,7 +100,8 @@ class CartTests(unittest.TestCase):
             )
             import rvr6 as _rvr6
             original = _rvr6.MAX_DATA_BYTES
-            _rvr6.MAX_DATA_BYTES = 256          # 64 rows x 16 bytes = 1024 > 256
+            # 64 rows x (4 index + 8 f8 column) = 768 > 256; no weight slab (data)
+            _rvr6.MAX_DATA_BYTES = 256
             try:
                 with self.assertRaisesRegex(CartError, "no longer fit"):
                     cart.skim(step_size=16)
