@@ -100,6 +100,27 @@
     {"id": "invalid.map_category", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "root": {"cut": {"col": "njet", "in": [8]}, "yes": null, "no": null}}]}]}]},
     {"id": "invalid.nested_block", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "block", "layout": [6], "cells": [{"kind": "block", "layout": [6], "cells": [{"kind": "1d", "varx": "pt"}]}]}]}]}]},
     {"id": "invalid.duplicate_board", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "board"}, {"kind": "board"}]}]}]},
-    {"id": "invalid.opens_on", "accept": false, "ops": [{"op": "set", "path": ["opens_on"], "value": 2}]}
+    {"id": "invalid.opens_on", "accept": false, "ops": [{"op": "set", "path": ["opens_on"], "value": 2}]},
+    {"id": "valid.plot_srcs", "accept": true, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "stage": [{"kind": "1d", "varx": "pt", "srcs": ["mc"]}]}]}
+    ]},
+    {"id": "valid.plot_srcs_empty", "accept": true, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "stage": [{"kind": "1d", "varx": "pt", "srcs": []}]}]}
+    ]},
+    {"id": "invalid.plot_srcs_unknown", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "stage": [{"kind": "1d", "varx": "pt", "srcs": ["ghost"]}]}]}
+    ]},
+    {"id": "invalid.plot_srcs_duplicate", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "stage": [{"kind": "1d", "varx": "pt", "srcs": ["mc", "mc"]}]}]}
+    ]},
+    {"id": "invalid.plot_srcs_type", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "stage": [{"kind": "1d", "varx": "pt", "srcs": [{}]}]}]}
+    ]},
+    {"id": "valid.tab_defaults_srcs", "accept": true, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "plot": {"srcs": ["mc"]}, "stage": [{"kind": "1d", "varx": "pt"}]}]}
+    ]},
+    {"id": "invalid.tab_defaults_srcs", "accept": false, "ops": [
+      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "plot": {"srcs": ["ghost"]}, "stage": [{"kind": "1d", "varx": "pt"}]}]}
+    ]}
   ]
 }

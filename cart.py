@@ -1,17 +1,20 @@
 """The one-file study definition used to build a RowVer cartridge.
 
-A study lives at ``studies/<name>/cart.py`` and exports one ``CART``.  The copied
-directory name is the study name; users do not repeat it inside the file.
+By default, studies live in ``studies/<name>/cart.py`` and run_rowver.py exports one ``CART`` (.rvr file) from that study.
 
-The fileset follows Coffea's familiar shape::
+a cart.py is intended to be a basic recipe to build your .rvr file, its a:
+1) fileset (remote or local paths to .root files)
+2)
+
+The fileset follows Coffea's familiar shape:
 
     {"sample": {"files": {"file.root": "Events"},
                 "metadata": {"weights": "genWeight"}}}
 
-Every sample must explicitly declare ``metadata['weights']``.  Use a branch name or a
-callable for weighted simulation and ``None`` for observed data.  Silence is refused even
-when every sample is silent: forgotten MC weights and intentional data are not the same
-state.
+Every sample must explicitly declare ``metadata['weights']``.  
+Use the branch name of your simulation weights or ``None`` for observed data. 
+Not declaring a weights branch is refused, even when every sample is weightless.
+This rigid enforcement is for your own good, forgotten MC weights and intentional data are not the same thing.
 """
 from __future__ import annotations
 

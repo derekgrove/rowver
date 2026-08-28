@@ -312,6 +312,15 @@ def _stage(stage: Any, where: str, columns: Mapping[str, dict], sources: set[str
                     _fail(f"{where} {kind} plot names an unknown x column")
                 if kind in {"2d", "3d"} and not _option(value.get("vary"), columns):
                     _fail(f"{where} {kind} plot names an unknown y column")
+                if "srcs" in value:
+                    # a plot's own source list: absent means every shown source;
+                    # present it must be unique known names
+                    srcs = value["srcs"]
+                    if (not isinstance(srcs, list)
+                            or any(not isinstance(entry, str) or entry not in sources
+                                   for entry in srcs)
+                            or len(set(srcs)) != len(srcs)):
+                        _fail(f"{where} {kind} plot has an invalid source list")
             if kind == "board":
                 board_rows = value.get("rows", 2)
                 board_cols = value.get("cols", 2)
@@ -530,6 +539,10 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
             _fail(f'column "{name}" nice range does not enclose lim')
         if not lim[0] <= p95 <= p99 <= lim[1]:
             _fail(f'column "{name}" percentiles are outside lim or reversed')
+        if col.get("p90") is not None:  # optional: files predating the key have none
+            p90 = _finite(col["p90"], f'column "{name}" p90')
+            if not lim[0] <= p90 <= p95:
+                _fail(f'column "{name}" p90 is outside lim or above p95')
         vals = col.get("vals")
         if vals is not None:
             if kind != "i4" or not isinstance(vals, list) or len(vals) > MAX_CHIPS:
@@ -661,6 +674,14 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
         _cuts(tab.get("cuts"), by_column, f'tab "{name}"')
         _shown(tab.get("shown"), sample_names, f'tab "{name}"')
         _stage(tab.get("stage"), f'tab "{name}"', by_column, sources)
+        defaults = tab.get("plot")
+        if isinstance(defaults, dict) and defaults.get("srcs") is not None:
+            srcs = defaults["srcs"]
+            if (not isinstance(srcs, list)
+                    or any(not isinstance(entry, str) or entry not in sources
+                           for entry in srcs)
+                    or len(set(srcs)) != len(srcs)):
+                _fail(f'tab "{name}" plot defaults carry an invalid source list')
     if "opens_on" in meta:
         opens = _nat(meta["opens_on"], "opens_on")
         if (tabs and opens >= len(tabs)) or (not tabs and opens != 0):
@@ -743,7 +764,7 @@ def _bump(value: float, up: bool) -> float:
 
 def _stats(values: np.ndarray, integer: bool) -> dict:
     if not values.size:
-        return {"lim": [0, 0], "nice": [0, 1], "p95": 0, "p99": 0,
+        return {"lim": [0, 0], "nice": [0, 1], "p90": 0, "p95": 0, "p99": 0,
                 **({"vals": []} if integer else {})}
     lo, hi = float(values.min()), float(values.max())
     nice_lo, nice_hi = _bump(lo, False), _bump(hi, True)
@@ -752,6 +773,7 @@ def _stats(values: np.ndarray, integer: bool) -> dict:
     if nice_lo == nice_hi:
         nice_hi = nice_lo + 1
     out = {"lim": [lo, hi], "nice": [nice_lo, nice_hi],
+           "p90": float(np.percentile(values, 90)),
            "p95": float(np.percentile(values, 95)),
            "p99": float(np.percentile(values, 99))}
     if integer:
