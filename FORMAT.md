@@ -136,9 +136,11 @@ All optional unless noted.
 Each entry: `{ name, cuts?, chips?/shown?, stage?, plot?, … }`.
 
 - `name`: non-empty string, unique among tabs.
-- `cuts`: `{ columnIndex: [lo, hi] }` for continuous columns (inclusive; `null`
-  opens one end) and `{ columnIndex: { "in": [values…] } }` for categorical
-  columns (declared values only). Present-but-`null` cuts are invalid.
+- `cuts`: keyed by column NAME (the page keys its internal state by index;
+  the wire never does): `{ colName: [lo, hi] }` for continuous columns
+  (inclusive; `null` opens one end) and `{ colName: { "in": [values…] } }`
+  for categorical columns (declared values only). Present-but-`null` cuts
+  are invalid.
 - `shown`: as in `view`.
 - `plot`: DEFAULTS merged into every plot leaf of this tab's stage. Any plot
   key is legal here; `srcs`/`mute` obey the same rules as on a leaf (below).
