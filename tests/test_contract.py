@@ -27,6 +27,16 @@ def apply(meta: dict, operations: list[dict]) -> dict:
 
 
 class ContractCorpusTests(unittest.TestCase):
+    # Full-file pin for the hand-synced corpus. A deliberate edit bumps this
+    # AND the frontend gate's CORPUS_SHA256 in the same sync; a mismatch means
+    # the copies were edited without re-syncing.
+    CORPUS_SHA256 = "735b31848cfca81b416149cde5f2d4905bb307d0710ca70ccb8caa6a2d75d64a"
+
+    def test_corpus_pinned(self):
+        raw = (Path(__file__).parents[1] / "contract/v6/cases.json").read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), self.CORPUS_SHA256,
+                         "corpus differs from the pin — bump both repos' pins and re-sync")
+
     def test_shared_v6_cases(self):
         corpus = json.loads((Path(__file__).parents[1] / "contract/v6/cases.json").read_text())
         buf = base64.b64decode(corpus["buffer_b64"])
