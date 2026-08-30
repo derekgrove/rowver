@@ -4,7 +4,7 @@
                                    [--no-cuts] [--allow-unset-lumi] [-o DIR]
 
 Each 1d stage entry (blocks included) becomes one output set, identity
-`t<tab>_s<stage>[_c<cell>]_1d_<var>` (SCHEMAS.md kind `plot1d` v1):
+`t<tab>_s<stage>[_c<cell>]_1d_<var>` (SCHEMAS.md kind `plot1d` v2):
 `.data.npz` (edges, centres, sources, h, h2, n, tails, err bands),
 `.meta.json` (the resolved spec + the window actually framed), `.cuts.txt`.
 

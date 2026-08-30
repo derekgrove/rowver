@@ -45,6 +45,7 @@ works with matplotlib alone).
 """
 import argparse
 import json
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -76,7 +77,7 @@ def _style_context(style: str):
     return plt.style.context(sheet)
 
 
-def _band(mode, h_rows, h2_rows, n_rows) -> np.ndarray:
+def _band(mode, h_rows, h2_rows, n_rows) -> tuple[np.ndarray, np.ndarray]:
     """(nb, 2) [down, up] for the stacked total: totals accumulated
     source-by-source in draw order (the backends' loop), then err_for."""
     tot = np.zeros(h_rows.shape[1] if h_rows.size else 0)
@@ -203,7 +204,7 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
         with np.load(meta_path.with_name(f"{name}.data.npz")) as z:
             edges = z["edges"]
             centres = z["centres"]
-            sources = [str(s) for s in z["sources"]]
+            src_arr = z["sources"]
             h, h2, n = z["h"], z["h2"], z["n"]
             if ("err_down" in z) != ("err_up" in z):
                 raise ExtractError(
@@ -211,12 +212,18 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
             err = (z["err_down"], z["err_up"]) if "err_down" in z else None
     except (OSError, KeyError, ValueError, zipfile.BadZipFile) as exc:
         raise ExtractError(f"{name}: unreadable npz — {exc}") from exc
+    if src_arr.ndim != 1 or src_arr.dtype.kind != "U":
+        raise ExtractError(f"{name}: sources must be a 1-D unicode array")
+    sources = [str(s) for s in src_arr]
     K, nb = len(sources), len(centres)
     grids = (h, h2, n) + (err or ())
     if not (centres.ndim == 1
             and all(g.shape == (K, nb) for g in grids)
             and edges.shape == (nb + 1,)
-            and all(np.issubdtype(g.dtype, np.floating)
+            # the schema says little-endian f8 exactly — a float16/128 or
+            # big-endian grid is another writer's record, and coercing a
+            # float128 would CHANGE the drawn value
+            and all(g.dtype.str == "<f8"
                     for g in grids + (edges, centres))):
         raise ExtractError(f"{name}: npz shapes/dtypes disagree with the "
                            f"schema")
@@ -242,9 +249,12 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
 
     spec, look = meta["spec"], meta.get("look") or {}
     colours = meta.get("colours")
-    if not isinstance(colours, dict) or any(s not in colours for s in sources):
-        raise ExtractError(f"{name}: no stamped colour for every source — "
-                           f"required as of plot1d v2")
+    if not isinstance(colours, dict) or any(
+            not isinstance(colours.get(s), str)
+            or re.fullmatch(r"#[0-9a-fA-F]{6}", colours[s]) is None
+            for s in sources):
+        raise ExtractError(f"{name}: no stamped #RRGGBB colour for every "
+                           f"source — required as of plot1d v2")
     widths = np.diff(edges)
     is_pts = [(look.get(s) or {}).get("draw") == "points" for s in sources]
     errstyles = [(look.get(s) or {}).get("errstyle") for s in sources]

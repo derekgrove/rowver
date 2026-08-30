@@ -191,9 +191,15 @@ class RenderTests(unittest.TestCase):
         # window.lo controls logx engagement: it must match the edges
         with self.assertRaises(ExtractError):
             self._fig(edit=lambda m: m["window"].__setitem__("lo", -1.0))
-        # colours are required as of v2, never guessed at
+        # colours are required as of v2, never guessed at — and a null or
+        # non-#RRGGBB value is as absent as a missing key (matplotlib
+        # would silently invent a default)
         with self.assertRaises(ExtractError):
             self._fig(edit=lambda m: m.pop("colours"))
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m["colours"].__setitem__("sig", None))
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m["colours"].__setitem__("sig", "red"))
 
     def test_one_bar_source_never_stacks(self):
         # JSROOT stacks only PLURAL bars: one bar + stack:true draws as the
