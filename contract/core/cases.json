@@ -7111,6 +7111,750 @@
    }
   }
  ],
+ "plot2d": [
+  {
+   "id": "2d-basic-grouped-weighted",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      4
+     ],
+     "nice": [
+      0,
+      4
+     ]
+    },
+    {
+     "name": "y",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.5,
+     1.5,
+     2.5,
+     3.5
+    ],
+    "y": [
+     0.5,
+     0.5,
+     1.5,
+     1.5
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    1,
+    2
+   ],
+   "samples": [
+    "a",
+    "b",
+    "c"
+   ],
+   "groups": {
+    "a": "G",
+    "b": "G"
+   },
+   "shown_on": null,
+   "weighted": true,
+   "ww": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "spec": {
+    "mode": "2d",
+    "varx": "x",
+    "vary": "y",
+    "nb": 4,
+    "nby": 2
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 4.0,
+    "nb": 4,
+    "ints": false,
+    "log": false,
+    "loy": 0.0,
+    "hiy": 2.0,
+    "nby": 2,
+    "logy": false,
+    "sources": [
+     "G",
+     "c"
+    ],
+    "h": [
+     1.0,
+     2.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     3.0,
+     4.0
+    ],
+    "kept": 4
+   }
+  },
+  {
+   "id": "2d-nby-null-falls-to-nb",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ]
+    },
+    {
+     "name": "y",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.5,
+     1.5
+    ],
+    "y": [
+     1.5,
+     0.5
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "a"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "mode": "2d",
+    "varx": "x",
+    "vary": "y",
+    "nb": 2,
+    "nby": null
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 2.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "loy": 0.0,
+    "hiy": 2.0,
+    "nby": 2,
+    "logy": false,
+    "sources": [
+     "a"
+    ],
+    "h": [
+     0.0,
+     1.0,
+     1.0,
+     0.0
+    ],
+    "kept": 2
+   }
+  },
+  {
+   "id": "2d-y-ints-column",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ]
+    },
+    {
+     "name": "y",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ],
+     "vals": [
+      0,
+      1,
+      2
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.5,
+     1.5,
+     0.5
+    ],
+    "y": [
+     0,
+     2,
+     1
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0
+   ],
+   "samples": [
+    "a"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "mode": "2d",
+    "varx": "x",
+    "vary": "y",
+    "nb": 2
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 2.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "loy": -0.5,
+    "hiy": 2.5,
+    "nby": 3,
+    "logy": false,
+    "sources": [
+     "a"
+    ],
+    "h": [
+     1.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "kept": 3
+   }
+  },
+  {
+   "id": "2d-logy-spacing-and-nonpositive",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    },
+    {
+     "name": "y",
+     "lim": [
+      1,
+      100
+     ],
+     "nice": [
+      1,
+      100
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.5,
+     0.5,
+     0.5
+    ],
+    "y": [
+     5,
+     50,
+     0.5
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0
+   ],
+   "samples": [
+    "a"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "mode": "2d",
+    "varx": "x",
+    "vary": "y",
+    "nb": 1,
+    "nby": 2,
+    "logy": true
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 1.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "loy": 1.0,
+    "hiy": 100.0,
+    "nby": 2,
+    "logy": true,
+    "sources": [
+     "a"
+    ],
+    "h": [
+     0.0,
+     2.0,
+     0.0,
+     1.0
+    ],
+    "kept": 3,
+    "centres_y": [
+     3.1622776601683795,
+     31.622776601683793
+    ]
+   }
+  },
+  {
+   "id": "2d-srcs-okds-and-hidden-member",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    },
+    {
+     "name": "y",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.5,
+     0.5,
+     0.5
+    ],
+    "y": [
+     0.5,
+     0.5,
+     0.5
+    ]
+   },
+   "ds": [
+    0,
+    1,
+    2
+   ],
+   "samples": [
+    "a",
+    "b",
+    "c"
+   ],
+   "groups": {},
+   "shown_on": [
+    "a",
+    "c"
+   ],
+   "weighted": true,
+   "ww": [
+    1,
+    10,
+    100
+   ],
+   "spec": {
+    "mode": "2d",
+    "varx": "x",
+    "vary": "y",
+    "nb": 2,
+    "srcs": [
+     "a",
+     "b"
+    ]
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 1.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "loy": 0.0,
+    "hiy": 1.0,
+    "nby": 2,
+    "logy": false,
+    "sources": [
+     "a"
+    ],
+    "h": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "kept": 1
+   }
+  },
+  {
+   "id": "2d-mute-okds",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    },
+    {
+     "name": "y",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.25,
+     0.75
+    ],
+    "y": [
+     0.25,
+     0.75
+    ]
+   },
+   "ds": [
+    0,
+    1
+   ],
+   "samples": [
+    "a",
+    "b"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "mode": "2d",
+    "varx": "x",
+    "vary": "y",
+    "nb": 2,
+    "mute": [
+     "b"
+    ]
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 1.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "loy": 0.0,
+    "hiy": 1.0,
+    "nby": 2,
+    "logy": false,
+    "sources": [
+     "a"
+    ],
+    "h": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "kept": 1
+   }
+  },
+  {
+   "id": "2d-manual-y-invert-guard",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      4
+     ],
+     "nice": [
+      0,
+      4
+     ]
+    },
+    {
+     "name": "y",
+     "lim": [
+      0,
+      10
+     ],
+     "nice": [
+      0,
+      10
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     2,
+     3.5
+    ],
+    "y": [
+     2.5,
+     7.5
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "a"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "mode": "2d",
+    "varx": "x",
+    "vary": "y",
+    "nb": 2,
+    "xauto": false,
+    "xmin": "1abc",
+    "xmax": "",
+    "yauto": false,
+    "ymin": "5",
+    "ymax": "2"
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 1.0,
+    "hi": 4.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "loy": 0.0,
+    "hiy": 10.0,
+    "nby": 2,
+    "logy": false,
+    "sources": [
+     "a"
+    ],
+    "h": [
+     1.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "kept": 2
+   }
+  },
+  {
+   "id": "2d-empty-srcs-empty-grid",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    },
+    {
+     "name": "y",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.5
+    ],
+    "y": [
+     0.5
+    ]
+   },
+   "ds": [
+    0
+   ],
+   "samples": [
+    "a"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "mode": "2d",
+    "varx": "x",
+    "vary": "y",
+    "nb": 2,
+    "srcs": []
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 1.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "loy": 0.0,
+    "hiy": 1.0,
+    "nby": 2,
+    "logy": false,
+    "sources": [],
+    "h": [
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "kept": 0
+   }
+  },
+  {
+   "id": "2d-y-auto-zoom-quantile",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    },
+    {
+     "name": "y",
+     "lim": [
+      0,
+      100
+     ],
+     "nice": [
+      0,
+      100
+     ],
+     "p90": 50
+    }
+   ],
+   "values": {
+    "x": [
+     0.5,
+     0.5
+    ],
+    "y": [
+     25,
+     75
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "a"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "mode": "2d",
+    "varx": "x",
+    "vary": "y",
+    "nb": 2
+   },
+   "zoom": "p90",
+   "expect": {
+    "lo": 0.0,
+    "hi": 1.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "loy": 0.0,
+    "hiy": 50.0,
+    "nby": 2,
+    "logy": false,
+    "sources": [
+     "a"
+    ],
+    "h": [
+     0.0,
+     0.0,
+     0.0,
+     2.0
+    ],
+    "kept": 2
+   }
+  }
+ ],
  "board": [
   {
    "id": "board.basic_sumw2",

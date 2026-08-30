@@ -354,6 +354,10 @@ def binned2d(vx, vy, ww, keep, lox: float, hix: float, nbx: int,
 
     ``ok_ds`` is the viewer's per-DATASET filter (srcs/mute plots): rows whose
     dataset is off are skipped before anything counts, exactly like the page.
+
+    The parity claim covers ``h`` and ``kept`` — binned2D returns nothing
+    else. ``h2`` and ``n`` are extractor EXTRAS over the same fills (the
+    per-source moment grids SCHEMAS.md kind plot2d labels x_*), no web twin.
     """
     k = np.asarray(keep, bool)
     if ok_ds is not None:
@@ -371,7 +375,10 @@ def binned2d(vx, vy, ww, keep, lox: float, hix: float, nbx: int,
     by = np.clip(np.where(np.isnan(by), 0, by), 0, max(nby - 1, 0))
     fill = sel & ~nan if nbx > 0 and nby > 0 else np.zeros(x.size, bool)
     flat = (by[fill] * nbx + bx[fill]).astype(np.int64)
-    return {"h": np.bincount(flat, weights=w[fill], minlength=nbx * nby),
+    wf = w[fill]
+    return {"h": np.bincount(flat, weights=wf, minlength=nbx * nby),
+            "h2": np.bincount(flat, weights=wf * wf, minlength=nbx * nby),
+            "n": np.bincount(flat, minlength=nbx * nby).astype(float),
             "kept": int(sel.sum())}
 
 

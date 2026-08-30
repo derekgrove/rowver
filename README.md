@@ -82,6 +82,7 @@ rowver check /path/to/result.rvr
 rowver show /path/to/result.rvr
 rowver extract flattened /path/to/result.rvr --from-map
 rowver extract plot1d /path/to/result.rvr
+rowver extract plot2d /path/to/result.rvr   # plot3d: same grid, surface-rendered
 rowver extract board /path/to/result.rvr
 rowver extract regions /path/to/result.rvr
 rowver render extracts/result/    # needs pip install rowver[render]

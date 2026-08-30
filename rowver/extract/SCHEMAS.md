@@ -161,21 +161,43 @@ area, `n` raw), and the error bands ride the scaled moments — what the
 page draws. Tails are per source, counted like `binned()`; a NaN row
 fills no bin and neither tail (linear spacing).
 
-## Kind: `plot2d` — v1 (reserved; built in step 6)
+## Kind: `plot2d` — v1
 
 The parity object is the viewer's aggregate: `h` (nby, nbx) f8 — row-major,
 y outer, exactly `binned2D`'s flat grid reshaped — plus scalar `kept`.
-Per-source moment grids may ride as extras: keys `x_h_<source>`,
-`x_h2_<source>`, `x_n_<source>`, each (nby, nbx) f8, `<source>` sanitized by
-the output-identity rule (collision-suffixed in stack order). Extensions,
-not a parity claim.
+Everything per-source is an EXTENSION, not a parity claim (`bin.ts`
+binned2D returns no per-source 2D).
 
-## Kind: `plot3d` — v1 (reserved; built in step 6, after 2D is proven)
+npz keys:
+
+| key | shape | meaning |
+|---|---|---|
+| `h` | (nby, nbx) f8 | Σw over ALL drawn sources per cell (binned2D's flat grid reshaped) |
+| `kept` | scalar i8 | rows the grid counted (binned2D's own tally; NaN rows count as kept but fill nothing, like 1D) |
+| `edges_x`, `edges_y` | (nb+1,) f8 | the bin edges actually used, per axis |
+| `centres_x`, `centres_y` | (nb,) f8 | bin centres in each axis's binning transform |
+| `sources` | (K,) str | the drawn sources, frame order (same filter as plot1d) |
+| `x_h_<source>`, `x_h2_<source>`, `x_n_<source>` | (nby, nbx) f8 | per-source moment grids over the same fills, `<source>` sanitized by the output-identity rule, collision-suffixed in stack order — extras |
+
+Both axes resolve exactly as `frameFor` frames them (the plot1d window
+rules, per axis): an integer column gets one bin per value; AUTO tracks
+`--zoom`; MANUAL bounds parse like the page; an inverted window falls back
+to the column's own range. The y bin count is the page's `nby ?? nb`; y
+log spacing couples to `binspacey`/`logy` as x does to `binspace`/`logx`.
+A plot with its own `srcs`/`mute` lists narrows the grid through the
+page's per-DATASET filter (frameFor's okDs) — an EMPTY srcs list means an
+empty grid, the page's own result. `meta.json` mirrors the npz (`edges`,
+`centres`, `window`, each split `{x: ..., y: ...}` with per-axis
+`zoom`/`from`/`log_active` provenance), carries `kept`, the `extras`
+key→source mapping, and the usual spec/look/colours/lumi/active/cuts
+context.
+
+## Kind: `plot3d` — v1
 
 Identical to plot2d: the viewer's 3D mode renders the SAME two-variable
 `binned2D` grid as a surface — there is no third binning axis. Same keys:
-`h` (nby, nbx) f8, scalar `kept`, `x_*_<source>` extras. Only the
-`meta.json` `kind` differs.
+`h` (nby, nbx) f8, scalar `kept`, edges/centres/sources, `x_*_<source>`
+extras. Only the `meta.json` `kind` differs.
 
 ## Kind: `board` — v1
 

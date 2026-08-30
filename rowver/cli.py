@@ -54,9 +54,10 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def _extract(args: argparse.Namespace, extra: list[str]) -> int:
-    from .extract import board, cutflow, flattened, plot1d, regions
+    from .extract import board, cutflow, flattened, plot1d, plot2d, regions
     kinds = {"flattened": flattened.main, "cutflow": cutflow.main,
-             "plot1d": plot1d.main, "board": board.main,
+             "plot1d": plot1d.main, "plot2d": plot2d.main,
+             "plot3d": plot2d.main3d, "board": board.main,
              "regions": regions.main}
     if args.kind not in kinds:
         raise SystemExit(f"error: unknown extract kind {args.kind!r} — have: {sorted(kinds)}")
