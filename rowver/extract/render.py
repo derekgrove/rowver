@@ -18,8 +18,12 @@ with the viewer's semantics so a side-by-side eyeball is easy:
 - the stacked band is err_for(mode, Σh, Σh2, Σn) with the totals
   accumulated source-by-source in draw order, the backends' own loop.
 - colours come from the record's ``colours`` (stamped at extract time,
-  where the viewer's global assignment is reproducible); a record without
-  them falls back to a local palette walk over the drawn sources only.
+  where the viewer's global assignment is reproducible) — REQUIRED as of
+  plot1d v2; a record without them is refused, never guessed at.
+- ONE bar source with ``stack`` truthy draws as the ordinary outline with
+  its recorded error bars — JSROOT (the default engine) stacks only when
+  there is more than one; plotly's one-bar stack is that backend's
+  layout, not record content.
 - the y frame ports autoYRange (stacked positive/negative envelope, error
   reach, log floor from drawn positives, the two stacking orders); MANUAL
   y bounds (``yauto`` exactly false) apply only when BOTH parse finite and
@@ -49,7 +53,7 @@ import numpy as np
 
 from . import ExtractError, core
 
-VERSION = 1  # renders plot1d v1 records
+VERSION = 2  # renders plot1d v2 records (v2: colours required)
 
 STYLES = ("root", "cms", "atlas", "lhcb", "alice", "plain")
 
@@ -70,24 +74,6 @@ def _style_context(style: str):
              "atlas": mplhep.style.ATLAS, "lhcb": mplhep.style.LHCb2,
              "alice": mplhep.style.ALICE}[style]
     return plt.style.context(sheet)
-
-
-def _fallback_colours(sources: list[str], look: dict) -> dict[str, str]:
-    """Palette walk over the DRAWN sources only — for a record with no
-    stamped ``colours``. Cannot reproduce the viewer's global slots."""
-    taken = {str((look.get(s) or {}).get("colour", "")).lower()
-             for s in sources} - {""}
-    out: dict[str, str] = {}
-    for s in sources:
-        own = (look.get(s) or {}).get("colour")
-        if own:
-            out[s] = own
-        else:
-            c = next((p for p in core.PALETTE20 if p.lower() not in taken),
-                     core.PALETTE20[len(out) % len(core.PALETTE20)])
-            out[s] = c
-            taken.add(c.lower())
-    return out
 
 
 def _band(mode, h_rows, h2_rows, n_rows) -> np.ndarray:
@@ -201,7 +187,7 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
     meta_path = Path(meta_path)
     try:
         meta = json.loads(meta_path.read_text())
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
         raise ExtractError(f"{meta_path.name}: not a record — {exc}") from exc
     if meta.get("kind") != "plot1d":
         raise ExtractError(f"{meta_path.name}: kind {meta.get('kind')!r} — "
@@ -226,10 +212,14 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
     except (OSError, KeyError, ValueError, zipfile.BadZipFile) as exc:
         raise ExtractError(f"{name}: unreadable npz — {exc}") from exc
     K, nb = len(sources), len(centres)
-    if not (h.shape == h2.shape == n.shape == (K, nb)
+    grids = (h, h2, n) + (err or ())
+    if not (centres.ndim == 1
+            and all(g.shape == (K, nb) for g in grids)
             and edges.shape == (nb + 1,)
-            and (err is None or err[0].shape == err[1].shape == (K, nb))):
-        raise ExtractError(f"{name}: npz shapes disagree with the schema")
+            and all(np.issubdtype(g.dtype, np.floating)
+                    for g in grids + (edges, centres))):
+        raise ExtractError(f"{name}: npz shapes/dtypes disagree with the "
+                           f"schema")
     try:  # the json carries the same edges/centres/sources — a record whose
         # mirrors contradict each other is refused, not silently resolved
         coherent = (list(meta.get("sources") or []) == sources
@@ -237,18 +227,31 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
                         np.asarray(meta.get("edges"), dtype=float), edges)
                     and np.array_equal(
                         np.asarray(meta.get("centres"), dtype=float), centres)
-                    and meta["window"].get("nb") == nb)
+                    and meta["window"].get("nb") == nb
+                    # lo/hi CONTROL drawing (logx engages on lo > 0): they
+                    # must agree with the edge endpoints — isclose, because
+                    # log spacing's pow10(log10(x)) round trip is a ulp off
+                    and np.isclose(float(meta["window"]["lo"]), edges[0],
+                                   rtol=1e-9, atol=0.0)
+                    and np.isclose(float(meta["window"]["hi"]), edges[-1],
+                                   rtol=1e-9, atol=0.0))
     except (TypeError, ValueError):
         coherent = False
     if not coherent:
         raise ExtractError(f"{name}: npz and meta.json mirrors disagree")
 
     spec, look = meta["spec"], meta.get("look") or {}
-    colours = meta.get("colours") or _fallback_colours(sources, look)
+    colours = meta.get("colours")
+    if not isinstance(colours, dict) or any(s not in colours for s in sources):
+        raise ExtractError(f"{name}: no stamped colour for every source — "
+                           f"required as of plot1d v2")
     widths = np.diff(edges)
     is_pts = [(look.get(s) or {}).get("draw") == "points" for s in sources]
     errstyles = [(look.get(s) or {}).get("errstyle") for s in sources]
-    stacked = core._js_truthy(spec.get("stack"))
+    bars_n = sum(1 for p in is_pts if not p)
+    # JSROOT (the default engine) stacks only PLURAL bars; one bar with
+    # stack truthy draws as the plain outline — draw and frame gate together
+    stacked = core._js_truthy(spec.get("stack")) and bars_n > 1
     raw_mode = spec.get("err")
     mode_on = core._js_truthy(raw_mode) and raw_mode != "off"
     mode_s = (raw_mode if isinstance(raw_mode, str)
@@ -263,76 +266,80 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
 
     with _style_context(style):
         fig, ax = plt.subplots(figsize=size, dpi=dpi)
-        if stacked and bars:
-            bottom = np.zeros(nb)
-            for k in bars:
-                s = sources[k]
-                ax.bar(edges[:-1], h[k], width=widths, bottom=bottom,
-                       align="edge", color=colours[s], edgecolor="white",
-                       linewidth=0.3, label=s)
-                bottom = bottom + h[k]
-            if mode_on:
-                band, tot = _band(raw_mode, h[bars], h2[bars], n[bars])
-                ax.bar(edges[:-1], band[:, 0] + band[:, 1], width=widths,
-                       bottom=tot - band[:, 0], align="edge", fill=False,
-                       hatch="/////", edgecolor="0.35", linewidth=0.0,
-                       label=f"stat ({raw_mode})")
-        else:
-            for k in bars:
-                s = sources[k]
-                ax.stairs(h[k], edges, color=colours[s], lw=1.6, label=s)
-                if err is not None:  # the RECORDED bars, verbatim — bars
-                    # always draw errors; errstyle is points-only
-                    ax.errorbar(centres, h[k], yerr=(err[0][k], err[1][k]),
-                                fmt="none", ecolor=colours[s], lw=1,
-                                capsize=0)
+        try:
+            if stacked and bars:
+                bottom = np.zeros(nb)
+                for k in bars:
+                    s = sources[k]
+                    ax.bar(edges[:-1], h[k], width=widths, bottom=bottom,
+                           align="edge", color=colours[s], edgecolor="white",
+                           linewidth=0.3, label=s)
+                    bottom = bottom + h[k]
+                if mode_on:
+                    band, tot = _band(raw_mode, h[bars], h2[bars], n[bars])
+                    ax.bar(edges[:-1], band[:, 0] + band[:, 1], width=widths,
+                           bottom=tot - band[:, 0], align="edge", fill=False,
+                           hatch="/////", edgecolor="0.35", linewidth=0.0,
+                           label=f"stat ({raw_mode})")
+            else:
+                for k in bars:
+                    s = sources[k]
+                    ax.stairs(h[k], edges, color=colours[s], lw=1.6, label=s)
+                    if err is not None:  # the RECORDED bars, verbatim — bars
+                        # always draw errors; errstyle is points-only
+                        ax.errorbar(centres, h[k], yerr=(err[0][k], err[1][k]),
+                                    fmt="none", ecolor=colours[s], lw=1,
+                                    capsize=0)
 
-        for k, s in enumerate(sources):
-            if not is_pts[k]:
-                continue
-            show_err = err is not None and errstyles[k] != "none"
-            yerr = (err[0][k], err[1][k]) if show_err else None
-            ax.errorbar(centres, h[k], yerr=yerr, fmt="o", ms=4,
-                        color=colours[s], label=s, capsize=0, lw=1.2)
+            for k, s in enumerate(sources):
+                if not is_pts[k]:
+                    continue
+                show_err = err is not None and errstyles[k] != "none"
+                yerr = (err[0][k], err[1][k]) if show_err else None
+                ax.errorbar(centres, h[k], yerr=yerr, fmt="o", ms=4,
+                            color=colours[s], label=s, capsize=0, lw=1.2)
 
-        w = meta["window"]
-        logy = core._js_truthy(spec.get("logy"))
-        if core._js_truthy(spec.get("logx")) and w["lo"] > 0:
-            ax.set_xscale("log")
-        if logy:
-            ax.set_yscale("log")
-        lo_y, hi_y = _y_range(h, h2, n, err, errstyles, is_pts, stacked,
-                              logy, mode_s)
-        if spec.get("yauto") is False:
-            # manual applies only when BOTH bounds parse finite and ordered
-            # (the backends' rule); anything else keeps the full auto range
-            my_lo = core.parse_float(spec.get("ymin"))
-            my_hi = core.parse_float(spec.get("ymax"))
-            if np.isfinite(my_lo) and np.isfinite(my_hi) and my_hi > my_lo:
-                if logy:  # plotly clamps the log low bound, never rejects it
-                    my_lo = max(my_lo, 1e-12)
-                lo_y, hi_y = my_lo, my_hi
-        ax.set_ylim(lo_y, hi_y)
-        ax.set_xlim(edges[0], edges[-1])
-        ax.set_xlabel(spec.get("xtitle") or spec.get("varx"))
-        ax.set_ylabel(spec.get("ytitle") or
-                      ("a.u." if spec.get("norm") == "shape"
-                       else "Σw / bin" if meta.get("weighted")
-                       else "events / bin"))
-        # furniture keeps modest FIXED sizes in every style: the mplhep
-        # sheets are tuned for square figures and their default typography
-        # collides at wide aspect ratios; the sheet still owns ticks, axes,
-        # fonts and line weights — the "look"
-        ax.set_title(f"{meta.get('cart', '')} — {name}", loc="left",
-                     fontsize=11)
-        handles, _ = ax.get_legend_handles_labels()
-        ax.legend(frameon=False, fontsize=9,
-                  ncol=2 if len(handles) > 6 else 1)
-        ax.annotate(f"window {w['from']} (zoom {w['zoom']})"
-                    + (", log bins" if w.get("log_active") else "")
-                    + (", stacked" if stacked else ""),
-                    xy=(0.99, 1.02), xycoords="axes fraction",
-                    ha="right", fontsize=8, color="0.4")
+            w = meta["window"]
+            logy = core._js_truthy(spec.get("logy"))
+            if core._js_truthy(spec.get("logx")) and w["lo"] > 0:
+                ax.set_xscale("log")
+            if logy:
+                ax.set_yscale("log")
+            lo_y, hi_y = _y_range(h, h2, n, err, errstyles, is_pts, stacked,
+                                  logy, mode_s)
+            if spec.get("yauto") is False:
+                # manual applies only when BOTH bounds parse finite and ordered
+                # (the backends' rule); anything else keeps the full auto range
+                my_lo = core.parse_float(spec.get("ymin"))
+                my_hi = core.parse_float(spec.get("ymax"))
+                if np.isfinite(my_lo) and np.isfinite(my_hi) and my_hi > my_lo:
+                    if logy:  # plotly clamps the log low bound, never rejects it
+                        my_lo = max(my_lo, 1e-12)
+                    lo_y, hi_y = my_lo, my_hi
+            ax.set_ylim(lo_y, hi_y)
+            ax.set_xlim(edges[0], edges[-1])
+            ax.set_xlabel(spec.get("xtitle") or spec.get("varx"))
+            ax.set_ylabel(spec.get("ytitle") or
+                          ("a.u." if spec.get("norm") == "shape"
+                           else "Σw / bin" if meta.get("weighted")
+                           else "events / bin"))
+            # furniture keeps modest FIXED sizes in every style: the mplhep
+            # sheets are tuned for square figures and their default typography
+            # collides at wide aspect ratios; the sheet still owns ticks, axes,
+            # fonts and line weights — the "look"
+            ax.set_title(f"{meta.get('cart', '')} — {name}", loc="left",
+                         fontsize=11)
+            handles, _ = ax.get_legend_handles_labels()
+            ax.legend(frameon=False, fontsize=9,
+                      ncol=2 if len(handles) > 6 else 1)
+            ax.annotate(f"window {w['from']} (zoom {w['zoom']})"
+                        + (", log bins" if w.get("log_active") else "")
+                        + (", stacked" if stacked else ""),
+                        xy=(0.99, 1.02), xycoords="axes fraction",
+                        ha="right", fontsize=8, color="0.4")
+        except BaseException:  # never leak the figure on a
+            plt.close(fig)      # mid-draw failure
+            raise
     return fig, name
 
 
@@ -359,7 +366,8 @@ def render(meta_path: str | Path, out_dir: str | Path | None = None,
         fig, name = _draw(meta_path, dpi, size, style)
     except ExtractError:
         raise
-    except (KeyError, TypeError, AttributeError, IndexError) as exc:
+    except (KeyError, TypeError, AttributeError, IndexError,
+            ValueError) as exc:
         # a structurally broken record must SKIP in a directory walk, not
         # abort it with a traceback
         raise ExtractError(f"{meta_path.name}: malformed record — "

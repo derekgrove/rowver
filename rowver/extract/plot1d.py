@@ -31,7 +31,7 @@ import numpy as np
 from . import ExtractError, core
 from .. import rvr6
 
-VERSION = 1
+VERSION = 2  # v2: colours required in meta.json (2026-08-30)
 
 
 def frame(spec: dict, col: dict, values, view: dict | None, samples: list[str],

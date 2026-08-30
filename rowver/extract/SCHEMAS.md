@@ -114,7 +114,12 @@ npz keys:
 
 Ladder order is `activeCuts`: `cutorder` first, then column order.
 
-## Kind: `plot1d` — v1
+## Kind: `plot1d` — v2
+
+v2 (2026-08-30): `colours` became REQUIRED `meta.json` content; the
+renderer refuses a record without it rather than guessing with a palette
+walk that cannot reproduce the viewer's global slots. npz keys are
+unchanged from v1.
 
 npz keys:
 
@@ -149,8 +154,8 @@ stays linear, the page's own fallback). `meta.json` also carries `edges`
 npz keys in strict JSON, and `colours` — the RESOLVED colour per drawn
 source, stamped at extract time because the viewer's assignment walks
 every global source and look namespace, which the record alone cannot
-reconstruct. These are v1 meta content (documented additions, npz keys
-unchanged); the render pass consumes them.
+reconstruct. `colours` is REQUIRED as of v2; the render pass consumes
+these.
 A SHAPE-normalized plot is written normalized (`h`/`h2` scaled to unit
 area, `n` raw), and the error bands ride the scaled moments — what the
 page draws. Tails are per source, counted like `binned()`; a NaN row

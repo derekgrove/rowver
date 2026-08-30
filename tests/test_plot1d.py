@@ -187,7 +187,7 @@ class GoldenTests(unittest.TestCase):
                              [100.0, 150.0, 200.0, 250.0, 300.0])
         meta = json.loads((out / "t0_s0_1d_MET.meta.json").read_text())
         self.assertEqual(meta["kind"], "plot1d")
-        self.assertEqual(meta["version"], 1)
+        self.assertEqual(meta["version"], 2)
         self.assertEqual(meta["window"],
                          {"lo": 100.0, "hi": 300.0, "nb": 4, "ints": False,
                           "log": False, "log_active": False,

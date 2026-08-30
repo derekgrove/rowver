@@ -188,6 +188,46 @@ class RenderTests(unittest.TestCase):
             self._fig(edit=lambda m: m["edges"].__setitem__(0, -999.0))
         with self.assertRaises(ExtractError):
             self._fig(edit=lambda m: m["sources"].reverse())
+        # window.lo controls logx engagement: it must match the edges
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m["window"].__setitem__("lo", -1.0))
+        # colours are required as of v2, never guessed at
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m.pop("colours"))
+
+    def test_one_bar_source_never_stacks(self):
+        # JSROOT stacks only PLURAL bars: one bar + stack:true draws as the
+        # plain outline with its recorded error bars, no fill, no band
+        from matplotlib.patches import StepPatch
+        def solo(m):
+            m["spec"]["stack"] = True
+            m["look"]["bkg"] = {"draw": "points"}
+            m["look"]["obs"] = {"draw": "points"}
+        ax = self._fig(edit=solo)
+        from matplotlib.container import BarContainer
+        steps = [p for p in ax.patches if isinstance(p, StepPatch)]
+        self.assertEqual(len(steps), 1)  # outline, not a filled bar
+        self.assertEqual([c for c in ax.containers
+                          if isinstance(c, BarContainer)], [])  # no band
+
+    def test_drawn_errorbars_are_the_recorded_bands(self):
+        # skew the recorded up-band in the npz: the drawn artists must
+        # follow it — proof the renderer reads bands, not moments
+        src = self.out / "t0_s0_1d_MET.data.npz"
+        with np.load(src) as z:
+            arrays = dict(z)
+        arrays["err_up"] = arrays["err_up"] + 7.0
+        edited = json.loads(self.meta0.read_text())
+        (self.out / "edited.meta.json").write_text(json.dumps(edited))
+        np.savez(self.out / "edited.data.npz", **arrays)
+        fig, _ = render._draw(self.out / "edited.meta.json", 150, (10, 5),
+                              "plain")
+        ax = fig.axes[0]
+        segs = ax.containers[0][2][0].get_segments()  # first source's bars
+        h0 = arrays["h"][0]
+        for i, seg in enumerate(segs):
+            self.assertAlmostEqual(seg[0][1], h0[i] - arrays["err_down"][0][i])
+            self.assertAlmostEqual(seg[1][1], h0[i] + arrays["err_up"][0][i])
 
     def test_style_selection(self):
         with self.assertRaises(ExtractError):
@@ -229,11 +269,11 @@ class RenderTests(unittest.TestCase):
         # the directory walk skips both and still renders the real records
         self.assertEqual(render.main([str(self.out), "--style", "plain"]), 0)
         # a future schema version is refused, never silently drawn
-        v2 = json.loads(self.meta0.read_text())
-        v2["version"] = 2
-        (self.out / "v2.meta.json").write_text(json.dumps(v2))
+        v3 = json.loads(self.meta0.read_text())
+        v3["version"] = 3
+        (self.out / "v3.meta.json").write_text(json.dumps(v3))
         with self.assertRaises(ExtractError):
-            render.render(self.out / "v2.meta.json")
+            render.render(self.out / "v3.meta.json")
 
 
 if __name__ == "__main__":

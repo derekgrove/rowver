@@ -1,4 +1,4 @@
-"""The ``rowver`` command: new / run / check / show / extract."""
+"""The ``rowver`` command: new / run / check / show / extract / render."""
 from __future__ import annotations
 
 import argparse
