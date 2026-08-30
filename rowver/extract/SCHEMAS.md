@@ -2,8 +2,8 @@
 
 Versioned per kind. An extractor writes only what its kind's schema here
 says, and bumps that kind's version when a key, dtype, or meaning changes.
-Written before any extractor consumes it (step 1 of the extract plan);
-`flattened` is rebased onto the resolver in step 2 and adopts its schema then.
+Written before any extractor consumed it (step 1 of the extract plan);
+`flattened` (rebased onto the resolver in step 2) is the first consumer.
 
 ## The three-file contract
 
