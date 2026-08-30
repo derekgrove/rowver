@@ -47,21 +47,10 @@ def frame(spec: dict, col: dict, values, view: dict | None, samples: list[str],
                            spec.get("nb"), logbx)
     lo, hi, nb = ax["lo"], ax["hi"], ax["nb"]
     oflow = spec.get("oflow") is not False
-    srcs = spec.get("srcs")
-    only = set(srcs) if isinstance(srcs, list) else None
-    mute = spec.get("mute")
-    muted = {x for x in mute if isinstance(x, str)} \
-        if isinstance(mute, list) else set()
     keep = np.asarray(keep, bool)
     ds = np.asarray(ds)
     bins = []
-    for name in core.sources(view, samples):
-        if (only is not None and name not in only) or name in muted:
-            continue
-        members = [d for d in core.src_members(view, samples, name)
-                   if shown.get(samples[d], True)]
-        if not members:
-            continue  # no shown dataset: the page's `visible` flag stays off
+    for name, members in core.drawn_sources(view, samples, shown, spec)[0]:
         b = core.binned(values, ww, keep & np.isin(ds, members),
                         lo, hi, nb, ax["log"], oflow)
         b["name"] = name

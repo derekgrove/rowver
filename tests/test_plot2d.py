@@ -103,8 +103,10 @@ def _cart(tmp: Path) -> Path:
                    {"kind": "block", "layout": [3, 3],
                     "cells": [{"kind": "2d", "varx": "MET", "vary": "HT",
                                "nb": 2, "srcs": ["sig"]}, None]},
-                   {"kind": "3d", "varx": "MET", "vary": "HT", "nb": 2,
-                    "xauto": False, "xmin": "100", "xmax": "300",
+                   # spec-identical to the s0 2d entry: only kind differs
+                   {"kind": "3d", "varx": "MET", "vary": "HT",
+                    "nb": 4, "nby": 2, "xauto": False,
+                    "xmin": "100", "xmax": "300",
                     "yauto": False, "ymin": "0", "ymax": "40"}]},
     ]
     path = tmp / "golden.rvr"
@@ -151,36 +153,66 @@ class GoldenTests(unittest.TestCase):
         self.assertEqual(f["spec"]["quad"], 0)
 
     def test_3d_same_grid(self):
+        # the s2 3d entry is spec-identical to the s0 2d entry: the whole
+        # record must agree — axes, grid, extras — with only kind differing
         f2 = plot2d.dump(self.rvr)[0]
         f3 = plot2d.dump(self.rvr, kind="3d")[0]
         self.assertEqual(f3["name"], "t0_s2_3d_MET_HT")
-        # nb 2 vs plot 0's nb 4/nby 2 — same windows, same rows
+        for ax in ("x", "y"):
+            for k in ("lo", "hi", "nb", "ints", "log", "log_active"):
+                self.assertEqual(f3[ax][k], f2[ax][k], f"{ax} {k}")
         self.assertEqual(f3["kept"], f2["kept"])
+        np.testing.assert_array_equal(f3["h"], f2["h"])
+        self.assertEqual([e["name"] for e in f3["extras"]],
+                         [e["name"] for e in f2["extras"]])
+        for e3, e2 in zip(f3["extras"], f2["extras"]):
+            for k in ("h", "h2", "n"):
+                np.testing.assert_array_equal(e3[k], e2[k], err_msg=k)
 
     def test_files_written(self):
         out = self.tmp / "extracts"
         rc = plot2d.main([str(self.rvr), "-o", str(out)])
         self.assertEqual(rc, 0)
         with np.load(out / "t0_s0_2d_MET_HT.data.npz") as z:
-            for key in ("h", "edges_x", "edges_y", "centres_x", "centres_y",
-                        "x_h_bkg", "x_h2_bkg", "x_n_bkg", "x_h_sig",
-                        "x_h_obs"):
-                self.assertEqual(z[key].dtype.str, "<f8", key)
-            self.assertEqual(z["kept"].dtype.str, "<i8")
+            # the EXACT key set — nothing extra, nothing missing
+            self.assertEqual(set(z.files), {
+                "h", "kept", "edges_x", "edges_y", "centres_x", "centres_y",
+                "sources"} | {f"x_{m}_{s}" for m in ("h", "h2", "n")
+                              for s in ("bkg", "sig", "obs")})
+            for key in z.files:
+                if key == "kept":
+                    self.assertEqual(z[key].dtype.str, "<i8")
+                elif key == "sources":
+                    self.assertTrue(z[key].dtype.str.startswith("<U"))
+                else:
+                    self.assertEqual(z[key].dtype.str, "<f8", key)
             self.assertEqual(int(z["kept"]), 6)
-            self.assertTrue(z["sources"].dtype.str.startswith("<U"))
             self.assertEqual(list(z["sources"]), ["bkg", "sig", "obs"])
             self.assertEqual(z["h"].shape, (2, 4))
-            self.assertEqual(z["x_h_bkg"].shape, (2, 4))
             self.assertEqual(list(z["edges_x"]),
                              [100.0, 150.0, 200.0, 250.0, 300.0])
             self.assertEqual(list(z["edges_y"]), [0.0, 20.0, 40.0])
+            # hand-computed per-source moment grids, cell by cell.
+            # Kept rows (ww, MET, HT): tt 120,10→2; tt 220,30→2;
+            # sig 150,20→3; sig 250,30→6; obs 110,10→1; obs 210,30→1
+            np.testing.assert_allclose(
+                z["x_h_bkg"], [[2.0, 0, 0, 0], [0, 0, 2.0, 0]])
+            np.testing.assert_allclose(
+                z["x_h2_bkg"], [[4.0, 0, 0, 0], [0, 0, 4.0, 0]])
+            np.testing.assert_allclose(
+                z["x_n_bkg"], [[1.0, 0, 0, 0], [0, 0, 1.0, 0]])
+            np.testing.assert_allclose(
+                z["x_h_sig"], [[0, 0, 0, 0], [0, 3.0, 0, 6.0]])
+            np.testing.assert_allclose(
+                z["x_h2_sig"], [[0, 0, 0, 0], [0, 9.0, 0, 36.0]])
+            np.testing.assert_allclose(
+                z["x_n_sig"], [[0, 0, 0, 0], [0, 1.0, 0, 1.0]])
+            for key in ("x_h_obs", "x_h2_obs", "x_n_obs"):  # unweighted 1s
+                np.testing.assert_allclose(
+                    z[key], [[1.0, 0, 0, 0], [0, 0, 1.0, 0]], err_msg=key)
             # extras sum to the aggregate
             np.testing.assert_allclose(
                 z["x_h_bkg"] + z["x_h_sig"] + z["x_h_obs"], z["h"])
-            # raw grid: one entry per kept row
-            self.assertEqual(
-                float((z["x_n_bkg"] + z["x_n_sig"] + z["x_n_obs"]).sum()), 6.0)
         meta = json.loads((out / "t0_s0_2d_MET_HT.meta.json").read_text())
         self.assertEqual(meta["kind"], "plot2d")
         self.assertEqual(meta["version"], 1)
@@ -229,6 +261,15 @@ class ExtraKeyTests(unittest.TestCase):
         # "a b" and "a_b" both sanitize to a_b — suffixed in stack order
         self.assertEqual(plot2d._extra_keys(["a b", "a_b", "c"]),
                          ["a_b", "a_b_2", "c"])
+
+    def test_natural_name_collides_with_generated_suffix(self):
+        # a source NATURALLY named a_b_2 lands on the generated suffix —
+        # keys must stay globally unique, never silently overwrite (codex
+        # step-6 r1)
+        self.assertEqual(plot2d._extra_keys(["a b", "a_b", "a_b_2"]),
+                         ["a_b", "a_b_2", "a_b_2_2"])
+        self.assertEqual(plot2d._extra_keys(["a_b_2", "a b", "a_b"]),
+                         ["a_b_2", "a_b", "a_b_3"])
 
 
 if __name__ == "__main__":

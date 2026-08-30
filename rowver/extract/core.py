@@ -533,6 +533,30 @@ def auto_colours(view: dict | None, samples: list[str]) -> dict[str, str]:
     return out
 
 
+def drawn_sources(view: dict | None, samples: list[str],
+                  shown: dict[str, bool], spec: dict) \
+        -> tuple[list[tuple[str, list[int]]], bool]:
+    """The plot's drawn sources with their SHOWN members, frame order —
+    frameFor's sourceAt walk: the srcs/mute filter, then the visible gate
+    (a source with no shown dataset draws nothing). Also returns whether
+    the plot NARROWS (srcs or mute present) — that presence, not whether
+    anything was actually filtered, is what makes frameFor build okDs."""
+    srcs = spec.get("srcs")
+    only = set(srcs) if isinstance(srcs, list) else None
+    mute = spec.get("mute")
+    muted = {x for x in mute if isinstance(x, str)} \
+        if isinstance(mute, list) else set()
+    out: list[tuple[str, list[int]]] = []
+    for name in sources(view, samples):
+        if (only is not None and name not in only) or name in muted:
+            continue
+        members = [d for d in src_members(view, samples, name)
+                   if shown.get(samples[d], True)]
+        if members:
+            out.append((name, members))
+    return out, only is not None or bool(muted)
+
+
 def source_look(view: dict | None, samples: list[str], name: str) -> dict | None:
     """Resolved style for one source — frame.ts sourceLook(): the same
     group -> subgroup -> sample namespace order as source membership."""

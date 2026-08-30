@@ -54,33 +54,15 @@ def frame(spec: dict, colx: dict, coly: dict, vx, vy, view: dict | None,
                            spec.get("nb") if nby_raw is None else nby_raw,
                            logby)
     oflow = spec.get("oflow") is not False
-
-    srcs = spec.get("srcs")
-    only = set(srcs) if isinstance(srcs, list) else None
-    mute = spec.get("mute")
-    muted = {x for x in mute if isinstance(x, str)} \
-        if isinstance(mute, list) else set()
     keep = np.asarray(keep, bool)
     ds = np.asarray(ds)
-
-    # the drawn sources, frame order — the same walk the 1d bins make; their
-    # shown members are exactly frameFor's sourceAt assignment, which is what
-    # feeds okDs below
-    drawn: list[tuple[str, list[int]]] = []
-    for name in core.sources(view, samples):
-        if (only is not None and name not in only) or name in muted:
-            continue
-        members = [d for d in core.src_members(view, samples, name)
-                   if shown.get(samples[d], True)]
-        if not members:
-            continue  # no shown dataset: the page's `visible` flag stays off
-        drawn.append((name, members))
+    drawn, narrows = core.drawn_sources(view, samples, shown, spec)
 
     # okDs exists ONLY when the plot narrows (srcs or mute) — frameFor builds
     # it from sourceAt, so an EMPTY srcs list means an empty grid, and a
     # hidden member dataset is off in it (keep already excludes those rows)
     ok = None
-    if only is not None or muted:
+    if narrows:
         ok = np.zeros(len(samples), bool)
         for _, members in drawn:
             ok[members] = True
@@ -157,16 +139,18 @@ def dump(rvr: str | Path, tab: int = 0, zoom: str = "p90",
 
 
 def _extra_keys(sources: list[str]) -> list[str]:
-    """Sanitized per-source key stems, collision-suffixed in stack order."""
-    out, used = [], {}
+    """Sanitized per-source key stems, GLOBALLY unique: a collision (with a
+    natural name or an earlier generated suffix — "a_b_2" exists both ways)
+    increments until the candidate is unused, stack order."""
+    out: list[str] = []
+    used: set[str] = set()
     for s in sources:
-        k = core._sanitize(s)
-        seen = used.get(k)
-        if seen:
-            used[k] = seen + 1
-            k = f"{k}_{seen + 1}"
-        else:
-            used[k] = 1
+        base = k = core._sanitize(s)
+        i = 1
+        while k in used:
+            i += 1
+            k = f"{base}_{i}"
+        used.add(k)
         out.append(k)
     return out
 

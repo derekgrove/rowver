@@ -177,7 +177,7 @@ npz keys:
 | `edges_x`, `edges_y` | (nb+1,) f8 | the bin edges actually used, per axis |
 | `centres_x`, `centres_y` | (nb,) f8 | bin centres in each axis's binning transform |
 | `sources` | (K,) str | the drawn sources, frame order (same filter as plot1d) |
-| `x_h_<source>`, `x_h2_<source>`, `x_n_<source>` | (nby, nbx) f8 | per-source moment grids over the same fills, `<source>` sanitized by the output-identity rule, collision-suffixed in stack order — extras |
+| `x_h_<source>`, `x_h2_<source>`, `x_n_<source>` | (nby, nbx) f8 | per-source moment grids over the same fills, `<source>` sanitized by the output-identity rule; keys are GLOBALLY unique — a collision (natural or with an earlier generated suffix) increments `_2`, `_3`, … until unused, stack order — extras |
 
 Both axes resolve exactly as `frameFor` frames them (the plot1d window
 rules, per axis): an integer column gets one bin per value; AUTO tracks
