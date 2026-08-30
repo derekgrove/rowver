@@ -88,8 +88,12 @@ def main(argv: list[str] | None = None) -> int:
     extract = sub.add_parser("extract", help="flattened / cutflow / plots / tables / regions")
     extract.add_argument("kind", help="what to extract, e.g. flattened")
 
+    sub.add_parser("render",
+                   help="render extracted plot records to png/pdf",
+                   add_help=False)
+
     args, extra = parser.parse_known_args(argv)
-    if extra and args.command != "extract":
+    if extra and args.command not in ("extract", "render"):
         parser.error(f"unrecognized arguments: {' '.join(extra)}")
     if args.command == "new":
         return _new(args)
@@ -97,6 +101,9 @@ def main(argv: list[str] | None = None) -> int:
         return _run(args)
     if args.command in ("check", "show"):
         return rvr6_main([args.command, str(args.file)])
+    if args.command == "render":
+        from .extract import render
+        return render.main(extra)
     return _extract(args, extra)
 
 

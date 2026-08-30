@@ -13,6 +13,7 @@ dependencies = ["numpy", "awkward", "uproot"]
 
 [project.optional-dependencies]
 live = ["aiohttp"]
+render = ["matplotlib", "mplhep"]
 
 [project.scripts]
 rowver = "rowver.cli:main"

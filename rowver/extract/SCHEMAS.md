@@ -146,7 +146,11 @@ into `meta.json` (`window.zoom`, `window.from`: vals/auto/manual/lim;
 spacing actually engaged — a log request over a lo ≤ 0 window silently
 stays linear, the page's own fallback). `meta.json` also carries `edges`
 (the contract's "bin edges actually used") and `centres`, mirroring the
-npz keys in strict JSON.
+npz keys in strict JSON, and `colours` — the RESOLVED colour per drawn
+source, stamped at extract time because the viewer's assignment walks
+every global source and look namespace, which the record alone cannot
+reconstruct. These are v1 meta content (documented additions, npz keys
+unchanged); the render pass consumes them.
 A SHAPE-normalized plot is written normalized (`h`/`h2` scaled to unit
 area, `n` raw), and the error bands ride the scaled moments — what the
 page draws. Tails are per source, counted like `binned()`; a NaN row

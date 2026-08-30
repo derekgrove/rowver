@@ -131,6 +131,11 @@ def dump(rvr: str | Path, tab: int = 0, zoom: str = "p90",
         f["weighted"] = core.is_weighted(meta)
         f["look"] = {s: core.source_look(view, samples, s)
                      for s in f["sources"]}
+        # resolved colours are stamped HERE, where the full context lives:
+        # the viewer's assignment walks every global source and every look
+        # namespace, which the record alone cannot reconstruct
+        assignment = core.auto_colours(view, samples)
+        f["colours"] = {s: assignment[s] for s in f["sources"]}
         f["active"] = active
         f["cuts"] = {n: core.json_cut_spec(by_name[n], cuts[n]) for n in active}
         f["lumi"] = {s: float(l)
@@ -195,7 +200,8 @@ def run(a: argparse.Namespace) -> int:
                         "log_active": f["log_active"],
                         "zoom": f["zoom"], "from": f["window"]},
              "oflow": f["oflow"], "weighted": f["weighted"],
-             "sources": f["sources"], "look": f["look"], "lumi": f["lumi"],
+             "sources": f["sources"], "look": f["look"],
+             "colours": f["colours"], "lumi": f["lumi"],
              "active": f["active"], "cuts": f["cuts"]},
             indent=4, sort_keys=True) + "\n")
         (out / f"{name}.cuts.txt").write_text(cuts_txt)

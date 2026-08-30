@@ -491,6 +491,41 @@ def sources(view: dict | None, samples: list[str]) -> list[str]:
     return group_names(view, samples) + [s for s in samples if not of.get(s)]
 
 
+# the viewer's offered palette (ui/frame.ts PALETTE20) — one list for chips,
+# wires, and automatic series colours, so a record can never disagree
+PALETTE20 = (
+    "#4E79A7", "#F28E2B", "#59A14F", "#E15759", "#B07AA1",
+    "#EDC948", "#76B7B2", "#FF9DA7", "#9C755F", "#BAB0AC",
+    "#A0CBE8", "#FFBE7D", "#8CD17D", "#FF9D9A", "#D4A6C8",
+    "#F1CE63", "#86BCB6", "#FABFD2", "#D7B5A6", "#79706E",
+)
+
+
+def auto_colours(view: dict | None, samples: list[str]) -> dict[str, str]:
+    """ONE colour assignment for everything drawn — ui/frame.ts autoColours().
+    Explicit look colours claim their slot from EVERY namespace (sample, sub,
+    group) before assignment; each GLOBAL source, in sources() order, takes
+    its own look colour or the first palette colour nobody holds. Computed at
+    extract time over the full context, because a record that kept only its
+    drawn sources could not reproduce the global slot arithmetic."""
+    look = (view or {}).get("look") or {}
+    taken = {str(lk["colour"]).lower()
+             for space in ("sample", "sub", "group")
+             for lk in (look.get(space) or {}).values()
+             if isinstance(lk, dict) and lk.get("colour")}
+    out: dict[str, str] = {}
+    for name in sources(view, samples):
+        own = (source_look(view, samples, name) or {}).get("colour")
+        if own:
+            out[name] = own
+            continue
+        c = next((p for p in PALETTE20 if p.lower() not in taken),
+                 PALETTE20[len(out) % len(PALETTE20)])
+        out[name] = c
+        taken.add(c.lower())
+    return out
+
+
 def source_look(view: dict | None, samples: list[str], name: str) -> dict | None:
     """Resolved style for one source — frame.ts sourceLook(): the same
     group -> subgroup -> sample namespace order as source membership."""
