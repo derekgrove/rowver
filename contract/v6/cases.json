@@ -1,250 +1,2290 @@
 {
-  "schema": 1,
-  "buffer_b64": "AAAAAAAA4D8AAAAAAAAAQAAAAAAAAPA/AAAAAAAA8D8AAAAAAAAlQAAAAAAAADRAAAAAAAAAPkAAAAAAAABEQAAAAAABAAAAAgAAAAMAAAAAAAAAAAAAAAEAAAABAAAA",
-  "buffer_sha256": "cc354b0a4695692a6f7032c2882f3709a16f51c448c916a3261c6a3673f7049c",
-  "base": {
-    "rowver": 6,
-    "about": {"name": "contract", "zz_about": true},
-    "data": {
-      "rows": 4,
-      "bytes": 96,
-      "weight_col": "weight",
-      "weight_at": 0,
-      "sample_at": 80,
-      "samples": [
-        {"name": "mc", "rows": 2, "weighted": true},
-        {"name": "data", "rows": 2, "weighted": false}
-      ],
-      "cols": [
-        {"name": "pt", "kind": "f8", "at": 32, "lim": [10.5, 40.0], "nice": [10.0, 40.0], "p95": 38.5, "p99": 39.7},
-        {"name": "njet", "kind": "i4", "at": 64, "lim": [0, 3], "nice": [0, 3], "p95": 2.85, "p99": 2.97, "vals": [0, 1, 2, 3]}
-      ]
-    },
-    "view": {},
-    "tabs": [],
-    "opens_on": 0,
-    "made": {
-      "by": "RowVer 6.0.0",
-      "built": "2026-08-24T00:00:00+00:00",
-      "skimmed": "2026-08-24T00:00:00+00:00",
-      "samples": [
-        {"name": "mc", "rows": 2, "files": [{"path": "mc.root", "tree": "Events"}], "metadata": {}, "weights": {"kind": "branch", "value": "genWeight"}},
-        {"name": "data", "rows": 2, "files": [{"path": "data.root", "tree": "Events"}], "metadata": {}, "weights": null}
-      ],
-      "keep": {"kind": "python", "name": "keep", "doc": "baseline", "source": "def keep(events):\n    return events.pt > 0"},
-      "prepare": null,
-      "columns": {
-        "pt": {"kind": "branch", "value": "pt"},
-        "njet": {"kind": "branch", "value": "njet"}
-      },
-      "cart": {"path": "studies/contract/cart.py", "mtime": 0, "sha256": "probe", "source": "CART = ..."},
-      "zz_made": true
-    },
-    "zz_root": true
+ "schema": 1,
+ "buffer_b64": "AAAAAAAA4D8AAAAAAAAAQAAAAAAAAPA/AAAAAAAA8D8AAAAAAAAlQAAAAAAAADRAAAAAAAAAPkAAAAAAAABEQAAAAAABAAAAAgAAAAMAAAAAAAAAAAAAAAEAAAABAAAA",
+ "buffer_sha256": "cc354b0a4695692a6f7032c2882f3709a16f51c448c916a3261c6a3673f7049c",
+ "base": {
+  "rowver": 6,
+  "about": {
+   "name": "contract",
+   "zz_about": true
   },
-  "raw_numbers": [
-    {"id": "raw.int_below_2p53", "accept": true, "lexeme": "9007199254740991"},
-    {"id": "raw.int_exactly_2p53", "accept": true, "lexeme": "9007199254740992"},
-    {"id": "raw.int_past_2p53", "accept": false, "lexeme": "9007199254740993"},
-    {"id": "raw.int_negative_past_2p53", "accept": false, "lexeme": "-9007199254740993"},
-    {"id": "raw.int_exact_but_past_cap", "accept": false, "lexeme": "9007199254740994"},
-    {"id": "raw.int_negative_exact_but_past_cap", "accept": false, "lexeme": "-9007199254740994"},
-    {"id": "raw.float_spelling_rounds_by_definition", "accept": true, "lexeme": "9007199254740993.0"},
-    {"id": "raw.exponent_spelling_rounds_by_definition", "accept": true, "lexeme": "9.007199254740993e15"},
-    {"id": "raw.overflow_to_infinity", "accept": false, "lexeme": "1e400"},
-    {"id": "raw.negative_overflow", "accept": false, "lexeme": "-1e400"}
-  ],
-  "cases": [
-    {"id": "valid.bare", "accept": true, "ops": []},
-    {"id": "valid.empty_group", "accept": true, "ops": [
-      {"op": "set", "path": ["view"], "value": {
-        "groups": {"of": {}, "sub": {}, "order": ["future"]},
-        "lumis": {"group": {"future": 100}},
-        "look": {"group": {"future": {"colour": "#123456", "draw": "bars"}}},
-        "stage": [{"kind": "map", "srcs": ["future"], "bkg": ["future"]}]
-      }}
-    ]},
-    {"id": "valid.full_hostile", "accept": true, "ops": [
-      {"op": "set", "path": ["view"], "value": {
-        "groups": {"of": {"mc": "__proto__"}, "sub": {"mc": "constructor"}, "order": ["__proto__"]},
-        "lumis": {"sample": {}, "sub": {}, "group": {"__proto__": 100}},
-        "look": {"sample": {"data": {"colour": "#111111", "draw": "points"}}, "sub": {}, "group": {"__proto__": {"colour": "#3366CC", "draw": "bars"}}},
-        "shown": null,
-        "zz_view": true
-      }},
-      {"op": "set", "path": ["tabs"], "value": [{
-        "name": "constructor",
-        "cuts": {"pt": [10.5, null], "njet": {"in": [0, 1, 2, 3]}},
-        "stage": [
-          {"kind": "1d", "varx": "pt", "zz_leaf": true},
-          {"kind": "3d", "varx": "pt", "vary": "njet"},
-          {"kind": "block", "layout": [3, 3, 6], "zz_block": true, "cells": [
-            {"kind": "2d", "varx": "pt", "vary": "njet"},
-            {"kind": "board", "rows": 1, "cols": 2, "cells": ["__proto__", "data"], "bkgs": ["data"], "channel": "metrics", "err": "sumw2", "met": ["sob", "sig"], "zz_board": true},
-            {"kind": "map", "srcs": ["__proto__", "data"], "sig": "__proto__", "bkg": ["data"], "root": {"cut": {"col": "pt", "lt": 25}, "yes": null, "no": null}, "zz_map": true}
-          ]}
+  "data": {
+   "rows": 4,
+   "bytes": 96,
+   "weight_col": "weight",
+   "weight_at": 0,
+   "sample_at": 80,
+   "samples": [
+    {
+     "name": "mc",
+     "rows": 2,
+     "weighted": true
+    },
+    {
+     "name": "data",
+     "rows": 2,
+     "weighted": false
+    }
+   ],
+   "cols": [
+    {
+     "name": "pt",
+     "kind": "f8",
+     "at": 32,
+     "lim": [
+      10.5,
+      40.0
+     ],
+     "nice": [
+      10.0,
+      40.0
+     ],
+     "p95": 38.5,
+     "p99": 39.699999999999996,
+     "p1": 10.785,
+     "p5": 11.925,
+     "p10": 13.350000000000001,
+     "p20": 16.200000000000003,
+     "p30": 19.05,
+     "p40": 22.0,
+     "p50": 25.0,
+     "p60": 28.0,
+     "p70": 30.999999999999996,
+     "p80": 34.0,
+     "p90": 37.0
+    },
+    {
+     "name": "njet",
+     "kind": "i4",
+     "at": 64,
+     "lim": [
+      0,
+      3
+     ],
+     "nice": [
+      0,
+      3
+     ],
+     "p95": 2.8499999999999996,
+     "p99": 2.9699999999999998,
+     "vals": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "p1": 0.03,
+     "p5": 0.15000000000000002,
+     "p10": 0.30000000000000004,
+     "p20": 0.6000000000000001,
+     "p30": 0.8999999999999999,
+     "p40": 1.2000000000000002,
+     "p50": 1.5,
+     "p60": 1.7999999999999998,
+     "p70": 2.0999999999999996,
+     "p80": 2.4000000000000004,
+     "p90": 2.7
+    }
+   ]
+  },
+  "view": {},
+  "tabs": [],
+  "opens_on": 0,
+  "made": {
+   "by": "RowVer 6.0.0",
+   "built": "2026-08-24T00:00:00+00:00",
+   "skimmed": "2026-08-24T00:00:00+00:00",
+   "samples": [
+    {
+     "name": "mc",
+     "rows": 2,
+     "files": [
+      {
+       "path": "mc.root",
+       "tree": "Events"
+      }
+     ],
+     "metadata": {},
+     "weights": {
+      "kind": "branch",
+      "value": "genWeight"
+     }
+    },
+    {
+     "name": "data",
+     "rows": 2,
+     "files": [
+      {
+       "path": "data.root",
+       "tree": "Events"
+      }
+     ],
+     "metadata": {},
+     "weights": null
+    }
+   ],
+   "keep": {
+    "kind": "python",
+    "name": "keep",
+    "doc": "baseline",
+    "source": "def keep(events):\n    return events.pt > 0"
+   },
+   "prepare": null,
+   "columns": {
+    "pt": {
+     "kind": "branch",
+     "value": "pt"
+    },
+    "njet": {
+     "kind": "branch",
+     "value": "njet"
+    }
+   },
+   "cart": {
+    "path": "studies/contract/cart.py",
+    "mtime": 0,
+    "sha256": "probe",
+    "source": "CART = ..."
+   },
+   "zz_made": true
+  },
+  "zz_root": true
+ },
+ "raw_numbers": [
+  {
+   "id": "raw.int_below_2p53",
+   "accept": true,
+   "lexeme": "9007199254740991"
+  },
+  {
+   "id": "raw.int_exactly_2p53",
+   "accept": true,
+   "lexeme": "9007199254740992"
+  },
+  {
+   "id": "raw.int_past_2p53",
+   "accept": false,
+   "lexeme": "9007199254740993"
+  },
+  {
+   "id": "raw.int_negative_past_2p53",
+   "accept": false,
+   "lexeme": "-9007199254740993"
+  },
+  {
+   "id": "raw.int_exact_but_past_cap",
+   "accept": false,
+   "lexeme": "9007199254740994"
+  },
+  {
+   "id": "raw.int_negative_exact_but_past_cap",
+   "accept": false,
+   "lexeme": "-9007199254740994"
+  },
+  {
+   "id": "raw.float_spelling_rounds_by_definition",
+   "accept": true,
+   "lexeme": "9007199254740993.0"
+  },
+  {
+   "id": "raw.exponent_spelling_rounds_by_definition",
+   "accept": true,
+   "lexeme": "9.007199254740993e15"
+  },
+  {
+   "id": "raw.overflow_to_infinity",
+   "accept": false,
+   "lexeme": "1e400"
+  },
+  {
+   "id": "raw.negative_overflow",
+   "accept": false,
+   "lexeme": "-1e400"
+  }
+ ],
+ "cases": [
+  {
+   "id": "valid.bare",
+   "accept": true,
+   "ops": []
+  },
+  {
+   "id": "valid.empty_group",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "groups": {
+       "of": {},
+       "sub": {},
+       "order": [
+        "future"
+       ]
+      },
+      "lumis": {
+       "group": {
+        "future": 100
+       }
+      },
+      "look": {
+       "group": {
+        "future": {
+         "colour": "#123456",
+         "draw": "bars"
+        }
+       }
+      },
+      "stage": [
+       {
+        "kind": "map",
+        "srcs": [
+         "future"
         ],
-        "zz_tab": true
-      }]}
-    ]},
-    {"id": "invalid.kind", "accept": false, "ops": [{"op": "set", "path": ["data", "cols", 0, "kind"], "value": "wat"}]},
-    {"id": "invalid.weight_at_missing", "accept": false, "ops": [{"op": "delete", "path": ["data", "weight_at"]}]},
-    {"id": "invalid.sample_count", "accept": false, "ops": [{"op": "set", "path": ["data", "samples", 0, "rows"], "value": 1}]},
-    {"id": "invalid.stats_reversed", "accept": false, "ops": [{"op": "set", "path": ["data", "cols", 0, "lim"], "value": [40, 10]}]},
-    {"id": "invalid.stats_payload", "accept": false, "ops": [{"op": "set", "path": ["data", "cols", 0, "lim"], "value": [10, 40]}]},
-    {"id": "invalid.vals_payload", "accept": false, "ops": [{"op": "set", "path": ["data", "cols", 1, "vals"], "value": [0, 1]}]},
-    {"id": "invalid.cut_kind_range", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "cuts": {"njet": [1, 1]}}]}]},
-    {"id": "invalid.cut_kind_members", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "cuts": {"pt": {"in": [20]}}}]}]},
-    {"id": "invalid.cut_unknown_value", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "cuts": {"njet": {"in": [8]}}}]}]},
-    {"id": "invalid.lumi_zero", "accept": false, "ops": [{"op": "set", "path": ["view"], "value": {"lumis": {"sample": {"mc": 0}, "sub": {}, "group": {}}}}]},
-    {"id": "invalid.source_name_collision", "accept": false, "ops": [{"op": "set", "path": ["view"], "value": {"groups": {"of": {"mc": "data"}, "sub": {}, "order": ["data"]}}}]},
-    {"id": "invalid.group_order_type", "accept": false, "ops": [{"op": "set", "path": ["view"], "value": {"groups": {"of": {}, "sub": {}, "order": [{}]}}}]},
-    {"id": "invalid.unsupported_lumi", "accept": false, "ops": [{"op": "set", "path": ["view"], "value": {"lumi": null}}]},
-    {"id": "invalid.plot_column", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "1d", "varx": "missing"}]}]}]},
-    {"id": "invalid.map_null_sources", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "srcs": null}]}]}]},
-    {"id": "invalid.map_null_backgrounds", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "bkg": null}]}]}]},
-    {"id": "invalid.map_null_signal", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "sig": null}]}]}]},
-    {"id": "invalid.map_source_type", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "srcs": [{}]}]}]}]},
-    {"id": "invalid.board_cell_type", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "board", "cells": [{}]}]}]}]},
-    {"id": "invalid.map_grid_type", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "grid": {"vars": {}}}]}]}]},
-    {"id": "invalid.map_grid_overlap", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "grid": {"vars": [{"col": "njet", "bands": [[0, 1], [1, 2]]}]}}]}]}]},
-    {"id": "invalid.map_grid_repeat", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "grid": {"vars": [{"col": "pt", "bands": [20]}, {"col": "pt", "bands": [30]}]}}]}]}]},
-    {"id": "invalid.map_category", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "map", "root": {"cut": {"col": "njet", "in": [8]}, "yes": null, "no": null}}]}]}]},
-    {"id": "invalid.nested_block", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "block", "layout": [6], "cells": [{"kind": "block", "layout": [6], "cells": [{"kind": "1d", "varx": "pt"}]}]}]}]}]},
-    {"id": "invalid.duplicate_board", "accept": false, "ops": [{"op": "set", "path": ["tabs"], "value": [{"name": "bad", "stage": [{"kind": "board"}, {"kind": "board"}]}]}]},
-    {"id": "invalid.opens_on", "accept": false, "ops": [{"op": "set", "path": ["opens_on"], "value": 2}]},
-    {"id": "valid.plot_srcs", "accept": true, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "stage": [{"kind": "1d", "varx": "pt", "srcs": ["mc"]}]}]}
-    ]},
-    {"id": "valid.plot_srcs_empty", "accept": true, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "stage": [{"kind": "1d", "varx": "pt", "srcs": []}]}]}
-    ]},
-    {"id": "invalid.plot_srcs_unknown", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "stage": [{"kind": "1d", "varx": "pt", "srcs": ["ghost"]}]}]}
-    ]},
-    {"id": "invalid.plot_srcs_duplicate", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "stage": [{"kind": "1d", "varx": "pt", "srcs": ["mc", "mc"]}]}]}
-    ]},
-    {"id": "invalid.plot_srcs_type", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "stage": [{"kind": "1d", "varx": "pt", "srcs": [{}]}]}]}
-    ]},
-    {"id": "valid.tab_defaults_srcs", "accept": true, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "plot": {"srcs": ["mc"]}, "stage": [{"kind": "1d", "varx": "pt"}]}]}
-    ]},
-    {"id": "invalid.tab_defaults_srcs", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "plot": {"srcs": ["ghost"]}, "stage": [{"kind": "1d", "varx": "pt"}]}]}
-    ]},
-    {"id": "invalid.tab_defaults_srcs_null", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "srcs case", "plot": {"srcs": null}, "stage": [{"kind": "1d", "varx": "pt"}]}]}
-    ]},
-    {"id": "valid.plot_mute", "accept": true, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "mute case", "stage": [{"kind": "1d", "varx": "pt", "srcs": ["mc", "data"], "mute": ["data"]}]}]}
-    ]},
-    {"id": "invalid.plot_mute_unknown", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "mute case", "stage": [{"kind": "1d", "varx": "pt", "mute": ["ghost"]}]}]}
-    ]},
-    {"id": "invalid.tab_defaults_mute_null", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "mute case", "plot": {"mute": null}, "stage": [{"kind": "1d", "varx": "pt"}]}]}
-    ]},
-    {"id": "invalid.look_dash", "accept": false, "ops": [
-      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"dash": "wavy"}}}}}
-    ]},
-    {"id": "invalid.look_lw", "accept": false, "ops": [
-      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"lw": 0}}}}}
-    ]},
-    {"id": "invalid.look_null_style", "accept": false, "ops": [
-      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": null}}}}
-    ]},
-    {"id": "invalid.look_dash_null", "accept": false, "ops": [
-      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"dash": null}}}}}
-    ]},
-    {"id": "invalid.look_lw_null", "accept": false, "ops": [
-      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"lw": null}}}}}
-    ]},
-    {"id": "invalid.map_metric", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "metric": "garbage"}]}]}
-    ]},
-    {"id": "invalid.map_flip", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "flip": "yes"}]}]}
-    ]},
-    {"id": "valid.grid_bands_increasing", "accept": true, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "grid": {"vars": [{"col": "pt", "bands": [20.0, 30.0]}]}}]}]}
-    ]},
-    {"id": "invalid.grid_bands_reversed", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "grid": {"vars": [{"col": "pt", "bands": [30.0, 20.0]}]}}]}]}
-    ]},
-    {"id": "valid.look_lw_edge", "accept": true, "ops": [
-      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"lw": 32}}}}}
-    ]},
-    {"id": "invalid.look_lw_over", "accept": false, "ops": [
-      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"lw": 32.5}}}}}
-    ]},
-    {"id": "invalid.look_lw_bool", "accept": false, "ops": [
-      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"lw": true}}}}}
-    ]},
-    {"id": "valid.p90_at_p95", "accept": true, "ops": [
-      {"op": "set", "path": ["data", "cols", 0, "p90"], "value": 38.5}
-    ]},
-    {"id": "invalid.p90_above_p95", "accept": false, "ops": [
-      {"op": "set", "path": ["data", "cols", 0, "p90"], "value": 39.0}
-    ]},
-    {"id": "valid.p90_null", "accept": true, "ops": [
-      {"op": "set", "path": ["data", "cols", 0, "p90"], "value": null}
-    ]},
-    {"id": "valid.opens_on_last", "accept": true, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "a"}, {"name": "b"}]},
-      {"op": "set", "path": ["opens_on"], "value": 1}
-    ]},
-    {"id": "invalid.opens_on_out", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "a"}]},
-      {"op": "set", "path": ["opens_on"], "value": 1}
-    ]},
-    {"id": "valid.board_4x4", "accept": true, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "b", "stage": [{"kind": "board", "rows": 4, "cols": 4}]}]}
-    ]},
-    {"id": "invalid.board_5", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "b", "stage": [{"kind": "board", "rows": 5, "cols": 1}]}]}
-    ]},
-    {"id": "valid.block_6", "accept": true, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "s", "stage": [{"kind": "block", "layout": [2, 2, 2, 2, 2, 2], "cells": [{"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}]}]}]}
-    ]},
-    {"id": "invalid.block_7", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "s", "stage": [{"kind": "block", "layout": [2, 2, 2, 2, 2, 2], "cells": [{"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}, {"kind": "1d", "varx": "pt"}]}]}]}
-    ]},
-    {"id": "valid.grid_bands_64", "accept": true, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "grid": {"vars": [{"col": "pt", "bands": [10.5, 10.9, 11.3, 11.7, 12.1, 12.5, 12.9, 13.3, 13.7, 14.1, 14.5, 14.9, 15.3, 15.7, 16.1, 16.5, 16.9, 17.3, 17.7, 18.1, 18.5, 18.9, 19.3, 19.700000000000003, 20.1, 20.5, 20.9, 21.3, 21.700000000000003, 22.1, 22.5, 22.9, 23.3, 23.700000000000003, 24.1, 24.5, 24.9, 25.3, 25.700000000000003, 26.1, 26.5, 26.900000000000002, 27.3, 27.7, 28.1, 28.5, 28.900000000000002, 29.3, 29.700000000000003, 30.1, 30.5, 30.900000000000002, 31.3, 31.700000000000003, 32.1, 32.5, 32.900000000000006, 33.3, 33.7, 34.1, 34.5, 34.900000000000006, 35.3, 35.7]}]}}]}]}
-    ]},
-    {"id": "invalid.grid_bands_65", "accept": false, "ops": [
-      {"op": "set", "path": ["tabs"], "value": [{"name": "m", "stage": [{"kind": "map", "grid": {"vars": [{"col": "pt", "bands": [10.5, 10.9, 11.3, 11.7, 12.1, 12.5, 12.9, 13.3, 13.7, 14.1, 14.5, 14.9, 15.3, 15.7, 16.1, 16.5, 16.9, 17.3, 17.7, 18.1, 18.5, 18.9, 19.3, 19.700000000000003, 20.1, 20.5, 20.9, 21.3, 21.700000000000003, 22.1, 22.5, 22.9, 23.3, 23.700000000000003, 24.1, 24.5, 24.9, 25.3, 25.700000000000003, 26.1, 26.5, 26.900000000000002, 27.3, 27.7, 28.1, 28.5, 28.900000000000002, 29.3, 29.700000000000003, 30.1, 30.5, 30.900000000000002, 31.3, 31.700000000000003, 32.1, 32.5, 32.900000000000006, 33.3, 33.7, 34.1, 34.5, 34.900000000000006, 35.3, 35.7, 36.1]}]}}]}]}
-    ]},
-    {"id": "valid.unicode_sample_name", "accept": true, "ops": [
-      {"op": "set", "path": ["data", "samples", 0, "name"], "value": "mc → t̄t̅ 🚀"},
-      {"op": "set", "path": ["made", "samples", 0, "name"], "value": "mc → t̄t̅ 🚀"}
-    ]},
-    {"id": "valid.awkward_sample_name", "accept": true, "ops": [
-      {"op": "set", "path": ["data", "samples", 0, "name"], "value": "mc \"quoted\"\nline two"},
-      {"op": "set", "path": ["made", "samples", 0, "name"], "value": "mc \"quoted\"\nline two"}
-    ]},
-    {"id": "invalid.empty_sample_name", "accept": false, "ops": [
-      {"op": "set", "path": ["data", "samples", 0, "name"], "value": ""}
-    ]},
-    {"id": "invalid.look_role", "accept": false, "ops": [
-      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"role": "hero"}}}}}
-    ]},
-    {"id": "invalid.look_errstyle", "accept": false, "ops": [
-      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"errstyle": "fat"}}}}}
-    ]},
-    {"id": "invalid.look_colour_null", "accept": false, "ops": [
-      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"colour": null}}}}}
-    ]},
-    {"id": "invalid.look_draw_null", "accept": false, "ops": [
-      {"op": "set", "path": ["view"], "value": {"look": {"sample": {"mc": {"draw": null}}}}}
-    ]},
-    {"id": "invalid.made_weights_missing", "accept": false, "ops": [
-      {"op": "delete", "path": ["made", "samples", 0, "weights"]}
-    ]},
-    {"id": "invalid.made_built_number", "accept": false, "ops": [
-      {"op": "set", "path": ["made", "built"], "value": 123}
-    ]}
-  ]
+        "bkg": [
+         "future"
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "valid.full_hostile",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "groups": {
+       "of": {
+        "mc": "__proto__"
+       },
+       "sub": {
+        "mc": "constructor"
+       },
+       "order": [
+        "__proto__"
+       ]
+      },
+      "lumis": {
+       "sample": {},
+       "sub": {},
+       "group": {
+        "__proto__": 100
+       }
+      },
+      "look": {
+       "sample": {
+        "data": {
+         "colour": "#111111",
+         "draw": "points"
+        }
+       },
+       "sub": {},
+       "group": {
+        "__proto__": {
+         "colour": "#3366CC",
+         "draw": "bars"
+        }
+       }
+      },
+      "shown": null,
+      "zz_view": true
+     }
+    },
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "constructor",
+       "cuts": {
+        "pt": [
+         10.5,
+         null
+        ],
+        "njet": {
+         "in": [
+          0,
+          1,
+          2,
+          3
+         ]
+        }
+       },
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "pt",
+         "zz_leaf": true
+        },
+        {
+         "kind": "3d",
+         "varx": "pt",
+         "vary": "njet"
+        },
+        {
+         "kind": "block",
+         "layout": [
+          3,
+          3,
+          6
+         ],
+         "zz_block": true,
+         "cells": [
+          {
+           "kind": "2d",
+           "varx": "pt",
+           "vary": "njet"
+          },
+          {
+           "kind": "board",
+           "rows": 1,
+           "cols": 2,
+           "cells": [
+            "__proto__",
+            "data"
+           ],
+           "bkgs": [
+            "data"
+           ],
+           "channel": "metrics",
+           "err": "sumw2",
+           "met": [
+            "sob",
+            "sig"
+           ],
+           "zz_board": true
+          },
+          {
+           "kind": "map",
+           "srcs": [
+            "__proto__",
+            "data"
+           ],
+           "sig": "__proto__",
+           "bkg": [
+            "data"
+           ],
+           "root": {
+            "cut": {
+             "col": "pt",
+             "lt": 25
+            },
+            "yes": null,
+            "no": null
+           },
+           "zz_map": true
+          }
+         ]
+        }
+       ],
+       "zz_tab": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.kind",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "cols",
+      0,
+      "kind"
+     ],
+     "value": "wat"
+    }
+   ]
+  },
+  {
+   "id": "invalid.weight_at_missing",
+   "accept": false,
+   "ops": [
+    {
+     "op": "delete",
+     "path": [
+      "data",
+      "weight_at"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.sample_count",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "samples",
+      0,
+      "rows"
+     ],
+     "value": 1
+    }
+   ]
+  },
+  {
+   "id": "invalid.stats_reversed",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "cols",
+      0,
+      "lim"
+     ],
+     "value": [
+      40,
+      10
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.stats_payload",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "cols",
+      0,
+      "lim"
+     ],
+     "value": [
+      10,
+      40
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.vals_payload",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "cols",
+      1,
+      "vals"
+     ],
+     "value": [
+      0,
+      1
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.cut_kind_range",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "cuts": {
+        "njet": [
+         1,
+         1
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.cut_kind_members",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "cuts": {
+        "pt": {
+         "in": [
+          20
+         ]
+        }
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.cut_unknown_value",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "cuts": {
+        "njet": {
+         "in": [
+          8
+         ]
+        }
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.lumi_zero",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "lumis": {
+       "sample": {
+        "mc": 0
+       },
+       "sub": {},
+       "group": {}
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.source_name_collision",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "groups": {
+       "of": {
+        "mc": "data"
+       },
+       "sub": {},
+       "order": [
+        "data"
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.group_order_type",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "groups": {
+       "of": {},
+       "sub": {},
+       "order": [
+        {}
+       ]
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.unsupported_lumi",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "lumi": null
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.plot_column",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "missing"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.map_null_sources",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "stage": [
+        {
+         "kind": "map",
+         "srcs": null
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.map_null_backgrounds",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "stage": [
+        {
+         "kind": "map",
+         "bkg": null
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.map_null_signal",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "stage": [
+        {
+         "kind": "map",
+         "sig": null
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.map_source_type",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "stage": [
+        {
+         "kind": "map",
+         "srcs": [
+          {}
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.board_cell_type",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "stage": [
+        {
+         "kind": "board",
+         "cells": [
+          {}
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.map_grid_type",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "stage": [
+        {
+         "kind": "map",
+         "grid": {
+          "vars": {}
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.map_grid_overlap",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "stage": [
+        {
+         "kind": "map",
+         "grid": {
+          "vars": [
+           {
+            "col": "njet",
+            "bands": [
+             [
+              0,
+              1
+             ],
+             [
+              1,
+              2
+             ]
+            ]
+           }
+          ]
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.map_grid_repeat",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "stage": [
+        {
+         "kind": "map",
+         "grid": {
+          "vars": [
+           {
+            "col": "pt",
+            "bands": [
+             20
+            ]
+           },
+           {
+            "col": "pt",
+            "bands": [
+             30
+            ]
+           }
+          ]
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.map_category",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "stage": [
+        {
+         "kind": "map",
+         "root": {
+          "cut": {
+           "col": "njet",
+           "in": [
+            8
+           ]
+          },
+          "yes": null,
+          "no": null
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.nested_block",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "stage": [
+        {
+         "kind": "block",
+         "layout": [
+          6
+         ],
+         "cells": [
+          {
+           "kind": "block",
+           "layout": [
+            6
+           ],
+           "cells": [
+            {
+             "kind": "1d",
+             "varx": "pt"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.duplicate_board",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "bad",
+       "stage": [
+        {
+         "kind": "board"
+        },
+        {
+         "kind": "board"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.opens_on",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "opens_on"
+     ],
+     "value": 2
+    }
+   ]
+  },
+  {
+   "id": "valid.plot_srcs",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "srcs case",
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "pt",
+         "srcs": [
+          "mc"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "valid.plot_srcs_empty",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "srcs case",
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "pt",
+         "srcs": []
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.plot_srcs_unknown",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "srcs case",
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "pt",
+         "srcs": [
+          "ghost"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.plot_srcs_duplicate",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "srcs case",
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "pt",
+         "srcs": [
+          "mc",
+          "mc"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.plot_srcs_type",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "srcs case",
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "pt",
+         "srcs": [
+          {}
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "valid.tab_defaults_srcs",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "srcs case",
+       "plot": {
+        "srcs": [
+         "mc"
+        ]
+       },
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "pt"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.tab_defaults_srcs",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "srcs case",
+       "plot": {
+        "srcs": [
+         "ghost"
+        ]
+       },
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "pt"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.tab_defaults_srcs_null",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "srcs case",
+       "plot": {
+        "srcs": null
+       },
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "pt"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "valid.plot_mute",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "mute case",
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "pt",
+         "srcs": [
+          "mc",
+          "data"
+         ],
+         "mute": [
+          "data"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.plot_mute_unknown",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "mute case",
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "pt",
+         "mute": [
+          "ghost"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.tab_defaults_mute_null",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "mute case",
+       "plot": {
+        "mute": null
+       },
+       "stage": [
+        {
+         "kind": "1d",
+         "varx": "pt"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_dash",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "dash": "wavy"
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_lw",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "lw": 0
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_null_style",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": null
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_dash_null",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "dash": null
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_lw_null",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "lw": null
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.map_metric",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "m",
+       "stage": [
+        {
+         "kind": "map",
+         "metric": "garbage"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.map_flip",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "m",
+       "stage": [
+        {
+         "kind": "map",
+         "flip": "yes"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "valid.grid_bands_increasing",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "m",
+       "stage": [
+        {
+         "kind": "map",
+         "grid": {
+          "vars": [
+           {
+            "col": "pt",
+            "bands": [
+             20.0,
+             30.0
+            ]
+           }
+          ]
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.grid_bands_reversed",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "m",
+       "stage": [
+        {
+         "kind": "map",
+         "grid": {
+          "vars": [
+           {
+            "col": "pt",
+            "bands": [
+             30.0,
+             20.0
+            ]
+           }
+          ]
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "valid.look_lw_edge",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "lw": 32
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_lw_over",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "lw": 32.5
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_lw_bool",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "lw": true
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "valid.p90_at_p95",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "cols",
+      0,
+      "p90"
+     ],
+     "value": 38.5
+    }
+   ]
+  },
+  {
+   "id": "invalid.p90_above_p95",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "cols",
+      0,
+      "p90"
+     ],
+     "value": 39.0
+    }
+   ]
+  },
+  {
+   "id": "invalid.p90_null",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "cols",
+      0,
+      "p90"
+     ],
+     "value": null
+    }
+   ]
+  },
+  {
+   "id": "valid.opens_on_last",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "a"
+      },
+      {
+       "name": "b"
+      }
+     ]
+    },
+    {
+     "op": "set",
+     "path": [
+      "opens_on"
+     ],
+     "value": 1
+    }
+   ]
+  },
+  {
+   "id": "invalid.opens_on_out",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "a"
+      }
+     ]
+    },
+    {
+     "op": "set",
+     "path": [
+      "opens_on"
+     ],
+     "value": 1
+    }
+   ]
+  },
+  {
+   "id": "valid.board_4x4",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "b",
+       "stage": [
+        {
+         "kind": "board",
+         "rows": 4,
+         "cols": 4
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.board_5",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "b",
+       "stage": [
+        {
+         "kind": "board",
+         "rows": 5,
+         "cols": 1
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "valid.block_6",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "s",
+       "stage": [
+        {
+         "kind": "block",
+         "layout": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+         ],
+         "cells": [
+          {
+           "kind": "1d",
+           "varx": "pt"
+          },
+          {
+           "kind": "1d",
+           "varx": "pt"
+          },
+          {
+           "kind": "1d",
+           "varx": "pt"
+          },
+          {
+           "kind": "1d",
+           "varx": "pt"
+          },
+          {
+           "kind": "1d",
+           "varx": "pt"
+          },
+          {
+           "kind": "1d",
+           "varx": "pt"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.block_7",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "s",
+       "stage": [
+        {
+         "kind": "block",
+         "layout": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+         ],
+         "cells": [
+          {
+           "kind": "1d",
+           "varx": "pt"
+          },
+          {
+           "kind": "1d",
+           "varx": "pt"
+          },
+          {
+           "kind": "1d",
+           "varx": "pt"
+          },
+          {
+           "kind": "1d",
+           "varx": "pt"
+          },
+          {
+           "kind": "1d",
+           "varx": "pt"
+          },
+          {
+           "kind": "1d",
+           "varx": "pt"
+          },
+          {
+           "kind": "1d",
+           "varx": "pt"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "valid.grid_bands_64",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "m",
+       "stage": [
+        {
+         "kind": "map",
+         "grid": {
+          "vars": [
+           {
+            "col": "pt",
+            "bands": [
+             10.5,
+             10.9,
+             11.3,
+             11.7,
+             12.1,
+             12.5,
+             12.9,
+             13.3,
+             13.7,
+             14.1,
+             14.5,
+             14.9,
+             15.3,
+             15.7,
+             16.1,
+             16.5,
+             16.9,
+             17.3,
+             17.7,
+             18.1,
+             18.5,
+             18.9,
+             19.3,
+             19.700000000000003,
+             20.1,
+             20.5,
+             20.9,
+             21.3,
+             21.700000000000003,
+             22.1,
+             22.5,
+             22.9,
+             23.3,
+             23.700000000000003,
+             24.1,
+             24.5,
+             24.9,
+             25.3,
+             25.700000000000003,
+             26.1,
+             26.5,
+             26.900000000000002,
+             27.3,
+             27.7,
+             28.1,
+             28.5,
+             28.900000000000002,
+             29.3,
+             29.700000000000003,
+             30.1,
+             30.5,
+             30.900000000000002,
+             31.3,
+             31.700000000000003,
+             32.1,
+             32.5,
+             32.900000000000006,
+             33.3,
+             33.7,
+             34.1,
+             34.5,
+             34.900000000000006,
+             35.3,
+             35.7
+            ]
+           }
+          ]
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.grid_bands_65",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "tabs"
+     ],
+     "value": [
+      {
+       "name": "m",
+       "stage": [
+        {
+         "kind": "map",
+         "grid": {
+          "vars": [
+           {
+            "col": "pt",
+            "bands": [
+             10.5,
+             10.9,
+             11.3,
+             11.7,
+             12.1,
+             12.5,
+             12.9,
+             13.3,
+             13.7,
+             14.1,
+             14.5,
+             14.9,
+             15.3,
+             15.7,
+             16.1,
+             16.5,
+             16.9,
+             17.3,
+             17.7,
+             18.1,
+             18.5,
+             18.9,
+             19.3,
+             19.700000000000003,
+             20.1,
+             20.5,
+             20.9,
+             21.3,
+             21.700000000000003,
+             22.1,
+             22.5,
+             22.9,
+             23.3,
+             23.700000000000003,
+             24.1,
+             24.5,
+             24.9,
+             25.3,
+             25.700000000000003,
+             26.1,
+             26.5,
+             26.900000000000002,
+             27.3,
+             27.7,
+             28.1,
+             28.5,
+             28.900000000000002,
+             29.3,
+             29.700000000000003,
+             30.1,
+             30.5,
+             30.900000000000002,
+             31.3,
+             31.700000000000003,
+             32.1,
+             32.5,
+             32.900000000000006,
+             33.3,
+             33.7,
+             34.1,
+             34.5,
+             34.900000000000006,
+             35.3,
+             35.7,
+             36.1
+            ]
+           }
+          ]
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "valid.unicode_sample_name",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "samples",
+      0,
+      "name"
+     ],
+     "value": "mc → t̄t̅ 🚀"
+    },
+    {
+     "op": "set",
+     "path": [
+      "made",
+      "samples",
+      0,
+      "name"
+     ],
+     "value": "mc → t̄t̅ 🚀"
+    }
+   ]
+  },
+  {
+   "id": "valid.awkward_sample_name",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "samples",
+      0,
+      "name"
+     ],
+     "value": "mc \"quoted\"\nline two"
+    },
+    {
+     "op": "set",
+     "path": [
+      "made",
+      "samples",
+      0,
+      "name"
+     ],
+     "value": "mc \"quoted\"\nline two"
+    }
+   ]
+  },
+  {
+   "id": "invalid.empty_sample_name",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "samples",
+      0,
+      "name"
+     ],
+     "value": ""
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_role",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "role": "hero"
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_errstyle",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "errstyle": "fat"
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_colour_null",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "colour": null
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_draw_null",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "draw": null
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.made_weights_missing",
+   "accept": false,
+   "ops": [
+    {
+     "op": "delete",
+     "path": [
+      "made",
+      "samples",
+      0,
+      "weights"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "invalid.made_built_number",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "made",
+      "built"
+     ],
+     "value": 123
+    }
+   ]
+  },
+  {
+   "id": "invalid.p50_null",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "cols",
+      0,
+      "p50"
+     ],
+     "value": null
+    }
+   ]
+  },
+  {
+   "id": "invalid.p80_above_p90",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "cols",
+      0,
+      "p80"
+     ],
+     "value": 37.75
+    }
+   ]
+  },
+  {
+   "id": "valid.p80_at_p90",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "cols",
+      0,
+      "p80"
+     ],
+     "value": 37.0
+    }
+   ]
+  },
+  {
+   "id": "invalid.p1_below_lim",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "data",
+      "cols",
+      0,
+      "p1"
+     ],
+     "value": 10.0
+    }
+   ]
+  },
+  {
+   "id": "invalid.p60_missing",
+   "accept": false,
+   "ops": [
+    {
+     "op": "delete",
+     "path": [
+      "data",
+      "cols",
+      0,
+      "p60"
+     ]
+    }
+   ]
+  }
+ ]
 }

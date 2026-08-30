@@ -5327,5 +5327,1788 @@
    },
    "expect_mask_kept": 2
   }
+ ],
+ "auto_window": [
+  {
+   "id": "packed-p90-toprecision4",
+   "col": {
+    "name": "x",
+    "lim": [
+     0,
+     100
+    ],
+    "nice": [
+     0,
+     100
+    ],
+    "p80": 80.5,
+    "p90": 87.654321,
+    "p95": 95.5,
+    "p99": 99.99
+   },
+   "pref": "p90",
+   "expect": [
+    0.0,
+    87.65
+   ]
+  },
+  {
+   "id": "packed-p80",
+   "col": {
+    "name": "x",
+    "lim": [
+     0,
+     100
+    ],
+    "nice": [
+     0,
+     100
+    ],
+    "p80": 80.5,
+    "p90": 87.654321,
+    "p95": 95.5,
+    "p99": 99.99
+   },
+   "pref": "p80",
+   "expect": [
+    0.0,
+    80.5
+   ]
+  },
+  {
+   "id": "packed-p95",
+   "col": {
+    "name": "x",
+    "lim": [
+     0,
+     100
+    ],
+    "nice": [
+     0,
+     100
+    ],
+    "p80": 80.5,
+    "p90": 87.654321,
+    "p95": 95.5,
+    "p99": 99.99
+   },
+   "pref": "p95",
+   "expect": [
+    0.0,
+    95.5
+   ]
+  },
+  {
+   "id": "packed-p99",
+   "col": {
+    "name": "x",
+    "lim": [
+     0,
+     100
+    ],
+    "nice": [
+     0,
+     100
+    ],
+    "p80": 80.5,
+    "p90": 87.654321,
+    "p95": 95.5,
+    "p99": 99.99
+   },
+   "pref": "p99",
+   "expect": [
+    0.0,
+    99.99
+   ]
+  },
+  {
+   "id": "full-pref-null",
+   "col": {
+    "name": "x",
+    "lim": [
+     0,
+     100
+    ],
+    "nice": [
+     0,
+     100
+    ],
+    "p80": 80.0,
+    "p90": 87.0,
+    "p95": 95.0,
+    "p99": 99.0
+   },
+   "pref": "full",
+   "expect": null
+  },
+  {
+   "id": "small-vals-null",
+   "col": {
+    "name": "x",
+    "lim": [
+     0,
+     3
+    ],
+    "vals": [
+     0,
+     1,
+     2,
+     3
+    ],
+    "p80": 2.0,
+    "p90": 3.0,
+    "p95": 3.0,
+    "p99": 3.0
+   },
+   "pref": "p90",
+   "expect": null
+  },
+  {
+   "id": "degenerate-quantile-null",
+   "col": {
+    "name": "x",
+    "lim": [
+     0,
+     100
+    ],
+    "nice": [
+     0,
+     100
+    ],
+    "p80": 0.0,
+    "p90": 0.0,
+    "p95": 95.0,
+    "p99": 99.0
+   },
+   "pref": "p90",
+   "expect": null
+  },
+  {
+   "id": "missing-quantile-null",
+   "col": {
+    "name": "x",
+    "lim": [
+     0,
+     100
+    ],
+    "nice": [
+     0,
+     100
+    ]
+   },
+   "pref": "p90",
+   "expect": null
+  },
+  {
+   "id": "tie-rounds-on-exact-expansion",
+   "col": {
+    "name": "x",
+    "lim": [
+     0,
+     1
+    ],
+    "nice": [
+     0,
+     1
+    ],
+    "p80": 0.1,
+    "p90": 0.12345,
+    "p95": 0.5,
+    "p99": 0.9
+   },
+   "pref": "p90",
+   "expect": [
+    0.0,
+    0.1235
+   ]
+  },
+  {
+   "id": "nice-anchors-the-low-edge",
+   "col": {
+    "name": "x",
+    "lim": [
+     -5,
+     100
+    ],
+    "nice": [
+     0,
+     100
+    ],
+    "p80": 40.0,
+    "p90": 50.0,
+    "p95": 95.0,
+    "p99": 99.0
+   },
+   "pref": "p90",
+   "expect": [
+    0.0,
+    50.0
+   ]
+  }
+ ],
+ "plot1d": [
+  {
+   "id": "grouped-sources-weighted",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      4
+     ],
+     "nice": [
+      0,
+      4
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.5,
+     1.5,
+     2.5,
+     3.5
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    1,
+    2
+   ],
+   "samples": [
+    "a",
+    "b",
+    "c"
+   ],
+   "groups": {
+    "a": "G",
+    "b": "G"
+   },
+   "shown_on": null,
+   "weighted": true,
+   "spec": {
+    "varx": "x",
+    "nb": 4
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 4.0,
+    "nb": 4,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "G",
+     "c"
+    ],
+    "h": [
+     [
+      1.0,
+      2.0,
+      3.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0,
+      4.0
+     ]
+    ],
+    "h2": [
+     [
+      1.0,
+      4.0,
+      9.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0,
+      16.0
+     ]
+    ],
+    "n": [
+     [
+      1.0,
+      1.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+     ]
+    ]
+   },
+   "ww": [
+    1,
+    2,
+    3,
+    4
+   ]
+  },
+  {
+   "id": "hidden-member-not-counted",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.5,
+     1.5
+    ]
+   },
+   "ds": [
+    0,
+    1
+   ],
+   "samples": [
+    "a",
+    "b"
+   ],
+   "groups": {
+    "a": "G",
+    "b": "G"
+   },
+   "shown_on": [
+    "a"
+   ],
+   "weighted": true,
+   "spec": {
+    "varx": "x",
+    "nb": 2
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 2.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "G"
+    ],
+    "h": [
+     [
+      2.0,
+      0.0
+     ]
+    ],
+    "h2": [
+     [
+      4.0,
+      0.0
+     ]
+    ],
+    "n": [
+     [
+      1.0,
+      0.0
+     ]
+    ]
+   },
+   "ww": [
+    2,
+    3
+   ]
+  },
+  {
+   "id": "hidden-source-dropped",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.5,
+     1.5
+    ]
+   },
+   "ds": [
+    0,
+    1
+   ],
+   "samples": [
+    "a",
+    "b"
+   ],
+   "groups": {},
+   "shown_on": [
+    "a"
+   ],
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 2.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "a"
+    ],
+    "h": [
+     [
+      1.0,
+      0.0
+     ]
+    ],
+    "h2": [
+     [
+      1.0,
+      0.0
+     ]
+    ],
+    "n": [
+     [
+      1.0,
+      0.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "srcs-narrows-mute-silences",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.5,
+     0.5,
+     0.5
+    ]
+   },
+   "ds": [
+    0,
+    1,
+    2
+   ],
+   "samples": [
+    "a",
+    "b",
+    "c"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "srcs": [
+     "a",
+     "b"
+    ],
+    "mute": [
+     "b"
+    ]
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 2.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "a"
+    ],
+    "h": [
+     [
+      1.0,
+      0.0
+     ]
+    ],
+    "n": [
+     [
+      1.0,
+      0.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "ints-one-bin-per-value",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      1,
+      3
+     ],
+     "vals": [
+      1,
+      2,
+      3
+     ],
+     "p90": 3.0,
+     "p95": 3.0,
+     "p99": 3.0
+    }
+   ],
+   "values": {
+    "x": [
+     1,
+     2,
+     2,
+     3
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 40
+   },
+   "zoom": "p90",
+   "expect": {
+    "lo": 0.5,
+    "hi": 3.5,
+    "nb": 3,
+    "ints": true,
+    "log": false,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      1.0,
+      2.0,
+      1.0
+     ]
+    ],
+    "centres": [
+     1.0,
+     2.0,
+     3.0
+    ]
+   }
+  },
+  {
+   "id": "manual-window",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      100
+     ],
+     "nice": [
+      0,
+      100
+     ],
+     "p80": 60.0,
+     "p90": 90.0,
+     "p95": 95.0,
+     "p99": 99.0
+    }
+   ],
+   "values": {
+    "x": [
+     5,
+     12,
+     18,
+     25
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "xauto": false,
+    "xmin": "10",
+    "xmax": "20"
+   },
+   "zoom": "p90",
+   "expect": {
+    "lo": 10.0,
+    "hi": 20.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      2.0,
+      2.0
+     ]
+    ],
+    "n": [
+     [
+      2.0,
+      2.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "manual-longest-prefix-parse",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      120
+     ],
+     "nice": [
+      5,
+      50
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     10,
+     60
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "xauto": false,
+    "xmin": "abc",
+    "xmax": "1e2px"
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 5.0,
+    "hi": 100.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "inverted-manual-falls-back",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      40
+     ],
+     "nice": [
+      0,
+      40
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     5,
+     35
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "xauto": false,
+    "xmin": "30",
+    "xmax": "10"
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 40.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "nb-string-clamped-to-200",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    }
+   ],
+   "values": {
+    "x": []
+   },
+   "ds": [],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": "500"
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 1.0,
+    "nb": 200,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ]
+   }
+  },
+  {
+   "id": "nb-zero-defaults-to-40",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    }
+   ],
+   "values": {
+    "x": []
+   },
+   "ds": [],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 0
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 1.0,
+    "nb": 40,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ]
+   }
+  },
+  {
+   "id": "nb-floor-is-2",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    }
+   ],
+   "values": {
+    "x": []
+   },
+   "ds": [],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 1
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 1.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ]
+   }
+  },
+  {
+   "id": "zoom-p90-frames-the-packed-quantile",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      100
+     ],
+     "nice": [
+      0,
+      100
+     ],
+     "p80": 60.0,
+     "p90": 90.0,
+     "p95": 95.0,
+     "p99": 99.0
+    }
+   ],
+   "values": {
+    "x": [
+     10,
+     80,
+     95
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2
+   },
+   "zoom": "p90",
+   "expect": {
+    "lo": 0.0,
+    "hi": 90.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      1.0,
+      2.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "binspace-log",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      1,
+      100
+     ],
+     "nice": [
+      1,
+      100
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     2,
+     50
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "binspace": "log"
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 1.0,
+    "hi": 100.0,
+    "nb": 2,
+    "ints": false,
+    "log": true,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      1.0,
+      1.0
+     ]
+    ],
+    "centres": [
+     3.1622776601683795,
+     31.622776601683793
+    ]
+   }
+  },
+  {
+   "id": "logx-couples-bin-spacing",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      1,
+      100
+     ],
+     "nice": [
+      1,
+      100
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     2,
+     50
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "logx": true
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 1.0,
+    "hi": 100.0,
+    "nb": 2,
+    "ints": false,
+    "log": true,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "binspace-lin-decouples",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      1,
+      100
+     ],
+     "nice": [
+      1,
+      100
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     2,
+     50
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "logx": true,
+    "binspace": "lin"
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 1.0,
+    "hi": 100.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      2.0,
+      0.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "log-binspace-defeats-ints-and-auto",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      1,
+      4
+     ],
+     "vals": [
+      1,
+      2,
+      3,
+      4
+     ],
+     "p90": 4.0,
+     "p95": 4.0,
+     "p99": 4.0
+    }
+   ],
+   "values": {
+    "x": [
+     2.5,
+     3
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "binspace": "log"
+   },
+   "zoom": "p90",
+   "expect": {
+    "lo": 1.0,
+    "hi": 4.0,
+    "nb": 2,
+    "ints": false,
+    "log": true,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      0.0,
+      2.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "shape-normalizes-h-not-n",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.5,
+     1.5,
+     0.5,
+     0.5,
+     1.5
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    1,
+    2,
+    2
+   ],
+   "samples": [
+    "a",
+    "b",
+    "c"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": true,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "norm": "shape"
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 2.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "a",
+     "b",
+     "c"
+    ],
+    "h": [
+     [
+      0.5,
+      0.5
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      -3.0,
+      3.0
+     ]
+    ],
+    "h2": [
+     [
+      0.25,
+      0.25
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      9.0,
+      9.0
+     ]
+    ],
+    "n": [
+     [
+      1.0,
+      1.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   },
+   "ww": [
+    2,
+    2,
+    5,
+    -3,
+    3
+   ]
+  },
+  {
+   "id": "nan-kept-fills-nothing",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     null,
+     1.5
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 2.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      0.0,
+      1.0
+     ]
+    ],
+    "n": [
+     [
+      0.0,
+      1.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "oflow-off-drops-tails",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     -1,
+     0.5,
+     3
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "oflow": false
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 2.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      1.0,
+      0.0
+     ]
+    ],
+    "n": [
+     [
+      1.0,
+      0.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "nb-hex-string-converts",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    }
+   ],
+   "values": {
+    "x": []
+   },
+   "ds": [],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": "0x10"
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 1.0,
+    "nb": 16,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ]
+   }
+  },
+  {
+   "id": "nb-inf-spelling-is-nan",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      1
+     ],
+     "nice": [
+      0,
+      1
+     ]
+    }
+   ],
+   "values": {
+    "x": []
+   },
+   "ds": [],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": "inf"
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 1.0,
+    "nb": 40,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ]
+   }
+  },
+  {
+   "id": "binspace-empty-array-truthy-linear",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      1,
+      100
+     ],
+     "nice": [
+      1,
+      100
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     2,
+     50
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "logx": true,
+    "binspace": []
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 1.0,
+    "hi": 100.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      2.0,
+      0.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "xauto-zero-is-not-manual",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      100
+     ],
+     "nice": [
+      0,
+      100
+     ],
+     "p80": 60.0,
+     "p90": 90.0,
+     "p95": 95.0,
+     "p99": 99.0
+    }
+   ],
+   "values": {
+    "x": [
+     10,
+     80
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "xauto": 0,
+    "xmin": "10",
+    "xmax": "20"
+   },
+   "zoom": "p90",
+   "expect": {
+    "lo": 0.0,
+    "hi": 90.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "oflow-zero-still-crams",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     -1,
+     0.5,
+     3
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "oflow": 0
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 2.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      2.0,
+      1.0
+     ]
+    ],
+    "n": [
+     [
+      2.0,
+      1.0
+     ]
+    ]
+   }
+  },
+  {
+   "id": "srcs-empty-draws-nothing",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      2
+     ],
+     "nice": [
+      0,
+      2
+     ]
+    }
+   ],
+   "values": {
+    "x": [
+     0.5
+    ]
+   },
+   "ds": [
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2,
+    "srcs": []
+   },
+   "zoom": "full",
+   "expect": {
+    "lo": 0.0,
+    "hi": 2.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": []
+   }
+  },
+  {
+   "id": "zoom-p80-frames-the-packed-p80",
+   "cols": [
+    {
+     "name": "x",
+     "lim": [
+      0,
+      100
+     ],
+     "nice": [
+      0,
+      100
+     ],
+     "p80": 60.0,
+     "p90": 90.0,
+     "p95": 95.0,
+     "p99": 99.0
+    }
+   ],
+   "values": {
+    "x": [
+     10,
+     70
+    ]
+   },
+   "ds": [
+    0,
+    0
+   ],
+   "samples": [
+    "m"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "spec": {
+    "varx": "x",
+    "nb": 2
+   },
+   "zoom": "p80",
+   "expect": {
+    "lo": 0.0,
+    "hi": 60.0,
+    "nb": 2,
+    "ints": false,
+    "log": false,
+    "sources": [
+     "m"
+    ],
+    "h": [
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   }
+  }
  ]
 }

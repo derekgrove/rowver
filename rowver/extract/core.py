@@ -855,6 +855,182 @@ def _or0(v: float) -> float:
     return 0.0 if v != v or v == 0 else v
 
 
+# ------------------------------------------------------- axis windows (ui/frame.ts) ----
+
+def _js_str(v: Any) -> str:
+    """String(v) over JSON-representable values — what parseFloat receives."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return _js_num(v) if math.isfinite(v) else \
+            ("NaN" if v != v else ("Infinity" if v > 0 else "-Infinity"))
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        return ",".join("" if x is None else _js_str(x) for x in v)
+    return "[object Object]"  # a dict; the page would parse this to NaN too
+
+
+# ECMAScript WhiteSpace + LineTerminator — NOT python's whitespace: JS trims
+# U+FEFF (ZWNBSP) which str.strip() keeps, and python's default strip eats
+# U+0085 (NEL) which JS keeps
+_JS_WS = ("\t\n\x0b\x0c\r \xa0     "
+          "         "
+          "  　﻿")
+
+# re.ASCII throughout: python \d matches Unicode digits ("١٢", "１２"), the
+# ECMAScript numeric grammar does not
+_PARSEFLOAT = re.compile(
+    r"[+-]?(?:Infinity|\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)",
+    re.ASCII)
+
+
+def parse_float(v: Any) -> float:
+    """parseFloat(String(v)): the longest numeric prefix, NaN when none."""
+    m = _PARSEFLOAT.match(_js_str(v).lstrip(_JS_WS))
+    if not m:
+        return math.nan
+    t = m.group()
+    return math.copysign(math.inf, -1 if t[0] == "-" else 1) \
+        if t.lstrip("+-") == "Infinity" else float(t)
+
+
+_NUM_DEC = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$", re.ASCII)
+_NUM_RADIX = re.compile(r"0([xX][0-9a-fA-F]+|[oO][0-7]+|[bB][01]+)$", re.ASCII)
+_NUM_INF = re.compile(r"([+-]?)Infinity$", re.ASCII)
+
+
+def _js_number(v: Any) -> float:
+    """Number(v) over JSON-representable values (the page's nb coercion).
+    The string grammar is JS's, not python's: hex/octal/binary literals
+    convert, but "inf"/"infinity"/"nan"/"1_0" spellings do NOT — only the
+    exact `Infinity` names a non-finite."""
+    if v is None:
+        return 0.0
+    if isinstance(v, bool):
+        return float(v)
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        s = v.strip(_JS_WS)
+        if not s:
+            return 0.0
+        m = _NUM_INF.match(s)
+        if m:  # ONE optional sign — "++Infinity" is NaN in JS too
+            return -math.inf if m.group(1) == "-" else math.inf
+        if _NUM_RADIX.match(s):
+            try:
+                return float(int(s, 0))
+            except OverflowError:  # Number("0x" + "f"*1000) is Infinity
+                return math.inf
+        if _NUM_DEC.match(s):
+            return float(s)
+        return math.nan
+    if isinstance(v, list):  # Number([]) = 0, Number([5]) = 5, via toString
+        return _js_number(_js_str(v))
+    return math.nan
+
+
+def _js_truthy(v: Any) -> bool:
+    """JS truthiness over JSON-representable values: containers are ALWAYS
+    truthy (an empty [] or {} included — the python instinct is wrong there);
+    falsy is exactly null, false, 0/-0, NaN, and the empty string."""
+    if isinstance(v, (list, dict)):
+        return True
+    if isinstance(v, float) and v != v:
+        return False
+    return bool(v)
+
+
+def to_precision(x: float, p: int) -> float:
+    """Number(x.toPrecision(p)): p significant digits, ties away from zero on
+    the double's EXACT decimal expansion — same rule fmt_num pins."""
+    d = Decimal(x)
+    if not d:
+        return x
+    q = d.quantize(Decimal(1).scaleb(d.adjusted() - (p - 1)),
+                   rounding=ROUND_HALF_UP)
+    return float(q)
+
+
+def auto_window(col: dict, pref: str) -> list[float] | None:
+    """The AUTO window for one axis — ui/frame.ts autoWindow(). Every
+    preference reads the packer's exact whole-cart quantile: p80..p99 are
+    REQUIRED wire content (owner decision 2026-08-30; the measured fallback
+    for p90-less files was deleted with it, both implementations). Null
+    means the full range — FULL preference, an integer column, a degenerate
+    quantile, or a non-numeric one on an unvalidated col dict."""
+    if pref == "full":
+        return None
+    vals = col.get("vals")
+    if vals is not None and len(vals) <= 200:
+        return None
+    q = col.get({"p80": "p80", "p95": "p95", "p99": "p99"}.get(pref, "p90"))
+    lo = float(bounds(col)[0])
+    if not (isinstance(q, (int, float)) and not isinstance(q, bool)
+            and math.isfinite(q) and q > lo):
+        return None
+    return [lo, to_precision(float(q), 4)]
+
+
+def resolve_axis(col: dict, zoom: str, auto: Any, vmin: Any, vmax: Any,
+                 nb: Any, logb: bool) -> dict:
+    """One axis of frameFor: window and bin count, exactly as the page frames
+    them. An integer column gets one bin per value; otherwise AUTO tracks the
+    zoom preference, MANUAL (auto exactly false) parses the typed bounds, and
+    an inverted window falls back to the column's own range. Returns the
+    resolved lo/hi/nb plus `ints`, `log`, and `window` provenance for meta."""
+    vals = col.get("vals")
+    if vals is not None and not logb and len(vals) <= 200:
+        if not vals:
+            # the page throws here: Math.min() of no values is Infinity and
+            # Float64Array(Math.round(-Infinity)) is a RangeError — refuse
+            raise ExtractError(
+                f'column "{col["name"]}" has an empty value list — nothing to bin')
+        lo, hi = min(vals) - 0.5, max(vals) + 0.5
+        return {"lo": lo, "hi": hi, "nb": math.floor(hi - lo + 0.5),
+                "ints": True, "log": False, "window": "vals", "zoom": zoom}
+    b = bounds(col)
+    lo, hi = float(b[0]), float(b[1])
+    window = "lim"
+    if auto is not False:
+        w = auto_window(col, zoom)
+        if w:
+            lo, hi = w
+            window = "auto"
+    else:
+        # parseFloat per bound; an unparsable bound keeps the column's own
+        x, y = parse_float(vmin), parse_float(vmax)
+        lo = x if math.isfinite(x) else lo
+        hi = y if math.isfinite(y) else hi
+        window = "manual"
+    if not hi > lo:
+        lo, hi = float(b[0]), float(b[1])
+        window = "lim"
+    n = _js_number(nb)
+    n = max(2.0, min(200.0, n if n == n and n else 40.0))
+    if n != int(n):
+        # DELIBERATE divergence: the page does not crash on a fractional nb —
+        # Float64Array(2.5) truncates to length 2 while the loops run to nb,
+        # so rows binned into [floor(nb), nb) are SILENTLY DROPPED and the
+        # centres/edges lists outgrow the arrays. That is incoherent as a
+        # record; refuse instead of reproducing it
+        raise ExtractError(
+            f"nb resolves to {n} — the page silently drops rows past "
+            f"bin {int(n)} on a fractional bin count; refusing to record that")
+    return {"lo": lo, "hi": hi, "nb": int(n), "ints": False, "log": bool(logb),
+            "window": window, "zoom": zoom}
+
+
+def unicode_array(strings: list[str]) -> np.ndarray:
+    """Fixed-width LITTLE-ENDIAN unicode, whatever the host — SCHEMAS.md
+    string-array policy, shared by every extractor's npz writer."""
+    width = max((len(s) for s in strings), default=1) or 1
+    return np.array(strings, dtype=f"<U{width}")
+
+
 # ------------------------------------------------------- the cutflow ladder (select.ts) ----
 
 def fmt_num(x: float) -> str:
@@ -1028,3 +1204,20 @@ def cuts_lines(meta: dict, tab: int, no_cuts: bool = False,
 
 def _py(v: float) -> str:
     return repr(v) if math.isfinite(v) else f"float('{v!r}')"
+
+
+def json_num(v: float):
+    """Strict-JSON number: non-finite as the strings SCHEMAS.md names."""
+    if v != v:
+        return "nan"
+    if math.isinf(v):
+        return "inf" if v > 0 else "-inf"
+    return v
+
+
+def json_cut_spec(col: dict, spec: Any) -> dict:
+    """The resolved cut for meta.json — chip list, or the open-aware range."""
+    if isinstance(spec, dict):
+        return {"in": spec.get("in") or []}
+    lo, hi = cut_range(col, spec)
+    return {"range": [json_num(lo), json_num(hi)]}

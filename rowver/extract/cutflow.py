@@ -24,7 +24,6 @@ Outputs (SCHEMAS.md kind `cutflow` v1, identity `t<tab>_cutflow`) go to
 """
 import argparse
 import json
-import math
 import sys
 from pathlib import Path
 
@@ -53,33 +52,11 @@ def dump(rvr: str | Path, tab: int = 0, allow_unset_lumi: bool = False) -> dict:
     flow["weighted"] = core.is_weighted(meta)
     flow["lumi"] = {s: float(l) for s, l in
                     zip(samples, core.lumi_table(meta))}
-    flow["cuts"] = {name: _json_spec(cuts[name],
-                                     {c["name"]: c for c in data["cols"]}[name])
+    flow["cuts"] = {name: core.json_cut_spec(
+                        {c["name"]: c for c in data["cols"]}[name], cuts[name])
                     for name in flow["active"]}
     flow["look"] = {s: core.source_look(view, samples, s) for s in flow["sources"]}
     return flow
-
-
-def _u(strings: list[str]) -> np.ndarray:
-    """Fixed-width LITTLE-ENDIAN unicode, whatever the host — SCHEMAS.md policy."""
-    width = max((len(s) for s in strings), default=1) or 1
-    return np.array(strings, dtype=f"<U{width}")
-
-
-def _json_spec(spec, col) -> dict:
-    """The resolved cut for meta.json — strict JSON, non-finite as strings."""
-    if isinstance(spec, dict):
-        return {"in": spec.get("in") or []}
-    lo, hi = core.cut_range(col, spec)
-    return {"range": [_j(lo), _j(hi)]}
-
-
-def _j(v: float):
-    if math.isnan(v):
-        return "nan"
-    if math.isinf(v):
-        return "inf" if v > 0 else "-inf"
-    return v
 
 
 def add_arguments(ap: argparse.ArgumentParser) -> None:
@@ -97,9 +74,10 @@ def run(a: argparse.Namespace) -> int:
     name = f"t{a.tab}_cutflow"
 
     np.savez(out / f"{name}.data.npz",
-             steps=_u(flow["steps"]),
+             steps=core.unicode_array(flow["steps"]),
              raw=flow["raw"].astype("<f8"), w=flow["w"].astype("<f8"),
-             by=flow["by"].astype("<f8"), sources=_u(flow["sources"]))
+             by=flow["by"].astype("<f8"),
+             sources=core.unicode_array(flow["sources"]))
     (out / f"{name}.meta.json").write_text(json.dumps(
         {"kind": "cutflow", "version": VERSION, "tab": a.tab,
          "cart": Path(a.rvr).name, "weighted": flow["weighted"],

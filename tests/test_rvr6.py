@@ -24,6 +24,23 @@ class Rvr6Tests(unittest.TestCase):
             made={"built": "test", "cart": None},
         )
 
+    def test_percentile_ladder_required_and_exact(self):
+        # every packed p-key is np.percentile over the CONCATENATED samples
+        cols = {c["name"]: c for c in self.meta["data"]["cols"]}
+        whole = {"pt": np.array([10.5, 20.0, 30.0, 40.0]),
+                 "njet": np.array([0, 1, 2, 3])}
+        for name, values in whole.items():
+            for q in rvr6.PCTS:
+                self.assertEqual(cols[name][f"p{q}"],
+                                 float(np.percentile(values, q)),
+                                 f"{name} p{q}")
+        # DELETING any one of the thirteen refuses, not just nulling it
+        for q in rvr6.PCTS:
+            broken = copy.deepcopy(self.meta)
+            del broken["data"]["cols"][0][f"p{q}"]
+            with self.assertRaises(rvr6.FormatError, msg=f"p{q}"):
+                rvr6.check(broken, self.buf)
+
     def test_wire_seed_is_little_endian_and_pinned(self):
         self.assertEqual(len(self.buf), 96)
         self.assertEqual(hashlib.sha256(self.buf).hexdigest(),

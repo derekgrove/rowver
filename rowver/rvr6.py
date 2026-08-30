@@ -41,6 +41,8 @@ VERSION = "6.0.0"
 MAX_HEADER_BYTES = 8 * 1024 * 1024
 MAX_DATA_BYTES = 1024 * 1024 * 1024
 MAX_CHIPS = 25
+# the packed percentile ladder — REQUIRED on every column, ordered with lim
+PCTS = (1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99)
 MAX_GRID_REGIONS = 4096
 MAX_REGION_NODES = 8192
 
@@ -542,16 +544,13 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
         bytes_per_row += width
         lim = _pair(col.get("lim"), f'column "{name}" lim')
         nice = _pair(col.get("nice"), f'column "{name}" nice')
-        p95 = _finite(col.get("p95"), f'column "{name}" p95')
-        p99 = _finite(col.get("p99"), f'column "{name}" p99')
+        pcts = [_finite(col.get(f"p{q}"), f'column "{name}" p{q}')
+                for q in PCTS]
         if nice[0] > lim[0] or nice[1] < lim[1]:
             _fail(f'column "{name}" nice range does not enclose lim')
-        if not lim[0] <= p95 <= p99 <= lim[1]:
+        chain = [lim[0], *pcts, lim[1]]
+        if any(a > b for a, b in zip(chain, chain[1:])):
             _fail(f'column "{name}" percentiles are outside lim or reversed')
-        if col.get("p90") is not None:  # optional: files predating the key have none
-            p90 = _finite(col["p90"], f'column "{name}" p90')
-            if not lim[0] <= p90 <= p95:
-                _fail(f'column "{name}" p90 is outside lim or above p95')
         vals = col.get("vals")
         if vals is not None:
             if kind != "i4" or not isinstance(vals, list) or len(vals) > MAX_CHIPS:
@@ -792,7 +791,8 @@ def _bump(value: float, up: bool) -> float:
 
 def _stats(values: np.ndarray, integer: bool) -> dict:
     if not values.size:
-        return {"lim": [0, 0], "nice": [0, 1], "p90": 0, "p95": 0, "p99": 0,
+        return {"lim": [0, 0], "nice": [0, 1],
+                **{f"p{q}": 0 for q in PCTS},
                 **({"vals": []} if integer else {})}
     lo, hi = float(values.min()), float(values.max())
     nice_lo, nice_hi = _bump(lo, False), _bump(hi, True)
@@ -801,9 +801,7 @@ def _stats(values: np.ndarray, integer: bool) -> dict:
     if nice_lo == nice_hi:
         nice_hi = nice_lo + 1
     out = {"lim": [lo, hi], "nice": [nice_lo, nice_hi],
-           "p90": float(np.percentile(values, 90)),
-           "p95": float(np.percentile(values, 95)),
-           "p99": float(np.percentile(values, 99))}
+           **{f"p{q}": float(np.percentile(values, q)) for q in PCTS}}
     if integer:
         unique = np.unique(values)
         if len(unique) <= MAX_CHIPS:

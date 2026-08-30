@@ -30,7 +30,7 @@ class ContractCorpusTests(unittest.TestCase):
     # Full-file pin for the hand-synced corpus. A deliberate edit bumps this
     # AND the frontend gate's CORPUS_SHA256 in the same sync; a mismatch means
     # the copies were edited without re-syncing.
-    CORPUS_SHA256 = "735b31848cfca81b416149cde5f2d4905bb307d0710ca70ccb8caa6a2d75d64a"
+    CORPUS_SHA256 = "8591dec1dce4c9cee8ccf7dec0193a3941e04b43300ed76f5929f66e59a90506"
 
     def test_corpus_pinned(self):
         raw = (Path(__file__).parents[1] / "contract/v6/cases.json").read_bytes()

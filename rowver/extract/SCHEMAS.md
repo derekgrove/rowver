@@ -114,7 +114,7 @@ npz keys:
 
 Ladder order is `activeCuts`: `cutorder` first, then column order.
 
-## Kind: `plot1d` — v1 (reserved; built in step 4)
+## Kind: `plot1d` — v1
 
 npz keys:
 
@@ -122,7 +122,7 @@ npz keys:
 |---|---|---|
 | `edges` | (nb+1,) f8 | the bin edges actually used (`edgeList`) |
 | `centres` | (nb,) f8 | bin centres in the binning transform |
-| `sources` | (K,) str | source names, stack order |
+| `sources` | (K,) str | source names, FRAME order — see below |
 | `h` | (K, nb) f8 | Σw per source per bin |
 | `h2` | (K, nb) f8 | Σw² per source per bin |
 | `n` | (K, nb) f8 | raw entries per source per bin |
@@ -130,7 +130,27 @@ npz keys:
 | `underW`, `overW` | (K,) f8 | weighted tails |
 | `err_down`, `err_up` | (K, nb) f8 | per the plot's error mode; absent when mode is `off` |
 
-Dimension order is always (source, bin).
+Dimension order is always (source, bin). Frame order is the viewer's
+`sources()` (groups first, then ungrouped samples) filtered to the plot's
+own `srcs`/`mute` lists and to sources with at least one SHOWN dataset —
+the order ROOT stacks in; plotly's largest-at-bottom re-sort is draw-time
+layout, not record content. The window is frameFor's: an integer column
+(≤200 values, non-log spacing) gets one bin per value; AUTO tracks the
+`--zoom` quantile — the packed whole-cart p80/p90/p95/p99 (required wire
+content since 2026-08-30), 4 significant digits; MANUAL
+bounds parse like the page (`parseFloat`, longest numeric prefix) and an
+inverted window falls back to the column's own range; nb clamps to
+[2, 200] with 40 the default. The choice and resolved window are stamped
+into `meta.json` (`window.zoom`, `window.from`: vals/auto/manual/lim;
+`window.log` is the spacing REQUEST, `window.log_active` whether log
+spacing actually engaged — a log request over a lo ≤ 0 window silently
+stays linear, the page's own fallback). `meta.json` also carries `edges`
+(the contract's "bin edges actually used") and `centres`, mirroring the
+npz keys in strict JSON.
+A SHAPE-normalized plot is written normalized (`h`/`h2` scaled to unit
+area, `n` raw), and the error bands ride the scaled moments — what the
+page draws. Tails are per source, counted like `binned()`; a NaN row
+fills no bin and neither tail (linear spacing).
 
 ## Kind: `plot2d` — v1 (reserved; built in step 6)
 

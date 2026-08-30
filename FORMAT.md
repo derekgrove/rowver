@@ -71,11 +71,15 @@ Never rewritten by any writer (W3). Keys:
     fit the buffer and overlap nothing.
   - `lim`: `[min, max]`, finite, `min ≤ max` — the measured extremes.
   - `nice`: `[lo, hi]`, finite, must ENCLOSE `lim` — slider endpoints.
-  - `p95`, `p99`: finite, `lim[0] ≤ p95 ≤ p99 ≤ lim[1]` — exact whole-cart
-    percentiles, computed by the packer.
-  - `p90` (optional; packers from 2026-08-28): finite with
-    `lim[0] ≤ p90 ≤ p95`, or `null` (reads as absent). Readers fall back to
-    measuring when absent.
+  - `p1`, `p5`, `p10`, `p20`, `p30`, `p40`, `p50`, `p60`, `p70`, `p80`,
+    `p90`, `p95`, `p99`: finite exact whole-cart percentiles, computed by
+    the packer, all REQUIRED, ordered:
+    `lim[0] ≤ p1 ≤ … ≤ p99 ≤ lim[1]`. (Owner decision 2026-08-30: the
+    percentile ladder is wire content — the zoom feature reads
+    p80/p90/p95/p99 and readers no longer measure a missing quantile; the
+    rest are packed for future features at negligible header cost.)
+    An EMPTY column stamps thirteen zeros (with `lim` `[0, 0]`) — the
+    packer's stub, normative.
   - `vals` (optional, `i4` only): the distinct values of a small categorical
     column — unique integers, at most 25 (`MAX_CHIPS`). Its presence makes the
     column categorical: cuts select values, plots bin one-per-value.
@@ -255,8 +259,9 @@ Frozen-format changes are ADDITIVE ONLY, in these places:
 - Any new key at the top level, inside `about`, `made`, `view.prefs`, on a tab
   entry, or on any stage leaf/block — readers preserve and ignore them.
 - New OPTIONAL keys on existing modeled objects require a spec revision here
-  plus corpus cases in both repos before any writer emits them (as `p90`,
-  `srcs`, `mute`, `dash`, `lw` were added).
+  plus corpus cases in both repos before any writer emits them (as `srcs`,
+  `mute`, `dash`, `lw` were added; the percentile ladder entered this way
+  before being promoted to REQUIRED on 2026-08-30).
 - Closed interiors: `view.lumis` tiers, region-tree nodes, and categorical
   cut objects validate strictly — new keys there are a spec revision, not
   free metadata. `view.look` styles validate their KNOWN keys strictly but
