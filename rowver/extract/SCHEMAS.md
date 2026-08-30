@@ -31,8 +31,8 @@ the positional core is what stays stable, and consumers that need an
 edit-stable key should key on it.
 
 - sanitization: `[^A-Za-z0-9_]+` → `_`, runs collapsed, edges stripped
-- a residual collision (sanitization collapsing two different variable
-  names) gets `_2`, `_3`, … in stage order
+- names cannot collide: every name embeds its entry's own stage path, and
+  paths are unique by construction (one entry per position)
 
 Region bin names use the viewer's `regionBinName` verbatim: comparison
 operators transliterated (`<` → `_lt_`, `≥` → `_ge_`, `≤` → `_le_`), never
@@ -53,8 +53,11 @@ stripped — "X < a" and "X ≥ a" are different regions.
   bin when overflow is on, dropped when off) and never counts as a tail —
   all of it the page's behavior, pinned in the fixture.
 - **tolerance for parity claims**: raw counts exact; weighted sums 1e-8
-  rtol, and an expected ZERO is exact. Never bit parity (accumulation order
-  differs between numpy and the page's row-wise `+=`). ONE carve-out on
+  rtol, and an expected ZERO is exact. Never bit parity — EXCEPT that every
+  weighted reduction accumulates left-to-right in row order (`_seq_sum`,
+  cumsum-backed), the page's own order: numpy's pairwise `sum` can differ
+  by more than any rtol under negative-weight cancellation. Per-bin fills
+  (`bincount`) are already row-order. ONE carve-out on
   "raw exact": a value within ~1 ulp of a LOG-transform bin edge may land
   in the adjacent bin, because `Math.log10` differs by an ulp across
   engines (verified: V8 vs libm at 10^-0.4) — the page has the same drift

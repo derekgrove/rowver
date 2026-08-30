@@ -21,7 +21,9 @@ for NaN, so it rides with x <= 0 — crammed into the low bin when overflow is
 on, dropped when it is off — and never counts as a tail.
 
 Tolerance for cross-implementation parity: raw counts exact, weighted sums
-1e-8 rtol — never bit parity (accumulation order differs).
+1e-8 rtol. Signed reductions accumulate left-to-right in row order like the
+page (``_seq_sum``) so cancellation cannot flip a sign, but bit parity is
+still never claimed.
 """
 from __future__ import annotations
 
@@ -221,6 +223,8 @@ def sig_fom(s: float, b: float, b2: float, has_weights: bool) -> float:
 
 
 def zbi(s: float, b: float, b2: float, syst: float, has_weights: bool) -> float:
+    # JS `syst ?` treats NaN as falsy; Python `if syst` would not
+    syst = syst if syst == syst else 0
     sb2 = (b2 if has_weights else 0) + (syst * b * syst * b if syst else 0)
     if not (s > 0 and b > 0 and sb2 > 0):
         return math.nan
@@ -244,6 +248,16 @@ def neff(sw: float, sw2: float) -> float:
     return sw * sw / sw2
 
 
+def _seq_sum(a: np.ndarray) -> float:
+    """Left-to-right float64 sum — the page's own accumulation order. np.sum's
+    pairwise reduction can differ by more than any rtol under negative-weight
+    cancellation; cumsum is sequential, so its last element is the page's.
+    `+ 0.0` pins the sign of zero: the page's accumulator starts at +0 and
+    IEEE addition from +0 never yields -0, but cumsum starts at the first
+    ELEMENT, so a lone -0.0 weight would leak through."""
+    return float(a.cumsum()[-1] + 0.0) if a.size else 0.0
+
+
 # ---------------------------------------------------------------- binning (bin.ts) ----
 
 def edges(lo: float, hi: float, nb: int, logb: bool = False) -> dict:
@@ -251,7 +265,18 @@ def edges(lo: float, hi: float, nb: int, logb: bool = False) -> dict:
     on = bool(logb) and lo > 0 and hi > lo
     a = math.log10(lo) if on else lo
     b = math.log10(hi) if on else hi
-    return {"on": on, "a": a, "b": b, "s": nb / ((b - a) or 1)}
+    span = b - a
+    if span != span:  # JS `(b - a) || 1`: NaN is falsy there
+        span = 0.0
+    return {"on": on, "a": a, "b": b, "s": nb / (span or 1)}
+
+
+def _pow10(m: float) -> float:
+    """10**m the way Math.pow does it: overflow is Infinity, never an error."""
+    try:
+        return 10.0 ** m
+    except OverflowError:
+        return math.inf
 
 
 def centres(lo: float, hi: float, nb: int, logb: bool = False) -> list[float]:
@@ -259,7 +284,7 @@ def centres(lo: float, hi: float, nb: int, logb: bool = False) -> list[float]:
     out = []
     for i in range(nb):
         m = e["a"] + (e["b"] - e["a"]) * (i + 0.5) / nb
-        out.append(10 ** m if e["on"] else m)
+        out.append(_pow10(m) if e["on"] else m)
     return out
 
 
@@ -269,7 +294,7 @@ def edge_list(lo: float, hi: float, nb: int, logb: bool = False) -> list[float]:
     for i in range(nb + 1):
         # nb=0 is validator-legal; JS 0/0 is NaN and edgeList returns [NaN]
         m = e["a"] + (e["b"] - e["a"]) * (i / nb if nb else math.nan)
-        out.append(10 ** m if e["on"] else m)
+        out.append(_pow10(m) if e["on"] else m)
     return out
 
 
@@ -315,7 +340,7 @@ def binned(values, ww, keep, lo: float, hi: float, nb: int,
         "h2": np.bincount(bi, weights=wb * wb, minlength=nb),
         "n": np.bincount(bi, minlength=nb).astype(float),
         "over": int(over_m.sum()), "under": int(under_m.sum()),
-        "overW": float(w[over_m].sum()), "underW": float(w[under_m].sum()),
+        "overW": _seq_sum(w[over_m]), "underW": _seq_sum(w[under_m]),
         "kept": int(sel.sum()),
     }
 
@@ -519,10 +544,11 @@ def plot_of_stage(item: dict, col_names: list[str],
     # squatting on it is dropped rather than exposed as resolved content
     for k in ("id", "opts", "cmton", "lbx", "lby", "blockRaw"):
         spec.pop(k, None)
-    srcs = spec.get("srcs")
-    if srcs is not None:
+    if "srcs" in spec:
         # defensive — check6 refuses duplicate/unknown srcs, on leaves AND in
-        # tab.plot defaults; mirrors plotOfStage's own belt-and-braces filter
+        # tab.plot defaults; mirrors plotOfStage's own belt-and-braces filter,
+        # PRESENCE-keyed like its `!== undefined` (a null srcs is deleted too)
+        srcs = spec["srcs"]
         if not isinstance(srcs, list) or any(not isinstance(x, str) for x in srcs):
             spec.pop("srcs", None)
         else:
@@ -584,16 +610,14 @@ def stage_entries(meta: dict, tab: int = 0) -> list[dict]:
         else:
             leaf(item, f"t{tab}.s{i}", None, None, None)
 
-    used: dict[str, int] = {}
     for e in entries:
+        # unique by construction: the name embeds the entry's own stage path
         base = e["path"].replace(".", "_") + "_" + e["kind"]
         if e["kind"] in ("1d", "2d", "3d"):
             base += "_" + _sanitize(str(e["spec"].get("varx", "")))
             if e["kind"] != "1d":
                 base += "_" + _sanitize(str(e["spec"].get("vary", "")))
-        k = used.get(base, 0) + 1
-        used[base] = k
-        e["name"] = base if k == 1 else f"{base}_{k}"
+        e["name"] = base
     return entries
 
 
@@ -623,7 +647,9 @@ def _js_num(x: Any) -> str:
     """A number the way a JS template string spells it: 200.0 -> "200",
     1e-6 -> "0.000001", 1e-7 -> "1e-7", 1.5e21 -> "1.5e+21". Beyond 2^53 JS
     prints the SHORTEST round-tripping decimal of the double the wire's JSON
-    parse produced, not the exact integer — ints route through float there."""
+    parse produced, not the exact integer — ints route through float there.
+    Only ever fed validator-FINITE values: NaN/Inf would spell nan/inf here
+    but NaN/Infinity in JS, and check6 refuses a non-finite threshold."""
     if isinstance(x, int) and not isinstance(x, bool):
         return str(x) if abs(x) < 2 ** 53 else _js_num(float(x))
     if not isinstance(x, float):
@@ -757,9 +783,10 @@ def region_count(meta: dict, columns: dict, ds: np.ndarray, keep: np.ndarray,
     """Per-leaf per-source [n, w, w2] over the kept rows — region.ts regionCount()."""
     view = meta.get("view") or {}
     samples = [s["name"] for s in meta["data"]["samples"]]
-    # ABSENT srcs means every source the page offers; an EMPTY list means none
-    srcs = list(spec["srcs"]) if "srcs" in spec and spec["srcs"] is not None \
-        else sources(view, samples)
+    # ABSENT srcs means every source the page offers; an EMPTY list means none.
+    # Presence-only, like the page's `spec.srcs === undefined` — a null srcs
+    # is validator-illegal and crashes there too (regionCount .slice() on null)
+    srcs = list(spec["srcs"]) if "srcs" in spec else sources(view, samples)
     root = region_root(spec)
     leaves = region_leaves(root)
     masks = leaf_masks(root, columns, keep)
@@ -773,12 +800,12 @@ def region_count(meta: dict, columns: dict, ds: np.ndarray, keep: np.ndarray,
         for k, sm in enumerate(src_rows):
             sel = m & sm
             n[j, k] = int(sel.sum())
-            w[j, k] = float(ww[sel].sum())
-            w2[j, k] = float((ww[sel] ** 2).sum())
+            w[j, k] = _seq_sum(ww[sel])
+            w2[j, k] = _seq_sum(ww[sel] ** 2)
     any_src = np.zeros(ds.size, bool)
     for sm in src_rows:
         any_src |= sm
-    total = float(ww[np.asarray(keep, bool) & any_src].sum())
+    total = _seq_sum(ww[np.asarray(keep, bool) & any_src])
     return {"leaves": leaves, "srcs": srcs, "n": n, "w": w, "w2": w2,
             "weighted": is_weighted(meta), "total": total}
 

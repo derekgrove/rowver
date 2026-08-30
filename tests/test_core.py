@@ -61,11 +61,17 @@ class MathFixtureTests(unittest.TestCase):
             self.assertClose(r["h2"], x["h2"], c["id"])
             self.assertClose([r["overW"], r["underW"]], [x["overW"], x["underW"]],
                              c["id"])
+            for key in ("overW", "underW"):
+                if x[key] == 0:
+                    # the page's +0 accumulator: a -0.0 tail must not survive
+                    self.assertEqual(math.copysign(1.0, r[key]), 1.0,
+                                     f'{c["id"]} {key} sign')
 
     def test_binned2d(self):
         for c in CASES["binned2d"]:
             r = core.binned2d(dec(c["vx"]), np.array(c["vy"], float),
-                              np.array(c["ww"]), np.ones(len(c["vx"]), bool),
+                              np.array(c["ww"]),
+                              np.array(c.get("keep", [1] * len(c["vx"])), bool),
                               c["lox"], c["hix"], c["nbx"],
                               c["loy"], c["hiy"], c["nby"],
                               lbx=c["lbx"], lby=c["lby"], oflow=c["oflow"],
@@ -211,7 +217,8 @@ class RegionFixtureTests(unittest.TestCase):
             if c["spec_srcs"] is not None:
                 spec["srcs"] = c["spec_srcs"]
             num = core.region_count(meta, columns, np.array(c["ds"]),
-                                    np.ones(len(c["ds"]), bool), spec)
+                                    np.array(c.get("keep", [1] * len(c["ds"])),
+                                             bool), spec)
             x = c["expect"]
             self.assertEqual(num["srcs"], x["srcs"], c["id"])
             self.assertEqual([l["name"] for l in num["leaves"]], x["names"], c["id"])
@@ -220,6 +227,7 @@ class RegionFixtureTests(unittest.TestCase):
             np.testing.assert_allclose(num["w2"], np.array(x["w2"]), rtol=RTOL, atol=0)
             if x["total"] == 0:
                 self.assertEqual(num["total"], 0.0, c["id"])
+                self.assertEqual(math.copysign(1.0, num["total"]), 1.0, c["id"])
             else:
                 self.assertAlmostEqual(num["total"], x["total"],
                                        delta=abs(x["total"]) * RTOL)
@@ -287,8 +295,8 @@ class RegionFixtureTests(unittest.TestCase):
     def test_region_windows(self):
         for c in CASES["region_windows"]:
             leaves = core.region_leaves(c["root"])
-            got = [{"path": l["path"], "name": l["name"], "windows": l["windows"]}
-                   for l in leaves]
+            got = [{"path": l["path"], "name": l["name"], "windows": l["windows"],
+                    "vals": l["vals"]} for l in leaves]
             self.assertEqual(got, c["expect"], c["id"])
 
     def test_grid_leaf_counts(self):
