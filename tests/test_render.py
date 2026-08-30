@@ -19,6 +19,7 @@ from rowver.extract import ExtractError, plot1d, render
 from test_plot1d import _cart
 
 HAVE_MPL = importlib.util.find_spec("matplotlib") is not None
+HAVE_MPLHEP = importlib.util.find_spec("mplhep") is not None
 
 A = np.array
 
@@ -29,21 +30,21 @@ class YRangeTests(unittest.TestCase):
 
     def test_mixed_sign_stacked_envelope(self):
         lo, hi = render._y_range([A([10.0]), A([-20.0])], [A([0.]), A([0.])],
-                                 [A([0.]), A([0.])], [None, None],
+                                 [A([0.]), A([0.])], None, [None, None],
                                  [False, False], True, False, None)
         self.assertAlmostEqual(hi, 11.5)
         self.assertAlmostEqual(lo, -23.0)
 
     def test_band_extends_the_stacked_reach(self):
-        lo, hi = render._y_range([A([10.0])], [A([25.0])], [A([1.0])],
+        lo, hi = render._y_range([A([10.0])], [A([25.0])], [A([1.0])], None,
                                  [None], [False], True, False, "sumw2")
         self.assertAlmostEqual(hi, 15 * 1.15)
 
     def test_log_floor_walks_the_drawn_cumulatives(self):
         # plotly draws cumulatives 10, 4, -2: the floor sits under the 4
         lo, _ = render._y_range([A([10.0]), A([-6.0]), A([-6.0])],
-                                [A([0.])] * 3, [A([0.])] * 3, [None] * 3,
-                                [False] * 3, True, True, None)
+                                [A([0.])] * 3, [A([0.])] * 3, None,
+                                [None] * 3, [False] * 3, True, True, None)
         self.assertAlmostEqual(lo, 2.0)  # 4 * 0.5
 
     def test_sequential_accumulation_not_compensated(self):
@@ -51,12 +52,21 @@ class YRangeTests(unittest.TestCase):
         # python's compensated sum() would total 1e16+8 instead
         hs = [A([1e16])] + [A([1.0])] * 8
         z = [A([0.0])] * 9
-        _, hi = render._y_range(hs, z, z, [None] * 9, [False] * 9,
+        _, hi = render._y_range(hs, z, z, None, [None] * 9, [False] * 9,
                                 True, False, None)
         self.assertEqual(hi, 1e16 * 1.15)
 
+    def test_overlay_reach_uses_the_recorded_bands(self):
+        # recorded up-band 3 (NOT what sumw2 over the moments would give):
+        # the frame must ride the drawn numbers
+        errs = ([A([1.0])], [A([3.0])])
+        _, hi = render._y_range([A([4.0])], [A([100.0])], [A([1.0])], errs,
+                                [None], [False], False, False, "sumw2")
+        self.assertAlmostEqual(hi, 7 * 1.15)
+
     def test_points_errstyle_none_excluded_from_reach(self):
-        _, hi = render._y_range([A([4.0])], [A([4.0])], [A([4.0])],
+        errs = ([A([2.0])], [A([2.0])])
+        _, hi = render._y_range([A([4.0])], [A([4.0])], [A([4.0])], errs,
                                 ["none"], [True], False, False,
                                 "poisson_raw")
         self.assertAlmostEqual(hi, 4 * 1.15)
@@ -108,8 +118,11 @@ class RenderTests(unittest.TestCase):
             meta_path.write_text(json.dumps(meta))
             data = (self.out / "t0_s0_1d_MET.data.npz").read_bytes()
             (self.out / "edited.data.npz").write_bytes(data)
+        # plain by default: the figure tests must pass with matplotlib
+        # alone — the advertised --style plain environment
         fig, _ = render._draw(meta_path, kw.pop("dpi", 150),
-                              kw.pop("size", (10, 5)))
+                              kw.pop("size", (10, 5)),
+                              kw.pop("style", "plain"))
         return fig.axes[0]
 
     # --- semantics on the drawn figure -------------------------------------
@@ -160,18 +173,49 @@ class RenderTests(unittest.TestCase):
         ax = self._fig(edit=lambda m: m["spec"].update(
             yauto=False, ymin="abc", ymax="50px"))
         self.assertEqual(ax.get_ylim(), auto)
+        # a nonpositive manual low bound on log y CLAMPS to 1e-12 (plotly's
+        # rule), never falls back to auto or an unrelated prior limit
+        ax = self._fig(edit=lambda m: m["spec"].update(
+            logy=True, yauto=False, ymin="-5", ymax="50"))
+        self.assertEqual(ax.get_ylim(), (1e-12, 50.0))
+
+    def test_contradictory_records_refused(self):
+        # bands in the npz while the spec's error mode is off
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m["spec"].__setitem__("err", "off"))
+        # meta.json mirrors that disagree with the npz
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m["edges"].__setitem__(0, -999.0))
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m["sources"].reverse())
+
+    def test_style_selection(self):
+        with self.assertRaises(ExtractError):
+            render.render(self.meta0, style="wat")
+        if HAVE_MPLHEP:  # the default sheet actually draws
+            self.assertTrue(render.render(self.meta0, self.tmp / "s",
+                                          style="root").is_file())
+        # without mplhep, every non-plain style refuses with the friendly
+        # message instead of an ImportError mid-draw
+        import sys
+        from unittest import mock
+        with mock.patch.dict(sys.modules, {"mplhep": None}):
+            with self.assertRaises(ExtractError):
+                render._style_context("root")
 
     # --- files, CLI, refusals ----------------------------------------------
 
     def test_renders_every_record_from_the_files_alone(self):
         from rowver import cli
-        rc = cli.main(["render", str(self.out), "--size", "4x3", "--dpi", "72"])
+        rc = cli.main(["render", str(self.out), "--size", "4x3",
+                       "--dpi", "72", "--style", "plain"])
         self.assertEqual(rc, 0)
         pngs = sorted(p.name for p in self.out.glob("*.png"))
         self.assertEqual(pngs, ["t0_s0_1d_MET.png", "t0_s1_c0_1d_MET.png"])
 
     def test_single_record_and_out_dir(self):
-        target = render.render(self.meta0, self.tmp / "imgs", fmt="pdf")
+        target = render.render(self.meta0, self.tmp / "imgs", fmt="pdf",
+                               style="plain")
         self.assertEqual(target, self.tmp / "imgs" / "t0_s0_1d_MET.pdf")
         self.assertTrue(target.is_file())
 
@@ -183,7 +227,7 @@ class RenderTests(unittest.TestCase):
         corrupt = self.out / "y.meta.json"
         corrupt.write_text("{not json")
         # the directory walk skips both and still renders the real records
-        self.assertEqual(render.main([str(self.out)]), 0)
+        self.assertEqual(render.main([str(self.out), "--style", "plain"]), 0)
         # a future schema version is refused, never silently drawn
         v2 = json.loads(self.meta0.read_text())
         v2["version"] = 2

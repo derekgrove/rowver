@@ -22,7 +22,9 @@ with the viewer's semantics so a side-by-side eyeball is easy:
   them falls back to a local palette walk over the drawn sources only.
 - the y frame ports autoYRange (stacked positive/negative envelope, error
   reach, log floor from drawn positives, the two stacking orders); MANUAL
-  y bounds (``yauto`` exactly false) parse like the page and win per bound.
+  y bounds (``yauto`` exactly false) apply only when BOTH parse finite and
+  ordered — anything else keeps the full auto range — and on a log y axis
+  the low bound clamps to 1e-12, plotly's rule.
 - log-spaced bins draw with their true widths from ``edges``; ``logx``
   engages only when the window's low edge is positive (the record already
   resolved the silent-linear fallback as ``window.log_active``).
@@ -103,9 +105,11 @@ def _band(mode, h_rows, h2_rows, n_rows) -> np.ndarray:
                      for i in range(tot.size)]), tot
 
 
-def _y_range(hs, h2s, ns, errstyles, is_pts, stacked, logy, mode) -> tuple:
-    """ui/frame.ts autoYRange(), over the record's rows. ``mode`` is None
-    when the error model is off."""
+def _y_range(hs, h2s, ns, errs, errstyles, is_pts, stacked, logy,
+             mode) -> tuple:
+    """ui/frame.ts autoYRange(), over the record's rows. Overlay and points
+    reach uses the RECORDED bands ``errs`` (the same numbers drawn); only
+    the stacked total recomputes via ``mode`` (None = error model off)."""
     top, bottom, floor = 0.0, 0.0, np.inf
 
     def reach(y, dn, up):
@@ -120,11 +124,9 @@ def _y_range(hs, h2s, ns, errstyles, is_pts, stacked, logy, mode) -> tuple:
             floor = y - dn
 
     def ext(k, i):
-        if mode is None or (is_pts[k] and errstyles[k] == "none"):
+        if errs is None or (is_pts[k] and errstyles[k] == "none"):
             return (0.0, 0.0)
-        e, _ = core.err_for(mode, float(hs[k][i]), float(h2s[k][i]),
-                            float(ns[k][i]))
-        return e or (0.0, 0.0)
+        return (float(errs[0][k][i]), float(errs[1][k][i]))
 
     bars = [k for k, p in enumerate(is_pts) if not p]
     nb = len(hs[bars[0]]) if bars else 0
@@ -228,6 +230,18 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
             and edges.shape == (nb + 1,)
             and (err is None or err[0].shape == err[1].shape == (K, nb))):
         raise ExtractError(f"{name}: npz shapes disagree with the schema")
+    try:  # the json carries the same edges/centres/sources — a record whose
+        # mirrors contradict each other is refused, not silently resolved
+        coherent = (list(meta.get("sources") or []) == sources
+                    and np.array_equal(
+                        np.asarray(meta.get("edges"), dtype=float), edges)
+                    and np.array_equal(
+                        np.asarray(meta.get("centres"), dtype=float), centres)
+                    and meta["window"].get("nb") == nb)
+    except (TypeError, ValueError):
+        coherent = False
+    if not coherent:
+        raise ExtractError(f"{name}: npz and meta.json mirrors disagree")
 
     spec, look = meta["spec"], meta.get("look") or {}
     colours = meta.get("colours") or _fallback_colours(sources, look)
@@ -242,6 +256,9 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
     if mode_on and err is None:
         raise ExtractError(f"{name}: spec has an error mode but the npz "
                            f"carries no bands")
+    if not mode_on and err is not None:
+        raise ExtractError(f"{name}: the npz carries error bands but the "
+                           f"spec's error mode is off")
     bars = [k for k, p in enumerate(is_pts) if not p]
 
     with _style_context(style):
@@ -284,14 +301,16 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
             ax.set_xscale("log")
         if logy:
             ax.set_yscale("log")
-        lo_y, hi_y = _y_range(h, h2, n, errstyles, is_pts, stacked, logy,
-                              mode_s)
+        lo_y, hi_y = _y_range(h, h2, n, err, errstyles, is_pts, stacked,
+                              logy, mode_s)
         if spec.get("yauto") is False:
             # manual applies only when BOTH bounds parse finite and ordered
             # (the backends' rule); anything else keeps the full auto range
             my_lo = core.parse_float(spec.get("ymin"))
             my_hi = core.parse_float(spec.get("ymax"))
             if np.isfinite(my_lo) and np.isfinite(my_hi) and my_hi > my_lo:
+                if logy:  # plotly clamps the log low bound, never rejects it
+                    my_lo = max(my_lo, 1e-12)
                 lo_y, hi_y = my_lo, my_hi
         ax.set_ylim(lo_y, hi_y)
         ax.set_xlim(edges[0], edges[-1])
