@@ -94,7 +94,7 @@ def frame(spec: dict, colx: dict, coly: dict, vx, vy, view: dict | None,
 
 def dump(rvr: str | Path, tab: int = 0, zoom: str = "p90",
          no_cuts: bool = False, allow_unset_lumi: bool = False,
-         kind: str = "2d") -> list[dict]:
+         kind: str = "2d", exp: str = "CMS") -> list[dict]:
     meta, buf = rvr6.read(rvr)
     data, view = meta["data"], meta.get("view") or {}
     columns = rvr6.columns(meta, buf)
@@ -132,6 +132,7 @@ def dump(rvr: str | Path, tab: int = 0, zoom: str = "p90",
         f["cuts"] = {n: core.json_cut_spec(by_name[n], cuts[n]) for n in active}
         f["lumi"] = {s: float(l)
                      for s, l in zip(samples, core.lumi_table(meta))}
+        f["label"] = core.exp_label(view, "" if exp == "none" else exp)
         plots.append(f)
     if not plots:
         raise ExtractError(f"tab {tab} has no {kind} plots")
@@ -165,13 +166,18 @@ def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--no-cuts", action="store_true",
                     help="do not apply the tab's cuts (visibility still applies)")
     ap.add_argument("--allow-unset-lumi", action="store_true")
+    ap.add_argument("--exp", choices=("CMS", "ATLAS", "LHCb", "ALICE", "none"),
+                    default="CMS",
+                    help="experiment label for a cart whose view carries none "
+                         "(the page's machine-local preference; default CMS, "
+                         "the preference's own default)")
     ap.add_argument("-o", "--out", default=None,
                     help="output directory (default ./extracts/<cart-stem>/)")
 
 
 def run(a: argparse.Namespace, kind: str = "2d") -> int:
     plots = dump(a.rvr, tab=a.tab, zoom=a.zoom, no_cuts=a.no_cuts,
-                 allow_unset_lumi=a.allow_unset_lumi, kind=kind)
+                 allow_unset_lumi=a.allow_unset_lumi, kind=kind, exp=a.exp)
     out = Path(a.out) if a.out else Path("extracts") / Path(a.rvr).stem
     out.mkdir(parents=True, exist_ok=True)
     meta, _ = rvr6.read(a.rvr)
@@ -214,6 +220,7 @@ def run(a: argparse.Namespace, kind: str = "2d") -> int:
              "kept": f["kept"], "sources": f["sources"],
              "extras": dict(zip(keys, f["sources"])),
              "look": f["look"], "colours": f["colours"], "lumi": f["lumi"],
+             "label": f["label"],
              "active": f["active"], "cuts": f["cuts"]},
             indent=4, sort_keys=True) + "\n")
         (out / f"{name}.cuts.txt").write_text(cuts_txt)

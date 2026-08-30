@@ -309,5 +309,46 @@ class RegionFixtureTests(unittest.TestCase):
             CASES["region"][1]["grid"]))), 7)
 
 
+class ExpLabelTests(unittest.TestCase):
+    """core.exp_label: the page's ?? resolution of view.label."""
+
+    def test_absent_fields_fall_to_page_defaults(self):
+        self.assertEqual(core.exp_label(None),
+                         {"exp": "CMS", "tag": "Work in progress",
+                          "right": ""})
+        self.assertEqual(core.exp_label({"label": {"right": "5 fb"}}),
+                         {"exp": "CMS", "tag": "Work in progress",
+                          "right": "5 fb"})
+
+    def test_explicit_empty_is_respected(self):
+        # ?? not ||: an explicit '' (the NONE toggle) stays ''
+        got = core.exp_label({"label": {"exp": "", "tag": ""}})
+        self.assertEqual(got["exp"], "")
+        self.assertEqual(got["tag"], "")
+
+    def test_default_exp_is_the_machine_preference(self):
+        # the --exp surface: absent exp falls to it, a saved exp wins over it
+        self.assertEqual(core.exp_label(None, "ATLAS")["exp"], "ATLAS")
+        self.assertEqual(core.exp_label(None, "")["exp"], "")
+        self.assertEqual(
+            core.exp_label({"label": {"exp": "LHCb"}}, "ATLAS")["exp"],
+            "LHCb")
+
+    def test_non_dict_label_reads_as_absent(self):
+        # the browser reads fields off any shape (["x"].exp is undefined):
+        # a malformed wire label falls back, never crashes the extractor
+        for bad in (["x"], "CMS", 7, True):
+            self.assertEqual(core.exp_label({"label": bad})["exp"], "CMS",
+                             repr(bad))
+
+    def test_saved_values_verbatim(self):
+        got = core.exp_label({"label": {"exp": "ATLAS",
+                                        "tag": "Simulation Preliminary",
+                                        "right": "13.6 TeV"}})
+        self.assertEqual(got, {"exp": "ATLAS",
+                               "tag": "Simulation Preliminary",
+                               "right": "13.6 TeV"})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -169,6 +169,18 @@ class GoldenTests(unittest.TestCase):
             for k in ("h", "h2", "n"):
                 np.testing.assert_array_equal(e3[k], e2[k], err_msg=k)
 
+    def test_label_stamped_with_exp_preference(self):
+        # no view.label in the cart: exp follows --exp (the machine-local
+        # preference), tag the page default; "none" is the NONE toggle
+        f = plot2d.dump(self.rvr)[0]
+        self.assertEqual(f["label"], {"exp": "CMS",
+                                      "tag": "Work in progress",
+                                      "right": ""})
+        f = plot2d.dump(self.rvr, exp="ATLAS")[0]
+        self.assertEqual(f["label"]["exp"], "ATLAS")
+        f = plot2d.dump(self.rvr, exp="none")[0]
+        self.assertEqual(f["label"]["exp"], "")
+
     def test_files_written(self):
         out = self.tmp / "extracts"
         rc = plot2d.main([str(self.rvr), "-o", str(out)])

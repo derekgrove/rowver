@@ -51,6 +51,13 @@ Manual x/y bounds need no zoom step: the record's edges already ARE the
 resolved window. Per-source ``x_*`` extras are not drawn — the viewer
 draws one surface for the whole selection.
 
+The record's stamped ``label`` (the page-wide experiment strip:
+exp/tag/right, page defaults resolved at extract time) draws exactly as
+the page's strip — bold experiment, italic tag, right label right-aligned
+above the axes — when ``spec.explabel`` is not false and an experiment is
+set; the cart—name title and provenance note then move below the figure.
+Records without a stamped label (pre-stamping) draw none.
+
 Pull panels are DEFERRED to a later render pass, with boards.
 Needs matplotlib + mplhep (``pip install rowver[render]``; ``plain``
 works with matplotlib alone).
@@ -184,6 +191,62 @@ def _y_range(hs, h2s, ns, errs, errstyles, is_pts, stacked, logy,
     if not hi > floor:
         hi = floor * 10
     return floor, hi
+
+
+def _furnish(fig, ax, meta: dict, name: str, note: str) -> None:
+    """Title, provenance note, and the experiment strip.
+
+    The strip is the page's own explabel DOM strip, ported: bold experiment
+    + italic tag on the left, the right label right-aligned — shown exactly
+    when the page shows it (``spec.explabel`` not false AND a stamped
+    experiment; a record without a stamped ``label`` predates stamping and
+    draws none). With a strip shown, the cart—name title and the note move
+    to one small line under the figure so the strip owns the top, the way
+    it does on the page. Without one, the original layout stands.
+    """
+    # ONLY key absence means pre-stamping; anything present — a JSON null
+    # included — must be the real shape
+    if "label" not in meta:
+        lab: dict = {}
+    elif not (isinstance(lab := meta["label"], dict) and all(
+            isinstance(lab.get(k), str) for k in ("exp", "tag", "right"))):
+        raise ExtractError(f"{name}: label must carry string exp/tag/right")
+    exp = lab.get("exp") or ""
+    is3d = getattr(ax, "name", "") == "3d"
+    title = f"{meta.get('cart', '')} — {name}"
+    if meta["spec"].get("explabel") is False or not exp:
+        ax.set_title(title, loc="left", fontsize=11)
+        if is3d:  # a 3d axes has no 'axes fraction' annotate
+            fig.text(0.99, 0.01, note, ha="right", fontsize=8, color="0.4")
+        else:
+            ax.annotate(note, xy=(0.99, 1.02), xycoords="axes fraction",
+                        ha="right", fontsize=8, color="0.4")
+        return
+    tag, right = lab["tag"], lab["right"]
+    # the parity target is the export stamp (png.ts stampLabel): the strip
+    # spans the full canvas, one size for all three runs, plain ink; saved
+    # strings draw VERBATIM (parse_math off — "$" is a character, not
+    # mathtext)
+    pos = ax.get_position()
+    y = pos.y1 + 0.012
+    # the stamp's own mono face, not the sheet's font
+    t = fig.text(0.01, y, exp, fontweight="bold", fontsize=13, va="bottom",
+                 family="monospace", parse_math=False)
+    if tag:
+        # the italic tag hangs off the measured end of the bold name with
+        # its own leading space — png.ts fillText(' ' + tag, at) exactly
+        fig.canvas.draw()
+        x1 = t.get_window_extent().transformed(
+            fig.transFigure.inverted()).x1
+        fig.text(x1, y, " " + tag, fontstyle="italic", fontsize=13,
+                 va="bottom", family="monospace", parse_math=False)
+    if right:
+        fig.text(0.99, y, right, ha="right", fontsize=13, va="bottom",
+                 family="monospace", parse_math=False)
+    # below the figure edge, clear of the x title; bbox_inches="tight"
+    # keeps it in the saved image
+    fig.text(0.01, -0.07, f"{title} · {note}", fontsize=8, color="0.4",
+             va="top")
 
 
 def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
@@ -356,16 +419,13 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
             # sheets are tuned for square figures and their default typography
             # collides at wide aspect ratios; the sheet still owns ticks, axes,
             # fonts and line weights — the "look"
-            ax.set_title(f"{meta.get('cart', '')} — {name}", loc="left",
-                         fontsize=11)
             handles, _ = ax.get_legend_handles_labels()
             ax.legend(frameon=False, fontsize=9,
                       ncol=2 if len(handles) > 6 else 1)
-            ax.annotate(f"window {w['from']} (zoom {w['zoom']})"
-                        + (", log bins" if w.get("log_active") else "")
-                        + (", stacked" if stacked else ""),
-                        xy=(0.99, 1.02), xycoords="axes fraction",
-                        ha="right", fontsize=8, color="0.4")
+            _furnish(fig, ax, meta, name,
+                     f"window {w['from']} (zoom {w['zoom']})"
+                     + (", log bins" if w.get("log_active") else "")
+                     + (", stacked" if stacked else ""))
         except BaseException:  # never leak the figure on a
             plt.close(fig)      # mid-draw failure
             raise
@@ -516,18 +576,11 @@ def _draw_grid(meta: dict, meta_path: Path, dpi: int,
                 ax.set_zlabel("log₁₀ yield" if logz else "yield")
             ax.set_xlabel(xlabel)
             ax.set_ylabel(ylabel)
-            ax.set_title(f"{meta.get('cart', '')} — {name}", loc="left",
-                         fontsize=11)
-            note = (f"x {wx['from']} · y {wy['from']} (zoom {wx['zoom']})"
-                    + (", log x bins" if wx.get("log_active") else "")
-                    + (", log y bins" if wy.get("log_active") else "")
-                    + f", kept {int(kept):,}")
-            if kind == "plot2d":
-                ax.annotate(note, xy=(0.99, 1.02), xycoords="axes fraction",
-                            ha="right", fontsize=8, color="0.4")
-            else:  # a 3d axes has no 'axes fraction' annotate
-                fig.text(0.99, 0.01, note, ha="right", fontsize=8,
-                         color="0.4")
+            _furnish(fig, ax, meta, name,
+                     f"x {wx['from']} · y {wy['from']} (zoom {wx['zoom']})"
+                     + (", log x bins" if wx.get("log_active") else "")
+                     + (", log y bins" if wy.get("log_active") else "")
+                     + f", kept {int(kept):,}")
         except BaseException:  # never leak the figure on a
             plt.close(fig)      # mid-draw failure
             raise

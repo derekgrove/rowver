@@ -2,6 +2,9 @@
 
 Versioned per kind. An extractor writes only what its kind's schema here
 says, and bumps that kind's version when a key, dtype, or meaning changes.
+ONE exception: a new OPTIONAL `meta.json` key whose absence keeps every
+consumer's behaviour unchanged may land without a bump — it must be
+marked optional here with its date (`label` is the precedent).
 Written before any extractor consumed it (step 1 of the extract plan);
 `flattened` (rebased onto the resolver in step 2) is the first consumer.
 
@@ -155,7 +158,12 @@ npz keys in strict JSON, and `colours` — the RESOLVED colour per drawn
 source, stamped at extract time because the viewer's assignment walks
 every global source and look namespace, which the record alone cannot
 reconstruct. `colours` is REQUIRED as of v2; the render pass consumes
-these.
+these. `label` (optional, additive 2026-08-30) mirrors the page-wide
+experiment strip as the page resolves it (`view.label` with the page's
+own `??` defaults: exp from `--exp` — the machine-local preference,
+CLI default `CMS`, `none` valid — tag `Work in progress`, right ``): string
+`exp`/`tag`/`right`; `spec.explabel` stays the per-plot visibility. A
+record without `label` predates stamping and renders no strip.
 A SHAPE-normalized plot is written normalized (`h`/`h2` scaled to unit
 area, `n` raw), and the error bands ride the scaled moments — what the
 page draws. Tails are per source, counted like `binned()`; a NaN row
@@ -190,7 +198,7 @@ empty grid, the page's own result. `meta.json` mirrors the npz (`edges`,
 `centres`, `window`, each split `{x: ..., y: ...}` with per-axis
 `zoom`/`from`/`log_active` provenance), carries `kept`, the `extras`
 key→source mapping, and the usual spec/look/colours/lumi/active/cuts
-context.
+context plus the optional `label` strip (same rules as plot1d).
 
 ## Kind: `plot3d` — v1
 

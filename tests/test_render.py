@@ -279,6 +279,12 @@ class RenderTests(unittest.TestCase):
         pngs = sorted(p.name for p in self.out.glob("*.png"))
         self.assertEqual(pngs, ["t0_s0_1d_MET.png", "t0_s1_c0_1d_MET.png"])
 
+    def test_label_strip_on_1d(self):
+        # the 1d path furnishes through the same helper: stamped page
+        # defaults draw the strip there too
+        fig, _ = render._draw(self.meta0, 150, (10, 5), "plain")
+        self.assertIn("CMS", [t.get_text() for t in fig.texts])
+
     def test_single_record_and_out_dir(self):
         target = render.render(self.meta0, self.tmp / "imgs", fmt="pdf",
                                style="plain")
@@ -480,6 +486,48 @@ class Render2DTests(unittest.TestCase):
                 "h", a["h"].astype("<f4")))
         with self.assertRaises(ExtractError):  # grid shape vs centres
             self._fig(edit_npz=lambda a: a.__setitem__("h", a["h"].T.copy()))
+
+    def test_label_strip_drawn_and_gated(self):
+        # the extract stamped the page defaults (no view.label in the cart):
+        # CMS bold + "Work in progress" italic, title relegated below
+        fig = self._fig()
+        # the tag run carries png.ts's own leading space — strip for lookup
+        texts = [t.get_text().strip() for t in fig.texts]
+        self.assertIn("CMS", texts)
+        self.assertIn("Work in progress", texts)
+        self.assertEqual(fig.axes[0].get_title(loc="left"), "")
+        bold = next(t for t in fig.texts if t.get_text() == "CMS")
+        self.assertEqual(bold.get_fontweight(), "bold")
+        # explabel: false hides the strip — the original layout returns
+        fig = self._fig(edit=lambda m: m["spec"].__setitem__(
+            "explabel", False))
+        self.assertNotIn("CMS", [t.get_text() for t in fig.texts])
+        self.assertTrue(fig.axes[0].get_title(loc="left"))
+        # a saved label renders VERBATIM, right label right-aligned; "$" is
+        # a character, never mathtext (the DOM and export stamp draw it raw)
+        def saved(m):
+            m["label"] = {"exp": "ATLAS", "tag": "Simulation Preliminary",
+                          "right": "137 fb$^{-1}$"}
+        fig = self._fig(edit=saved)
+        texts = {t.get_text().strip(): t for t in fig.texts}
+        self.assertIn("ATLAS", texts)
+        self.assertIn("Simulation Preliminary", texts)
+        self.assertEqual(texts["137 fb$^{-1}$"].get_ha(), "right")
+        self.assertFalse(texts["137 fb$^{-1}$"].get_parse_math())
+        # NONE experiment (page toggle) and a pre-stamping record: no strip
+        for gone in (lambda m: m["label"].__setitem__("exp", ""),
+                     lambda m: m.pop("label")):
+            fig = self._fig(edit=gone)
+            self.assertTrue(fig.axes[0].get_title(loc="left"))
+        # a malformed label is refused, not guessed at — falsey shapes and
+        # a present JSON null too (only KEY ABSENCE means pre-stamping)
+        for bad in ({"exp": 3}, False, 0, "", [], {}, None):
+            with self.assertRaises(ExtractError, msg=repr(bad)):
+                self._fig(edit=lambda m: m.__setitem__("label", bad))
+
+    def test_label_strip_on_the_3d_surface(self):
+        fig = self._fig(src=self.meta3d)
+        self.assertIn("CMS", [t.get_text() for t in fig.texts])
 
     def test_duplicate_edges_are_valid_geometry(self):
         # a subnormal window legitimately rounds edges to duplicates: the

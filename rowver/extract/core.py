@@ -1335,3 +1335,20 @@ def json_cut_spec(col: dict, spec: Any) -> dict:
         return {"in": spec.get("in") or []}
     lo, hi = cut_range(col, spec)
     return {"range": [json_num(lo), json_num(hi)]}
+
+
+def exp_label(view: dict | None, default_exp: str = "CMS") -> dict[str, str]:
+    """The page-wide experiment label strip, resolved the way the page opens
+    it (rvr6.ts openState): an ABSENT exp falls to ``default_exp`` — the
+    machine-local preference the record cannot see, surfaced as ``--exp``
+    (default CMS, the preference's own default) — an absent tag to 'Work
+    in progress'; an explicit empty string is respected (the ?? rule). A
+    non-dict ``label`` reads as absent, the browser's own field access."""
+    lab = (view or {}).get("label")
+    if not isinstance(lab, dict):
+        lab = {}
+    def get(key: str, dflt: str) -> str:
+        v = lab.get(key)
+        return dflt if v is None else v if isinstance(v, str) else _js_str(v)
+    return {"exp": get("exp", default_exp),
+            "tag": get("tag", "Work in progress"), "right": get("right", "")}
