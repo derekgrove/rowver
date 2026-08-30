@@ -78,11 +78,7 @@ def board_numbers(meta: dict, columns: dict, ds: np.ndarray, keep: np.ndarray,
     raw_err = spec.get("err")
     mode = core._js_str(raw_err) if core._js_truthy(raw_err) \
         else "poisson_neff"
-    # the format's fallback: a garbled view.syst means 5%, never a silent
-    # 0% — two tools must not disagree about one number (board.ts:126)
-    v = view.get("syst")
-    syst_raw = core._js_number("0.05" if v is None else core._js_str(v))
-    syst = syst_raw if np.isfinite(syst_raw) and syst_raw >= 0 else 0.05
+    syst = core.view_syst(view)
     weighted = core.is_weighted(meta)
 
     # the shelf first: it is every square's B, so it exists before any
@@ -183,8 +179,10 @@ def run(a: argparse.Namespace) -> int:
     def cell(key):  # the wire's NaN-for-empty, distinct from a zero yield
         return np.array([q[key] if q["src"] else np.nan for q in sq], "<f8")
 
+    pairs = [x for p in num["overlap"] for x in p]
     arrays = {
-        "rows": np.int8(num["rows"]), "cols": np.int8(num["cols"]),
+        "rows": np.array(num["rows"], "<i8"),
+        "cols": np.array(num["cols"], "<i8"),
         "cell_sources": core.unicode_array([q["src"] for q in sq]),
         "raw": cell("n"),
         "yield": cell("w"),
@@ -193,12 +191,14 @@ def run(a: argparse.Namespace) -> int:
         "bkg_raw": np.array([q["n"] for q in num["shelf"]], "<f8"),
         "bkg_w": np.array([q["w"] for q in num["shelf"]], "<f8"),
         "bkg_w2": np.array([q["w2"] for q in num["shelf"]], "<f8"),
-        "bkg_total_raw": np.float64(num["bkg"]["n"]),
-        "bkg_total_w": np.float64(num["bkg"]["w"]),
-        "bkg_total_w2": np.float64(num["bkg"]["w2"]),
+        "bkg_total_raw": np.array(num["bkg"]["n"], "<f8"),
+        "bkg_total_w": np.array(num["bkg"]["w"], "<f8"),
+        "bkg_total_w2": np.array(num["bkg"]["w2"], "<f8"),
         "weighted": np.bool_(num["weighted"]),
-        "err_fallback_count": np.int8(num["fell_back"]),
-        "overlap": np.array(num["overlap"], dtype="<U64").reshape(-1, 2),
+        "err_fallback_count": np.array(num["fell_back"], "<i8"),
+        # sized to the names, never a fixed width that truncates
+        "overlap": core.unicode_array(pairs).reshape(-1, 2)
+        if pairs else np.empty((0, 2), "<U1"),
     }
     if num["mode"] != "off":
         arrays["err_down"] = np.array(

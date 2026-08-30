@@ -224,7 +224,7 @@ leaf partition, tree order:
 | `total` | scalar f8 | the viewer's normalization total (bubble radii): Σw over kept rows feeding ≥1 source, each row counted ONCE globally — NOT the sum over source columns, which double-counts overlapping membership |
 | `neff` | (L, K) f8 | effective entries per cell, w²/Σw²; NaN when either moment is not positive (`region.ts` neff) |
 | `asimov_z` | scalar f8 | Asimov Z, no systematic: sqrt(max(q0, 0)), q0 = 2·Σ[(s+b)ln(1+s/b) − s]; NaN when significance is not ready (falsy `sig` or empty `bkg` — the page's own gate and placeholder) |
-| `asimov_dropped` | scalar i8 | bins with s > 0 and b ≤ 0 (or a non-finite term): DROPPED AND COUNTED, never silently skipped |
+| `asimov_dropped` | scalar i8 | bins with s ≠ 0 whose likelihood is undefined — s < 0 (or NaN), b ≤ 0 (or NaN), or a non-finite term: DROPPED AND COUNTED, never silently skipped |
 | `asimov_thin` | scalar i8 | contributing bins whose pooled RAW background is under 5 |
 
 The flattened face of the same numbers is kind `flattened`. The Asimov

@@ -883,6 +883,15 @@ def region_flat(num: dict) -> dict:
     return out
 
 
+def view_syst(view: dict) -> float:
+    """The ZBi systematic actually used — board.ts:126-129 / RegionMap.tsx:
+    Number(String(view.syst ?? '0.05')), anything garbled or negative is
+    the format's 5%, never a silent 0%."""
+    v = view.get("syst")
+    raw = _js_number("0.05" if v is None else _js_str(v))
+    return raw if math.isfinite(raw) and raw >= 0 else 0.05
+
+
 def region_sig(flat: dict, sig: str, bkg: list[str]) -> dict:
     """Asimov significance, no systematic — region.ts regionSig().
 

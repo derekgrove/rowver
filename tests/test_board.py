@@ -206,6 +206,23 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(meta["err"], "sumw2")
         self.assertEqual(meta["syst"], 0.05)
 
+    def test_off_mode_and_met_subset_on_the_wire(self):
+        rvr = _cart(self.tmp, board_spec={
+            "kind": "board", "rows": 1, "cols": 2, "cells": ["sig", None],
+            "bkgs": ["bkg"], "err": "off", "met": ["zbi"]})
+        out = self.tmp / "extracts"
+        self.assertEqual(board.main([str(rvr), "-o", str(out)]), 0)
+        with np.load(out / "t0_s0_board.data.npz") as z:
+            self.assertNotIn("err_down", z)  # off mode: no bands
+            self.assertNotIn("err_up", z)
+            self.assertIn("zbi", z)          # only the SHOWN metric
+            self.assertNotIn("sob", z)
+            self.assertNotIn("sig", z)
+            self.assertEqual(z["rows"].dtype.str, "<i8")  # schema i8
+            self.assertEqual(z["err_fallback_count"].dtype.str, "<i8")
+            self.assertEqual(z["bkg_total_w"].dtype.str, "<f8")
+            self.assertTrue(np.isnan(z["zbi"][1]))  # the empty cell
+
     def test_no_board_refused(self):
         rvr = _cart(self.tmp)
         meta, buf = rvr6.read(rvr)

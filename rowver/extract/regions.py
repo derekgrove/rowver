@@ -66,9 +66,7 @@ def dump(rvr: str | Path, tab: int = 0, no_cuts: bool = False,
     else:
         asimov = {"z": float("nan"), "bins": 0, "dropped": 0, "thin": 0}
 
-    v = view.get("syst")
-    syst_raw = core._js_number("0.05" if v is None else core._js_str(v))
-    syst = syst_raw if np.isfinite(syst_raw) and syst_raw >= 0 else 0.05
+    syst = core.view_syst(view)
 
     with np.errstate(invalid="ignore", divide="ignore"):
         neff = np.where((num["w"] > 0) & (num["w2"] > 0),
@@ -112,11 +110,11 @@ def run(a: argparse.Namespace) -> int:
              sources=core.unicode_array(num["srcs"]),
              n=num["n"].astype("<f8"), w=num["w"].astype("<f8"),
              w2=num["w2"].astype("<f8"),
-             total=np.float64(num["total"]),
+             total=np.array(num["total"], "<f8"),
              neff=num["neff"].astype("<f8"),
-             asimov_z=np.float64(num["asimov"]["z"]),
-             asimov_dropped=np.int8(num["asimov"]["dropped"]),
-             asimov_thin=np.int8(num["asimov"]["thin"]))
+             asimov_z=np.array(num["asimov"]["z"], "<f8"),
+             asimov_dropped=np.array(num["asimov"]["dropped"], "<i8"),
+             asimov_thin=np.array(num["asimov"]["thin"], "<i8"))
     (out / f"{name}.meta.json").write_text(json.dumps(
         {"kind": "regions", "version": VERSION, "tab": a.tab,
          "cart": Path(a.rvr).name, "path": num["path"], "spec": num["spec"],
