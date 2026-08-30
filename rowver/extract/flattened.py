@@ -81,16 +81,6 @@ def bin_mask(columns: dict, cuts: list) -> np.ndarray:
     return keep if keep is not None else np.ones(len(next(iter(columns.values()))), bool)
 
 
-def _tab_entry(meta: dict, tab: int) -> dict:
-    tabs = meta.get("tabs") or []
-    if not tabs:
-        _require(tab == 0, f"this file has no tabs — --tab {tab} names nothing")
-        return {}
-    _require(0 <= tab < len(tabs),
-             f"--tab {tab} is out of range — this file has {len(tabs)} tab(s)")
-    return tabs[tab]
-
-
 def _map_spec(meta: dict, tab: int) -> dict:
     """The tab's first effective map stage, with a root: saved, else derived."""
     maps = [e["spec"] for e in core.stage_entries(meta, tab) if e["kind"] == "map"]
@@ -102,34 +92,6 @@ def _map_spec(meta: dict, tab: int) -> dict:
     return {**spec, "root": root}
 
 
-def _cuts_lines(meta: dict, tab: int, no_cuts: bool) -> list[str]:
-    """The applied cuts as python, one line each — SCHEMAS.md .cuts.txt."""
-    tab_entry = _tab_entry(meta, tab)
-    view = meta.get("view") or {}
-    cols = meta["data"]["cols"]
-    cuts = rvr6.effective(tab_entry, view, "cuts") or {}
-    active = [] if no_cuts else core.active_cuts(cols, cuts, None)
-    if not active:
-        return ["# no cuts"]
-    by_name = {c["name"]: c for c in cols}
-    # valid python: columns addressed as col[<name>], non-finite bounds spelled
-    # float('inf') — the file must exec against {np, col, keep}
-    lines = ["# viewer semantics: NaN passes a range cut, fails a chip cut"]
-    for name in active:
-        spec = cuts[name]
-        if isinstance(spec, dict):
-            lines.append(f"keep &= np.isin(col[{name!r}], {spec['in']!r})")
-        else:
-            lo, hi = core.cut_range(by_name[name], spec)
-            lines.append(f"keep &= ~((col[{name!r}] < {_py(lo)}) | "
-                         f"(col[{name!r}] > {_py(hi)}))")
-    return lines
-
-
-def _py(v: float) -> str:
-    return repr(v) if math.isfinite(v) else f"float('{v!r}')"
-
-
 def dump(rvr: str | Path, bins: dict | None, tab: int = 0, w2: str | None = None,
          no_cuts: bool = False, allow_unset_lumi: bool = False) -> dict:
     """``bins`` is the external {name: cuts} dict, or None for --from-map."""
@@ -138,19 +100,11 @@ def dump(rvr: str | Path, bins: dict | None, tab: int = 0, w2: str | None = None
     columns = rvr6.columns(meta, buf)
     samples = [s["name"] for s in data["samples"]]
     rows = data["rows"]
-    ds = np.frombuffer(buf, np.int32, rows, data["sample_at"])
+    ds = np.frombuffer(buf, np.dtype("<i4"), rows, data["sample_at"])
 
-    if core.is_weighted(meta):
-        weighted = {s["name"]: s["weighted"] for s in data["samples"]}
-        unset = [n for n in samples
-                 if weighted[n] and rvr6.lumi_of(n, view) == 1.0 and not _named(n, view)]
-        _require(allow_unset_lumi or not unset,
-                 f"{len(unset)} weighted sample(s) resolve to no luminosity anywhere and fall "
-                 f"back to 1, e.g. {unset[:3]} — a silent default is the x1-in-a-x400-study "
-                 f"trap. Give their group an entry in view.lumis, or pass --allow-unset-lumi "
-                 f"to accept it.")
+    core.require_lumi(meta, allow_unset_lumi)
 
-    tab_entry = _tab_entry(meta, tab)
+    tab_entry = core.tab_entry(meta, tab)
     cuts = {} if no_cuts else (rvr6.effective(tab_entry, view, "cuts") or {})
     shown = core.shown_of(tab_entry, view, samples)
     keep = core.sel_mask(columns, data["cols"], cuts, shown, ds, samples)
@@ -194,15 +148,6 @@ def dump(rvr: str | Path, bins: dict | None, tab: int = 0, w2: str | None = None
     return out
 
 
-def _named(sample: str, view: dict) -> bool:
-    """Whether any tier actually names a luminosity for this sample, rather than defaulting."""
-    lumis, groups = view.get("lumis") or {}, view.get("groups") or {}
-    return any((lumis.get(tier) or {}).get(key) is not None
-               for tier, key in (("group", (groups.get("of") or {}).get(sample)),
-                                 ("sub", (groups.get("sub") or {}).get(sample)),
-                                 ("sample", sample)))
-
-
 def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("rvr")
     ap.add_argument("bins", nargs="?", default=None,
@@ -241,7 +186,7 @@ def run(a: argparse.Namespace) -> int:
     if a.out:
         meta, _ = rvr6.read(a.rvr)
         Path(a.out).with_suffix(".cuts.txt").write_text(
-            "\n".join(_cuts_lines(meta, a.tab, a.no_cuts)) + "\n")
+            "\n".join(core.cuts_lines(meta, a.tab, a.no_cuts)) + "\n")
     return 0
 
 

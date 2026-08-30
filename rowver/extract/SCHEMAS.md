@@ -33,6 +33,9 @@ edit-stable key should key on it.
 - sanitization: `[^A-Za-z0-9_]+` → `_`, runs collapsed, edges stripped
 - names cannot collide: every name embeds its entry's own stage path, and
   paths are unique by construction (one entry per position)
+- kind `cutflow` is TAB-level — the sankey is a dialog over the tab's
+  selection, not a placed stage entry — so its name is `t<tab>_cutflow`,
+  with no stage component (one cutflow per tab, by construction)
 
 Region bin names use the viewer's `regionBinName` verbatim: comparison
 operators transliterated (`<` → `_lt_`, `≥` → `_ge_`, `≤` → `_le_`), never
@@ -84,7 +87,20 @@ collide with a leaf whose OWN name already ends in `_N`, and the later bin
 then overwrites the earlier — fixing it means changing the viewer's export
 too, so it is deferred and journaled rather than diverged from.
 
-## Kind: `cutflow` — v1 (reserved; built in step 3)
+## Kind: `cutflow` — v1
+
+Step labels are the sankey dialog's own (`cutTextFor`): chip cuts as
+`name = a/b/c`, ranges as `name ≤ v` / `name ≥ v` / `lo ≤ name ≤ v` with the
+viewer's `num()` formatting (en-US grouping — labels can contain commas).
+NaN FAILS a ladder step (`lo <= x <= hi`), the opposite polarity of the
+selection mask — the page's own split, pinned in the fixture; the `.cuts.txt`
+is written in ladder polarity. There is no `--no-cuts`: a cutflow IS its cuts.
+
+One accumulation carve-out from the common `_seq_sum` rule, ported from the
+page: the per-source `by` follows `(acc.by[g] || 0) + ww` (select.ts:148), so
+a NaN RUNNING total (overflow cancellation) resets to 0 before the next add —
+a later weight un-poisons the per-source column, while `w`'s sticky `+=`
+stays NaN. Fixture-pinned.
 
 npz keys:
 

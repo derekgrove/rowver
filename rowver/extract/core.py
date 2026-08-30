@@ -30,11 +30,12 @@ from __future__ import annotations
 import math
 import re
 from copy import deepcopy
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 import numpy as np
 
+from . import ExtractError
 from .. import rvr6
 
 MAX_CELLS = 6
@@ -490,6 +491,20 @@ def sources(view: dict | None, samples: list[str]) -> list[str]:
     return group_names(view, samples) + [s for s in samples if not of.get(s)]
 
 
+def source_look(view: dict | None, samples: list[str], name: str) -> dict | None:
+    """Resolved style for one source — frame.ts sourceLook(): the same
+    group -> subgroup -> sample namespace order as source membership."""
+    look = (view or {}).get("look") or {}
+    _, sub, _ = grouping(view)
+    if name in group_names(view, samples):
+        space = look.get("group") or {}
+    elif name in sub.values():
+        space = look.get("sub") or {}
+    else:
+        space = look.get("sample") or {}
+    return space.get(name)
+
+
 def src_members(view: dict | None, samples: list[str], name: str) -> list[int]:
     """Datasets behind a group, subgroup, or sample name — colour.ts srcMembers()."""
     of, sub, _ = grouping(view)
@@ -838,3 +853,178 @@ def _or0(v: float) -> float:
     overflow-cancelled Σw must flatten identically in both implementations."""
     v = float(v)
     return 0.0 if v != v or v == 0 else v
+
+
+# ------------------------------------------------------- the cutflow ladder (select.ts) ----
+
+def fmt_num(x: float) -> str:
+    """format.ts num(): '–' for non-finite; toExponential(2) at |x| >= 1e5 or
+    0 < |x| < 1e-3; else 6 significant digits then en-US toLocaleString —
+    comma grouping, at most 3 fraction digits, trailing zeros dropped. Ties
+    round away from zero on the double's EXACT decimal expansion, both JS
+    rules (toPrecision "larger n", Intl halfExpand)."""
+    if not math.isfinite(x):
+        return "–"
+    if x == 0:
+        return "0"  # signed zero included: the page prints "0" for -0 too
+    d = Decimal(x)
+    if abs(x) >= 1e5 or abs(x) < 1e-3:
+        q = d.quantize(Decimal(1).scaleb(d.adjusted() - 2), rounding=ROUND_HALF_UP)
+        e = q.adjusted()
+        return f"{q.scaleb(-e):.2f}e{'+' if e >= 0 else '-'}{abs(e)}"
+    if d:
+        d = d.quantize(Decimal(1).scaleb(d.adjusted() - 5), rounding=ROUND_HALF_UP)
+    d = d.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+    return f"{d:,.3f}".rstrip("0").rstrip(".")
+
+
+def _by_sum(a: np.ndarray) -> float:
+    """select.ts:148 `acc.by[g] = (acc.by[g] || 0) + ww`: a NaN RUNNING total
+    (overflow cancellation) is falsy in JS and resets to 0 before the next
+    add — so a later weight UN-POISONS the per-source column, while the `w`
+    total's sticky `+=` stays NaN. Row order, like every reduction."""
+    c = np.cumsum(a)
+    if c.size == 0:
+        return 0.0
+    if not np.isnan(c).any():
+        return float(c[-1]) + 0.0  # (acc || 0) normalizes -0 to +0 in JS
+    acc = 0.0
+    for x in a:
+        acc = (0.0 if acc != acc else acc) + x
+    return acc
+
+
+def cut_text(col: dict, spec: Any) -> str:
+    """One ladder step's label — SankeyDialog.tsx cutTextFor(). Chip values
+    join the way a JS template spells them; range bounds through num()."""
+    if isinstance(spec, dict):
+        return f"{col['name']} = " + "/".join(_js_num(v) for v in spec.get("in") or [])
+    lo, hi = cut_range(col, spec)
+    if lo == -math.inf:
+        return f"{col['name']} ≤ {fmt_num(hi)}"
+    if hi == math.inf:
+        return f"{col['name']} ≥ {fmt_num(lo)}"
+    return f"{fmt_num(lo)} ≤ {col['name']} ≤ {fmt_num(hi)}"
+
+
+def cutflow(columns: dict, cols: list[dict], cuts: dict, shown: dict[str, bool],
+            ds: np.ndarray, samples: list[str], ww: np.ndarray,
+            view: dict | None) -> dict:
+    """One pass down the ladder — select.ts cutflow(). Each event advances
+    until a cut rejects it, counting itself at every step it reached, so
+    reordering changes the LADDER, never the final row.
+
+    NaN FAILS a ladder step: the step test is `lo <= x <= hi` (select.ts:136),
+    the OPPOSITE polarity of sel_mask's `x < lo || x > hi` — so on a
+    NaN-bearing cut column the last row is SMALLER than the mask's total.
+    The page has the same split; ported and fixture-pinned, not fixed.
+
+    A source is a group name, or an ungrouped dataset's own name (gOf);
+    `sources` is their first-appearance order over shown datasets.
+    """
+    active = active_cuts(cols, cuts, None)
+    by_name = {c["name"]: c for c in cols}
+    of, _, _ = grouping(view)
+    gof = [of.get(s) or s for s in samples]
+    shown_arr = np.asarray([shown.get(s, True) for s in samples], bool)
+    srcs = list(dict.fromkeys(g for g, on in zip(gof, shown_arr) if on))
+    src_idx = np.asarray([srcs.index(g) if g in srcs else -1 for g in gof])[ds]
+    reach = shown_arr[ds]
+    n_steps, n_srcs = len(active) + 1, len(srcs)
+    raw = np.zeros(n_steps)
+    w = np.zeros(n_steps)
+    by = np.zeros((n_steps, n_srcs))
+    for s in range(n_steps):
+        if s:
+            name = active[s - 1]
+            spec, v = cuts[name], columns[name]
+            if isinstance(spec, dict):
+                ok = np.isin(v, spec["in"])
+            else:
+                lo, hi = cut_range(by_name[name], spec)
+                with np.errstate(invalid="ignore"):
+                    ok = (v >= lo) & (v <= hi)
+            reach = reach & ok
+        raw[s] = int(reach.sum())
+        w[s] = _seq_sum(ww[reach])
+        for k in range(n_srcs):
+            by[s, k] = _by_sum(ww[reach & (src_idx == k)])
+    steps = ["no cuts"] + [cut_text(by_name[n], cuts[n]) for n in active]
+    return {"steps": steps, "raw": raw, "w": w, "by": by, "sources": srcs}
+
+
+# ------------------------------------------------------- shared extractor plumbing ----
+
+def tab_entry(meta: dict, tab: int) -> dict:
+    tabs = meta.get("tabs") or []
+    if not tabs:
+        if tab != 0:
+            raise ExtractError(f"this file has no tabs — --tab {tab} names nothing")
+        return {}
+    if not 0 <= tab < len(tabs):
+        raise ExtractError(
+            f"--tab {tab} is out of range — this file has {len(tabs)} tab(s)")
+    return tabs[tab]
+
+
+def require_lumi(meta: dict, allow: bool) -> None:
+    """Refuse a weighted sample silently falling back to lumi 1 — the
+    x1-tab-in-a-x400-study trap. `rvr6.lumi_of` is the one ladder."""
+    if allow or not is_weighted(meta):
+        return
+    view = meta.get("view") or {}
+    unset = [s["name"] for s in meta["data"]["samples"]
+             if s["weighted"] and rvr6.lumi_of(s["name"], view) == 1.0
+             and not _lumi_named(s["name"], view)]
+    if unset:
+        raise ExtractError(
+            f"{len(unset)} weighted sample(s) resolve to no luminosity anywhere and fall "
+            f"back to 1, e.g. {unset[:3]} — a silent default is the x1-in-a-x400-study "
+            f"trap. Give their group an entry in view.lumis, or pass --allow-unset-lumi "
+            f"to accept it.")
+
+
+def _lumi_named(sample: str, view: dict) -> bool:
+    """Whether any tier actually names a luminosity for this sample, rather than defaulting."""
+    lumis, groups = view.get("lumis") or {}, view.get("groups") or {}
+    return any((lumis.get(tier) or {}).get(key) is not None
+               for tier, key in (("group", (groups.get("of") or {}).get(sample)),
+                                 ("sub", (groups.get("sub") or {}).get(sample)),
+                                 ("sample", sample)))
+
+
+def cuts_lines(meta: dict, tab: int, no_cuts: bool = False,
+               ladder: bool = False) -> list[str]:
+    """The applied cuts as python, one line each — SCHEMAS.md .cuts.txt.
+
+    ``ladder=True`` spells the cutflow's step test (NaN FAILS a range step);
+    the default spells the selection mask (NaN passes) — the page's own split.
+    """
+    view = meta.get("view") or {}
+    cols = meta["data"]["cols"]
+    cuts = rvr6.effective(tab_entry(meta, tab), view, "cuts") or {}
+    active = [] if no_cuts else active_cuts(cols, cuts, None)
+    if not active:
+        return ["# no cuts"]
+    by_name = {c["name"]: c for c in cols}
+    # valid python: columns addressed as col[<name>], non-finite bounds spelled
+    # float('inf') — the file must exec against {np, col, keep}
+    lines = ["# ladder semantics: NaN fails a range step, fails a chip cut" if ladder
+             else "# viewer semantics: NaN passes a range cut, fails a chip cut"]
+    for name in active:
+        spec = cuts[name]
+        if isinstance(spec, dict):
+            lines.append(f"keep &= np.isin(col[{name!r}], {spec['in']!r})")
+        elif ladder:
+            lo, hi = cut_range(by_name[name], spec)
+            lines.append(f"keep &= (col[{name!r}] >= {_py(lo)}) & "
+                         f"(col[{name!r}] <= {_py(hi)})")
+        else:
+            lo, hi = cut_range(by_name[name], spec)
+            lines.append(f"keep &= ~((col[{name!r}] < {_py(lo)}) | "
+                         f"(col[{name!r}] > {_py(hi)}))")
+    return lines
+
+
+def _py(v: float) -> str:
+    return repr(v) if math.isfinite(v) else f"float('{v!r}')"

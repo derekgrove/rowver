@@ -1,5 +1,5 @@
 {
- "_note": "Shared math+resolver fixture, asserted by rowver tests/test_core.py and rowver_web bin/stats/resolver tests. Raw counts exact; weighted sums 1e-8 rtol; never bit parity. null in a value array means NaN; scalar 'nan'/'inf'/'-inf' strings mean those doubles.",
+ "_note": "Shared math+resolver fixture, asserted by rowver tests/test_core.py and rowver_web bin/stats/resolver/cutflow tests. Raw counts exact; weighted sums 1e-8 rtol; never bit parity. null in a value array means NaN; scalar 'nan'/'inf'/'-inf' strings mean those doubles. 'inf'/'-inf' strings in a weight array mean those doubles (a finite weight times a luminosity can overflow).",
  "version": 1,
  "edges": [
   {
@@ -4497,5 +4497,835 @@
     }
    }
   }
- }
+ },
+ "cutflow": [
+  {
+   "id": "ladder-order-and-by-source",
+   "note": "column-order ladder (no session cutorder on the wire); range then chip; sources are gOf in first-appearance order",
+   "samples": [
+    "sig",
+    "tt",
+    "wj",
+    "obs"
+   ],
+   "groups": {
+    "tt": "bkg",
+    "wj": "bkg"
+   },
+   "shown_on": null,
+   "weighted": true,
+   "cols": [
+    {
+     "name": "MET",
+     "lim": [
+      0,
+      1000
+     ]
+    },
+    {
+     "name": "nJet",
+     "lim": [
+      0,
+      10
+     ],
+     "vals": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ]
+    }
+   ],
+   "values": {
+    "MET": [
+     150.0,
+     50.0,
+     250.0,
+     120.0,
+     220.0,
+     130.0,
+     230.0,
+     110.0,
+     210.0,
+     90.0
+    ],
+    "nJet": [
+     2,
+     2,
+     3,
+     1,
+     2,
+     2,
+     0,
+     2,
+     3,
+     1
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0,
+    1,
+    1,
+    2,
+    2,
+    3,
+    3,
+    3
+   ],
+   "ww": [
+    0.5,
+    1.0,
+    2.0,
+    1.0,
+    1.0,
+    10.0,
+    10.0,
+    1.0,
+    1.0,
+    1.0
+   ],
+   "cuts": {
+    "MET": [
+     100,
+     null
+    ],
+    "nJet": {
+     "in": [
+      2,
+      3
+     ]
+    }
+   },
+   "expect": {
+    "steps": [
+     "no cuts",
+     "MET ≥ 100",
+     "nJet = 2/3"
+    ],
+    "raw": [
+     10,
+     8,
+     6
+    ],
+    "w": [
+     28.5,
+     26.5,
+     15.5
+    ],
+    "sources": [
+     "sig",
+     "bkg",
+     "obs"
+    ],
+    "by": [
+     [
+      3.5,
+      22.0,
+      3.0
+     ],
+     [
+      2.5,
+      22.0,
+      2.0
+     ],
+     [
+      2.5,
+      11.0,
+      2.0
+     ]
+    ]
+   },
+   "expect_mask_kept": 6
+  },
+  {
+   "id": "nan-fails-ladder-passes-mask",
+   "note": "the page's own split: the ladder step tests lo <= x <= hi so NaN FAILS, while mask() rejects on x < lo || x > hi so NaN PASSES",
+   "samples": [
+    "sig"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "cols": [
+    {
+     "name": "MET",
+     "lim": [
+      0,
+      1000
+     ]
+    }
+   ],
+   "values": {
+    "MET": [
+     null,
+     150.0,
+     50.0
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0
+   ],
+   "ww": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "cuts": {
+    "MET": [
+     100,
+     null
+    ]
+   },
+   "expect": {
+    "steps": [
+     "no cuts",
+     "MET ≥ 100"
+    ],
+    "raw": [
+     3,
+     1
+    ],
+    "w": [
+     3,
+     1
+    ],
+    "sources": [
+     "sig"
+    ],
+    "by": [
+     [
+      3.0
+     ],
+     [
+      1.0
+     ]
+    ]
+   },
+   "expect_mask_kept": 2
+  },
+  {
+   "id": "hidden-dataset-drops-everywhere",
+   "note": "a hidden sample is neither counted nor a source; its groupmate keeps the group alive",
+   "samples": [
+    "sig",
+    "tt",
+    "wj",
+    "obs"
+   ],
+   "groups": {
+    "tt": "bkg",
+    "wj": "bkg"
+   },
+   "shown_on": [
+    "sig",
+    "tt",
+    "obs"
+   ],
+   "weighted": true,
+   "cols": [
+    {
+     "name": "MET",
+     "lim": [
+      0,
+      1000
+     ]
+    },
+    {
+     "name": "nJet",
+     "lim": [
+      0,
+      10
+     ],
+     "vals": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ]
+    }
+   ],
+   "values": {
+    "MET": [
+     150.0,
+     50.0,
+     250.0,
+     120.0,
+     220.0,
+     130.0,
+     230.0,
+     110.0,
+     210.0,
+     90.0
+    ],
+    "nJet": [
+     2,
+     2,
+     3,
+     1,
+     2,
+     2,
+     0,
+     2,
+     3,
+     1
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0,
+    1,
+    1,
+    2,
+    2,
+    3,
+    3,
+    3
+   ],
+   "ww": [
+    0.5,
+    1.0,
+    2.0,
+    1.0,
+    1.0,
+    10.0,
+    10.0,
+    1.0,
+    1.0,
+    1.0
+   ],
+   "cuts": {
+    "MET": [
+     100,
+     null
+    ]
+   },
+   "expect": {
+    "steps": [
+     "no cuts",
+     "MET ≥ 100"
+    ],
+    "raw": [
+     8,
+     6
+    ],
+    "w": [
+     8.5,
+     6.5
+    ],
+    "sources": [
+     "sig",
+     "bkg",
+     "obs"
+    ],
+    "by": [
+     [
+      3.5,
+      2.0,
+      3.0
+     ],
+     [
+      2.5,
+      2.0,
+      2.0
+     ]
+    ]
+   },
+   "expect_mask_kept": 6
+  },
+  {
+   "id": "empty-ladder-is-totals",
+   "note": "an unnarrowed cut is no cut; one 'no cuts' row equals the totals; ungrouped samples flow under their own names, first-appearance order",
+   "samples": [
+    "u1",
+    "g1s",
+    "u2"
+   ],
+   "groups": {
+    "g1s": "G"
+   },
+   "shown_on": null,
+   "weighted": false,
+   "cols": [
+    {
+     "name": "MET",
+     "lim": [
+      0,
+      100
+     ]
+    }
+   ],
+   "values": {
+    "MET": [
+     10.0,
+     20.0,
+     30.0
+    ]
+   },
+   "ds": [
+    0,
+    1,
+    2
+   ],
+   "ww": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "cuts": {
+    "MET": [
+     null,
+     null
+    ]
+   },
+   "expect": {
+    "steps": [
+     "no cuts"
+    ],
+    "raw": [
+     3
+    ],
+    "w": [
+     3
+    ],
+    "sources": [
+     "u1",
+     "G",
+     "u2"
+    ],
+    "by": [
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ]
+   },
+   "expect_mask_kept": 3
+  },
+  {
+   "id": "negative-weight-cancellation-row-order",
+   "note": "w accumulates left-to-right in row order (the page's +=): 1e16 absorbs the 8 until the -1e16 cancels; the surviving pair is exact",
+   "samples": [
+    "mc"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": true,
+   "cols": [
+    {
+     "name": "MET",
+     "lim": [
+      0,
+      100
+     ]
+    }
+   ],
+   "values": {
+    "MET": [
+     10.0,
+     20.0,
+     30.0,
+     40.0
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "ww": [
+    1e+16,
+    8.0,
+    -1e+16,
+    2.5
+   ],
+   "cuts": {
+    "MET": [
+     null,
+     25
+    ]
+   },
+   "expect": {
+    "steps": [
+     "no cuts",
+     "MET ≤ 25"
+    ],
+    "raw": [
+     4,
+     2
+    ],
+    "w": [
+     10.5,
+     1.0000000000000008e+16
+    ],
+    "sources": [
+     "mc"
+    ],
+    "by": [
+     [
+      10.5
+     ],
+     [
+      1.0000000000000008e+16
+     ]
+    ]
+   },
+   "expect_mask_kept": 2
+  },
+  {
+   "id": "step-labels-num-formatting",
+   "note": "labels are the sankey's cutTextFor: num() grouping/exponential/6-sig rules for range bounds, JS string join for chips",
+   "samples": [
+    "mc"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": false,
+   "cols": [
+    {
+     "name": "a",
+     "lim": [
+      0,
+      1000000
+     ]
+    },
+    {
+     "name": "b",
+     "lim": [
+      0,
+      1000000
+     ]
+    },
+    {
+     "name": "c",
+     "lim": [
+      -1,
+      1
+     ]
+    },
+    {
+     "name": "d",
+     "lim": [
+      -1,
+      1
+     ]
+    },
+    {
+     "name": "e",
+     "lim": [
+      0,
+      10
+     ]
+    },
+    {
+     "name": "f",
+     "lim": [
+      0,
+      3
+     ],
+     "vals": [
+      1,
+      2.5,
+      3
+     ]
+    },
+    {
+     "name": "g",
+     "lim": [
+      -1,
+      1
+     ]
+    }
+   ],
+   "values": {
+    "a": [
+     2000.0
+    ],
+    "b": [
+     100.0
+    ],
+    "c": [
+     0.5
+    ],
+    "d": [
+     0.1
+    ],
+    "e": [
+     5.0
+    ],
+    "f": [
+     1.0
+    ],
+    "g": [
+     -0.5
+    ]
+   },
+   "ds": [
+    0
+   ],
+   "ww": [
+    1.0
+   ],
+   "cuts": {
+    "a": [
+     1234.5,
+     null
+    ],
+    "b": [
+     null,
+     123456
+    ],
+    "c": [
+     0.0005,
+     null
+    ],
+    "d": [
+     null,
+     0.123456789
+    ],
+    "e": [
+     2.5,
+     7
+    ],
+    "f": {
+     "in": [
+      1,
+      2.5
+     ]
+    },
+    "g": [
+     null,
+     -0.0
+    ]
+   },
+   "expect": {
+    "steps": [
+     "no cuts",
+     "a ≥ 1,234.5",
+     "b ≤ 1.23e+5",
+     "c ≥ 5.00e-4",
+     "d ≤ 0.123",
+     "2.5 ≤ e ≤ 7",
+     "f = 1/2.5",
+     "g ≤ 0"
+    ],
+    "raw": [
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1
+    ],
+    "w": [
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1
+    ],
+    "sources": [
+     "mc"
+    ],
+    "by": [
+     [
+      1.0
+     ],
+     [
+      1.0
+     ],
+     [
+      1.0
+     ],
+     [
+      1.0
+     ],
+     [
+      1.0
+     ],
+     [
+      1.0
+     ],
+     [
+      1.0
+     ],
+     [
+      1.0
+     ]
+    ]
+   },
+   "expect_mask_kept": 1
+  },
+  {
+   "id": "overflow-unpoisons-by-source",
+   "note": "select.ts:148 `(acc.by[g] || 0) + ww`: a NaN running by-total (inf + -inf) is falsy and resets to 0 before the next add, so a later weight un-poisons the column; the w total's sticky += stays NaN",
+   "samples": [
+    "mc"
+   ],
+   "groups": {},
+   "shown_on": null,
+   "weighted": true,
+   "cols": [
+    {
+     "name": "MET",
+     "lim": [
+      0,
+      100
+     ]
+    }
+   ],
+   "values": {
+    "MET": [
+     10.0,
+     20.0,
+     30.0
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0
+   ],
+   "ww": [
+    "inf",
+    "-inf",
+    5.0
+   ],
+   "cuts": {
+    "MET": [
+     null,
+     25
+    ]
+   },
+   "expect": {
+    "steps": [
+     "no cuts",
+     "MET ≤ 25"
+    ],
+    "raw": [
+     3,
+     2
+    ],
+    "w": [
+     "nan",
+     "nan"
+    ],
+    "sources": [
+     "mc"
+    ],
+    "by": [
+     [
+      5.0
+     ],
+     [
+      "nan"
+     ]
+    ]
+   },
+   "expect_mask_kept": 2
+  },
+  {
+   "id": "lumi-composition-mixed-file",
+   "note": "ww is w × lumi composed by BOTH sides: group tier wins for mc1, sample tier reaches ungrouped mc2, and the unweighted dataset's rows count 1 — its sample-tier lumi entry must be ignored",
+   "samples": [
+    "mc1",
+    "mc2",
+    "data"
+   ],
+   "groups": {
+    "mc1": "MC"
+   },
+   "shown_on": null,
+   "weighted": true,
+   "lumis": {
+    "group": {
+     "MC": 2.0
+    },
+    "sample": {
+     "mc2": 3.0,
+     "data": 5.0
+    }
+   },
+   "unweighted_samples": [
+    "data"
+   ],
+   "cols": [
+    {
+     "name": "MET",
+     "lim": [
+      0,
+      100
+     ]
+    }
+   ],
+   "values": {
+    "MET": [
+     10.0,
+     20.0,
+     30.0
+    ]
+   },
+   "ds": [
+    0,
+    1,
+    2
+   ],
+   "w": [
+    1.5,
+    2.0,
+    1.0
+   ],
+   "cuts": {
+    "MET": [
+     null,
+     25
+    ]
+   },
+   "expect": {
+    "steps": [
+     "no cuts",
+     "MET ≤ 25"
+    ],
+    "raw": [
+     3,
+     2
+    ],
+    "w": [
+     10,
+     9
+    ],
+    "sources": [
+     "MC",
+     "mc2",
+     "data"
+    ],
+    "by": [
+     [
+      3.0,
+      6.0,
+      1.0
+     ],
+     [
+      3.0,
+      6.0,
+      0.0
+     ]
+    ]
+   },
+   "expect_mask_kept": 2
+  }
+ ]
 }
