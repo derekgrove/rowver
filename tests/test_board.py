@@ -184,6 +184,12 @@ class BoardTests(unittest.TestCase):
         meta["view"]["syst"] = "0.10"
         rvr6.write(rvr, meta, buf)
         self.assertEqual(board.dump(rvr)["syst"], 0.10)
+        # a python int beyond double range is Infinity in JS — not finite,
+        # so the format's 5%, never an OverflowError. (The wire validator
+        # already refuses ints past 2**53, so this is pinned on the helper:
+        # its JS-double claim must hold for every caller.)
+        self.assertEqual(core.view_syst({"syst": 10 ** 400}), 0.05)
+        self.assertEqual(core.view_syst({"syst": -(10 ** 400)}), 0.05)
 
     def test_cli_writes_the_schema(self):
         rvr = _cart(self.tmp)

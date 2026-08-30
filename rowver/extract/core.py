@@ -943,6 +943,7 @@ def _js_str(v: Any) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, (int, float)):
+        v = _js_number(v)  # JS holds a DOUBLE: a huge JSON int is Infinity
         return _js_num(v) if math.isfinite(v) else \
             ("NaN" if v != v else ("Infinity" if v > 0 else "-Infinity"))
     if isinstance(v, str):
@@ -991,7 +992,10 @@ def _js_number(v: Any) -> float:
     if isinstance(v, bool):
         return float(v)
     if isinstance(v, (int, float)):
-        return float(v)
+        try:
+            return float(v)
+        except OverflowError:  # a JSON integer beyond double range IS
+            return math.inf if v > 0 else -math.inf  # Infinity in JS
     if isinstance(v, str):
         s = v.strip(_JS_WS)
         if not s:
