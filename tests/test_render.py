@@ -14,9 +14,10 @@ from pathlib import Path
 
 import numpy as np
 
-from rowver.extract import ExtractError, plot1d, render
+from rowver.extract import ExtractError, plot1d, plot2d, render
 
 from test_plot1d import _cart
+from test_plot2d import _cart as _cart2d
 
 HAVE_MPL = importlib.util.find_spec("matplotlib") is not None
 HAVE_MPLHEP = importlib.util.find_spec("mplhep") is not None
@@ -200,6 +201,11 @@ class RenderTests(unittest.TestCase):
             self._fig(edit=lambda m: m["colours"].__setitem__("sig", None))
         with self.assertRaises(ExtractError):
             self._fig(edit=lambda m: m["colours"].__setitem__("sig", "red"))
+        # version is an exact int: True == 1 and 2.0 == 2 must not pass
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m.__setitem__("version", True))
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m.__setitem__("version", 2.0))
 
     def test_schema_invalid_npz_dtypes_refused(self):
         src = self.out / "t0_s0_1d_MET.data.npz"
@@ -294,6 +300,209 @@ class RenderTests(unittest.TestCase):
         (self.out / "v3.meta.json").write_text(json.dumps(v3))
         with self.assertRaises(ExtractError):
             render.render(self.out / "v3.meta.json")
+
+
+@unittest.skipUnless(HAVE_MPL, "matplotlib not installed (rowver[render])")
+class Render2DTests(unittest.TestCase):
+    """plot2d/plot3d records: heatmap/surface of the aggregate grid."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        rvr = _cart2d(self.tmp)
+        self.out = self.tmp / "extracts"
+        plot2d.main([str(rvr), "-o", str(self.out)])
+        plot2d.main3d([str(rvr), "-o", str(self.out)])
+        rvr.unlink()  # from here on, the RECORD alone must suffice
+        self.meta2d = self.out / "t0_s0_2d_MET_HT.meta.json"
+        self.meta3d = self.out / "t0_s2_3d_MET_HT.meta.json"
+
+    def tearDown(self):
+        import matplotlib.pyplot as plt
+        plt.close("all")
+        self._tmp.cleanup()
+
+    def _fig(self, src=None, edit=None, edit_npz=None):
+        meta_path = src or self.meta2d
+        if edit or edit_npz:
+            name = meta_path.name.removesuffix(".meta.json")
+            meta = json.loads(meta_path.read_text())
+            if edit:
+                edit(meta)
+            with np.load(meta_path.with_name(f"{name}.data.npz")) as z:
+                arrays = dict(z)
+            if edit_npz:
+                edit_npz(arrays)
+            meta_path = self.out / "edited.meta.json"
+            meta_path.write_text(json.dumps(meta))
+            np.savez(self.out / "edited.data.npz", **arrays)
+        fig, _ = render._draw(meta_path, 150, (10, 5), "plain")
+        return fig
+
+    def test_heatmap_draws_the_aggregate_grid(self):
+        from matplotlib.collections import QuadMesh
+        ax = self._fig().axes[0]
+        meshes = [c for c in ax.collections if isinstance(c, QuadMesh)]
+        self.assertEqual(len(meshes), 1)
+        with np.load(self.out / "t0_s0_2d_MET_HT.data.npz") as z:
+            want = z["h"]
+        np.testing.assert_array_equal(
+            np.asarray(meshes[0].get_array()).reshape(want.shape), want)
+        # the record's window is the drawn frame — no separate zoom step
+        self.assertEqual(ax.get_xlim(), (100.0, 300.0))
+        self.assertEqual(ax.get_ylim(), (0.0, 40.0))
+        self.assertEqual(ax.get_xlabel(), "MET")
+        self.assertEqual(ax.get_ylabel(), "HT")
+
+    def test_logz_blanks_nonpositive_on_a_log_colour_scale(self):
+        from matplotlib.colors import LogNorm
+        ax = self._fig(edit=lambda m: m["spec"].__setitem__("logz", True)) \
+            .axes[0]
+        mesh = ax.collections[0]
+        self.assertIsInstance(mesh.norm, LogNorm)
+        with np.load(self.out / "t0_s0_2d_MET_HT.data.npz") as z:
+            nonpos = int(np.sum(z["h"] <= 0))
+        z = mesh.get_array()
+        self.assertEqual(int(np.ma.count_masked(z)), nonpos)
+
+    def test_log_axis_engages_only_on_positive_lo(self):
+        # x window is [100, 300]: logx engages; y is [0, 40]: logy must not
+        ax = self._fig(edit=lambda m: m["spec"].update(
+            logx=True, logy=True)).axes[0]
+        self.assertEqual(ax.get_xscale(), "log")
+        self.assertEqual(ax.get_yscale(), "linear")
+
+    def test_logz_all_nonpositive_draws_nothing_coloured(self):
+        # a valid empty selection: every cell masked, no LogNorm autoscale
+        # crash, no cell coloured at all (plotly's all-null heatmap)
+        fig = self._fig(edit=lambda m: m["spec"].__setitem__("logz", True),
+                        edit_npz=lambda a: a.__setitem__(
+                            "h", np.zeros_like(a["h"])))
+        z = fig.axes[0].collections[0].get_array()
+        self.assertEqual(int(np.ma.count_masked(z)), z.size)
+        # and NO colorbar: matplotlib's default 0-1 scale would invent
+        # values the record does not contain
+        self.assertEqual(len(fig.axes), 1)
+        # same rule on the 3d surface: all-NaN z, no colorbar
+        fig = self._fig(src=self.meta3d,
+                        edit=lambda m: m["spec"].__setitem__("logz", True),
+                        edit_npz=lambda a: a.__setitem__(
+                            "h", np.zeros_like(a["h"])))
+        self.assertEqual(len(fig.axes), 1)
+
+    def test_surface_of_the_same_grid(self):
+        fig = self._fig(src=self.meta3d)
+        ax = fig.axes[0]
+        self.assertEqual(ax.name, "3d")
+        self.assertEqual(ax.get_zlabel(), "yield")
+        # the scene ALWAYS labels y with the column name (plotly's
+        # grid.yname), never ytitle; xtitle IS honored
+        ax = self._fig(src=self.meta3d, edit=lambda m: m["spec"].update(
+            xtitle="missing E_T", ytitle="fancy")).axes[0]
+        self.assertEqual(ax.get_xlabel(), "missing E_T")
+        self.assertEqual(ax.get_ylabel(), "HT")
+        # logz is plotly's mapping: log10 of the positives, labeled so
+        ax = self._fig(src=self.meta3d,
+                       edit=lambda m: m["spec"].__setitem__("logz", True)) \
+            .axes[0]
+        self.assertEqual(ax.get_zlabel(), "log₁₀ yield")
+
+    def test_surface_log_axes_key_on_spec_not_bin_spacing(self):
+        # plotly's scene axis type is spec.logx/logy — bin SPACING
+        # (log_active) neither engages nor blocks it. x window [100, 300]
+        # has linear bins; logx:true must still transform the coordinates
+        ax = self._fig(src=self.meta3d,
+                       edit=lambda m: m["spec"].__setitem__("logx", True)) \
+            .axes[0]
+        self.assertEqual(ax.get_xlabel(), "log₁₀ MET")
+        with np.load(self.out / "t0_s2_3d_MET_HT.data.npz") as z:
+            cx = z["centres_x"]
+        self.assertAlmostEqual(ax.get_xlim()[1], np.log10(cx).max(), places=1)
+        # logy over the [0, 40] window: lo <= 0 cannot transform — linear
+        ax = self._fig(src=self.meta3d,
+                       edit=lambda m: m["spec"].__setitem__("logy", True)) \
+            .axes[0]
+        self.assertEqual(ax.get_ylabel(), "HT")
+
+    def test_surface_never_downsamples_the_grid(self):
+        # plot_surface's 50-sample default would silently drop cells on a
+        # big grid: every recorded cell must reach the drawn mesh
+        from unittest import mock
+        from mpl_toolkits.mplot3d import Axes3D
+        real = Axes3D.plot_surface
+        seen = {}
+        def spy(self, X, Y, Z, **kw):
+            seen.update(kw, shape=Z.shape)
+            return real(self, X, Y, Z, **kw)
+        with mock.patch.object(Axes3D, "plot_surface", spy):
+            self._fig(src=self.meta3d)
+        self.assertEqual((seen["rcount"], seen["ccount"]), seen["shape"])
+
+    def test_contradictory_records_refused(self):
+        with self.assertRaises(ExtractError):  # future schema version
+            self._fig(edit=lambda m: m.__setitem__("version", 2))
+        with self.assertRaises(ExtractError):  # True == 1 must not pass
+            self._fig(edit=lambda m: m.__setitem__("version", True))
+        with self.assertRaises(ExtractError):  # 1.0 == 1 must not pass
+            self._fig(edit=lambda m: m.__setitem__("version", 1.0))
+        with self.assertRaises(ExtractError):  # "A" would pass list()
+            self._fig(edit=lambda m: m.__setitem__(
+                "sources", "".join(m["sources"])),
+                edit_npz=lambda a: a.__setitem__(
+                    "sources", np.array(["".join(str(s)
+                                        for s in a["sources"])])))
+        # non-monotonic edges, mirrored consistently in BOTH files, are
+        # geometry the extractor could never write
+        def swap(seq):
+            seq[1], seq[2] = seq[2], seq[1]
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: swap(m["edges"]["x"]),
+                      edit_npz=lambda a: swap(a["edges_x"]))
+        # a centre outside its OWN bin refuses even when globally monotonic
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m["centres"]["x"].__setitem__(0, 155.0),
+                      edit_npz=lambda a: a["centres_x"].__setitem__(0, 155.0))
+        # kept and window nb are exact-int mirrors: 6.0 / 4.0 must not pass
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m.__setitem__("kept", float(m["kept"])))
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m["window"]["x"].__setitem__("nb", 4.0))
+        with self.assertRaises(ExtractError):  # meta edges contradict npz
+            self._fig(edit=lambda m: m["edges"]["x"].__setitem__(0, -999.0))
+        with self.assertRaises(ExtractError):
+            self._fig(edit=lambda m: m["sources"].reverse())
+        with self.assertRaises(ExtractError):  # kept mirror disagrees
+            self._fig(edit=lambda m: m.__setitem__("kept", 999))
+        with self.assertRaises(ExtractError):  # window.lo controls log
+            self._fig(edit=lambda m: m["window"]["x"].__setitem__("lo", -1.0))
+        with self.assertRaises(ExtractError):  # schema dtype, exactly <f8
+            self._fig(edit_npz=lambda a: a.__setitem__(
+                "h", a["h"].astype("<f4")))
+        with self.assertRaises(ExtractError):  # grid shape vs centres
+            self._fig(edit_npz=lambda a: a.__setitem__("h", a["h"].T.copy()))
+
+    def test_duplicate_edges_are_valid_geometry(self):
+        # a subnormal window legitimately rounds edges to duplicates: the
+        # nondecreasing invariant must ACCEPT them (centre pinned to the
+        # zero-width bin)
+        def dup(m):
+            m["edges"]["x"][2] = 150.0
+            m["centres"]["x"][1] = 150.0
+        def dup_npz(a):
+            a["edges_x"][2] = 150.0
+            a["centres_x"][1] = 150.0
+        fig = self._fig(edit=dup, edit_npz=dup_npz)
+        self.assertTrue(fig.axes)
+
+    def test_directory_walk_renders_2d_and_3d_records(self):
+        from rowver import cli
+        rc = cli.main(["render", str(self.out), "--size", "4x3",
+                       "--dpi", "72", "--style", "plain"])
+        self.assertEqual(rc, 0)
+        pngs = sorted(p.name for p in self.out.glob("*.png"))
+        self.assertEqual(pngs, ["t0_s0_2d_MET_HT.png",
+                                "t0_s1_c0_2d_MET_HT.png",
+                                "t0_s2_3d_MET_HT.png"])
 
 
 if __name__ == "__main__":

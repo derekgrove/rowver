@@ -39,7 +39,19 @@ dependency), ``cms``/``atlas``/``lhcb``/``alice``, or ``plain`` (bare
 matplotlib). A genuine PyROOT engine is deliberately NOT here: ROOT
 cannot ride a pip extra, and the mplhep ROOT sheet covers the look.
 
-Pull panels are DEFERRED to a later render pass, with boards and 2D.
+``plot2d`` records draw as a heatmap of the aggregate grid over the TRUE
+bin edges (viridis, the plotly backend's scale); ``logz`` blanks
+non-positive cells and puts the colour on a log scale — both engines'
+rule (plotly nulls them, ROOT's logz skips them). ``plot3d`` renders the
+SAME grid as a surface over the bin centres with plotly's z mapping
+(``logz``: log10 of the positives, holes elsewhere); a ``logx``/``logy``
+scene axis (plotly's own key, gated on a positive low edge) plots as
+log10 of its centres, since matplotlib's 3D has no log scale.
+Manual x/y bounds need no zoom step: the record's edges already ARE the
+resolved window. Per-source ``x_*`` extras are not drawn — the viewer
+draws one surface for the whole selection.
+
+Pull panels are DEFERRED to a later render pass, with boards.
 Needs matplotlib + mplhep (``pip install rowver[render]``; ``plain``
 works with matplotlib alone).
 """
@@ -55,6 +67,7 @@ import numpy as np
 from . import ExtractError, core
 
 VERSION = 2  # renders plot1d v2 records (v2: colours required)
+VERSION_2D = 1  # renders plot2d/plot3d v1 records
 
 STYLES = ("root", "cms", "atlas", "lhcb", "alice", "plain")
 
@@ -190,10 +203,15 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
         meta = json.loads(meta_path.read_text())
     except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
         raise ExtractError(f"{meta_path.name}: not a record — {exc}") from exc
-    if meta.get("kind") != "plot1d":
-        raise ExtractError(f"{meta_path.name}: kind {meta.get('kind')!r} — "
-                           f"only plot1d renders for now")
-    if meta.get("version") != VERSION:
+    if isinstance(meta, dict) and meta.get("kind") in ("plot2d", "plot3d"):
+        return _draw_grid(meta, meta_path, dpi, size, style)
+    if not isinstance(meta, dict) or meta.get("kind") != "plot1d":
+        raise ExtractError(
+            f"{meta_path.name}: kind "
+            f"{meta.get('kind') if isinstance(meta, dict) else meta!r} — "
+            f"only plot1d/plot2d/plot3d render for now")
+    # exact int, the same rule as _draw_grid: True == 1 and 2.0 == 2
+    if type(meta.get("version")) is not int or meta.get("version") != VERSION:
         raise ExtractError(f"{meta_path.name}: plot1d v{meta.get('version')} "
                            f"— this renderer draws v{VERSION}")
     if not isinstance(meta, dict) or not isinstance(meta.get("spec"), dict) \
@@ -348,6 +366,168 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
                         + (", stacked" if stacked else ""),
                         xy=(0.99, 1.02), xycoords="axes fraction",
                         ha="right", fontsize=8, color="0.4")
+        except BaseException:  # never leak the figure on a
+            plt.close(fig)      # mid-draw failure
+            raise
+    return fig, name
+
+
+def _draw_grid(meta: dict, meta_path: Path, dpi: int,
+               size: tuple[float, float], style: str):
+    """One plot2d/plot3d record -> the drawn (fig, name): heatmap over the
+    true edges, or a surface over the centres (the viewer's 3D of the SAME
+    grid). _draw dispatches here after loading meta.json."""
+    import matplotlib.pyplot as plt
+
+    kind = meta["kind"]
+    # exact int: python's True == 1 and 1.0 == 1 would let a hand-edited
+    # "version": true or 1.0 pass as v1
+    if type(meta.get("version")) is not int \
+            or meta.get("version") != VERSION_2D:
+        raise ExtractError(f"{meta_path.name}: {kind} "
+                           f"v{meta.get('version')} — this renderer draws "
+                           f"v{VERSION_2D}")
+    if not isinstance(meta.get("spec"), dict) \
+            or not isinstance(meta.get("window"), dict) \
+            or not isinstance(meta["window"].get("x"), dict) \
+            or not isinstance(meta["window"].get("y"), dict):
+        raise ExtractError(f"{meta_path.name}: malformed record metadata")
+    name = meta_path.name.removesuffix(".meta.json")
+    try:
+        with np.load(meta_path.with_name(f"{name}.data.npz")) as z:
+            h = z["h"]
+            kept = z["kept"]
+            ex, ey = z["edges_x"], z["edges_y"]
+            cx, cy = z["centres_x"], z["centres_y"]
+            src_arr = z["sources"]
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile) as exc:
+        raise ExtractError(f"{name}: unreadable npz — {exc}") from exc
+    if src_arr.ndim != 1 or not src_arr.dtype.str.startswith("<U"):
+        raise ExtractError(f"{name}: sources must be a 1-D little-endian "
+                           f"unicode array")
+    sources = [str(s) for s in src_arr]
+    nbx, nby = cx.size, cy.size
+    if not (h.shape == (nby, nbx) and ex.shape == (nbx + 1,)
+            and ey.shape == (nby + 1,) and cx.ndim == cy.ndim == 1
+            and kept.shape == () and kept.dtype.str == "<i8"
+            # the schema says little-endian f8 exactly (same rule as plot1d)
+            and all(g.dtype.str == "<f8" for g in (h, ex, ey, cx, cy))):
+        raise ExtractError(f"{name}: npz shapes/dtypes disagree with the "
+                           f"schema")
+    wx, wy = meta["window"]["x"], meta["window"]["y"]
+    # geometry the extractor could never write is refused outright: edges
+    # nondecreasing (subnormal windows legitimately round to duplicates)
+    # and every centre inside its OWN bin, elementwise
+    for e, c in ((ex, cx), (ey, cy)):
+        if not (np.all(np.diff(e) >= 0) and np.all(e[:-1] <= c)
+                and np.all(c <= e[1:])):
+            raise ExtractError(f"{name}: edges/centres are not a monotonic "
+                               f"binning")
+    try:  # meta.json mirrors the npz — a contradiction is refused, per axis
+        # sources must be a LIST: "A" would pass list() against ["A"];
+        # kept and nb are exact ints, same rule as version (4.0 == 4)
+        coherent = (isinstance(meta.get("sources"), list)
+                    and list(meta["sources"]) == sources
+                    and type(meta.get("kept")) is int
+                    and meta["kept"] == int(kept)) and all(
+            np.array_equal(np.asarray((meta.get("edges") or {})[a],
+                                      dtype=float), e)
+            and np.array_equal(np.asarray((meta.get("centres") or {})[a],
+                                          dtype=float), c)
+            and type(w.get("nb")) is int and w["nb"] == c.size
+            # lo/hi control drawing (log engages on lo > 0): isclose, the
+            # log round trip is a ulp off (same rule as plot1d)
+            and np.isclose(float(w["lo"]), e[0], rtol=1e-9, atol=0.0)
+            and np.isclose(float(w["hi"]), e[-1], rtol=1e-9, atol=0.0)
+            for a, e, c, w in (("x", ex, cx, wx), ("y", ey, cy, wy)))
+    except (TypeError, ValueError, KeyError):
+        coherent = False
+    if not coherent:
+        raise ExtractError(f"{name}: npz and meta.json mirrors disagree")
+
+    spec = meta["spec"]
+    logz = core._js_truthy(spec.get("logz"))
+    xlabel = spec.get("xtitle") or spec.get("varx")
+    # in 2d the y axis is a COLUMN, not the yield — the yield is the colour;
+    # the 3D scene ALWAYS labels y with the column name (plotly.ts scene
+    # yaxis: grid.yname, never ytitle)
+    ylabel = spec.get("vary") if kind == "plot3d" \
+        else spec.get("ytitle") or spec.get("vary")
+    if kind == "plot3d" and (nbx < 2 or nby < 2):
+        raise ExtractError(f"{name}: a surface needs at least 2 bins per "
+                           f"axis (grid is {nby}x{nbx})")
+
+    with _style_context(style):
+        fig = plt.figure(figsize=size, dpi=dpi)
+        try:
+            if kind == "plot2d":
+                ax = fig.add_subplot()
+                z = h
+                norm = None
+                if logz:
+                    # both engines blank non-positive cells under logz
+                    z = np.ma.masked_less_equal(h, 0.0)
+                    if z.count():
+                        from matplotlib.colors import LogNorm
+                        norm = LogNorm()
+                    # else: every cell masked — nothing is coloured at all
+                    # (plotly's all-null heatmap), so no norm is needed and
+                    # LogNorm's autoscale would have no data to scale over
+                mesh = ax.pcolormesh(ex, ey, z, cmap="viridis", norm=norm)
+                if not (logz and norm is None):
+                    # an all-blank logz grid gets NO colorbar: with nothing
+                    # coloured, matplotlib's default 0-1 scale would invent
+                    # values the record does not contain
+                    fig.colorbar(mesh, ax=ax, label="yield")
+                # log axes engage only on a positive low edge, the record's
+                # own resolution (same rule as plot1d's logx)
+                if core._js_truthy(spec.get("logx")) and wx["lo"] > 0:
+                    ax.set_xscale("log")
+                if core._js_truthy(spec.get("logy")) and wy["lo"] > 0:
+                    ax.set_yscale("log")
+                ax.set_xlim(ex[0], ex[-1])
+                ax.set_ylim(ey[0], ey[-1])
+            else:  # plot3d: plotly's z mapping — log10 positives, holes else
+                ax = fig.add_subplot(projection="3d")
+                z = h
+                if logz:
+                    z = np.full_like(h, np.nan)
+                    pos = h > 0
+                    z[pos] = np.log10(h[pos])
+                px, py = cx, cy
+                # matplotlib's 3D has no log scale: a log axis plots as
+                # log10 of its centres, labeled as such. The scene keys on
+                # spec.logx/logy exactly as plotly's axis type does — NOT on
+                # log_active, which describes bin SPACING — gated on a
+                # positive low edge (log10 of a centre <= 0 cannot draw)
+                if core._js_truthy(spec.get("logx")) and wx["lo"] > 0:
+                    px, xlabel = np.log10(cx), f"log₁₀ {xlabel}"
+                if core._js_truthy(spec.get("logy")) and wy["lo"] > 0:
+                    py, ylabel = np.log10(cy), f"log₁₀ {ylabel}"
+                gx, gy = np.meshgrid(px, py)
+                # rcount/ccount: plot_surface DOWNSAMPLES to 50 rows/cols by
+                # default, silently discarding recorded cells on a big grid
+                surf = ax.plot_surface(gx, gy, z, cmap="viridis",
+                                       rcount=nby, ccount=nbx)
+                if not (logz and not np.any(h > 0)):
+                    # same rule as 2d: an all-NaN logz surface colours
+                    # nothing, so a colorbar would invent a scale
+                    fig.colorbar(surf, ax=ax, shrink=0.7)
+                ax.set_zlabel("log₁₀ yield" if logz else "yield")
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+            ax.set_title(f"{meta.get('cart', '')} — {name}", loc="left",
+                         fontsize=11)
+            note = (f"x {wx['from']} · y {wy['from']} (zoom {wx['zoom']})"
+                    + (", log x bins" if wx.get("log_active") else "")
+                    + (", log y bins" if wy.get("log_active") else "")
+                    + f", kept {int(kept):,}")
+            if kind == "plot2d":
+                ax.annotate(note, xy=(0.99, 1.02), xycoords="axes fraction",
+                            ha="right", fontsize=8, color="0.4")
+            else:  # a 3d axes has no 'axes fraction' annotate
+                fig.text(0.99, 0.01, note, ha="right", fontsize=8,
+                         color="0.4")
         except BaseException:  # never leak the figure on a
             plt.close(fig)      # mid-draw failure
             raise
