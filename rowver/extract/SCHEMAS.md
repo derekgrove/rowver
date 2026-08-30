@@ -177,10 +177,12 @@ Identical to plot2d: the viewer's 3D mode renders the SAME two-variable
 `h` (nby, nbx) f8, scalar `kept`, `x_*_<source>` extras. Only the
 `meta.json` `kind` differs.
 
-## Kind: `board` — v1 (reserved; built in step 5)
+## Kind: `board` — v1
 
-npz keys (reserved; exact shapes so two step-5 implementations cannot both
-"satisfy" this schema and disagree):
+Identity `t<tab>_s<stage>_board` — the board is a stage singleton. One
+pass over the kept rows (`boardNumbers`), the shelf summed FIRST in
+`bkgs` order (every square's B). npz keys (exact shapes so two
+implementations cannot both "satisfy" this schema and disagree):
 
 | key | shape | meaning |
 |---|---|---|
@@ -198,10 +200,19 @@ npz keys (reserved; exact shapes so two step-5 implementations cannot both
 
 The ZBi systematic actually used goes in `meta.json` only (a malformed value
 normalizes to 0.05 — recorded there, never counted as a fallback).
+`err_fallback_count` counts per READ, squares then shelf — a source on
+both a square and the shelf that falls back counts twice, the viewer's
+own tally. `meta.json` carries `err` (the mode actually used, wire
+default `poisson_neff`), `syst`, `mets` (the shown metric keys), plus
+the usual spec/look/active/cuts/lumi/weighted context.
 
 ## Kind: `regions` — v1
 
-The leaf partition, tree order:
+Identity `t<tab>_s<stage>_map` — the map is a stage singleton. What is
+counted is the map's saved `root` only (a grid with no root is one
+undivided region — the page's regionCount rule; deriving a tree from the
+grid stays `extract flattened --from-map`'s explicit-request face). The
+leaf partition, tree order:
 
 | key | shape | meaning |
 |---|---|---|
@@ -211,7 +222,12 @@ The leaf partition, tree order:
 | `w` | (L, K) f8 | Σw |
 | `w2` | (L, K) f8 | Σw² |
 | `total` | scalar f8 | the viewer's normalization total (bubble radii): Σw over kept rows feeding ≥1 source, each row counted ONCE globally — NOT the sum over source columns, which double-counts overlapping membership |
+| `neff` | (L, K) f8 | effective entries per cell, w²/Σw²; NaN when either moment is not positive (`region.ts` neff) |
+| `asimov_z` | scalar f8 | Asimov Z, no systematic: sqrt(max(q0, 0)), q0 = 2·Σ[(s+b)ln(1+s/b) − s]; NaN when significance is not ready (falsy `sig` or empty `bkg` — the page's own gate and placeholder) |
+| `asimov_dropped` | scalar i8 | bins with s > 0 and b ≤ 0 (or a non-finite term): DROPPED AND COUNTED, never silently skipped |
+| `asimov_thin` | scalar i8 | contributing bins whose pooled RAW background is under 5 |
 
-The flattened face of the same numbers is kind `flattened`. Asimov
-significance / thin-bin accounting / `neff` columns are step 5; reserved
-names: `asimov_z`, `asimov_dropped`, `asimov_thin`, `neff`.
+The flattened face of the same numbers is kind `flattened`. The Asimov
+`bins` count and the view's ZBi systematic (format fallback 5%) go in
+`meta.json` (`asimov.bins`, `syst`), with the usual
+spec/look/active/cuts/lumi/weighted context.

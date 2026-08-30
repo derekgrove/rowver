@@ -883,6 +883,41 @@ def region_flat(num: dict) -> dict:
     return out
 
 
+def region_sig(flat: dict, sig: str, bkg: list[str]) -> dict:
+    """Asimov significance, no systematic — region.ts regionSig().
+
+    q0 = 2*sum[(s+b)ln(1+s/b) - s], Z = sqrt(q0). s = 0 contributes
+    nothing and is kept; s > 0 with b <= 0 has no defined likelihood and
+    is DROPPED AND COUNTED, never silently skipped. ``thin`` counts
+    contributing bins whose pooled RAW background is under 5.
+    """
+    q0, bins, dropped, thin = 0.0, 0, 0, 0
+    for row in flat.values():
+        cell = row.get(sig)
+        s = cell["nominal"][1] if cell else 0.0
+        b = braw = 0.0
+        for k in bkg:  # sequential, the viewer's own += in bkg order
+            c = row.get(k)
+            b += c["nominal"][1] if c else 0.0
+            braw += c["nominal"][0] if c else 0.0
+        if s == 0:
+            bins += 1
+            continue
+        if not (s > 0) or not (b > 0):
+            dropped += 1
+            continue
+        t = 2 * ((s + b) * math.log(1 + s / b) - s)
+        if not math.isfinite(t):
+            dropped += 1
+            continue
+        q0 += t
+        bins += 1
+        if braw < 5:
+            thin += 1
+    return {"z": math.sqrt(max(q0, 0.0)), "bins": bins,
+            "dropped": dropped, "thin": thin}
+
+
 def _or0(v: float) -> float:
     """JS `x || 0`: NaN and NEGATIVE ZERO (both falsy there) become +0 — an
     overflow-cancelled Σw must flatten identically in both implementations."""
