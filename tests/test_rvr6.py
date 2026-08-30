@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-import rvr6
+from rowver import rvr6
 
 
 class Rvr6Tests(unittest.TestCase):

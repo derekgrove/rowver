@@ -1,0 +1,3995 @@
+{
+ "_note": "Shared math+resolver fixture, asserted by rowver tests/test_core.py and rowver_web bin/stats/resolver tests. Raw counts exact; weighted sums 1e-8 rtol; never bit parity. null in a value array means NaN; scalar 'nan'/'inf'/'-inf' strings mean those doubles.",
+ "version": 1,
+ "edges": [
+  {
+   "lo": 0,
+   "hi": 10,
+   "nb": 5,
+   "log": false,
+   "expect": {
+    "on": false,
+    "a": 0,
+    "b": 10,
+    "s": 0.5
+   },
+   "centres": [
+    1.0,
+    3.0,
+    5.0,
+    7.0,
+    9.0
+   ],
+   "edge_list": [
+    0.0,
+    2.0,
+    4.0,
+    6.0,
+    8.0,
+    10.0
+   ]
+  },
+  {
+   "lo": 1,
+   "hi": 1000,
+   "nb": 3,
+   "log": true,
+   "expect": {
+    "on": true,
+    "a": 0.0,
+    "b": 3.0,
+    "s": 1.0
+   },
+   "centres": [
+    3.1622776601683795,
+    31.622776601683793,
+    316.22776601683796
+   ],
+   "edge_list": [
+    1.0,
+    10.0,
+    100.0,
+    1000.0
+   ]
+  },
+  {
+   "lo": 0,
+   "hi": 100,
+   "nb": 4,
+   "log": true,
+   "expect": {
+    "on": false,
+    "a": 0,
+    "b": 100,
+    "s": 0.04
+   },
+   "centres": [
+    12.5,
+    37.5,
+    62.5,
+    87.5
+   ],
+   "edge_list": [
+    0.0,
+    25.0,
+    50.0,
+    75.0,
+    100.0
+   ]
+  },
+  {
+   "lo": 5,
+   "hi": 5,
+   "nb": 3,
+   "log": false,
+   "expect": {
+    "on": false,
+    "a": 5,
+    "b": 5,
+    "s": 3.0
+   },
+   "centres": [
+    5.0,
+    5.0,
+    5.0
+   ],
+   "edge_list": [
+    5.0,
+    5.0,
+    5.0,
+    5.0
+   ]
+  },
+  {
+   "lo": 0.5,
+   "hi": 64,
+   "nb": 7,
+   "log": true,
+   "expect": {
+    "on": true,
+    "a": -0.3010299956639812,
+    "b": 1.806179973983887,
+    "s": 3.3219280948873626
+   },
+   "centres": [
+    0.7071067811865476,
+    1.414213562373095,
+    2.8284271247461903,
+    5.656854249492379,
+    11.31370849898476,
+    22.627416997969522,
+    45.25483399593903
+   ],
+   "edge_list": [
+    0.5,
+    1.0,
+    2.0,
+    3.999999999999999,
+    7.999999999999999,
+    16.0,
+    31.99999999999999,
+    63.999999999999986
+   ]
+  },
+  {
+   "lo": 0,
+   "hi": 1,
+   "nb": 0,
+   "log": false,
+   "expect": {
+    "on": false,
+    "a": 0,
+    "b": 1,
+    "s": 0.0
+   },
+   "centres": [],
+   "edge_list": [
+    null
+   ]
+  }
+ ],
+ "binned": [
+  {
+   "id": "linear-tails-crammed",
+   "values": [
+    1.0,
+    2.5,
+    4.9,
+    5.0,
+    9.9,
+    12.0,
+    -1.0,
+    3.3
+   ],
+   "ww": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ],
+   "keep": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "lo": 0,
+   "hi": 10,
+   "nb": 5,
+   "log": false,
+   "oflow": true,
+   "expect": {
+    "h": [
+     2.0,
+     2.0,
+     2.0,
+     0.0,
+     2.0
+    ],
+    "h2": [
+     2.0,
+     2.0,
+     2.0,
+     0.0,
+     2.0
+    ],
+    "n": [
+     2.0,
+     2.0,
+     2.0,
+     0.0,
+     2.0
+    ],
+    "over": 1,
+    "under": 1,
+    "overW": 1.0,
+    "underW": 1.0,
+    "kept": 8
+   }
+  },
+  {
+   "id": "linear-tails-dropped",
+   "values": [
+    1.0,
+    2.5,
+    4.9,
+    5.0,
+    9.9,
+    12.0,
+    -1.0,
+    3.3
+   ],
+   "ww": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ],
+   "keep": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "lo": 0,
+   "hi": 10,
+   "nb": 5,
+   "log": false,
+   "oflow": false,
+   "expect": {
+    "h": [
+     1.0,
+     2.0,
+     2.0,
+     0.0,
+     1.0
+    ],
+    "h2": [
+     1.0,
+     2.0,
+     2.0,
+     0.0,
+     1.0
+    ],
+    "n": [
+     1.0,
+     2.0,
+     2.0,
+     0.0,
+     1.0
+    ],
+    "over": 1,
+    "under": 1,
+    "overW": 1.0,
+    "underW": 1.0,
+    "kept": 6
+   }
+  },
+  {
+   "id": "keep-mask",
+   "values": [
+    1.0,
+    2.5,
+    4.9,
+    5.0,
+    9.9,
+    12.0,
+    -1.0,
+    3.3
+   ],
+   "ww": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ],
+   "keep": [
+    1,
+    0,
+    1,
+    0,
+    1,
+    0,
+    1,
+    0
+   ],
+   "lo": 0,
+   "hi": 10,
+   "nb": 5,
+   "log": false,
+   "oflow": true,
+   "expect": {
+    "h": [
+     2.0,
+     0.0,
+     1.0,
+     0.0,
+     1.0
+    ],
+    "h2": [
+     2.0,
+     0.0,
+     1.0,
+     0.0,
+     1.0
+    ],
+    "n": [
+     2.0,
+     0.0,
+     1.0,
+     0.0,
+     1.0
+    ],
+    "over": 0,
+    "under": 1,
+    "overW": 0.0,
+    "underW": 1.0,
+    "kept": 4
+   }
+  },
+  {
+   "id": "log-with-nonpositive",
+   "values": [
+    0.0,
+    -3.0,
+    1.0,
+    9.9,
+    10.0,
+    500.0,
+    1500.0
+   ],
+   "ww": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ],
+   "keep": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "lo": 1,
+   "hi": 1000,
+   "nb": 3,
+   "log": true,
+   "oflow": true,
+   "expect": {
+    "h": [
+     4.0,
+     1.0,
+     2.0
+    ],
+    "h2": [
+     4.0,
+     1.0,
+     2.0
+    ],
+    "n": [
+     4.0,
+     1.0,
+     2.0
+    ],
+    "over": 1,
+    "under": 2,
+    "overW": 1.0,
+    "underW": 2.0,
+    "kept": 7
+   }
+  },
+  {
+   "id": "weighted-negative-cancellation",
+   "values": [
+    2.0,
+    2.0,
+    7.0,
+    7.0
+   ],
+   "ww": [
+    1.5,
+    -1.5,
+    2.0,
+    0.25
+   ],
+   "keep": [
+    1,
+    1,
+    1,
+    1
+   ],
+   "lo": 0,
+   "hi": 10,
+   "nb": 2,
+   "log": false,
+   "oflow": true,
+   "expect": {
+    "h": [
+     0.0,
+     2.25
+    ],
+    "h2": [
+     4.5,
+     4.0625
+    ],
+    "n": [
+     2.0,
+     2.0
+    ],
+    "over": 0,
+    "under": 0,
+    "overW": 0.0,
+    "underW": 0.0,
+    "kept": 4
+   }
+  },
+  {
+   "id": "nan-kept-unbinned-linear",
+   "values": [
+    null,
+    3.0,
+    7.0
+   ],
+   "ww": [
+    1.0,
+    2.0,
+    4.0
+   ],
+   "keep": [
+    1,
+    1,
+    1
+   ],
+   "lo": 0,
+   "hi": 10,
+   "nb": 2,
+   "log": false,
+   "oflow": true,
+   "expect": {
+    "h": [
+     2.0,
+     4.0
+    ],
+    "h2": [
+     4.0,
+     16.0
+    ],
+    "n": [
+     1.0,
+     1.0
+    ],
+    "over": 0,
+    "under": 0,
+    "overW": 0.0,
+    "underW": 0.0,
+    "kept": 3
+   }
+  },
+  {
+   "id": "nan-log-lands-low",
+   "values": [
+    null,
+    10.0
+   ],
+   "ww": [
+    3.0,
+    1.0
+   ],
+   "keep": [
+    1,
+    1
+   ],
+   "lo": 1,
+   "hi": 100,
+   "nb": 2,
+   "log": true,
+   "oflow": true,
+   "expect": {
+    "h": [
+     3.0,
+     1.0
+    ],
+    "h2": [
+     9.0,
+     1.0
+    ],
+    "n": [
+     1.0,
+     1.0
+    ],
+    "over": 0,
+    "under": 0,
+    "overW": 0.0,
+    "underW": 0.0,
+    "kept": 2
+   }
+  },
+  {
+   "id": "nan-log-dropped-no-oflow",
+   "values": [
+    null,
+    10.0
+   ],
+   "ww": [
+    3.0,
+    1.0
+   ],
+   "keep": [
+    1,
+    1
+   ],
+   "lo": 1,
+   "hi": 100,
+   "nb": 2,
+   "log": true,
+   "oflow": false,
+   "expect": {
+    "h": [
+     0.0,
+     1.0
+    ],
+    "h2": [
+     0.0,
+     1.0
+    ],
+    "n": [
+     0.0,
+     1.0
+    ],
+    "over": 0,
+    "under": 0,
+    "overW": 0.0,
+    "underW": 0.0,
+    "kept": 1
+   }
+  },
+  {
+   "id": "exact-upper-edge-not-a-tail",
+   "values": [
+    10.0,
+    5.0,
+    0.0
+   ],
+   "ww": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "keep": [
+    1,
+    1,
+    1
+   ],
+   "lo": 0,
+   "hi": 10,
+   "nb": 5,
+   "log": false,
+   "oflow": true,
+   "expect": {
+    "h": [
+     1.0,
+     0.0,
+     1.0,
+     0.0,
+     1.0
+    ],
+    "h2": [
+     1.0,
+     0.0,
+     1.0,
+     0.0,
+     1.0
+    ],
+    "n": [
+     1.0,
+     0.0,
+     1.0,
+     0.0,
+     1.0
+    ],
+    "over": 0,
+    "under": 0,
+    "overW": 0.0,
+    "underW": 0.0,
+    "kept": 3
+   }
+  },
+  {
+   "id": "exact-upper-edge-dropped-no-oflow",
+   "values": [
+    10.0,
+    5.0,
+    0.0
+   ],
+   "ww": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "keep": [
+    1,
+    1,
+    1
+   ],
+   "lo": 0,
+   "hi": 10,
+   "nb": 5,
+   "log": false,
+   "oflow": false,
+   "expect": {
+    "h": [
+     1.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "h2": [
+     1.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "n": [
+     1.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0
+    ],
+    "over": 0,
+    "under": 0,
+    "overW": 0.0,
+    "underW": 0.0,
+    "kept": 2
+   }
+  },
+  {
+   "id": "infinity-is-a-tail",
+   "values": [
+    "inf",
+    "-inf",
+    5.0
+   ],
+   "ww": [
+    2.0,
+    3.0,
+    1.0
+   ],
+   "keep": [
+    1,
+    1,
+    1
+   ],
+   "lo": 0,
+   "hi": 10,
+   "nb": 5,
+   "log": false,
+   "oflow": true,
+   "expect": {
+    "h": [
+     3.0,
+     0.0,
+     1.0,
+     0.0,
+     2.0
+    ],
+    "h2": [
+     9.0,
+     0.0,
+     1.0,
+     0.0,
+     4.0
+    ],
+    "n": [
+     1.0,
+     0.0,
+     1.0,
+     0.0,
+     1.0
+    ],
+    "over": 1,
+    "under": 1,
+    "overW": 2.0,
+    "underW": 3.0,
+    "kept": 3
+   }
+  },
+  {
+   "id": "zero-bins-fills-nothing-counts-kept",
+   "values": [
+    0.5,
+    2.0
+   ],
+   "ww": [
+    1.0,
+    1.0
+   ],
+   "keep": [
+    1,
+    1
+   ],
+   "lo": 0,
+   "hi": 1,
+   "nb": 0,
+   "log": false,
+   "oflow": true,
+   "expect": {
+    "h": [],
+    "h2": [],
+    "n": [],
+    "over": 1,
+    "under": 0,
+    "overW": 1.0,
+    "underW": 0.0,
+    "kept": 2
+   }
+  }
+ ],
+ "binned2d": [
+  {
+   "id": "2d-crammed",
+   "vx": [
+    1.0,
+    4.0,
+    9.0,
+    -2.0,
+    12.0
+   ],
+   "vy": [
+    1.0,
+    9.0,
+    4.0,
+    5.0,
+    5.0
+   ],
+   "ww": [
+    1.0,
+    2.0,
+    3.0,
+    4.0,
+    5.0
+   ],
+   "lox": 0,
+   "hix": 10,
+   "nbx": 2,
+   "loy": 0,
+   "hiy": 10,
+   "nby": 2,
+   "lbx": false,
+   "lby": false,
+   "oflow": true,
+   "expect": {
+    "h": [
+     1.0,
+     3.0,
+     6.0,
+     5.0
+    ],
+    "kept": 5
+   }
+  },
+  {
+   "id": "2d-dropped",
+   "vx": [
+    1.0,
+    4.0,
+    9.0,
+    -2.0,
+    12.0
+   ],
+   "vy": [
+    1.0,
+    9.0,
+    4.0,
+    5.0,
+    5.0
+   ],
+   "ww": [
+    1.0,
+    2.0,
+    3.0,
+    4.0,
+    5.0
+   ],
+   "lox": 0,
+   "hix": 10,
+   "nbx": 2,
+   "loy": 0,
+   "hiy": 10,
+   "nby": 2,
+   "lbx": false,
+   "lby": false,
+   "oflow": false,
+   "expect": {
+    "h": [
+     1.0,
+     3.0,
+     2.0,
+     0.0
+    ],
+    "kept": 3
+   }
+  },
+  {
+   "id": "2d-logx-nonpositive-and-nan",
+   "vx": [
+    0.0,
+    -5.0,
+    null,
+    10.0,
+    1000.0
+   ],
+   "vy": [
+    1.0,
+    9.0,
+    5.0,
+    5.0,
+    5.0
+   ],
+   "ww": [
+    1.0,
+    2.0,
+    3.0,
+    4.0,
+    5.0
+   ],
+   "lox": 1,
+   "hix": 100,
+   "nbx": 2,
+   "loy": 0,
+   "hiy": 10,
+   "nby": 2,
+   "lbx": true,
+   "lby": false,
+   "oflow": true,
+   "expect": {
+    "h": [
+     1.0,
+     0.0,
+     5.0,
+     9.0
+    ],
+    "kept": 5
+   }
+  },
+  {
+   "id": "2d-nan-y-dropped-no-oflow",
+   "vx": [
+    1.0,
+    4.0,
+    9.0
+   ],
+   "vy": [
+    null,
+    5.0,
+    12.0
+   ],
+   "ww": [
+    1.0,
+    2.0,
+    3.0
+   ],
+   "lox": 0,
+   "hix": 10,
+   "nbx": 2,
+   "loy": 0,
+   "hiy": 10,
+   "nby": 2,
+   "lbx": false,
+   "lby": false,
+   "oflow": false,
+   "expect": {
+    "h": [
+     0.0,
+     0.0,
+     2.0,
+     0.0
+    ],
+    "kept": 2
+   }
+  },
+  {
+   "id": "2d-okds-dataset-filter",
+   "vx": [
+    0.5,
+    0.5
+   ],
+   "vy": [
+    0.5,
+    0.5
+   ],
+   "ww": [
+    1.0,
+    10.0
+   ],
+   "ds": [
+    0,
+    1
+   ],
+   "ok_ds": [
+    1,
+    0
+   ],
+   "lox": 0,
+   "hix": 1,
+   "nbx": 1,
+   "loy": 0,
+   "hiy": 1,
+   "nby": 1,
+   "lbx": false,
+   "lby": false,
+   "oflow": true,
+   "expect": {
+    "h": [
+     1.0
+    ],
+    "kept": 1
+   }
+  }
+ ],
+ "err_modes": [
+  {
+   "mode": "off",
+   "sw": 12.5,
+   "sw2": 6.2,
+   "n": 20,
+   "expect": {
+    "err": null,
+    "fellBack": false
+   }
+  },
+  {
+   "mode": "sumw2",
+   "sw": 12.5,
+   "sw2": 6.2,
+   "n": 20,
+   "expect": {
+    "err": [
+     2.4899799195977463,
+     2.4899799195977463
+    ],
+    "fellBack": false
+   }
+  },
+  {
+   "mode": "sqrtn",
+   "sw": 12.5,
+   "sw2": 6.2,
+   "n": 20,
+   "expect": {
+    "err": [
+     2.7950849718747373,
+     2.7950849718747373
+    ],
+    "fellBack": false
+   }
+  },
+  {
+   "mode": "sqrtn",
+   "sw": 5.0,
+   "sw2": 2.0,
+   "n": 0,
+   "expect": {
+    "err": [
+     0.0,
+     0.0
+    ],
+    "fellBack": false
+   }
+  },
+  {
+   "mode": "poisson_neff",
+   "sw": 12.5,
+   "sw2": 6.2,
+   "n": 20,
+   "expect": {
+    "err": [
+     2.4733495677404136,
+     3.0188766663875093
+    ],
+    "fellBack": false
+   }
+  },
+  {
+   "mode": "poisson_neff",
+   "sw": -3.0,
+   "sw2": 6.2,
+   "n": 20,
+   "expect": {
+    "err": [
+     2.4899799195977463,
+     2.4899799195977463
+    ],
+    "fellBack": true
+   }
+  },
+  {
+   "mode": "poisson_neff",
+   "sw": 3.0,
+   "sw2": 0.0,
+   "n": 20,
+   "expect": {
+    "err": [
+     0.0,
+     0.0
+    ],
+    "fellBack": true
+   }
+  },
+  {
+   "mode": "poisson_raw",
+   "sw": 12.5,
+   "sw2": 6.2,
+   "n": 20,
+   "expect": {
+    "err": [
+     2.771529988883823,
+     3.466574518444663
+    ],
+    "fellBack": false
+   }
+  },
+  {
+   "mode": "poisson_raw",
+   "sw": 12.5,
+   "sw2": 6.2,
+   "n": 0,
+   "expect": {
+    "err": [
+     2.4899799195977463,
+     2.4899799195977463
+    ],
+    "fellBack": true
+   }
+  },
+  {
+   "mode": "poisson_raw",
+   "sw": -3.0,
+   "sw2": 6.2,
+   "n": 20,
+   "expect": {
+    "err": [
+     2.4899799195977463,
+     2.4899799195977463
+    ],
+    "fellBack": true
+   }
+  }
+ ],
+ "garwood": [
+  {
+   "n": 0,
+   "expect": [
+    0,
+    1.8410216450092585
+   ]
+  },
+  {
+   "n": 1,
+   "expect": [
+    0.8272462209765503,
+    2.299526559115855
+   ]
+  },
+  {
+   "n": 4,
+   "expect": [
+    1.9143391862228825,
+    3.162753172260947
+   ]
+  },
+  {
+   "n": 20.25,
+   "expect": [
+    4.462548274462822,
+    5.573926840307415
+   ]
+  }
+ ],
+ "foms": [
+  {
+   "kind": "sig",
+   "args": [
+    5.0,
+    20.0,
+    3.0,
+    true
+   ],
+   "expect": 1.0425720702853738
+  },
+  {
+   "kind": "sig",
+   "args": [
+    5.0,
+    20.0,
+    3.0,
+    false
+   ],
+   "expect": 1.118033988749895
+  },
+  {
+   "kind": "sig",
+   "args": [
+    5.0,
+    0.0,
+    0.0,
+    true
+   ],
+   "expect": "nan"
+  },
+  {
+   "kind": "zbi",
+   "args": [
+    5.0,
+    20.0,
+    3.0,
+    0.05,
+    true
+   ],
+   "expect": 0.8865385221845791
+  },
+  {
+   "kind": "zbi",
+   "args": [
+    5.0,
+    20.0,
+    3.0,
+    0.0,
+    false
+   ],
+   "expect": "nan"
+  },
+  {
+   "kind": "zbi",
+   "args": [
+    0.0,
+    20.0,
+    3.0,
+    0.05,
+    true
+   ],
+   "expect": "nan"
+  },
+  {
+   "kind": "zbi",
+   "args": [
+    5000.0,
+    1.0,
+    0.01,
+    0.0,
+    true
+   ],
+   "expect": "inf"
+  },
+  {
+   "kind": "neff",
+   "args": [
+    12.5,
+    6.2
+   ],
+   "expect": 25.201612903225804
+  },
+  {
+   "kind": "neff",
+   "args": [
+    -1.0,
+    6.2
+   ],
+   "expect": "nan"
+  },
+  {
+   "kind": "sob",
+   "args": [
+    5.0,
+    20.0
+   ],
+   "expect": 0.25
+  },
+  {
+   "kind": "sob",
+   "args": [
+    5.0,
+    0.0
+   ],
+   "expect": "nan"
+  }
+ ],
+ "region_read": [
+  {
+   "s": 5.0,
+   "b": 20.0,
+   "b2": 3.0,
+   "syst": 0.05,
+   "weighted": true,
+   "expect": {
+    "sb": 0.25,
+    "zbi": 0.8865385221845791
+   }
+  },
+  {
+   "s": 5.0,
+   "b": 20.0,
+   "b2": 3.0,
+   "syst": 0.0,
+   "weighted": false,
+   "expect": {
+    "sb": 0.25,
+    "zbi": "nan"
+   }
+  },
+  {
+   "s": 5.0,
+   "b": 0.0,
+   "b2": 0.0,
+   "syst": 0.05,
+   "weighted": true,
+   "expect": {
+    "sb": "nan",
+    "zbi": "nan"
+   }
+  }
+ ],
+ "resolver": [
+  {
+   "id": "tab-cuts-order-visibility-defaults",
+   "session_cutorder": [
+    "HT"
+   ],
+   "meta": {
+    "view": {
+     "groups": {
+      "of": {
+       "ttbar": "BKG",
+       "qcd": "BKG"
+      },
+      "order": [
+       "BKG"
+      ]
+     },
+     "lumis": {
+      "group": {
+       "BKG": 400.0
+      }
+     }
+    },
+    "tabs": [
+     {
+      "name": "t",
+      "wt": "raw",
+      "cutorder": [
+       "HT"
+      ],
+      "cuts": {
+       "MET": [
+        100.0,
+        null
+       ],
+       "HT": [
+        null,
+        800.0
+       ],
+       "nJet": {
+        "in": [
+         2,
+         3
+        ]
+       }
+      },
+      "shown": [
+       "ttbar",
+       "data"
+      ],
+      "plot": {
+       "nb": 64,
+       "err": "sumw2"
+      },
+      "stage": [
+       {
+        "kind": "1d",
+        "varx": "MET"
+       },
+       {
+        "kind": "block",
+        "layout": [
+         3,
+         3
+        ],
+        "cells": [
+         {
+          "kind": "1d",
+          "varx": "HT",
+          "nb": 25,
+          "blockRaw": {
+           "forged": 1
+          }
+         },
+         {
+          "kind": "2d",
+          "varx": "MET",
+          "vary": "nJet"
+         }
+        ]
+       },
+       {
+        "kind": "board",
+        "channel": "yield"
+       },
+       {
+        "kind": "map",
+        "grid": {
+         "vars": [
+          {
+           "col": "MET",
+           "bands": [
+            200.0
+           ]
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ],
+    "data": {
+     "samples": [
+      {
+       "name": "ttbar",
+       "weighted": true
+      },
+      {
+       "name": "qcd",
+       "weighted": true
+      },
+      {
+       "name": "data",
+       "weighted": false
+      },
+      {
+       "name": "singlet",
+       "weighted": true
+      }
+     ],
+     "cols": [
+      {
+       "name": "MET",
+       "kind": "f8",
+       "at": 0,
+       "lim": [
+        3.0,
+        480.0
+       ],
+       "nice": [
+        0,
+        500
+       ],
+       "p90": 300.0,
+       "p95": 400.0,
+       "p99": 450.0
+      },
+      {
+       "name": "HT",
+       "kind": "f8",
+       "at": 0,
+       "lim": [
+        10.0,
+        950.0
+       ],
+       "nice": [
+        0,
+        1000
+       ],
+       "p90": 700.0,
+       "p95": 800.0,
+       "p99": 900.0
+      },
+      {
+       "name": "nJet",
+       "kind": "i4",
+       "at": 0,
+       "lim": [
+        0,
+        5
+       ],
+       "nice": [
+        0,
+        6
+       ],
+       "p90": 4,
+       "p95": 5,
+       "p99": 5,
+       "vals": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+       ]
+      }
+     ],
+     "weight_col": "w"
+    }
+   },
+   "expect": {
+    "active_load": [
+     "MET",
+     "HT",
+     "nJet"
+    ],
+    "active_session": [
+     "HT",
+     "MET",
+     "nJet"
+    ],
+    "effective_cuts": {
+     "MET": [
+      100.0,
+      null
+     ],
+     "HT": [
+      null,
+      800.0
+     ],
+     "nJet": {
+      "in": [
+       2,
+       3
+      ]
+     }
+    },
+    "shown_on": [
+     "ttbar",
+     "data"
+    ],
+    "plots": [
+     {
+      "path": "t0.s0",
+      "name": "t0_s0_1d_MET",
+      "sheet": null,
+      "quad": null,
+      "spec": {
+       "mode": "1d",
+       "nb": 64,
+       "decouple": false,
+       "compare": false,
+       "logx": false,
+       "logy": false,
+       "logz": false,
+       "pull": false,
+       "pmin": "",
+       "pmax": "",
+       "oflow": true,
+       "d3style": "bars",
+       "norm": "yield",
+       "layer": "all",
+       "layer2": "all",
+       "view": "one",
+       "cmpmode": "ratio",
+       "xtitle": "",
+       "ytitle": "",
+       "titles": {},
+       "err": "sumw2",
+       "xauto": true,
+       "xmin": "",
+       "xmax": "",
+       "yauto": true,
+       "ymin": "",
+       "ymax": "",
+       "zauto": true,
+       "zmin": "",
+       "zmax": "",
+       "cmt": "",
+       "anno": true,
+       "drawcol": "#3D9BE9",
+       "draw": {},
+       "merge": null,
+       "lines": null,
+       "varx": "MET",
+       "vary": "HT",
+       "sheet": null,
+       "quad": null
+      }
+     },
+     {
+      "path": "t0.s1.c0",
+      "name": "t0_s1_c0_1d_HT",
+      "sheet": 0,
+      "quad": 0,
+      "spec": {
+       "mode": "1d",
+       "nb": 25,
+       "decouple": false,
+       "compare": false,
+       "logx": false,
+       "logy": false,
+       "logz": false,
+       "pull": false,
+       "pmin": "",
+       "pmax": "",
+       "oflow": true,
+       "d3style": "bars",
+       "norm": "yield",
+       "layer": "all",
+       "layer2": "all",
+       "view": "one",
+       "cmpmode": "ratio",
+       "xtitle": "",
+       "ytitle": "",
+       "titles": {},
+       "err": "sumw2",
+       "xauto": true,
+       "xmin": "",
+       "xmax": "",
+       "yauto": true,
+       "ymin": "",
+       "ymax": "",
+       "zauto": true,
+       "zmin": "",
+       "zmax": "",
+       "cmt": "",
+       "anno": true,
+       "drawcol": "#3D9BE9",
+       "draw": {},
+       "merge": null,
+       "lines": null,
+       "varx": "HT",
+       "vary": "HT",
+       "sheet": 0,
+       "quad": 0,
+       "layout": [
+        3,
+        3
+       ]
+      }
+     },
+     {
+      "path": "t0.s1.c1",
+      "name": "t0_s1_c1_2d_MET_nJet",
+      "sheet": 0,
+      "quad": 1,
+      "spec": {
+       "mode": "2d",
+       "nb": 64,
+       "decouple": false,
+       "compare": false,
+       "logx": false,
+       "logy": false,
+       "logz": false,
+       "pull": false,
+       "pmin": "",
+       "pmax": "",
+       "oflow": true,
+       "d3style": "bars",
+       "norm": "yield",
+       "layer": "all",
+       "layer2": "all",
+       "view": "one",
+       "cmpmode": "ratio",
+       "xtitle": "",
+       "ytitle": "",
+       "titles": {},
+       "err": "sumw2",
+       "xauto": true,
+       "xmin": "",
+       "xmax": "",
+       "yauto": true,
+       "ymin": "",
+       "ymax": "",
+       "zauto": true,
+       "zmin": "",
+       "zmax": "",
+       "cmt": "",
+       "anno": true,
+       "drawcol": "#3D9BE9",
+       "draw": {},
+       "merge": null,
+       "lines": null,
+       "varx": "MET",
+       "vary": "nJet",
+       "sheet": 0,
+       "quad": 1,
+       "layout": [
+        3,
+        3
+       ]
+      }
+     }
+    ],
+    "board": {
+     "path": "t0.s2",
+     "name": "t0_s2_board",
+     "spec": {
+      "kind": "board",
+      "channel": "yield"
+     }
+    },
+    "map": {
+     "path": "t0.s3",
+     "name": "t0_s3_map",
+     "spec": {
+      "kind": "map",
+      "grid": {
+       "vars": [
+        {
+         "col": "MET",
+         "bands": [
+          200.0
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "weighted": true,
+    "lumi": [
+     400.0,
+     400.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  {
+   "id": "view-locks-shadow-tab-defaults-still-apply",
+   "meta": {
+    "view": {
+     "groups": {
+      "of": {
+       "ttbar": "BKG",
+       "qcd": "BKG"
+      },
+      "order": [
+       "BKG"
+      ]
+     },
+     "lumis": {
+      "group": {
+       "BKG": 400.0
+      }
+     },
+     "cuts": {
+      "MET": [
+       200.0,
+       null
+      ]
+     },
+     "stage": [
+      {
+       "kind": "1d",
+       "varx": "HT"
+      }
+     ],
+     "shown": [
+      "ttbar"
+     ]
+    },
+    "tabs": [
+     {
+      "name": "t",
+      "cuts": {
+       "MET": [
+        50.0,
+        null
+       ]
+      },
+      "stage": [
+       {
+        "kind": "1d",
+        "varx": "MET"
+       }
+      ],
+      "plot": {
+       "logy": true,
+       "srcs": [
+        "BKG",
+        "data"
+       ]
+      }
+     }
+    ],
+    "data": {
+     "samples": [
+      {
+       "name": "ttbar",
+       "weighted": true
+      },
+      {
+       "name": "qcd",
+       "weighted": true
+      },
+      {
+       "name": "data",
+       "weighted": false
+      }
+     ],
+     "cols": [
+      {
+       "name": "MET",
+       "kind": "f8",
+       "at": 0,
+       "lim": [
+        3.0,
+        480.0
+       ],
+       "nice": [
+        0,
+        500
+       ],
+       "p90": 300.0,
+       "p95": 400.0,
+       "p99": 450.0
+      },
+      {
+       "name": "HT",
+       "kind": "f8",
+       "at": 0,
+       "lim": [
+        10.0,
+        950.0
+       ],
+       "nice": [
+        0,
+        1000
+       ],
+       "p90": 700.0,
+       "p95": 800.0,
+       "p99": 900.0
+      },
+      {
+       "name": "nJet",
+       "kind": "i4",
+       "at": 0,
+       "lim": [
+        0,
+        5
+       ],
+       "nice": [
+        0,
+        6
+       ],
+       "p90": 4,
+       "p95": 5,
+       "p99": 5,
+       "vals": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+       ]
+      }
+     ]
+    }
+   },
+   "expect": {
+    "active_load": [
+     "MET"
+    ],
+    "effective_cuts": {
+     "MET": [
+      200.0,
+      null
+     ]
+    },
+    "shown_on": [
+     "ttbar"
+    ],
+    "plots": [
+     {
+      "path": "t0.s0",
+      "name": "t0_s0_1d_HT",
+      "sheet": null,
+      "quad": null,
+      "spec": {
+       "mode": "1d",
+       "nb": 40,
+       "decouple": false,
+       "compare": false,
+       "logx": false,
+       "logy": true,
+       "logz": false,
+       "pull": false,
+       "pmin": "",
+       "pmax": "",
+       "oflow": true,
+       "d3style": "bars",
+       "norm": "yield",
+       "layer": "all",
+       "layer2": "all",
+       "view": "one",
+       "cmpmode": "ratio",
+       "xtitle": "",
+       "ytitle": "",
+       "titles": {},
+       "err": "off",
+       "xauto": true,
+       "xmin": "",
+       "xmax": "",
+       "yauto": true,
+       "ymin": "",
+       "ymax": "",
+       "zauto": true,
+       "zmin": "",
+       "zmax": "",
+       "cmt": "",
+       "anno": true,
+       "drawcol": "#3D9BE9",
+       "draw": {},
+       "merge": null,
+       "lines": null,
+       "varx": "HT",
+       "vary": "HT",
+       "srcs": [
+        "BKG",
+        "data"
+       ],
+       "sheet": null,
+       "quad": null
+      }
+     }
+    ],
+    "board": null,
+    "map": null,
+    "weighted": false,
+    "lumi": [
+     400.0,
+     400.0,
+     1.0
+    ]
+   }
+  },
+  {
+   "id": "block-contained-board-gets-placement",
+   "meta": {
+    "view": {
+     "groups": {
+      "of": {
+       "ttbar": "BKG",
+       "qcd": "BKG"
+      },
+      "order": [
+       "BKG"
+      ]
+     },
+     "lumis": {
+      "group": {
+       "BKG": 400.0
+      }
+     }
+    },
+    "tabs": [
+     {
+      "name": "t",
+      "stage": [
+       {
+        "kind": "block",
+        "layout": [
+         6
+        ],
+        "cells": [
+         {
+          "kind": "board",
+          "channel": "yield",
+          "at": 99,
+          "blockRaw": {
+           "forged": 1
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "data": {
+     "samples": [
+      {
+       "name": "ttbar",
+       "weighted": true
+      },
+      {
+       "name": "qcd",
+       "weighted": true
+      },
+      {
+       "name": "data",
+       "weighted": false
+      }
+     ],
+     "cols": [
+      {
+       "name": "MET",
+       "kind": "f8",
+       "at": 0,
+       "lim": [
+        3.0,
+        480.0
+       ],
+       "nice": [
+        0,
+        500
+       ],
+       "p90": 300.0,
+       "p95": 400.0,
+       "p99": 450.0
+      },
+      {
+       "name": "HT",
+       "kind": "f8",
+       "at": 0,
+       "lim": [
+        10.0,
+        950.0
+       ],
+       "nice": [
+        0,
+        1000
+       ],
+       "p90": 700.0,
+       "p95": 800.0,
+       "p99": 900.0
+      },
+      {
+       "name": "nJet",
+       "kind": "i4",
+       "at": 0,
+       "lim": [
+        0,
+        5
+       ],
+       "nice": [
+        0,
+        6
+       ],
+       "p90": 4,
+       "p95": 5,
+       "p99": 5,
+       "vals": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+       ]
+      }
+     ]
+    }
+   },
+   "expect": {
+    "active_load": [],
+    "shown_on": [
+     "ttbar",
+     "qcd",
+     "data"
+    ],
+    "plots": [],
+    "board": {
+     "path": "t0.s0.c0",
+     "name": "t0_s0_c0_board",
+     "spec": {
+      "kind": "board",
+      "channel": "yield",
+      "sheet": 0,
+      "quad": 0,
+      "layout": [
+       6
+      ]
+     }
+    },
+    "map": null,
+    "weighted": false,
+    "lumi": [
+     400.0,
+     400.0,
+     1.0
+    ]
+   }
+  }
+ ],
+ "mask": [
+  {
+   "id": "nan-passes-range-hidden-sample",
+   "note": "NaN passes an inclusive range cut, like the page; hidden datasets drop",
+   "cuts": {
+    "MET": [
+     100.0,
+     null
+    ]
+   },
+   "shown_on": [
+    "ttbar"
+   ],
+   "MET": [
+    null,
+    50.0,
+    150.0,
+    600.0
+   ],
+   "nJet": [
+    1,
+    1,
+    2,
+    2
+   ],
+   "ds": [
+    0,
+    0,
+    1,
+    1
+   ],
+   "expect_keep": [
+    1,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "id": "chips-and-range",
+   "note": "",
+   "cuts": {
+    "MET": [
+     null,
+     300.0
+    ],
+    "nJet": {
+     "in": [
+      2,
+      3
+     ]
+    }
+   },
+   "shown_on": [
+    "ttbar",
+    "qcd",
+    "data"
+   ],
+   "MET": [
+    10.0,
+    250.0,
+    250.0,
+    250.0
+   ],
+   "nJet": [
+    2,
+    1,
+    3,
+    2
+   ],
+   "ds": [
+    0,
+    1,
+    2,
+    0
+   ],
+   "expect_keep": [
+    1,
+    0,
+    1,
+    1
+   ]
+  }
+ ],
+ "region": [
+  {
+   "id": "grid-exhaustive",
+   "grid": {
+    "vars": [
+     {
+      "col": "MET",
+      "bands": [
+       200.0,
+       300.0
+      ]
+     },
+     {
+      "col": "nJet",
+      "bands": [
+       [
+        0,
+        1
+       ],
+       [
+        2,
+        3
+       ]
+      ]
+     }
+    ],
+    "exhaustive": true
+   },
+   "spec_srcs": [
+    "BKG",
+    "data"
+   ],
+   "rows": {
+    "MET": [
+     50.0,
+     250.0,
+     250.0,
+     350.0,
+     null,
+     150.0,
+     250.0,
+     400.0,
+     100.0,
+     320.0
+    ],
+    "nJet": [
+     0,
+     2,
+     4,
+     1,
+     2,
+     3,
+     0,
+     5,
+     1,
+     2
+    ],
+    "w": [
+     1.0,
+     0.5,
+     2.0,
+     1.0,
+     0.25,
+     -0.5,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    0
+   ],
+   "view": {
+    "groups": {
+     "of": {
+      "ttbar": "BKG",
+      "qcd": "BKG"
+     },
+     "order": [
+      "BKG"
+     ]
+    },
+    "lumis": {
+     "group": {
+      "BKG": 400.0
+     }
+    }
+   },
+   "samples": [
+    "ttbar",
+    "qcd",
+    "data"
+   ],
+   "unweighted": [
+    false,
+    false,
+    true
+   ],
+   "expect": {
+    "srcs": [
+     "BKG",
+     "data"
+    ],
+    "names": [
+     "Bin_MET_lt_200_nJet_0_1",
+     "Bin_MET_lt_200_nJet_other_nJet_2_3",
+     "Bin_MET_lt_200_nJet_other_nJet_other",
+     "Bin_MET_ge_200_MET_lt_300_nJet_0_1",
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_2_3",
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_other",
+     "Bin_MET_ge_200_MET_ge_300_nJet_0_1",
+     "Bin_MET_ge_200_MET_ge_300_nJet_other_nJet_2_3",
+     "Bin_MET_ge_200_MET_ge_300_nJet_other_nJet_other"
+    ],
+    "n": [
+     [
+      1.0,
+      1.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      2.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0
+     ]
+    ],
+    "w": [
+     [
+      400.0,
+      1.0
+     ],
+     [
+      -200.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0
+     ],
+     [
+      200.0,
+      0.0
+     ],
+     [
+      800.0,
+      0.0
+     ],
+     [
+      400.0,
+      0.0
+     ],
+     [
+      500.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0
+     ]
+    ],
+    "w2": [
+     [
+      160000.0,
+      1.0
+     ],
+     [
+      40000.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0
+     ],
+     [
+      40000.0,
+      0.0
+     ],
+     [
+      640000.0,
+      0.0
+     ],
+     [
+      160000.0,
+      0.0
+     ],
+     [
+      170000.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0
+     ]
+    ],
+    "total": 2103.0,
+    "flat": {
+     "Bin_MET_lt_200_nJet_0_1": {
+      "BKG": {
+       "nominal": [
+        1.0,
+        400.0,
+        400.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        1.0,
+        1.0,
+        1.0
+       ]
+      }
+     },
+     "Bin_MET_lt_200_nJet_other_nJet_2_3": {
+      "BKG": {
+       "nominal": [
+        1.0,
+        -200.0,
+        200.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_lt_200_nJet_other_nJet_other": {
+      "BKG": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_lt_300_nJet_0_1": {
+      "BKG": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        1.0,
+        1.0,
+        1.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_2_3": {
+      "BKG": {
+       "nominal": [
+        1.0,
+        200.0,
+        200.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_other": {
+      "BKG": {
+       "nominal": [
+        1.0,
+        800.0,
+        800.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_ge_300_nJet_0_1": {
+      "BKG": {
+       "nominal": [
+        1.0,
+        400.0,
+        400.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_ge_300_nJet_other_nJet_2_3": {
+      "BKG": {
+       "nominal": [
+        2.0,
+        500.0,
+        412.31056256176606
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_ge_300_nJet_other_nJet_other": {
+      "BKG": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        1.0,
+        1.0,
+        1.0
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "grid-tails-unsplit",
+   "grid": {
+    "vars": [
+     {
+      "col": "MET",
+      "bands": [
+       200.0,
+       300.0
+      ]
+     },
+     {
+      "col": "nJet",
+      "bands": [
+       [
+        0,
+        1
+       ],
+       [
+        2,
+        3
+       ]
+      ]
+     }
+    ],
+    "exhaustive": false
+   },
+   "spec_srcs": null,
+   "rows": {
+    "MET": [
+     50.0,
+     250.0,
+     250.0,
+     350.0,
+     null,
+     150.0,
+     250.0,
+     400.0,
+     100.0,
+     320.0
+    ],
+    "nJet": [
+     0,
+     2,
+     4,
+     1,
+     2,
+     3,
+     0,
+     5,
+     1,
+     2
+    ],
+    "w": [
+     1.0,
+     0.5,
+     2.0,
+     1.0,
+     0.25,
+     -0.5,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    0
+   ],
+   "view": {
+    "groups": {
+     "of": {
+      "ttbar": "BKG",
+      "qcd": "BKG"
+     },
+     "order": [
+      "BKG"
+     ]
+    },
+    "lumis": {
+     "group": {
+      "BKG": 400.0
+     }
+    }
+   },
+   "samples": [
+    "ttbar",
+    "qcd",
+    "data"
+   ],
+   "unweighted": [
+    false,
+    false,
+    true
+   ],
+   "expect": {
+    "srcs": [
+     "BKG",
+     "data"
+    ],
+    "names": [
+     "Bin_MET_lt_200_nJet_0_1",
+     "Bin_MET_lt_200_nJet_other_nJet_2_3",
+     "Bin_MET_lt_200_nJet_other_nJet_other",
+     "Bin_MET_ge_200_MET_lt_300_nJet_0_1",
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_2_3",
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_other",
+     "Bin_MET_ge_200_MET_ge_300"
+    ],
+    "n": [
+     [
+      1.0,
+      1.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0
+     ],
+     [
+      3.0,
+      1.0
+     ]
+    ],
+    "w": [
+     [
+      400.0,
+      1.0
+     ],
+     [
+      -200.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0
+     ],
+     [
+      200.0,
+      0.0
+     ],
+     [
+      800.0,
+      0.0
+     ],
+     [
+      900.0,
+      1.0
+     ]
+    ],
+    "w2": [
+     [
+      160000.0,
+      1.0
+     ],
+     [
+      40000.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0
+     ],
+     [
+      40000.0,
+      0.0
+     ],
+     [
+      640000.0,
+      0.0
+     ],
+     [
+      330000.0,
+      1.0
+     ]
+    ],
+    "total": 2103.0,
+    "flat": {
+     "Bin_MET_lt_200_nJet_0_1": {
+      "BKG": {
+       "nominal": [
+        1.0,
+        400.0,
+        400.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        1.0,
+        1.0,
+        1.0
+       ]
+      }
+     },
+     "Bin_MET_lt_200_nJet_other_nJet_2_3": {
+      "BKG": {
+       "nominal": [
+        1.0,
+        -200.0,
+        200.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_lt_200_nJet_other_nJet_other": {
+      "BKG": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_lt_300_nJet_0_1": {
+      "BKG": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        1.0,
+        1.0,
+        1.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_2_3": {
+      "BKG": {
+       "nominal": [
+        1.0,
+        200.0,
+        200.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_other": {
+      "BKG": {
+       "nominal": [
+        1.0,
+        800.0,
+        800.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_ge_300": {
+      "BKG": {
+       "nominal": [
+        3.0,
+        900.0,
+        574.4562646538029
+       ]
+      },
+      "data": {
+       "nominal": [
+        1.0,
+        1.0,
+        1.0
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "empty-srcs-counts-nothing",
+   "grid": {
+    "vars": [
+     {
+      "col": "MET",
+      "bands": [
+       200.0,
+       300.0
+      ]
+     },
+     {
+      "col": "nJet",
+      "bands": [
+       [
+        0,
+        1
+       ],
+       [
+        2,
+        3
+       ]
+      ]
+     }
+    ],
+    "exhaustive": true
+   },
+   "spec_srcs": [],
+   "rows": {
+    "MET": [
+     50.0,
+     250.0,
+     250.0,
+     350.0,
+     null,
+     150.0,
+     250.0,
+     400.0,
+     100.0,
+     320.0
+    ],
+    "nJet": [
+     0,
+     2,
+     4,
+     1,
+     2,
+     3,
+     0,
+     5,
+     1,
+     2
+    ],
+    "w": [
+     1.0,
+     0.5,
+     2.0,
+     1.0,
+     0.25,
+     -0.5,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    0
+   ],
+   "view": {
+    "groups": {
+     "of": {
+      "ttbar": "BKG",
+      "qcd": "BKG"
+     },
+     "order": [
+      "BKG"
+     ]
+    },
+    "lumis": {
+     "group": {
+      "BKG": 400.0
+     }
+    }
+   },
+   "samples": [
+    "ttbar",
+    "qcd",
+    "data"
+   ],
+   "unweighted": [
+    false,
+    false,
+    true
+   ],
+   "expect": {
+    "srcs": [],
+    "names": [
+     "Bin_MET_lt_200_nJet_0_1",
+     "Bin_MET_lt_200_nJet_other_nJet_2_3",
+     "Bin_MET_lt_200_nJet_other_nJet_other",
+     "Bin_MET_ge_200_MET_lt_300_nJet_0_1",
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_2_3",
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_other",
+     "Bin_MET_ge_200_MET_ge_300_nJet_0_1",
+     "Bin_MET_ge_200_MET_ge_300_nJet_other_nJet_2_3",
+     "Bin_MET_ge_200_MET_ge_300_nJet_other_nJet_other"
+    ],
+    "n": [
+     [],
+     [],
+     [],
+     [],
+     [],
+     [],
+     [],
+     [],
+     []
+    ],
+    "w": [
+     [],
+     [],
+     [],
+     [],
+     [],
+     [],
+     [],
+     [],
+     []
+    ],
+    "w2": [
+     [],
+     [],
+     [],
+     [],
+     [],
+     [],
+     [],
+     [],
+     []
+    ],
+    "total": 0.0,
+    "flat": {
+     "Bin_MET_lt_200_nJet_0_1": {},
+     "Bin_MET_lt_200_nJet_other_nJet_2_3": {},
+     "Bin_MET_lt_200_nJet_other_nJet_other": {},
+     "Bin_MET_ge_200_MET_lt_300_nJet_0_1": {},
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_2_3": {},
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_other": {},
+     "Bin_MET_ge_200_MET_ge_300_nJet_0_1": {},
+     "Bin_MET_ge_200_MET_ge_300_nJet_other_nJet_2_3": {},
+     "Bin_MET_ge_200_MET_ge_300_nJet_other_nJet_other": {}
+    }
+   }
+  },
+  {
+   "id": "lumi-ladder-tiers",
+   "grid": {
+    "vars": [
+     {
+      "col": "MET",
+      "bands": [
+       200.0,
+       300.0
+      ]
+     },
+     {
+      "col": "nJet",
+      "bands": [
+       [
+        0,
+        1
+       ],
+       [
+        2,
+        3
+       ]
+      ]
+     }
+    ],
+    "exhaustive": false
+   },
+   "spec_srcs": null,
+   "rows": {
+    "MET": [
+     50.0,
+     250.0,
+     250.0,
+     350.0,
+     null,
+     150.0,
+     250.0,
+     400.0,
+     100.0,
+     320.0
+    ],
+    "nJet": [
+     0,
+     2,
+     4,
+     1,
+     2,
+     3,
+     0,
+     5,
+     1,
+     2
+    ],
+    "w": [
+     1.0,
+     0.5,
+     2.0,
+     1.0,
+     0.25,
+     -0.5,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "ds": [
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3
+   ],
+   "view": {
+    "groups": {
+     "of": {
+      "ttbar": "BKG"
+     },
+     "sub": {
+      "ttbar": "TT",
+      "qcd": "QQ",
+      "wjets": "WW"
+     },
+     "order": [
+      "BKG"
+     ]
+    },
+    "lumis": {
+     "group": {
+      "BKG": 2.0
+     },
+     "sub": {
+      "TT": 5.0,
+      "QQ": 5.0,
+      "WW": null
+     },
+     "sample": {
+      "qcd": 9.0,
+      "data": 11.0,
+      "wjets": 9.0
+     }
+    }
+   },
+   "samples": [
+    "ttbar",
+    "qcd",
+    "data",
+    "wjets"
+   ],
+   "unweighted": [
+    false,
+    false,
+    true,
+    false
+   ],
+   "expect": {
+    "srcs": [
+     "BKG",
+     "qcd",
+     "data",
+     "wjets"
+    ],
+    "names": [
+     "Bin_MET_lt_200_nJet_0_1",
+     "Bin_MET_lt_200_nJet_other_nJet_2_3",
+     "Bin_MET_lt_200_nJet_other_nJet_other",
+     "Bin_MET_ge_200_MET_lt_300_nJet_0_1",
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_2_3",
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_other",
+     "Bin_MET_ge_200_MET_ge_300"
+    ],
+    "n": [
+     [
+      1.0,
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      2.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "w": [
+     [
+      2.0,
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      -2.5,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      4.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      6.25,
+      1.0,
+      9.0
+     ]
+    ],
+    "w2": [
+     [
+      4.0,
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      6.25,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      16.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      26.5625,
+      1.0,
+      81.0
+     ]
+    ],
+    "total": 22.75,
+    "flat": {
+     "Bin_MET_lt_200_nJet_0_1": {
+      "BKG": {
+       "nominal": [
+        1.0,
+        2.0,
+        2.0
+       ]
+      },
+      "qcd": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        1.0,
+        1.0,
+        1.0
+       ]
+      },
+      "wjets": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_lt_200_nJet_other_nJet_2_3": {
+      "BKG": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "qcd": {
+       "nominal": [
+        1.0,
+        -2.5,
+        2.5
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "wjets": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_lt_200_nJet_other_nJet_other": {
+      "BKG": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "qcd": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "wjets": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_lt_300_nJet_0_1": {
+      "BKG": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "qcd": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        1.0,
+        1.0,
+        1.0
+       ]
+      },
+      "wjets": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_2_3": {
+      "BKG": {
+       "nominal": [
+        1.0,
+        1.0,
+        1.0
+       ]
+      },
+      "qcd": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "wjets": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_lt_300_nJet_other_nJet_other": {
+      "BKG": {
+       "nominal": [
+        1.0,
+        4.0,
+        4.0
+       ]
+      },
+      "qcd": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "data": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "wjets": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      }
+     },
+     "Bin_MET_ge_200_MET_ge_300": {
+      "BKG": {
+       "nominal": [
+        0.0,
+        0.0,
+        0.0
+       ]
+      },
+      "qcd": {
+       "nominal": [
+        2.0,
+        6.25,
+        5.153882032022076
+       ]
+      },
+      "data": {
+       "nominal": [
+        1.0,
+        1.0,
+        1.0
+       ]
+      },
+      "wjets": {
+       "nominal": [
+        1.0,
+        9.0,
+        9.0
+       ]
+      }
+     }
+    }
+   }
+  }
+ ],
+ "region_windows": [
+  {
+   "id": "windows-intersect",
+   "root": {
+    "cut": {
+     "col": "MET",
+     "lt": 300.0
+    },
+    "yes": {
+     "cut": {
+      "col": "MET",
+      "lt": 200.0
+     },
+     "yes": null,
+     "no": null
+    },
+    "no": null
+   },
+   "expect": [
+    {
+     "path": [
+      "MET < 300",
+      "MET < 200"
+     ],
+     "name": "Bin_MET_lt_300_MET_lt_200",
+     "windows": [
+      {
+       "col": "MET",
+       "lo": null,
+       "hi": 200.0
+      }
+     ]
+    },
+    {
+     "path": [
+      "MET < 300",
+      "MET ≥ 200"
+     ],
+     "name": "Bin_MET_lt_300_MET_ge_200",
+     "windows": [
+      {
+       "col": "MET",
+       "lo": 200.0,
+       "hi": 300.0
+      }
+     ]
+    },
+    {
+     "path": [
+      "MET ≥ 300"
+     ],
+     "name": "Bin_MET_ge_300",
+     "windows": [
+      {
+       "col": "MET",
+       "lo": 300.0,
+       "hi": null
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "js-number-spelling",
+   "root": {
+    "cut": {
+     "col": "X",
+     "lt": 1e-06
+    },
+    "yes": null,
+    "no": null
+   },
+   "expect": [
+    {
+     "path": [
+      "X < 0.000001"
+     ],
+     "name": "Bin_X_lt_0_000001",
+     "windows": [
+      {
+       "col": "X",
+       "lo": null,
+       "hi": 1e-06
+      }
+     ]
+    },
+    {
+     "path": [
+      "X ≥ 0.000001"
+     ],
+     "name": "Bin_X_ge_0_000001",
+     "windows": [
+      {
+       "col": "X",
+       "lo": 1e-06,
+       "hi": null
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "js-number-spelling-beyond-2e53",
+   "root": {
+    "cut": {
+     "col": "X",
+     "lt": 1.0000000000000001e+18
+    },
+    "yes": null,
+    "no": null
+   },
+   "expect": [
+    {
+     "path": [
+      "X < 1000000000000000100"
+     ],
+     "name": "Bin_X_lt_1000000000000000100",
+     "windows": [
+      {
+       "col": "X",
+       "lo": null,
+       "hi": 1.0000000000000001e+18
+      }
+     ]
+    },
+    {
+     "path": [
+      "X ≥ 1000000000000000100"
+     ],
+     "name": "Bin_X_ge_1000000000000000100",
+     "windows": [
+      {
+       "col": "X",
+       "lo": 1.0000000000000001e+18,
+       "hi": null
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "js-number-spelling-int-literal",
+   "root": {
+    "cut": {
+     "col": "X",
+     "lt": 1000000000000000128
+    },
+    "yes": null,
+    "no": null
+   },
+   "expect": [
+    {
+     "path": [
+      "X < 1000000000000000100"
+     ],
+     "name": "Bin_X_lt_1000000000000000100",
+     "windows": [
+      {
+       "col": "X",
+       "lo": null,
+       "hi": 1000000000000000128
+      }
+     ]
+    },
+    {
+     "path": [
+      "X ≥ 1000000000000000100"
+     ],
+     "name": "Bin_X_ge_1000000000000000100",
+     "windows": [
+      {
+       "col": "X",
+       "lo": 1000000000000000128,
+       "hi": null
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "region_rootless": {
+  "grid": {
+   "vars": [
+    {
+     "col": "MET",
+     "bands": [
+      200.0,
+      300.0
+     ]
+    },
+    {
+     "col": "nJet",
+     "bands": [
+      [
+       0,
+       1
+      ],
+      [
+       2,
+       3
+      ]
+     ]
+    }
+   ]
+  },
+  "rows": {
+   "MET": [
+    50.0,
+    250.0,
+    250.0,
+    350.0,
+    null,
+    150.0,
+    250.0,
+    400.0,
+    100.0,
+    320.0
+   ],
+   "nJet": [
+    0,
+    2,
+    4,
+    1,
+    2,
+    3,
+    0,
+    5,
+    1,
+    2
+   ],
+   "w": [
+    1.0,
+    0.5,
+    2.0,
+    1.0,
+    0.25,
+    -0.5,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ds": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1,
+   2,
+   2,
+   2,
+   0
+  ],
+  "view": {
+   "groups": {
+    "of": {
+     "ttbar": "BKG",
+     "qcd": "BKG"
+    },
+    "order": [
+     "BKG"
+    ]
+   },
+   "lumis": {
+    "group": {
+     "BKG": 400.0
+    }
+   }
+  },
+  "samples": [
+   "ttbar",
+   "qcd",
+   "data"
+  ],
+  "unweighted": [
+   false,
+   false,
+   true
+  ],
+  "expect": {
+   "srcs": [
+    "BKG",
+    "data"
+   ],
+   "names": [
+    "Bin"
+   ],
+   "n": [
+    [
+     7.0,
+     3.0
+    ]
+   ],
+   "w": [
+    [
+     2100.0,
+     3.0
+    ]
+   ],
+   "w2": [
+    [
+     1210000.0,
+     3.0
+    ]
+   ]
+  }
+ },
+ "region_flat_dups": {
+  "leaves": [
+   "Bin_X",
+   "Bin_X",
+   "",
+   "Bin_N",
+   "Bin_Z"
+  ],
+  "srcs": [
+   "a",
+   "b"
+  ],
+  "n": [
+   [
+    1.0,
+    0.0
+   ],
+   [
+    2.0,
+    1.0
+   ],
+   [
+    0.0,
+    3.0
+   ],
+   [
+    2.0,
+    0.0
+   ],
+   [
+    -0.0,
+    0.0
+   ]
+  ],
+  "w": [
+   [
+    1.5,
+    0.0
+   ],
+   [
+    2.5,
+    1.0
+   ],
+   [
+    0.0,
+    -3.0
+   ],
+   [
+    null,
+    1.0
+   ],
+   [
+    -0.0,
+    0.0
+   ]
+  ],
+  "w2": [
+   [
+    2.25,
+    0.0
+   ],
+   [
+    6.25,
+    1.0
+   ],
+   [
+    0.0,
+    9.0
+   ],
+   [
+    "inf",
+    1.0
+   ],
+   [
+    -0.0,
+    0.0
+   ]
+  ],
+  "expect": {
+   "Bin_X": {
+    "a": {
+     "nominal": [
+      1.0,
+      1.5,
+      1.5
+     ]
+    },
+    "b": {
+     "nominal": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    }
+   },
+   "Bin_X_2": {
+    "a": {
+     "nominal": [
+      2.0,
+      2.5,
+      2.5
+     ]
+    },
+    "b": {
+     "nominal": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   },
+   "Bin": {
+    "a": {
+     "nominal": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "b": {
+     "nominal": [
+      3.0,
+      -3.0,
+      3.0
+     ]
+    }
+   },
+   "Bin_N": {
+    "a": {
+     "nominal": [
+      2.0,
+      0.0,
+      "inf"
+     ]
+    },
+    "b": {
+     "nominal": [
+      0.0,
+      1.0,
+      1.0
+     ]
+    }
+   },
+   "Bin_Z": {
+    "a": {
+     "nominal": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "b": {
+     "nominal": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    }
+   }
+  }
+ },
+ "region_flat_suffix_collision": {
+  "leaves": [
+   "Bin_X",
+   "Bin_X_2",
+   "Bin_X"
+  ],
+  "srcs": [
+   "a"
+  ],
+  "n": [
+   [
+    1.0
+   ],
+   [
+    2.0
+   ],
+   [
+    3.0
+   ]
+  ],
+  "w": [
+   [
+    1.0
+   ],
+   [
+    2.0
+   ],
+   [
+    3.0
+   ]
+  ],
+  "w2": [
+   [
+    1.0
+   ],
+   [
+    4.0
+   ],
+   [
+    9.0
+   ]
+  ],
+  "expect": {
+   "Bin_X": {
+    "a": {
+     "nominal": [
+      1.0,
+      1.0,
+      1.0
+     ]
+    }
+   },
+   "Bin_X_2": {
+    "a": {
+     "nominal": [
+      3.0,
+      3.0,
+      3.0
+     ]
+    }
+   }
+  }
+ }
+}

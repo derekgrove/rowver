@@ -21,9 +21,9 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 import uproot
 from aiohttp import web
 
-from builder_spec import NAME, SpecError, compile_spec, resolve_path, validate_spec
-from press import Cart, CartError
-from rvr6 import FormatError
+from .builder_spec import NAME, SpecError, compile_spec, resolve_path, validate_spec
+from .press import Cart, CartError
+from .rvr6 import FormatError
 
 API = 1
 DEFAULT_PORT = 8271
@@ -134,13 +134,13 @@ class Service:
             spec_path.write_text(json.dumps(spec, allow_nan=False), encoding="utf-8")
             roots_path.write_text(json.dumps({key: str(path) for key, path in self.roots.items()}),
                                   encoding="utf-8")
-            command = [sys.executable, str(Path(__file__).resolve()), "--worker",
+            command = [sys.executable, "-m", "rowver.builder", "--worker",
                        str(spec_path), str(roots_path), str(result_path),
                        "--max-files", str(self.max_files), "--max-rows", str(self.max_rows),
                        "--timeout", str(self.timeout)]
             try:
                 job.process = await asyncio.create_subprocess_exec(
-                    *command, cwd=Path(__file__).resolve().parent,
+                    *command, cwd=Path(__file__).resolve().parents[1],
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                 if job.status == "cancelled" and job.process.returncode is None:
                     job.process.terminate()

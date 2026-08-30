@@ -21,7 +21,7 @@ import unicodedata
 
 import uproot
 
-from press import Cart, CartError
+from .press import Cart, CartError
 
 # ---------------------------------------------------------------- terminal ----
 TTY = sys.stdout.isatty()

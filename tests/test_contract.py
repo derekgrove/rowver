@@ -7,7 +7,7 @@ import json
 import unittest
 from pathlib import Path
 
-import rvr6
+from rowver import rvr6
 
 
 def apply(meta: dict, operations: list[dict]) -> dict:

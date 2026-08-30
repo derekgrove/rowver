@@ -9,10 +9,10 @@ import numpy as np
 import uproot
 from aiohttp.test_utils import TestClient, TestServer
 
-from builder import Service, create_app, viewer_url
-from builder_spec import SpecError, compile_spec, validate_spec
+from rowver.builder import Service, create_app, viewer_url
+from rowver.builder_spec import SpecError, compile_spec, validate_spec
 from cart import Cart
-import rvr6
+from rowver import rvr6
 
 
 def study(source: str = "data", path: str = "events.root") -> dict:

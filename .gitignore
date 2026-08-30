@@ -13,3 +13,7 @@ studies/*
 # Local review notes and retired prototypes are not part of the product.
 bridge/
 remote/
+__pycache__/
+build/
+dist/
+*.egg-info/

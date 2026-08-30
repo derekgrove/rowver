@@ -6,7 +6,19 @@ opens them entirely in the browser.
 
 ## Install
 
-Mamba is recommended because it resolves the HEP Python stack quickly and reproducibly.
+RowVer is a pip-installable package with one CLI:
+
+```bash
+pip install rowver          # from a checkout: pip install .
+rowver new mystudy
+# Edit mystudy/cart.py: files, weights, baseline selection, and columns.
+rowver run mystudy/
+```
+
+The browser-builder helper (`python -m rowver.builder`) needs the `[live]`
+extra: `pip install 'rowver[live]'`.
+
+For development, mamba resolves the HEP Python stack quickly and reproducibly:
 
 ```bash
 git clone https://gitlab.cern.ch/dgrove/rowver.git
@@ -39,12 +51,13 @@ Purely local filesets need none of this.
 ## Build your cartridge
 
 ```bash
-cp -R studies/template studies/mine
-# Edit studies/mine/cart.py: files, weights, baseline selection, and columns.
-python run_rowver.py mine
+rowver new mine
+# Edit mine/cart.py: files, weights, baseline selection, and columns.
+rowver run mine/
 ```
 
-The output is `studies/mine/mine.rvr`. Drop it onto the web app, arrange the page, and
+`rowver run` takes any study directory path; a bare name is also looked up
+under `./studies/`. The output is `mine/mine.rvr`. Drop it onto the web app, arrange the page, and
 save it. Send that one file to a collaborator; they can reopen it and change the cuts or
 binning without your ROOT files or Python environment.
 
@@ -63,17 +76,23 @@ weights cannot silently look like data.
 Useful commands:
 
 ```bash
-python run_rowver.py --list
-python run_rowver.py mine --out /path/to/result.rvr
-python rvr6.py check /path/to/result.rvr
-python rvr6.py show /path/to/result.rvr
-python gate.py
+rowver run --list
+rowver run mine/ --out /path/to/result.rvr
+rowver check /path/to/result.rvr
+rowver show /path/to/result.rvr
+rowver extract flattened /path/to/result.rvr --from-map
+python gate.py          # release gate, from a checkout
+sh wheel_gate.sh        # the documented workflow from an installed wheel in a clean venv
 ```
+
+`python run_rowver.py …` and `python rvr6.py check|show …` keep working from a
+checkout as thin shims for one transition period.
 
 ## Programmatic use
 
 A study's `cart.py` recipe is the front door (the library that presses it is
-`press.py`), but a script can also write a cartridge directly:
+`rowver/press.py`; `from rowver import Cart`), but a script can also write a
+cartridge directly:
 `meta, buf = rvr6.pack(by_sample, weighted=..., weights=...)` then
 `rvr6.write(path, meta, buf)`. Both `write` and `read` run `rvr6.check` internally, so an
 invalid file can be neither produced nor opened. `contract/v6/cases.json` holds the worked
@@ -81,7 +100,7 @@ example of a valid header.
 
 The browser builder is experimental. After building the frontend's `viewer.html`, start its
 authenticated local helper with
-`python builder.py --root data=/path/to/ntuples --ui ../rowver_web/viewer.html`
+`python -m rowver.builder --root data=/path/to/ntuples --ui ../rowver_web/viewer.html`
 (or, without a local frontend checkout, pair against the hosted page:
 `--ui https://rowver.web.cern.ch`). The printed
 URL contains the pairing token. Arbitrary Python expressions remain a `cart.py` feature and
@@ -93,4 +112,4 @@ A cartridge includes the selected numeric columns and the exact `cart.py` proven
 including input paths. Review that metadata before sharing outside your collaboration.
 
 RowVer supports `.rvr` version 6 only. [FORMAT.md](FORMAT.md) defines the contract and
-`rvr6.py` is the reference implementation.
+`rowver/rvr6.py` is the reference implementation.

@@ -1,10 +1,10 @@
-"""Copy this directory, then edit only this file.
+"""Scaffolded by ``rowver new``; edit only this file.
 
-Build it from the repository root with ``python run_rowver.py <directory-name>``.
+Build it with ``rowver run <this-directory>``.
 """
 import awkward as ak
 
-from press import Cart
+from rowver import Cart
 
 
 def keep(events, metadata):

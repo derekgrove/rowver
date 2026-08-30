@@ -8,8 +8,8 @@ from pathlib import Path
 import numpy as np
 import uproot
 
-import rvr6
-from cart import Cart, CartError
+from rowver import rvr6
+from rowver import Cart, CartError
 
 
 class CartTests(unittest.TestCase):
@@ -98,7 +98,7 @@ class CartTests(unittest.TestCase):
                 keep=lambda events: events.pt >= 0,
                 columns={"pt": "pt"},
             )
-            import rvr6 as _rvr6
+            from rowver import rvr6 as _rvr6
             original = _rvr6.MAX_DATA_BYTES
             # 64 rows x (4 index + 8 f8 column) = 768 > 256; no weight slab (data)
             _rvr6.MAX_DATA_BYTES = 256
