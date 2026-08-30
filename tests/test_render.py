@@ -201,6 +201,20 @@ class RenderTests(unittest.TestCase):
         with self.assertRaises(ExtractError):
             self._fig(edit=lambda m: m["colours"].__setitem__("sig", "red"))
 
+    def test_schema_invalid_npz_dtypes_refused(self):
+        src = self.out / "t0_s0_1d_MET.data.npz"
+        with np.load(src) as z:
+            good = dict(z)
+        for poison in ({"h": good["h"].astype("<f4")},
+                       {"h2": good["h2"].astype(">f8")},
+                       {"sources": np.arange(3)},
+                       {"sources": good["sources"].reshape(3, 1)}):
+            (self.out / "edited.meta.json").write_text(self.meta0.read_text())
+            np.savez(self.out / "edited.data.npz", **{**good, **poison})
+            with self.assertRaises(ExtractError, msg=list(poison)):
+                render._draw(self.out / "edited.meta.json", 150, (10, 5),
+                             "plain")
+
     def test_one_bar_source_never_stacks(self):
         # JSROOT stacks only PLURAL bars: one bar + stack:true draws as the
         # plain outline with its recorded error bars, no fill, no band

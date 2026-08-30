@@ -212,8 +212,9 @@ def _draw(meta_path: Path, dpi: int, size: tuple[float, float],
             err = (z["err_down"], z["err_up"]) if "err_down" in z else None
     except (OSError, KeyError, ValueError, zipfile.BadZipFile) as exc:
         raise ExtractError(f"{name}: unreadable npz — {exc}") from exc
-    if src_arr.ndim != 1 or src_arr.dtype.kind != "U":
-        raise ExtractError(f"{name}: sources must be a 1-D unicode array")
+    if src_arr.ndim != 1 or not src_arr.dtype.str.startswith("<U"):
+        raise ExtractError(f"{name}: sources must be a 1-D little-endian "
+                           f"unicode array")
     sources = [str(s) for s in src_arr]
     K, nb = len(sources), len(centres)
     grids = (h, h2, n) + (err or ())
