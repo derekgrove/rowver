@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Compatibility shim: the builder is now ``rowver run``. Same flags."""
+"""Compatibility shim for ``rowver run``."""
 import sys
 
 from rowver.cli import main

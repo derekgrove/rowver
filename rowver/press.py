@@ -15,10 +15,10 @@ The fileset follows Coffea's familiar shape:
     {"sample": {"files": {"file.root": "Events"},
                 "metadata": {"weights": "genWeight"}}}
 
-Every sample must explicitly declare ``metadata['weights']``.  
-Use the branch name of your simulation weights or ``None`` for observed data. 
-Not declaring a weights branch is refused, even when every sample is weightless.
-This rigid enforcement is for your own good, forgotten MC weights and intentional data are not the same thing.
+Every sample must explicitly declare ``metadata['weights']``.
+Use a branch name or callable for event weights, or ``None`` for an unweighted
+sample. Not declaring a weights expression is refused, because forgotten weights
+and intentionally unweighted simulation are not the same thing.
 """
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 import awkward as ak
 import numpy as np
@@ -56,6 +57,59 @@ def study_names(root: Path = STUDIES) -> list[str]:
 
 def _remote(path: str) -> bool:
     return "://" in path
+
+
+def _open_tree(path: str, tree: str):
+    """Open one selected tree with the press's source-specific policy."""
+    options = ({"handler": uproot.source.xrootd.XRootDSource}
+               if path.startswith("root://") else {})
+    return uproot.open({path: tree}, **options)
+
+
+def _redacted_source(path: str) -> str:
+    """Keep a useful URL path while dropping userinfo, query, and fragment secrets."""
+    if not _remote(path):
+        return path
+    parsed = urlsplit(path)
+    safe_netloc = parsed.netloc.rsplit("@", 1)[-1]
+    return urlunsplit((parsed.scheme, safe_netloc, parsed.path, "", ""))
+
+
+def _redacted_error(exc: Exception, path: str) -> str:
+    """Remove URL credentials if a backend echoes them in its error."""
+    text = str(exc)
+    if not _remote(path):
+        return text
+    parsed = urlsplit(path)
+    redacted = _redacted_source(path)
+    without_query = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    for echoed in (path, path.split("#", 1)[0], without_query):
+        text = text.replace(echoed, redacted)
+    safe_netloc = parsed.netloc.rsplit("@", 1)[-1]
+    if parsed.netloc:
+        text = text.replace(parsed.netloc, safe_netloc)
+    for parameter in parsed.query.split("&"):
+        if parameter:
+            key = parameter.split("=", 1)[0]
+            text = text.replace(parameter, f"{key}=<redacted>")
+    if parsed.fragment:
+        text = text.replace(f"#{parsed.fragment}", "#<redacted>")
+    return text
+
+
+def _source_failure(sample: str, path: str, exc: Exception) -> CartError:
+    return CartError(
+        f"cannot open sample {sample!r} file {_redacted_source(path)!r}: "
+        f"{_redacted_error(exc, path)}"
+    )
+
+
+def _open_sample_tree(sample: str, path: str, tree: str):
+    """Open a tree and translate source failures consistently for users."""
+    try:
+        return _open_tree(path, tree)
+    except Exception as exc:
+        raise _source_failure(sample, path, exc) from exc
 
 
 def _call_shape(function: Callable[..., Any], where: str) -> int:
@@ -243,7 +297,7 @@ class Cart:
             if "weights" not in metadata:
                 raise CartError(
                     f'sample "{sample}" must explicitly set metadata["weights"] to a branch, '
-                    "a callable, or None for observed data")
+                    "a callable, or None for an unweighted sample")
             weight = metadata["weights"]
             if not (weight is None or isinstance(weight, str) and weight or callable(weight)):
                 raise CartError(f'sample "{sample}" has an invalid weights declaration')
@@ -305,12 +359,7 @@ class Cart:
             weight_chunks: list[np.ndarray] = []
             for path, tree_name in entry["files"].items():
                 metadata = self._meta(sample, path, tree_name)
-                opts = ({"handler": uproot.source.xrootd.XRootDSource}
-                        if path.startswith("root://") else {})
-                try:
-                    source = uproot.open({path: tree_name}, **opts)
-                except Exception as exc:
-                    raise CartError(f'cannot open {sample} file "{path}": {exc}') from exc
+                source = _open_sample_tree(sample, path, tree_name)
                 with source as tree:
                     if isinstance(step_size, int):
                         entries_per_chunk = step_size
@@ -456,6 +505,8 @@ class Cart:
         name = self.name or "unbound study"
         lines = [f"{name}: {len(self.fileset)} samples, {len(self.columns)} columns"]
         for sample, entry in self.fileset.items():
-            mode = "data" if entry["metadata"].get("weights") is None else "weighted"
+            mode = "unweighted" if entry["metadata"].get("weights") is None else "weighted"
             lines.append(f"  {sample}: {len(entry['files'])} file(s), {mode}")
+        lines.append("  columns pressed into cartridge:")
+        lines.extend(f"    {name}" for name in self.columns)
         return "\n".join(lines)

@@ -25,7 +25,8 @@ _Avoid_: Frontend, dashboard
 
 **Sample**:
 A named collection of collision data or simulated events from one or more source
-files.
+files. Collision data is unweighted; simulated events may be weighted or
+unweighted according to the study's needs.
 _Avoid_: Dataset
 
 **Column**:

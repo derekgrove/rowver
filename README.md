@@ -104,11 +104,12 @@ Your `cart.py` must say how every sample is weighted:
 
 ```python
 "metadata": {"weights": "genWeight"}  # simulated events
-"metadata": {"weights": None}         # observed data
+"metadata": {"weights": None}         # any intentionally unweighted sample
 ```
 
-Weights may also be a function. An omitted declaration is rejected so forgotten MC
-weights cannot silently look like data.
+Weights may also be a function. An omitted declaration is rejected so forgotten
+weights cannot silently look intentional. Use `rowver run --no-live mine/` for
+plain output without the live display's indexing pre-pass.
 
 Useful commands:
 

@@ -5,7 +5,6 @@ import argparse
 import contextlib
 import importlib.resources
 import shutil
-import time
 from pathlib import Path
 
 from .press import Cart, CartError, study_names
@@ -38,10 +37,10 @@ def _run(args: argparse.Namespace) -> int:
         if args.live:
             from .dashboard import Dashboard
             board = Dashboard(cart)
-            print("indexing files…")
-            board.index(cart)          # totals for the bars and the ETA
-            board.t0 = time.monotonic()
         with board.live() if board else contextlib.nullcontext():
+            if board:
+                board.index(cart)      # totals for the bars and the ETA
+                board.begin_skim()
             result = cart.build(args.out, step_size=step,
                                 progress=board.chunk if board else None)
     except (CartError, FormatError) as exc:
@@ -80,8 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--out", type=Path, help="output .rvr path or directory")
     run.add_argument("--step-size", default="100 MB",
                      help="Uproot chunk size, for example '100 MB' or an entry count")
-    run.add_argument("--live", action="store_true",
-                     help="draw a live press dashboard while building")
+    run.add_argument("--no-live", dest="live", action="store_false", default=True,
+                     help="disable live progress and the indexing pre-pass")
 
     for name, blurb in (("check", "format validation"), ("show", "print the full v6 header")):
         p = sub.add_parser(name, help=blurb)
