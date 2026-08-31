@@ -331,6 +331,8 @@ class Cart:
         ``progress``, when given, is called after each fully processed chunk with
         ``(sample, raw_rows, kept_rows)`` — raw is the tree entries the chunk covered
         (pre-PREPARE, the same currency as ``num_entries``), kept is what survived KEEP.
+        A callback object may additionally define ``source(sample, path, tree)`` and
+        ``sample_done(sample)`` lifecycle methods; plain callables remain supported.
         ``build`` additionally calls it once with ``(None, 0, 0)`` when skimming ends
         and the pack/compress/write phase begins — the long quiet stretch a watcher
         would otherwise read as a hang. An exception from the callback aborts the
@@ -359,6 +361,9 @@ class Cart:
             weight_chunks: list[np.ndarray] = []
             for path, tree_name in entry["files"].items():
                 metadata = self._meta(sample, path, tree_name)
+                source_progress = getattr(progress, "source", None)
+                if source_progress is not None:
+                    source_progress(sample, path, tree_name)
                 source = _open_sample_tree(sample, path, tree_name)
                 with source as tree:
                     if isinstance(step_size, int):
@@ -442,6 +447,9 @@ class Cart:
             if entry["metadata"]["weights"] is not None:
                 output_weights[sample] = (np.concatenate(weight_chunks) if weight_chunks
                                           else np.empty(0, dtype=np.float64))
+            sample_done = getattr(progress, "sample_done", None)
+            if sample_done is not None:
+                sample_done(sample)
         return output, output_weights
 
     def _provenance(self, rows: Mapping[str, Mapping[str, np.ndarray]], built: str) -> dict:

@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""Live indexing, skimming, and pressing progress for ``rowver run``.
+"""One-pass and indexed live progress for ``rowver run``.
 
-The dashboard is an observer. ``Cart.build(progress=board.chunk)`` supplies the
-skim and press events; the indexing pre-pass supplies totals used only for display.
+The dashboard is an observer. ``Cart.build(progress=board)`` supplies the
+skim and press events. Robust mode adds an indexing pre-pass for exact totals.
 """
 from __future__ import annotations
 
@@ -97,9 +97,10 @@ def clock(seconds: float) -> str:
 class Dashboard:
     """Own one output stream and all state for the three display phases."""
 
-    def __init__(self, cart: Cart, output=None) -> None:
+    def __init__(self, cart: Cart, output=None, *, robust: bool = False) -> None:
         self.output = output if output is not None else sys.stdout
         self.tty = self.output.isatty()
+        self.robust = robust
         self.est_row_bytes = 8 * len(cart.columns) + 12
         self.order = list(cart.fileset)
         self.weighted = {
@@ -114,7 +115,7 @@ class Dashboard:
         self.total: dict[str, int] = {}
         self.scanned = {name: 0 for name in self.order}
         self.kept = {name: 0 for name in self.order}
-        self.phase = "indexing"
+        self.phase = "indexing" if robust else "starting"
         self.index_files = len(self.sources)
         self.index_file = 1 if self.sources else 0
         self.indexed_files = 0
@@ -181,6 +182,36 @@ class Dashboard:
         for name in self.order:
             self.total.setdefault(name, 0)
 
+    def source(self, sample: str, path: str, tree: str) -> None:
+        """Observe a source immediately before the real skim opens it."""
+        with self.lock:
+            self.current = sample
+            self.current_file = path
+            if not self.robust:
+                self.phase = "skimming"
+        if self.robust:
+            return
+        if self.tty:
+            self.draw()
+        else:
+            self._write_lines([
+                f"skimming {_clean(sample)}: {source_name(path)}"
+            ])
+
+    def sample_done(self, sample: str) -> None:
+        """Observe completion without inventing a total for one-pass progress."""
+        if self.robust:
+            return
+        with self.lock:
+            if sample in self.reported:
+                return
+            self.reported.add(sample)
+            line = self._skim_line(sample)
+        if self.tty:
+            self.draw()
+        else:
+            self._write_lines([line])
+
     def begin_skim(self) -> None:
         with self.lock:
             self.phase = "skimming"
@@ -199,21 +230,23 @@ class Dashboard:
         with self.lock:
             if sample is None:
                 if not self.tty:
-                    for name in self._completed_before(None):
-                        self.reported.add(name)
-                        lines.append(self._skim_line(name))
+                    if self.robust:
+                        for name in self._completed_before(None):
+                            self.reported.add(name)
+                            lines.append(self._skim_line(name))
                     lines.append("pressing cartridge…")
                 self.phase = "pressing"
             else:
-                if not self.tty:
+                if self.robust and not self.tty:
                     for name in self._completed_before(sample):
                         self.reported.add(name)
                         lines.append(self._skim_line(name))
                 self.scanned[sample] += scanned
                 self.kept[sample] += kept
                 self.current = sample
-                boundary = self.scanned[sample] >= self.total.get(sample, 0)
-                if not self.tty and boundary and sample not in self.reported:
+                boundary = (self.robust
+                            and self.scanned[sample] >= self.total.get(sample, 0))
+                if self.robust and not self.tty and boundary and sample not in self.reported:
                     self.reported.add(sample)
                     lines.append(self._skim_line(sample))
         if lines:
@@ -225,6 +258,8 @@ class Dashboard:
         now = time.monotonic()
         if self.tty and (now - self.last_draw > 0.15 or boundary):
             self.draw()
+
+    __call__ = chunk
 
     def _skim_line(self, sample: str) -> str:
         return (f"skimmed {_clean(sample)}: {self.scanned[sample]:,} scanned, "
@@ -265,6 +300,9 @@ class Dashboard:
 
     def _draw(self, final: bool) -> None:
         self.last_draw = time.monotonic()
+        if not self.robust:
+            self._draw_fast(final)
+            return
         if self.phase == "indexing":
             if not self.tty:
                 if self.index_files:
@@ -291,6 +329,35 @@ class Dashboard:
             self._flush(self._box([rows]), final)
             return
         self._draw_samples(final)
+
+    def _draw_fast(self, final: bool) -> None:
+        if not self.tty:
+            return
+        scanned = sum(self.scanned.values())
+        kept = sum(self.kept.values())
+        elapsed = time.monotonic() - self.t0
+        self.spins += 1
+        spin = "" if final else SPIN[self.spins % len(SPIN)]
+        width = max(shutil.get_terminal_size((120, 40)).columns - 5, 1)
+        if self.phase == "starting":
+            heading = f"Starting one-pass skim… {spin}"
+            detail = "Waiting for the first source"
+        elif self.phase == "pressing":
+            heading = ("Cartridge written" if final
+                       else f"Pressing the cartridge (pack + gzip)… {spin}")
+            detail = f"{scanned:,} scanned · {kept:,} kept"
+        else:
+            heading = f"Skimming {_clean(self.current)}  {spin}"
+            detail = source_name(self.current_file)
+        rows = [
+            self._row(clip(heading, width).rstrip()),
+            self._row(clip(detail, width).rstrip()),
+            self._row(clip(
+                f"{scanned:,} scanned · {kept:,} kept · elapsed {clock(elapsed)}",
+                width,
+            ).rstrip()),
+        ]
+        self._flush(self._box([rows]), final)
 
     def _index_line(self, verb: str, entries: int | None = None) -> str:
         prefix = f"{verb} {self.index_file}/{self.index_files} {_clean(self.current)}: "

@@ -34,15 +34,15 @@ def _run(args: argparse.Namespace) -> int:
         # --path is a compatibility alias: Cart.load now takes paths directly
         cart = Cart.load(args.study)
         print(cart.summary())
-        if args.live:
+        if args.progress != "plain":
             from .dashboard import Dashboard
-            board = Dashboard(cart)
+            board = Dashboard(cart, robust=args.progress == "robust")
         with board.live() if board else contextlib.nullcontext():
-            if board:
+            if board and board.robust:
                 board.index(cart)      # totals for the bars and the ETA
                 board.begin_skim()
             result = cart.build(args.out, step_size=step,
-                                progress=board.chunk if board else None)
+                                progress=board)
     except (CartError, FormatError) as exc:
         raise SystemExit(f"error: {exc}") from exc
     if board:
@@ -70,7 +70,12 @@ def main(argv: list[str] | None = None) -> int:
     new = sub.add_parser("new", help="scaffold a study directory from the template")
     new.add_argument("study", help="directory to create")
 
-    run = sub.add_parser("run", help="run a study, produce the .rvr")
+    run = sub.add_parser(
+        "run", help="run a study, produce the .rvr",
+        description=("Run a study. By default progress is live and one-pass; "
+                     "sources are opened only by the real skim."),
+        allow_abbrev=False,
+    )
     run.add_argument("study", nargs="?",
                      help="a study directory path, or a name under ./studies/")
     run.add_argument("--path", action="store_true",
@@ -79,8 +84,16 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--out", type=Path, help="output .rvr path or directory")
     run.add_argument("--step-size", default="100 MB",
                      help="Uproot chunk size, for example '100 MB' or an entry count")
-    run.add_argument("--no-live", dest="live", action="store_false", default=True,
-                     help="disable live progress and the indexing pre-pass")
+    progress = run.add_mutually_exclusive_group()
+    progress.add_argument(
+        "--no-live", dest="progress", action="store_const", const="plain",
+        help="plain one-pass execution with no dashboard",
+    )
+    progress.add_argument(
+        "--live-robust", dest="progress", action="store_const", const="robust",
+        help="indexed live display with exact totals and ETA (opens sources twice)",
+    )
+    run.set_defaults(progress="fast")
 
     for name, blurb in (("check", "format validation"), ("show", "print the full v6 header")):
         p = sub.add_parser(name, help=blurb)

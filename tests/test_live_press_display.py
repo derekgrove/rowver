@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 import re
+import tempfile
 import time
 import unittest
 from argparse import Namespace
+from pathlib import Path
 from unittest import mock
 
+import numpy as np
+import uproot
+
 from rowver import Cart, CartError
-from rowver import cli
+from rowver import cli, rvr6
 from rowver.dashboard import Dashboard, cells, source_name
 
 
@@ -64,16 +70,22 @@ class SummaryAndCliTests(unittest.TestCase):
             "    a",
         ])
 
-    def test_live_defaults_true_and_no_live_turns_it_off(self):
+    def test_three_progress_modes_parse_explicitly(self):
         seen = []
-        with mock.patch("rowver.cli._run", side_effect=lambda args: seen.append(args.live) or 0):
+        with mock.patch("rowver.cli._run",
+                        side_effect=lambda args: seen.append(args.progress) or 0):
             cli.main(["run", "study"])
             cli.main(["run", "--no-live", "study"])
-        self.assertEqual(seen, [True, False])
+            cli.main(["run", "--live-robust", "study"])
+            with self.assertRaises(SystemExit):
+                cli.main(["run", "--live", "study"])
+            with self.assertRaises(SystemExit):
+                cli.main(["run", "--live-r", "study"])
+        self.assertEqual(seen, ["fast", "plain", "robust"])
         with self.assertRaises(SystemExit):
-            cli.main(["run", "--live", "study"])
+            cli.main(["run", "--no-live", "--live-robust", "study"])
 
-    def test_live_context_wraps_index_and_build(self):
+    def test_default_live_wraps_only_the_real_build(self):
         events = []
 
         class FakeCart:
@@ -83,6 +95,7 @@ class SummaryAndCliTests(unittest.TestCase):
             def build(self, *args, **kwargs):
                 events.append("build")
                 self.assert_live()
+                kwargs["progress"].source("sample", "/tmp/source.root", "Events")
                 return {"file": "out.rvr", "rows": 1, "compressed": 0}
 
         cart = FakeCart()
@@ -90,10 +103,15 @@ class SummaryAndCliTests(unittest.TestCase):
         cart.assert_live = lambda: self.assertTrue(active["live"])
 
         class FakeBoard:
-            chunk = object()
-
-            def __init__(self, value):
+            def __init__(self, value, robust=False):
                 self.assert_cart = value
+                self.robust = robust
+
+            def __call__(self, *args):
+                events.append("chunk")
+
+            def source(self, *args):
+                events.append("source")
 
             def live(self):
                 class Context:
@@ -106,30 +124,57 @@ class SummaryAndCliTests(unittest.TestCase):
                         active["live"] = False
                 return Context()
 
+            def draw(self, final=False):
+                events.append("final")
+
+        args = Namespace(list=False, study="study", step_size="1", out=None,
+                         progress="fast")
+        with mock.patch("rowver.cli.Cart.load", return_value=cart), \
+             mock.patch("rowver.dashboard.Dashboard", FakeBoard), \
+             mock.patch("builtins.print"):
+            cli._run(args)
+        self.assertEqual(events, ["enter", "build", "source", "exit", "final"])
+
+    def test_robust_live_indexes_before_the_real_build(self):
+        events = []
+        cart = mock.Mock()
+        cart.summary.return_value = "summary"
+        cart.build.return_value = {"file": "out.rvr", "rows": 0, "compressed": 0}
+
+        class FakeBoard:
+            def __init__(self, value, robust=False):
+                self.robust = robust
+
+            def __call__(self, *args):
+                pass
+
+            def live(self):
+                return contextlib.nullcontext()
+
             def index(self, value):
-                self.assert_cart = value
                 events.append("index")
-                self_test.assertTrue(active["live"])
 
             def begin_skim(self):
                 events.append("skim")
 
             def draw(self, final=False):
-                events.append("final")
+                pass
 
-        self_test = self
-        args = Namespace(list=False, study="study", step_size="1", out=None, live=True)
+        args = Namespace(list=False, study="study", step_size="1", out=None,
+                         progress="robust")
         with mock.patch("rowver.cli.Cart.load", return_value=cart), \
              mock.patch("rowver.dashboard.Dashboard", FakeBoard), \
              mock.patch("builtins.print"):
             cli._run(args)
-        self.assertEqual(events, ["enter", "index", "skim", "build", "exit", "final"])
+        self.assertEqual(events, ["index", "skim"])
+        self.assertTrue(cart.build.call_args.kwargs["progress"].robust)
 
     def test_no_live_constructs_no_dashboard_or_index(self):
         cart = mock.Mock()
         cart.summary.return_value = "summary"
         cart.build.return_value = {"file": "out.rvr", "rows": 0, "compressed": 0}
-        args = Namespace(list=False, study="study", step_size="1", out=None, live=False)
+        args = Namespace(list=False, study="study", step_size="1", out=None,
+                         progress="plain")
         with mock.patch("rowver.cli.Cart.load", return_value=cart), \
              mock.patch("rowver.dashboard.Dashboard") as dashboard, \
              mock.patch("builtins.print"):
@@ -137,11 +182,103 @@ class SummaryAndCliTests(unittest.TestCase):
         dashboard.assert_not_called()
         self.assertIsNone(cart.build.call_args.kwargs["progress"])
 
+    def test_modes_open_sources_once_once_twice_and_write_equivalent_cartridges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "events.root"
+            with uproot.recreate(source) as output:
+                output["Events"] = {"x": np.arange(6.0),
+                                    "w": np.arange(6.0) + 0.5}
+            cart = Cart(
+                fileset={"sample": {"files": {str(source): "Events"},
+                                    "metadata": {"weights": "w"}}},
+                columns={"x": "x"}, keep=keep_all,
+            )
+            cart.name = "study"
+            cart.dir = root
+            results = []
+            counts = []
+            from rowver import press
+            real_open = press._open_sample_tree
+            opened = 0
+
+            def tracked_open(*args):
+                nonlocal opened
+                opened += 1
+                return real_open(*args)
+
+            with mock.patch("rowver.cli.Cart.load", return_value=cart), \
+                 mock.patch("rowver.press._open_sample_tree", side_effect=tracked_open), \
+                 mock.patch("rowver.dashboard._open_sample_tree", side_effect=tracked_open):
+                for mode in ("fast", "plain", "robust"):
+                    before = opened
+                    args = Namespace(list=False, study="study", step_size="2",
+                                     out=root / f"{mode}.rvr", progress=mode)
+                    with contextlib.redirect_stdout(Stream()):
+                        cli._run(args)
+                    counts.append(opened - before)
+                    results.append(rvr6.read_by_sample(root / f"{mode}.rvr"))
+
+        self.assertEqual(counts, [1, 1, 2])
+        for meta, samples in results[1:]:
+            self.assertEqual(meta["about"], results[0][0]["about"])
+            self.assertEqual(meta["data"], results[0][0]["data"])
+            np.testing.assert_array_equal(samples["sample"]["x"],
+                                          results[0][1]["sample"]["x"])
+            np.testing.assert_array_equal(samples["sample"]["weight"],
+                                          results[0][1]["sample"]["weight"])
+
+    def test_default_source_error_still_uses_the_established_cart_error(self):
+        cart = Cart(fileset={"sample": {"files": {"/missing/source.root": "Events"},
+                                        "metadata": {"weights": None}}},
+                    columns={"x": "x"}, keep=keep_all)
+        cart.name = "study"
+        cart.dir = Path("/tmp")
+        args = Namespace(list=False, study="study", step_size="1",
+                         out=Path("/tmp/never.rvr"), progress="fast")
+        with mock.patch("rowver.cli.Cart.load", return_value=cart), \
+             contextlib.redirect_stdout(Stream()), \
+             self.assertRaisesRegex(SystemExit,
+                                     "cannot open sample 'sample' file '/missing/source.root'"):
+            cli._run(args)
+
 
 class DashboardTests(unittest.TestCase):
+    def test_fast_redirected_progress_has_no_exact_totals_percent_or_eta(self):
+        stream = Stream()
+        board = Dashboard(make_cart(names=("sample",)), output=stream)
+        with board.live():
+            board.source("sample", "/tmp/sample.root", "Events")
+            board("sample", 10, 3)
+            board.draw()
+            board.sample_done("sample")
+            board(None, 0, 0)
+        output = stream.getvalue()
+        self.assertIn("skimming sample: sample.root", output)
+        self.assertIn("skimmed sample: 10 scanned, 3 kept", output)
+        self.assertIn("pressing cartridge…", output)
+        self.assertNotIn("eta", output.lower())
+        self.assertNotIn("%", output)
+        self.assertNotIn("/10", output)
+
+    def test_fast_tty_progress_has_no_exact_totals_percent_or_eta(self):
+        stream = Stream(True)
+        board = Dashboard(make_cart(names=("sample",)), output=stream)
+        with board.live():
+            board.source("sample", "/tmp/sample.root", "Events")
+            board("sample", 10, 3)
+            board.draw()
+        output = stream.getvalue()
+        self.assertIn("Skimming sample", output)
+        self.assertIn("10 scanned", output)
+        self.assertIn("3 kept", output)
+        self.assertNotIn("eta", output.lower())
+        self.assertNotIn("%", output)
+
     def test_redirected_output_has_durable_lines_and_zero_samples_once(self):
         stream = Stream()
-        board = Dashboard(make_cart(names=("zero", "full")), output=stream)
+        board = Dashboard(make_cart(names=("zero", "full")), output=stream,
+                          robust=True)
         with mock.patch("rowver.dashboard._open_sample_tree",
                         side_effect=[Tree(0), Tree(10)]):
             with board.live():
@@ -162,7 +299,7 @@ class DashboardTests(unittest.TestCase):
     def test_tty_draws_before_open_and_ticks_during_delayed_open(self):
         stream = Stream(tty=True)
         cart = make_cart(names=("sample",))
-        board = Dashboard(cart, output=stream)
+        board = Dashboard(cart, output=stream, robust=True)
 
         def delayed(*args):
             self.assertIn("Indexing files  1/1", stream.getvalue())
@@ -175,8 +312,23 @@ class DashboardTests(unittest.TestCase):
         self.assertGreaterEqual(stream.getvalue().count("Indexing files"), 2)
         self.assertIn("12 entries", stream.getvalue())
 
+    def test_robust_tty_retains_exact_totals_percent_and_eta(self):
+        stream = Stream(tty=True)
+        cart = make_cart(names=("sample",))
+        board = Dashboard(cart, output=stream, robust=True)
+        with mock.patch("rowver.dashboard._open_sample_tree", return_value=Tree(10)):
+            board.index(cart)
+        board.begin_skim()
+        board("sample", 5, 2)
+        board.draw()
+        output = stream.getvalue().lower()
+        self.assertIn("5/10", output)
+        self.assertIn("50.0%", output)
+        self.assertIn("eta", output)
+
     def test_all_phase_transitions_draw_synchronously_in_tty(self):
-        board = Dashboard(make_cart(names=("sample",)), output=Stream(tty=True))
+        board = Dashboard(make_cart(names=("sample",)), output=Stream(tty=True),
+                          robust=True)
         phases = []
         original = board._draw
 
@@ -197,7 +349,7 @@ class DashboardTests(unittest.TestCase):
     def test_tty_pressing_transition_emits_no_redirected_completion_lines(self):
         stream = Stream(True)
         cart = make_cart(names=("sample",))
-        board = Dashboard(cart, output=stream)
+        board = Dashboard(cart, output=stream, robust=True)
         board.total = {"sample": 1}
         board.begin_skim()
         board.chunk("sample", 1, 1)
@@ -213,7 +365,7 @@ class DashboardTests(unittest.TestCase):
         cart = Cart(fileset={name: {"files": {url: "Events"},
                                    "metadata": {"weights": None}}},
                     columns={"x": "x"}, keep=keep_all)
-        board = Dashboard(cart, output=Stream())
+        board = Dashboard(cart, output=Stream(), robust=True)
         echoed = OSError(f"cannot resolve {url}")
         with mock.patch("rowver.press._open_tree", side_effect=echoed):
             with self.assertRaises(CartError) as caught:
@@ -245,7 +397,7 @@ class DashboardTests(unittest.TestCase):
                     columns={"x": "x"}, keep=keep_all)
         with mock.patch("rowver.dashboard._open_sample_tree", return_value=LazyFailure()):
             with self.assertRaises(CartError) as caught:
-                Dashboard(cart, output=Stream()).index(cart)
+                Dashboard(cart, output=Stream(), robust=True).index(cart)
         message = str(caught.exception)
         self.assertNotIn("SEKRIT", message)
         self.assertNotIn("debug=1", message)
@@ -258,7 +410,8 @@ class DashboardTests(unittest.TestCase):
 
     def test_indexing_frame_fits_a_narrow_terminal(self):
         stream = Stream(True)
-        board = Dashboard(make_cart(names=("a very long sample name",)), output=stream)
+        board = Dashboard(make_cart(names=("a very long sample name",)), output=stream,
+                          robust=True)
         with mock.patch("rowver.dashboard.shutil.get_terminal_size",
                         return_value=os.terminal_size((40, 20))):
             board.draw()
@@ -274,7 +427,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("…", shown)
         cart = make_cart(names=("sample\n\x1bname",))
         stream = Stream()
-        board = Dashboard(cart, output=stream)
+        board = Dashboard(cart, output=stream, robust=True)
         board.total = {"sample\n\x1bname": 1}
         board.begin_skim()
         board.chunk("sample\n\x1bname", 1, 1)
@@ -290,7 +443,7 @@ class DashboardTests(unittest.TestCase):
 
     def test_sample_rows_have_no_kind_tags_and_weight_controls_active_colour(self):
         stream = Stream(True)
-        board = Dashboard(make_cart(), output=stream)
+        board = Dashboard(make_cart(), output=stream, robust=True)
         board.total = {"unweighted": 10, "weighted": 10}
         board.begin_skim()
         output = stream.getvalue()
@@ -332,7 +485,7 @@ class DashboardTests(unittest.TestCase):
                                         "metadata": {"weights": None}}},
                     columns={"x": "x"}, keep=keep_all)
         with mock.patch("rowver.press.uproot.open", return_value=Tree(0)) as opened:
-            Dashboard(cart, output=Stream()).index(cart)
+            Dashboard(cart, output=Stream(), robust=True).index(cart)
             cart.skim(step_size=1)
         self.assertEqual(opened.call_count, 2)
         for call in opened.call_args_list:
