@@ -6,6 +6,10 @@ __pycache__/
 studies/*
 !studies/template/
 !studies/template/cart.py
+!studies/jetmet_2018_simple/
+!studies/jetmet_2018_simple/cart.py
+!studies/jetmet_2018_advanced/
+!studies/jetmet_2018_advanced/cart.py
 
 # Built cartridges are artifacts, not source.
 *.rvr

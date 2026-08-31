@@ -4,6 +4,40 @@ RowVer turns ROOT ntuples into a shareable `.rvr` file for interactive plots, ta
 cuts, and region maps. This repository builds cartridges; a matching RowVer 6 Web build
 opens them entirely in the browser.
 
+## Quick start: DATA + MC
+
+The smallest complete example is
+[`studies/jetmet_2018_simple/cart.py`](studies/jetmet_2018_simple/cart.py). It reads one
+2018 MET DATA file and one UL18 TTJets MC file from CMS DAS. Every path, tree, column,
+selection, and weight declaration is written directly in the study—there are no setup
+helpers to follow.
+
+```bash
+git clone https://gitlab.cern.ch/dgrove/rowver.git
+cd rowver
+mamba env create -f environment.yml
+mamba activate rowver
+mamba install -n rowver xrootd voms
+pip install -e .
+voms-proxy-init --voms cms --valid 192:00
+rowver run jetmet_2018_simple
+```
+
+This writes `studies/jetmet_2018_simple/jetmet_2018_simple.rvr`. Open
+[RowVer Web](https://rowver.web.cern.ch), drop the `.rvr` file onto the page, and start
+plotting. The two lines that keep DATA and MC yields correct are visible beside each
+sample:
+
+```python
+"metadata": {"kind": "data", "weights": None}       # do not weight DATA
+"metadata": {"kind": "mc", "weights": "genWeight"}  # weight MC event by event
+```
+
+The remote files require CMS grid access. If your site does not set the proxy and CA
+locations automatically, use the setup under [Remote CMS files](#remote-cms-files).
+For a larger local stress study with reusable helpers, see
+[`studies/jetmet_2018_advanced/cart.py`](studies/jetmet_2018_advanced/cart.py).
+
 ## Install
 
 RowVer is a pip-installable package with one CLI:
@@ -25,9 +59,12 @@ git clone https://gitlab.cern.ch/dgrove/rowver.git
 cd rowver
 mamba env create -f environment.yml
 mamba activate rowver
+pip install -e .
 ```
 
 Conda can use the same file: `conda env create -f environment.yml`.
+
+## Remote CMS files
 
 Remote files (`root://…` in a fileset) additionally need the XRootD client —
 `mamba install -n rowver xrootd` — and, for GSI-protected redirectors such as
