@@ -419,6 +419,36 @@ class DashboardTests(unittest.TestCase):
         for line in stream.getvalue().splitlines():
             self.assertLessEqual(cells(ansi.sub("", line)), 39)
 
+    def test_compact_footer_does_not_clip_kept_count(self):
+        names = ("top_Run2", "boson_Run2", "diboson_Run2", "triboson_Run2",
+                 "SMS_300_250", "SMS_300_260", "SMS_300_270", "SMS_300_280",
+                 "SMS_300_290", "SMS_300_295")
+        stream = Stream(True)
+        board = Dashboard(make_cart(names=names), output=stream, robust=True)
+        board.total = {names[0]: 99_000_000,
+                       **{name: 14_000_000 for name in names[1:]}}
+        board.scanned[names[0]] = 94_440_000
+        board.kept[names[0]] = 45_670_000
+        board.phase = "skimming"
+        with mock.patch("rowver.dashboard.shutil.get_terminal_size",
+                        return_value=os.terminal_size((32, 20))):
+            board.draw()
+        ansi = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+        self.assertIn("kept 45.67M", ansi.sub("", stream.getvalue()))
+
+    def test_compact_footer_does_not_expand_to_a_wide_terminal(self):
+        names = tuple(f"sample_{number}" for number in range(10))
+        stream = Stream(True)
+        board = Dashboard(make_cart(names=names), output=stream, robust=True)
+        board.total = {name: 1 for name in names}
+        board.phase = "skimming"
+        with mock.patch("rowver.dashboard.shutil.get_terminal_size",
+                        return_value=os.terminal_size((200, 12))):
+            board.draw()
+        ansi = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+        self.assertLessEqual(max(cells(ansi.sub("", line))
+                                 for line in stream.getvalue().splitlines()), 55)
+
     def test_names_are_sanitized_and_source_is_cell_bounded(self):
         shown = source_name(
             "root://host/a/control%20/very-very-very-long-世界-filename.root?x=1#y"

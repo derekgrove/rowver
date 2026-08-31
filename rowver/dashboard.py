@@ -400,10 +400,11 @@ class Dashboard:
                     painted = " ".join(value for _, value in row)
                     pad = " " * ((ncols - len(row)) * (namew + 13))
                     grid.append((plain + pad, painted + pad))
-                foot = clip(f"{short(scanned)}/{short(total)} {pct_of(scanned, total)}"
-                            f"  kept {short(kept)}  "
-                            + (doing or f"eta {clock(eta)}  {spin}"),
-                            (namew + 13) * ncols - 1)
+                summary = (f"{short(scanned)}/{short(total)} "
+                           f"{pct_of(scanned, total)} kept {short(kept)}")
+                foot = clip(summary + "  " + (doing or f"eta {clock(eta)}  {spin}"),
+                            min(max((namew + 13) * ncols - 1, cells(summary)),
+                                cols - 5))
                 self._flush(self._box([grid, [self._row(foot)]]), final)
                 return
             width = max(8, min(cols - 1, 60))
