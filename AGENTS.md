@@ -14,6 +14,11 @@ Default vocabulary: needs-triage, needs-info, ready-for-agent, ready-for-human, 
 
 Single-context: `CONTEXT.md` at the root, ADRs in `docs/adr/`. See `docs/agents/domain.md`.
 
+### Independent verification
+
+For cartridge contracts, numerical semantics, extraction, remote-data behavior, or
+cross-repository checks, see `docs/agents/verification.md`.
+
 ### Commit gate: cross-model adversarial review
 
 After `/code-review` passes and before committing, the working agent runs an adversarial review by the *other* vendor's model — never itself:
