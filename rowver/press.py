@@ -32,6 +32,7 @@ import multiprocessing
 import os
 import signal
 import threading
+from copy import deepcopy
 from datetime import datetime, timezone
 from multiprocessing.connection import wait
 from pathlib import Path
@@ -297,12 +298,14 @@ class Cart:
                  columns: Mapping[str, str | Callable[..., Any]],
                  keep: Callable[..., Any], prepare: Callable[..., Any] | None = None,
                  labels: Mapping[str, Mapping[Any, str]] | None = None,
+                 view: Mapping[str, Any] | None = None,
                  title: str | None = None, note: str | None = None):
         self.fileset = {name: dict(entry) for name, entry in fileset.items()}
         self.columns = dict(columns)
         self.keep = keep
         self.prepare = prepare
         self.labels = dict(labels or {})
+        self.view = deepcopy(dict(view or {}))
         self.title = title
         self.note = note
         self.name: str | None = None
@@ -420,6 +423,7 @@ class Cart:
             raise CartError("title must be text")
         if self.note is not None and not isinstance(self.note, str):
             raise CartError("note must be text")
+        _jsonable(self.view, "view")
         self._validated = True
 
     def _meta(self, sample: str, path: str, tree: str) -> dict:
@@ -797,6 +801,7 @@ class Cart:
             about=about,
             made=self._provenance(rows, built),
         )
+        meta["view"].update(deepcopy(self.view))
         target = Path(destination) if destination else self.dir / f"{self.name}.rvr"
         if target.suffix != ".rvr":
             target = target / f"{self.name}.rvr"

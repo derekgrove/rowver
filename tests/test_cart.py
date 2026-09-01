@@ -108,6 +108,33 @@ class CartTests(unittest.TestCase):
             finally:
                 _rvr6.MAX_DATA_BYTES = original
 
+    def test_build_seeds_saved_view_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ntuple = root / "events.root"
+            with uproot.recreate(ntuple) as output:
+                output["Events"] = {"pt": np.array([25.0])}
+            study = root / "mine"
+            study.mkdir()
+            (study / "cart.py").write_text(textwrap.dedent(f"""
+                from rowver import Cart
+
+                CART = Cart(
+                    fileset={{"tt": {{"files": {{{str(ntuple)!r}: "Events"}},
+                                      "metadata": {{"weights": None}}}}}},
+                    keep=lambda events: events.pt > 0,
+                    columns={{"pt": "pt"}},
+                    view={{"groups": {{"of": {{"tt": "top"}}, "order": ["top"]}}}},
+                )
+            """), encoding="utf-8")
+
+            result = Cart.load(study).build(root / "mine.rvr")
+            meta, _ = rvr6.read(result["file"])
+
+        self.assertEqual(meta["view"], {
+            "groups": {"of": {"tt": "top"}, "order": ["top"]},
+        })
+
 
 if __name__ == "__main__":
     unittest.main()
