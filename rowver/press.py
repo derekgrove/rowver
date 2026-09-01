@@ -28,7 +28,12 @@ import re
 import importlib.util
 import inspect
 import json
+import multiprocessing
+import os
+import signal
+import threading
 from datetime import datetime, timezone
+from multiprocessing.connection import wait
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit, urlunsplit
@@ -75,7 +80,7 @@ def _redacted_source(path: str) -> str:
     return urlunsplit((parsed.scheme, safe_netloc, parsed.path, "", ""))
 
 
-def _redacted_error(exc: Exception, path: str) -> str:
+def _redacted_error(exc: BaseException, path: str) -> str:
     """Remove URL credentials if a backend echoes them in its error."""
     text = str(exc)
     if not _remote(path):
@@ -102,6 +107,103 @@ def _source_failure(sample: str, path: str, exc: Exception) -> CartError:
         f"cannot open sample {sample!r} file {_redacted_source(path)!r}: "
         f"{_redacted_error(exc, path)}"
     )
+
+
+def _study_hash(study: Path) -> str:
+    """Fingerprint executable Python owned by one Study directory."""
+    digest = hashlib.sha256()
+    for source in sorted(study.rglob("*.py")):
+        try:
+            contents = source.read_bytes()
+        except OSError as exc:
+            raise CartError(f"cannot read Study recipe {source}: {exc}") from exc
+        digest.update(str(source.relative_to(study)).encode())
+        digest.update(b"\0")
+        digest.update(contents)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _raise_parallel_error(kind: str, text: str) -> None:
+    if kind == "interrupt":
+        raise KeyboardInterrupt(text)
+    if kind == "exit":
+        raise SystemExit(text)
+    raise CartError(text)
+
+
+def _parallel_worker(study: str, expected_hash: str, step_size: int | str,
+                     tasks, messages, parent_watch) -> None:
+    """Reload one Study and return source results over an ordinary process pipe."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    def stop_with_parent() -> None:
+        try:
+            parent_watch.recv_bytes()
+        except (EOFError, OSError):
+            os._exit(1)
+
+    threading.Thread(target=stop_with_parent, daemon=True).start()
+    current_path: str | None = None
+    try:
+        if _study_hash(Path(study)) != expected_hash:
+            raise CartError("study recipe changed before parallel workers started")
+        cart = Cart.load(study)
+        full_fileset = cart.fileset
+        messages.send(("ready",))
+        while True:
+            task = tasks.get()
+            if task is None:
+                break
+            sample_at, source_at, sample, path, tree = task
+            current_path = path
+            if _study_hash(Path(study)) != expected_hash:
+                raise CartError("study recipe changed after parallel tasks were resolved")
+            samples = list(full_fileset)
+            sources = list(full_fileset.get(sample, {}).get("files", {}).items())
+            if (sample_at >= len(samples) or samples[sample_at] != sample
+                    or source_at >= len(sources) or sources[source_at] != (path, tree)):
+                raise CartError("study fileset changed after parallel tasks were resolved")
+
+            scanned = 0
+
+            class Progress:
+                def source(self, name: str, source: str, tree_name: str) -> None:
+                    messages.send(("source", name, source, tree_name))
+
+                def __call__(self, name: str | None, raw: int, kept: int) -> None:
+                    nonlocal scanned
+                    scanned += raw
+                    messages.send(("chunk", name, raw, kept))
+
+                def _size(self, name: str, kept: int, wide: dict[str, bool]) -> None:
+                    messages.send(("size", name, kept, wide))
+
+            entry = full_fileset[sample]
+            cart.fileset = {sample: {
+                "files": {path: tree},
+                "metadata": entry["metadata"],
+            }}
+            try:
+                rows, weights = cart.skim(step_size, Progress())
+            finally:
+                cart.fileset = full_fileset
+            messages.send(("result", sample_at, source_at, sample, scanned,
+                           rows[sample], weights.get(sample)))
+            current_path = None
+        messages.send(("done",))
+    except BaseException as exc:
+        text = _redacted_error(exc, current_path) if current_path else str(exc)
+        if not isinstance(exc, CartError):
+            text = f"{type(exc).__name__}: {text}"
+        kind = ("interrupt" if isinstance(exc, KeyboardInterrupt) else
+                "exit" if isinstance(exc, SystemExit) else "failure")
+        try:
+            messages.send(("error", kind, text))
+        except Exception:
+            pass
+    finally:
+        messages.close()
 
 
 def _open_sample_tree(sample: str, path: str, tree: str):
@@ -206,6 +308,7 @@ class Cart:
         self.name: str | None = None
         self.dir: Path | None = None
         self.source: Path | None = None
+        self._recipe_hash: str | None = None
         self._validated = False
 
     @classmethod
@@ -219,6 +322,7 @@ class Cart:
         if not source.is_file():
             expected = f"{named} or {direct}" if named is not None and named != direct else str(direct)
             raise CartError(f"no study {str(study)!r}: expected {expected}")
+        recipe_hash = _study_hash(source.parent)
         spec = importlib.util.spec_from_file_location(f"rowver_study_{source.parent.name}", source)
         if spec is None or spec.loader is None:
             raise CartError(f"cannot import {source}")
@@ -230,6 +334,9 @@ class Cart:
         cart.name, cart.dir, cart.source = source.parent.name, source.parent, source
         cart.fileset = cart._expand_files(source.parent)
         cart.validate()
+        if _study_hash(source.parent) != recipe_hash:
+            raise CartError("study recipe changed while it was being loaded")
+        cart._recipe_hash = recipe_hash
         return cart
 
     def _expand_files(self, base: Path) -> dict[str, dict]:
@@ -438,6 +545,9 @@ class Cart:
                                 f"{kept_rows:,} rows x {row_bytes} bytes exceeds the "
                                 f"{rvr6.MAX_DATA_BYTES}-byte column limit (reached in "
                                 f'sample "{sample}") — tighten KEEP or trim the fileset')
+                        size_progress = getattr(progress, "_size", None)
+                        if size_progress is not None:
+                            size_progress(sample, len(selected), dict(col_wide))
                         if progress is not None:
                             progress(sample, stop - start, len(selected))
             output[sample] = {
@@ -451,6 +561,183 @@ class Cart:
             if sample_done is not None:
                 sample_done(sample)
         return output, output_weights
+
+    def _parallel_skim(self, workers: int, step_size: int | str,
+                       progress: Callable[[str | None, int, int], None] | None
+                       ) -> tuple[dict, dict]:
+        """Process one source per task; merge and all side effects stay here."""
+        tasks = [
+            (sample_at, source_at, sample, path, tree)
+            for sample_at, (sample, entry) in enumerate(self.fileset.items())
+            for source_at, (path, tree) in enumerate(entry["files"].items())
+        ]
+        workers = min(workers, len(tasks))
+        context = multiprocessing.get_context("spawn")
+        task_queue = context.SimpleQueue()
+        processes = []
+        connections = []
+        lifelines = []
+        expected_hash = self._recipe_hash
+        if expected_hash is None:
+            raise CartError("parallel builds require an unchanged loaded Study")
+        succeeded = False
+        try:
+            for number in range(workers):
+                receive, send = context.Pipe(duplex=False)
+                parent_watch, lifeline = context.Pipe(duplex=False)
+                process = context.Process(
+                    target=_parallel_worker,
+                    args=(str(self.dir), expected_hash, step_size, task_queue, send,
+                          parent_watch),
+                    name=f"rowver-source-{number + 1}",
+                )
+                try:
+                    process.start()
+                except BaseException:
+                    receive.close()
+                    send.close()
+                    parent_watch.close()
+                    lifeline.close()
+                    raise
+                processes.append(process)
+                connections.append(receive)
+                lifelines.append(lifeline)
+                send.close()
+                parent_watch.close()
+
+            ready: set[Any] = set()
+            while len(ready) < workers:
+                available = wait(connections, timeout=0.1)
+                for connection in available:
+                    try:
+                        message = connection.recv()
+                    except EOFError as exc:
+                        raise CartError("a parallel worker exited before it was ready") from exc
+                    if message[0] == "ready":
+                        ready.add(connection)
+                    elif message[0] == "error":
+                        _raise_parallel_error(*message[1:])
+                    else:
+                        raise CartError("a parallel worker sent an invalid startup message")
+                for process in processes:
+                    if process.exitcode not in (None, 0):
+                        raise CartError(
+                            f"a parallel worker exited unexpectedly (exit code {process.exitcode})"
+                        )
+
+            next_task = workers
+            for task in tasks[:workers]:
+                task_queue.put(task)
+
+            results: dict[tuple[int, int], tuple[str, int, dict, np.ndarray | None]] = {}
+            finished_sources = {sample: 0 for sample in self.fileset}
+            active = set(connections)
+            kept_rows = 0
+            col_wide = {name: False for name in self.columns}
+            any_weighted = any(entry["metadata"]["weights"] is not None
+                               for entry in self.fileset.values())
+            while active:
+                available = wait(active, timeout=0.1)
+                for connection in available:
+                    try:
+                        message = connection.recv()
+                    except EOFError as exc:
+                        process = processes[connections.index(connection)]
+                        process.join(0.1)
+                        if process.exitcode not in (None, 0):
+                            raise CartError(
+                                f"a parallel worker exited unexpectedly "
+                                f"(exit code {process.exitcode})"
+                            ) from exc
+                        raise CartError("a parallel worker exited without completing") from exc
+                    kind = message[0]
+                    if kind == "source":
+                        source_progress = getattr(progress, "source", None)
+                        if source_progress is not None:
+                            source_progress(*message[1:])
+                    elif kind == "chunk":
+                        if progress is not None:
+                            progress(*message[1:])
+                    elif kind == "size":
+                        _, sample, count, source_wide = message
+                        kept_rows += count
+                        for name, wide in source_wide.items():
+                            col_wide[name] = col_wide[name] or wide
+                        row_bytes = (4 + (8 if any_weighted else 0)
+                                     + sum(8 if wide else 4
+                                           for wide in col_wide.values()))
+                        if kept_rows * row_bytes > rvr6.MAX_DATA_BYTES:
+                            raise CartError(
+                                f"the kept rows no longer fit the cartridge: "
+                                f"{kept_rows:,} rows x {row_bytes} bytes exceeds the "
+                                f"{rvr6.MAX_DATA_BYTES}-byte column limit (reached in "
+                                f'sample "{sample}") — tighten KEEP or trim the fileset')
+                    elif kind == "result":
+                        _, sample_at, source_at, sample, scanned, rows, weight = message
+                        key = (sample_at, source_at)
+                        if key in results:
+                            raise CartError("a parallel worker returned a source twice")
+                        results[key] = (sample, scanned, rows, weight)
+                        if next_task < len(tasks):
+                            task_queue.put(tasks[next_task])
+                            next_task += 1
+                        else:
+                            task_queue.put(None)
+                        finished_sources[sample] += 1
+                        if finished_sources[sample] == len(self.fileset[sample]["files"]):
+                            sample_done = getattr(progress, "sample_done", None)
+                            if sample_done is not None:
+                                sample_done(sample)
+                    elif kind == "error":
+                        _raise_parallel_error(*message[1:])
+                    elif kind == "done":
+                        active.remove(connection)
+                    else:
+                        raise CartError("a parallel worker sent an invalid result message")
+                for process in processes:
+                    if process.exitcode not in (None, 0):
+                        raise CartError(
+                            f"a parallel worker exited unexpectedly (exit code {process.exitcode})"
+                        )
+
+            if len(results) != len(tasks):
+                raise CartError("parallel workers did not return every source")
+            for process in processes:
+                process.join()
+                if process.exitcode != 0:
+                    raise CartError(
+                        f"a parallel worker exited unexpectedly (exit code {process.exitcode})"
+                    )
+
+            output: dict[str, dict[str, np.ndarray]] = {}
+            output_weights: dict[str, np.ndarray] = {}
+            for sample_at, (sample, entry) in enumerate(self.fileset.items()):
+                pieces = [results[(sample_at, source_at)]
+                          for source_at in range(len(entry["files"]))]
+                output[sample] = {}
+                for name in self.columns:
+                    arrays = [rows[name] for _, scanned, rows, _ in pieces if scanned]
+                    output[sample][name] = (np.concatenate(arrays) if arrays else
+                                            np.empty(0, dtype=np.float64))
+                if entry["metadata"]["weights"] is not None:
+                    weights = [weight for _, _, _, weight in pieces]
+                    if any(weight is None for weight in weights):
+                        raise CartError(f'weighted sample "{sample}" lost its weights')
+                    output_weights[sample] = np.concatenate(weights)
+            succeeded = True
+            return output, output_weights
+        finally:
+            if not succeeded:
+                for process in processes:
+                    if process.is_alive():
+                        process.terminate()
+                for process in processes:
+                    process.join()
+            for connection in connections:
+                connection.close()
+            for lifeline in lifelines:
+                lifeline.close()
+            task_queue.close()
 
     def _provenance(self, rows: Mapping[str, Mapping[str, np.ndarray]], built: str) -> dict:
         if self.source is None:
@@ -481,11 +768,18 @@ class Cart:
 
     def build(self, destination: str | Path | None = None,
               *, step_size: int | str = "100 MB",
-              progress: Callable[[str | None, int, int], None] | None = None) -> dict:
+              progress: Callable[[str | None, int, int], None] | None = None,
+              workers: int | None = None) -> dict:
         """Skim and atomically write ``<study>.rvr``.  This is the normal public API."""
         if self.name is None or self.dir is None:
             raise CartError("load the cart with Cart.load(<study>) before building it")
-        rows, weights = self.skim(step_size, progress)
+        if workers is not None and (type(workers) is not int or workers < 1):
+            raise CartError("workers must be a positive integer")
+        if workers is not None and workers > 1 and self.source is None:
+            raise CartError("parallel builds require a Cart loaded from a study directory")
+        rows, weights = (self.skim(step_size, progress)
+                         if workers is None or workers == 1
+                         else self._parallel_skim(workers, step_size, progress))
         if progress is not None:
             progress(None, 0, 0)          # skim done; packing and compressing now
         built = datetime.now(timezone.utc).isoformat()

@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "recorded_utc": "2026-08-31T18:26:43Z",
+  "mode": "sequential",
+  "workers": 1,
+  "machine": {
+    "platform": "macOS-26.1-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "logical_cpus": 10,
+    "python": "3.13.14"
+  },
+  "fixture": {
+    "generator": "benchmarks.make_parallel_fixture",
+    "base_rows": 500000,
+    "rows_scanned": 3875000,
+    "rows_kept": 1022727,
+    "bytes_read": 14442944,
+    "step_size": 100000,
+    "files": [
+      ["data-large.root", 1000000, "47fdf944ebe3b5348fa832c79afb57840beedd332f8e517e20682e658b163122"],
+      ["empty.root", 0, "0eaa5d75e73770b67fc0b95ddb531fbea097264733b5b0f8be1acd043882443c"],
+      ["zero-kept.root", 500000, "37aab18bf1911d7b93c51a29ab71048117b164bdc71ec7af2644fde39b14c050"],
+      ["signal-small.root", 250000, "cc61bd80daa0abd176e52f1740a77951fa2244222d9dbdaf4151c8b1668eb7f3"],
+      ["signal-large.root", 1500000, "26809153215c680af733b09b19209b53f8104f04402b0efadba40ca10f1932a1"],
+      ["background.root", 500000, "82866b7e67065e7c5fe1450d068a71db1b79184d9564b352684db30f53c34598"],
+      ["background-tail.root", 125000, "e39710036c050b0162831b79b7b9e8afa7dff891ac00d6ccb8afdce1c58ff779"]
+    ]
+  },
+  "runs": [
+    [2.060161374974996, 2.020749, 373424128, 0.2428236248670146, 0.19271225004922599, 0.012268083053641021, 1.6061012919526547, 1.6162198750535026],
+    [1.9903459169436246, 1.979622, 378650624, 0.21987283288035542, 0.15958874998614192, 0.009406500030308962, 1.5946618750458583, 1.6019089580513537],
+    [2.0047596669755876, 1.990889, 395657216, 0.21952133462764323, 0.16582808399107307, 0.00714537501335144, 1.6044139579171315, 1.6135990000329912],
+    [1.9908802909776568, 1.980603, 396967936, 0.21036749985069036, 0.16002491698600352, 0.009645875077694654, 1.607301083044149, 1.6145297499606386],
+    [1.9936283340211958, 1.9814690000000001, 380846080, 0.21018699905835092, 0.1570402500219643, 0.0071726670721545815, 1.6119395829737186, 1.6211935000028461]
+  ],
+  "run_columns": [
+    "wall_seconds",
+    "process_cpu_seconds",
+    "peak_rss_bytes",
+    "source_active_seconds",
+    "pack_seconds",
+    "validation_seconds",
+    "gzip_seconds",
+    "write_seconds"
+  ],
+  "median": {
+    "wall_seconds": 1.9936283340211958,
+    "process_cpu_seconds": 1.9814690000000001,
+    "peak_rss_bytes": 380846080,
+    "source_active_seconds": 0.21952133462764323,
+    "pack_seconds": 0.16002491698600352,
+    "validation_seconds": 0.009406500030308962,
+    "gzip_seconds": 1.6061012919526547,
+    "write_seconds": 1.6145297499606386
+  },
+  "gate": {
+    "source_active_fraction_of_wall": 0.11011147065654465,
+    "local_parallel_prototype_warranted": false,
+    "reason": "Source-active time is not material; gzip dominates end-to-end time."
+  }
+}

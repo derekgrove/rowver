@@ -4,11 +4,24 @@ from __future__ import annotations
 import argparse
 import contextlib
 import importlib.resources
+import os
 import shutil
 from pathlib import Path
 
 from .press import Cart, CartError, study_names
 from .rvr6 import FormatError, _main as rvr6_main
+
+
+def _positive_int(value: str) -> int | str:
+    if value == "auto":
+        return value
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
 
 
 def _new(args: argparse.Namespace) -> int:
@@ -34,6 +47,10 @@ def _run(args: argparse.Namespace) -> int:
         # --path is a compatibility alias: Cart.load now takes paths directly
         cart = Cart.load(args.study)
         print(cart.summary())
+        parallel = getattr(args, "parallel", None)
+        if parallel == "auto":
+            runnable = sum(len(entry["files"]) for entry in cart.fileset.values())
+            parallel = min(runnable, max(1, (os.cpu_count() or 1) - 2))
         if args.progress != "plain":
             from .dashboard import Dashboard
             board = Dashboard(cart, robust=args.progress == "robust")
@@ -42,7 +59,7 @@ def _run(args: argparse.Namespace) -> int:
                 board.index(cart)      # totals for the bars and the ETA
                 board.begin_skim()
             result = cart.build(args.out, step_size=step,
-                                progress=board)
+                                progress=board, workers=parallel)
     except (CartError, FormatError) as exc:
         raise SystemExit(f"error: {exc}") from exc
     if board:
@@ -84,6 +101,11 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--out", type=Path, help="output .rvr path or directory")
     run.add_argument("--step-size", default="100 MB",
                      help="Uproot chunk size, for example '100 MB' or an entry count")
+    run.add_argument(
+        "--parallel", nargs="?", const="auto", type=_positive_int, metavar="N",
+        help=("process sources with N workers; without N uses all but two logical CPUs, "
+              "capped by runnable sources"),
+    )
     progress = run.add_mutually_exclusive_group()
     progress.add_argument(
         "--no-live", dest="progress", action="store_const", const="plain",
@@ -91,7 +113,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     progress.add_argument(
         "--live-robust", dest="progress", action="store_const", const="robust",
-        help="indexed live display with exact totals and ETA (opens sources twice)",
+        help=("indexed live display with exact totals and ETA (opens sources twice; "
+              "with --parallel, indexing stays sequential)"),
     )
     run.set_defaults(progress="fast")
 

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "recorded_utc": "2026-08-31",
+  "study": "studies/jetmet_parallel_benchmark",
+  "files": 8,
+  "repeats": 3,
+  "transport": "pickle",
+  "start_method": "spawn",
+  "rows_scanned": 9384626,
+  "rows_kept": 1839,
+  "wall_seconds": {
+    "sequential": {"runs": [88.23856425005943, 125.52394070802256, 128.41119487502147], "median": 125.52394070802256},
+    "source_workers_1": {"runs": [112.77238845801912, 106.016412166995, 91.5452258340083], "median": 106.016412166995},
+    "source_workers_2": {"runs": [37.83418141701259, 53.13971691695042, 66.18603845790494], "median": 53.13971691695042},
+    "source_workers_4": {"runs": [38.96881841693539, 36.50772470899392, 48.50181333301589], "median": 38.96881841693539},
+    "source_workers_8": {"runs": [22.89100987499114, 40.18682629195973, 34.535535375005566], "median": 34.535535375005566}
+  },
+  "entry_order_experiment": {
+    "workers": 4,
+    "declaration_order_seconds": 21.133626207942143,
+    "largest_first_reused_counts_seconds": 25.701835583080538,
+    "largest_first_with_index_seconds": 102.43171287502628,
+    "index_seconds": 19.458105249912478,
+    "result": "Exact entry-count ordering did not improve wall time; remote duration was not predicted by entries."
+  },
+  "correctness": {
+    "all_completed_results_opened_with_rvr6_read": true,
+    "decoded_arrays_equal": true,
+    "interrupted_run_published_no_destination": true,
+    "active_worker_cancellation_seconds": 0.039
+  },
+  "warning": "Remote latency varied substantially; larger input sizes remain required before choosing a worker default."
+}

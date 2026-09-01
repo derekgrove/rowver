@@ -124,11 +124,28 @@ rowver run --live-robust mine/   # indexed display with exact totals, bars, and 
 the real skim. Use it when exact progress is worth that extra local or remote I/O;
 omit it when minimum time to the completed cartridge matters.
 
+Pressing is sequential by default. Studies with several independent, slow sources
+can opt into source-level worker processes:
+
+```bash
+rowver run mine/ --parallel 4   # at most four workers
+rowver run mine/ --parallel     # all but two logical CPUs, capped by source count
+rowver run mine/ --parallel 1   # the sequential implementation
+```
+
+Results are always merged in Study declaration order, and only the coordinator
+packs, validates, compresses, reports progress, and publishes the cartridge.
+`--live-robust --parallel` keeps its exact-total indexing pass sequential before
+the parallel skim; `--no-live --parallel` constructs no dashboard. Remote services
+may throttle concurrent readers, so choose an explicit count when site-specific
+evidence favors a lower limit.
+
 Useful commands:
 
 ```bash
 rowver run --list
 rowver run mine/ --out /path/to/result.rvr
+rowver run mine/ --parallel 4
 rowver run --no-live mine/
 rowver run --live-robust mine/
 rowver check /path/to/result.rvr

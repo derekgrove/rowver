@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "recorded_utc": "2026-08-31",
+  "study": "studies/jetmet_parallel_benchmark",
+  "files": 16,
+  "repeats": 1,
+  "rows_scanned": 16887926,
+  "rows_kept": 3296,
+  "transport": "pickle",
+  "start_method": "spawn",
+  "runs": {
+    "sequential": {"wall_seconds": 172.2507035000017, "cpu_seconds": 18.283408, "peak_rss_bytes": 272449536},
+    "source_workers_2": {"wall_seconds": 107.73609145893715, "cpu_seconds": 16.600302, "coordinator_peak_rss_bytes": 86147072, "worker_peak_rss_bytes": 210190336},
+    "source_workers_4": {"wall_seconds": 59.12063041690271, "cpu_seconds": 16.215722, "coordinator_peak_rss_bytes": 86261760, "worker_peak_rss_bytes": 217579520},
+    "source_workers_8": {"wall_seconds": 46.34605258400552, "cpu_seconds": 15.512396, "coordinator_peak_rss_bytes": 86310912, "worker_peak_rss_bytes": 187334656},
+    "source_workers_10": {"wall_seconds": 39.3434085000772, "cpu_seconds": 15.035599, "coordinator_peak_rss_bytes": 86343680, "worker_peak_rss_bytes": 188530688}
+  },
+  "correctness": {
+    "all_results_opened_with_rvr6_read": true,
+    "decoded_arrays_equal": true
+  },
+  "warning": "Single pilot pass; repeat before choosing a default."
+}
