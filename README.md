@@ -130,8 +130,12 @@ can opt into source-level worker processes:
 ```bash
 rowver run mine/ --parallel 4   # at most four workers
 rowver run mine/ --parallel     # all but two logical CPUs, capped by source count
+rowver run mine/ --parallel max # all logical CPUs, capped by source count
 rowver run mine/ --parallel 1   # the sequential implementation
 ```
+
+Before source processing, RowVer reports the workers it will use and the cores
+available; default sequential runs also suggest `--parallel`.
 
 Results are always merged in Study declaration order, and only the coordinator
 packs, validates, compresses, reports progress, and publishes the cartridge.

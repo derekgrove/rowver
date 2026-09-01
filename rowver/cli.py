@@ -13,12 +13,12 @@ from .rvr6 import FormatError, _main as rvr6_main
 
 
 def _positive_int(value: str) -> int | str:
-    if value == "auto":
+    if value in ("auto", "max"):
         return value
     try:
         number = int(value)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+        raise argparse.ArgumentTypeError("must be a positive integer, 'max', or 'auto'") from exc
     if number < 1:
         raise argparse.ArgumentTypeError("must be a positive integer")
     return number
@@ -48,9 +48,24 @@ def _run(args: argparse.Namespace) -> int:
         cart = Cart.load(args.study)
         print(cart.summary())
         parallel = getattr(args, "parallel", None)
-        if parallel == "auto":
+        cores = max(1, os.cpu_count() or 1)
+        if parallel is None:
+            effective = 1
+        else:
             runnable = sum(len(entry["files"]) for entry in cart.fileset.values())
-            parallel = min(runnable, max(1, (os.cpu_count() or 1) - 2))
+            if parallel == "auto":
+                parallel = min(runnable, max(1, cores - 2))
+            elif parallel == "max":
+                parallel = cores
+            effective = min(parallel, runnable)
+        message = (f"using {effective} {'worker' if effective == 1 else 'workers'} "
+                   f"({cores} {'core' if cores == 1 else 'cores'} available)")
+        if parallel is None:
+            message += "; try --parallel for faster processing"
+        elif effective == 1:
+            message += "; running sequentially"
+        print(message)
+        workers = None if parallel is None else effective
         if args.progress != "plain":
             from .dashboard import Dashboard
             board = Dashboard(cart, robust=args.progress == "robust")
@@ -59,7 +74,7 @@ def _run(args: argparse.Namespace) -> int:
                 board.index(cart)      # totals for the bars and the ETA
                 board.begin_skim()
             result = cart.build(args.out, step_size=step,
-                                progress=board, workers=parallel)
+                                progress=board, workers=workers)
     except (CartError, FormatError) as exc:
         raise SystemExit(f"error: {exc}") from exc
     if board:
@@ -102,9 +117,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--step-size", default="100 MB",
                      help="Uproot chunk size, for example '100 MB' or an entry count")
     run.add_argument(
-        "--parallel", nargs="?", const="auto", type=_positive_int, metavar="N",
-        help=("process sources with N workers; without N uses all but two logical CPUs, "
-              "capped by runnable sources"),
+        "--parallel", nargs="?", const="auto", type=_positive_int, metavar="N|max",
+        help=("process sources with N workers; max uses all logical CPUs; without a value "
+              "uses all but two; capped by runnable sources"),
     )
     progress = run.add_mutually_exclusive_group()
     progress.add_argument(

@@ -552,10 +552,11 @@ CART = Cart(
         with mock.patch("rowver.cli._run", side_effect=lambda args: parsed.append(args) or 0):
             cli.main(["run", "study", "--parallel"])
             cli.main(["run", "study", "--parallel", "1"])
+            cli.main(["run", "study", "--parallel", "max"])
             for bad in ("0", "-1", "nope"):
                 with self.assertRaises(SystemExit):
                     cli.main(["run", "study", "--parallel", bad])
-        self.assertEqual([args.parallel for args in parsed], ["auto", 1])
+        self.assertEqual([args.parallel for args in parsed], ["auto", 1, "max"])
 
         cart = mock.Mock()
         cart.fileset = {"sample": {"files": {str(n): "Events" for n in range(3)}}}
@@ -575,6 +576,48 @@ CART = Cart(
         board.index.assert_called_once_with(cart)
         cart.build.assert_called_once()
         self.assertEqual(cart.build.call_args.kwargs["workers"], 3)
+
+        args.parallel = "max"
+        cart.build.reset_mock()
+        with mock.patch("rowver.cli.Cart.load", return_value=cart), \
+             mock.patch("rowver.dashboard.Dashboard", return_value=board), \
+             mock.patch("rowver.cli.os.cpu_count", return_value=10), \
+             mock.patch("builtins.print"):
+            cli._run(args)
+        self.assertEqual(cart.build.call_args.kwargs["workers"], 3)
+
+    def test_run_reports_effective_workers_and_available_cores(self):
+        cases = [
+            (None, 16, 20,
+             "using 1 worker (16 cores available); try --parallel for faster processing",
+             None),
+            (6, 16, 20, "using 6 workers (16 cores available)", 6),
+            ("auto", 16, 20, "using 14 workers (16 cores available)", 14),
+            ("max", 16, 20, "using 16 workers (16 cores available)", 16),
+            ("max", 16, 10, "using 10 workers (16 cores available)", 10),
+            (6, 16, 1,
+             "using 1 worker (16 cores available); running sequentially", 1),
+            (1, 16, 20,
+             "using 1 worker (16 cores available); running sequentially", 1),
+            ("max", None, 20,
+             "using 1 worker (1 core available); running sequentially", 1),
+        ]
+        for parallel, cores, sources, expected, passed_workers in cases:
+            with self.subTest(parallel=parallel, cores=cores, sources=sources):
+                cart = mock.Mock()
+                cart.fileset = {
+                    "sample": {"files": {str(n): "Events" for n in range(sources)}}
+                }
+                cart.summary.return_value = "summary"
+                cart.build.return_value = {"file": "out.rvr", "rows": 0, "compressed": 0}
+                args = mock.Mock(list=False, study="study", step_size="1", out=None,
+                                 progress="plain", parallel=parallel)
+                with mock.patch("rowver.cli.Cart.load", return_value=cart), \
+                     mock.patch("rowver.cli.os.cpu_count", return_value=cores), \
+                     mock.patch("builtins.print") as output:
+                    cli._run(args)
+                output.assert_any_call(expected)
+                self.assertEqual(cart.build.call_args.kwargs["workers"], passed_workers)
 
 
 if __name__ == "__main__":
