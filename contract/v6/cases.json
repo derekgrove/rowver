@@ -2137,6 +2137,90 @@
    ]
   },
   {
+   "id": "valid.look_binwidth_indicator_true",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "binwidth_indicator": true
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "valid.look_binwidth_indicator_false",
+   "accept": true,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "binwidth_indicator": false
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_binwidth_indicator_string",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "binwidth_indicator": "true"
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "invalid.look_binwidth_indicator_null",
+   "accept": false,
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "view"
+     ],
+     "value": {
+      "look": {
+       "sample": {
+        "mc": {
+         "binwidth_indicator": null
+        }
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
    "id": "invalid.look_colour_null",
    "accept": false,
    "ops": [

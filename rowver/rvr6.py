@@ -673,6 +673,8 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
                     _fail(f"view.look.{namespace}.{name} role must be signal, background, or data")
                 if "errstyle" in style and style["errstyle"] not in ("ticks", "none"):
                     _fail(f"view.look.{namespace}.{name} errstyle must be ticks or none")
+                if "binwidth_indicator" in style and not isinstance(style["binwidth_indicator"], bool):
+                    _fail(f"view.look.{namespace}.{name} binwidth_indicator must be boolean")
                 if "colour" in style:
                     colour = style["colour"]
                     if (not isinstance(colour, str)

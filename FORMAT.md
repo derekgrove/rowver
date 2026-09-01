@@ -112,6 +112,10 @@ All optional unless noted.
   - `dash`: `"solid"` | `"dash"` | `"dot"` (bars only; absent = solid).
   - `lw`: number, `0 < lw ≤ 32` — this source's own line width.
   - `errstyle`: `"ticks"` | `"none"` (points only).
+  - `binwidth_indicator`: boolean. An explicit value wins. When absent, the
+    Viewer defaults points with `errstyle: "none"` to `false` and points with
+    absent/`"ticks"` errstyle to `true`; bars preserve the value latently but
+    never render the indicator. Python matplotlib rendering is deferred.
   - `role`: `"signal"` | `"background"` | `"data"` — stored and preserved,
     read by nothing since 2026-08-28 (kept for round-trip fidelity).
   Unknown keys inside a style object currently RIDE THROUGH unvalidated (an
