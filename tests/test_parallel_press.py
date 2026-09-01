@@ -1,4 +1,3 @@
-import json
 import multiprocessing
 import os
 import signal
@@ -15,14 +14,62 @@ from unittest import mock
 import numpy as np
 import uproot
 
-from benchmarks.parallel_press import _source_id, main, measure
-from benchmarks.make_parallel_fixture import generate
-from benchmarks.parallel_press_prototype import run
 from rowver import Cart, rvr6
 from rowver import CartError, cli
 
 
-class ParallelPressBenchmarkTests(unittest.TestCase):
+def make_parallel_study(root: Path) -> Path:
+    sizes = (24, 0, 12, 6, 36, 12, 3)
+    names = ("data-large", "empty", "zero-kept", "signal-small",
+             "signal-large", "background", "background-tail")
+    for name, rows in zip(names, sizes):
+        x = np.arange(rows, dtype=np.int32)
+        if name == "zero-kept":
+            x = -x - 1
+        with uproot.recreate(root / f"{name}.root") as output:
+            output["Events"] = {
+                "x": x,
+                "y": x.astype(np.float64) / 7,
+                "genWeight": np.where(np.arange(rows) % 2, -0.5, 1.5),
+                "valid": np.arange(rows) % 11 != 0,
+            }
+    (root / "cart.py").write_text(textwrap.dedent("""
+        from rowver import Cart
+
+        def prepare(events): return events[events.valid]
+        def keep(events): return (events.x >= 0) & (events.x % 3 == 0)
+        def scaled(events, metadata): return events.y * metadata["scale"]
+        def half_x(events): return events.x // 2
+        def weight(events, metadata): return events.genWeight * metadata["norm"]
+
+        CART = Cart(
+            fileset={
+                "data": {
+                    "files": {"data-large.root": "Events", "empty.root": "Events",
+                              "zero-kept.root": "Events"},
+                    "metadata": {"weights": None, "scale": 1.0},
+                },
+                "signal": {
+                    "files": {"signal-small.root": "Events",
+                              "signal-large.root": "Events"},
+                    "metadata": {"weights": weight, "norm": 0.25, "scale": 2.0},
+                },
+                "background": {
+                    "files": {"background.root": "Events",
+                              "background-tail.root": "Events"},
+                    "metadata": {"weights": "genWeight", "scale": 0.5},
+                },
+            },
+            prepare=prepare,
+            keep=keep,
+            columns={"scaled": scaled, "x": "x", "half_x": half_x},
+            title="Parallel press test",
+        )
+    """), encoding="utf-8")
+    return root
+
+
+class ParallelPressTests(unittest.TestCase):
     def fixture(self, root: Path) -> Path:
         source = root / "events.root"
         with uproot.recreate(source) as output:
@@ -56,87 +103,6 @@ class ParallelPressBenchmarkTests(unittest.TestCase):
         """), encoding="utf-8")
         return study
 
-    def test_measures_real_sequential_build(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            output = root / "result.rvr"
-            record = measure(self.fixture(root), output, step_size=4)
-
-        self.assertIsNone(record["error"])
-        self.assertEqual(record["totals"]["rows_scanned"], 12)
-        self.assertEqual(record["totals"]["rows_kept"], 6)
-        self.assertEqual(record["result"]["rows"], 6)
-        self.assertEqual(len(record["sources"]), 1)
-        self.assertGreater(record["totals"]["bytes_read"], 0)
-        self.assertTrue({"study_load_and_validation", "source_open", "source_active",
-                         "array_request",
-                         "prepare", "keep", "columns", "weights", "pack",
-                         "validation", "gzip", "fsync", "atomic_replace",
-                         "ordered_merge", "result_transfer"}
-                        <= set(record["phases"]))
-
-    def test_cli_writes_json_and_source_ids_hide_url_secrets(self):
-        source = _source_id("root://user:pass@example/x/file.root?token=secret#fragment")
-        self.assertNotIn("pass", source)
-        self.assertNotIn("token", source)
-        self.assertNotIn("secret", source)
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            code = main([str(self.fixture(root)), "--output", str(root / "out.rvr"),
-                         "--json", str(root / "result.json"), "--step-size", "4"])
-            result = json.loads((root / "result.json").read_text())
-        self.assertEqual(code, 0)
-        self.assertEqual(result["schema"], 1)
-
-    def test_generated_fixture_covers_ordering_and_recipe_cases(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            manifest = generate(root, base_rows=12)
-            record = measure(root, root / "out.rvr", step_size=5)
-            other = generate(root / "same-data", base_rows=12)
-        self.assertEqual([file["rows"] for file in manifest["files"]],
-                         [24, 0, 12, 6, 36, 12, 3])
-        self.assertEqual(len(record["sources"]), 7)
-        self.assertIsNone(record["error"])
-        self.assertGreater(record["totals"]["rows_kept"], 0)
-        self.assertEqual(record["sources"][1]["rows_scanned"], 0)
-        self.assertEqual(record["sources"][2]["rows_kept"], 0)
-        self.assertEqual([file["data_sha256"] for file in manifest["files"]],
-                         [file["data_sha256"] for file in other["files"]])
-
-    def test_prototypes_are_byte_identical_with_both_transports(self):
-        fixed = "2026-08-31T12:00:00+00:00"
-
-        class Clock(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return cls.fromisoformat(fixed).astimezone(tz or timezone.utc)
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            generate(root, base_rows=12)
-            with mock.patch("rowver.press.datetime", Clock):
-                sequential = Cart.load(root).build(root / "sequential.rvr", step_size=5)
-            records = [
-                run(root, root / "sample.rvr", mode="sample", workers=2,
-                    step_size=5, built=fixed),
-                run(root, root / "source-pickle.rvr", mode="source", workers=3,
-                    step_size=5, built=fixed, delay_seed=7),
-                run(root, root / "source-shard.rvr", mode="source", workers=3,
-                    transport="shard", step_size=5, built=fixed, delay_seed=11),
-                run(root, root / "source-balanced.rvr", mode="source", workers=3,
-                    step_size=5, built=fixed, schedule="entries-desc"),
-            ]
-            expected = Path(sequential["file"]).read_bytes()
-            actual = [Path(record["result"]["file"]).read_bytes() for record in records]
-            for record in records:
-                rvr6.read(record["result"]["file"])
-        self.assertTrue(all(value == expected for value in actual))
-        balanced = records[-1]
-        counts = balanced["indexed_entries"]
-        self.assertEqual([counts[key] for key in balanced["submission"]],
-                         sorted(counts.values(), reverse=True))
-
     def test_production_parallel_builds_are_byte_identical(self):
         fixed = "2026-08-31T12:00:00+00:00"
 
@@ -147,7 +113,7 @@ class ParallelPressBenchmarkTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            generate(root, base_rows=12)
+            make_parallel_study(root)
             with mock.patch("rowver.press.datetime", Clock):
                 sequential = Cart.load(root).build(root / "production-default.rvr",
                                                    step_size=5)
