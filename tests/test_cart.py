@@ -5,6 +5,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
+import awkward as ak
 import numpy as np
 import uproot
 
@@ -134,6 +135,79 @@ class CartTests(unittest.TestCase):
         self.assertEqual(meta["view"], {
             "groups": {"of": {"tt": "top"}, "order": ["top"]},
         })
+
+    def test_byte_budget_chunks_follow_the_branches_the_recipe_touches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ntuple = Path(directory) / "events.root"
+            with uproot.recreate(ntuple) as output:
+                tree = output.mktree("Events", {"a": np.int32, "heavy": "var * float64"})
+                tree.extend({"a": np.arange(5000, dtype=np.int32),
+                             "heavy": ak.Array([[1.0] * 30] * 5000)})
+
+            def keep(events):
+                if ak.any(events.a > 1500):       # reaches for heavy only later in the file
+                    return ak.num(events.heavy) > 0
+                return events.a >= 0
+
+            cart = Cart(
+                fileset={"mc": {"files": {str(ntuple): "Events"},
+                                "metadata": {"weights": None}}},
+                keep=keep, columns={"a": "a"},
+            )
+            seen: list[int] = []
+            rows, _ = cart.skim(step_size="4 kB",
+                                progress=lambda sample, raw, kept: seen.append(raw))
+        # the 1024-entry probe touches only `a` (~4 B/entry), so a 4 kB budget is ~1000
+        # entries; once `heavy` (~250 B/entry) is touched the budget is re-derived
+        self.assertEqual(seen[0], 1024)
+        self.assertGreater(seen[1], 500)
+        self.assertLess(max(seen[2:]), 100)
+        self.assertEqual(sum(seen), 5000)
+        np.testing.assert_array_equal(rows["mc"]["a"], np.arange(5000))
+
+    def test_nested_rntuple_fields_survive_the_batched_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ntuple = Path(directory) / "events.root"
+            pt = np.arange(3000, dtype=np.float64)
+            with uproot.recreate(ntuple) as output:
+                output["Events"] = {"a": np.arange(3000, dtype=np.int32),
+                                    "Jet": ak.zip({"pt": ak.Array(np.stack([pt, pt / 2], 1)),
+                                                   "eta": ak.Array(np.zeros((3000, 2)))})}
+            cart = Cart(
+                fileset={"mc": {"files": {str(ntuple): "Events"},
+                                "metadata": {"weights": None}}},
+                keep=lambda events: ak.num(events.Jet.pt) > 1,
+                columns={"lead": lambda events: ak.firsts(events.Jet.pt)},
+            )
+            seen: list[int] = []
+            rows, _ = cart.skim(step_size="2 kB",
+                                progress=lambda sample, raw, kept: seen.append(raw))
+        # bounded chunks even without per-branch totals, never one whole-file remainder
+        self.assertGreater(len(seen), 2)
+        self.assertLess(max(seen), 3000 - 1024)
+        np.testing.assert_array_equal(rows["mc"]["lead"], pt)
+
+    def test_touched_branches_carry_across_files_that_lack_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first, second = Path(directory) / "a.root", Path(directory) / "b.root"
+            with uproot.recreate(first) as output:
+                output["Events"] = {"a": np.arange(2000, dtype=np.int32),
+                                    "b": np.ones(2000, dtype=np.int32)}
+            with uproot.recreate(second) as output:
+                output["Events"] = {"a": np.arange(2000, 2500, dtype=np.int32)}
+
+            def keep(events):
+                if "b" in events.fields:
+                    return (events.a >= 0) & (events.b > 0)
+                return events.a >= 0
+
+            cart = Cart(
+                fileset={"mc": {"files": {str(first): "Events", str(second): "Events"},
+                                "metadata": {"weights": None}}},
+                keep=keep, columns={"a": "a"},
+            )
+            rows, _ = cart.skim(step_size="1 kB")
+        np.testing.assert_array_equal(rows["mc"]["a"], np.arange(2500))
 
 
 if __name__ == "__main__":

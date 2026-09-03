@@ -115,7 +115,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--list", action="store_true", help="list studies under ./studies/ and exit")
     run.add_argument("--out", type=Path, help="output .rvr path or directory")
     run.add_argument("--step-size", default="100 MB",
-                     help="Uproot chunk size, for example '100 MB' or an entry count")
+                     help=("chunk bound: uncompressed bytes of the branches the recipe "
+                           "touches, for example '100 MB', or an entry count"))
     run.add_argument(
         "--parallel", nargs="?", const="auto", type=_positive_int, metavar="N|max",
         help=("process sources with N workers; max uses all logical CPUs; without a value "

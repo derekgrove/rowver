@@ -737,7 +737,8 @@ def write(path: str | Path, meta: dict, buf: bytes) -> dict:
     check(meta, buf)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload = gzip.compress(frame(meta, buf), compresslevel=9, mtime=0)
+    # Level 6: level 9 measured 2.5x slower for a 0.3% smaller cartridge (360 MB buffer).
+    payload = gzip.compress(frame(meta, buf), compresslevel=6, mtime=0)
     handle, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
     try:
         with os.fdopen(handle, "wb") as stream:

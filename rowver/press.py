@@ -229,9 +229,6 @@ def _call_shape(function: Callable[..., Any], where: str) -> int:
     return len(positional)
 
 
-REMOTE = ("root://", "http://", "https://")
-
-
 def _byte_count(text: str) -> int:
     """'100 MB' -> 100_000_000. Matches the grammar uproot step-size strings use,
     scientific notation included."""
@@ -241,6 +238,83 @@ def _byte_count(text: str) -> int:
     if not match or match.group(2).lower() not in scale:
         raise CartError(f'cannot read step size "{text}"')
     return int(float(match.group(1)) * scale[match.group(2).lower()])
+
+
+PROBE_ENTRIES = 1024      # lazily read entries that teach the press which branches a recipe touches
+FALLBACK_ENTRIES = 100_000  # chunk bound when neither branch nor file sizes are available
+
+
+def _top_level(name: str) -> str:
+    """The top-level field a branch, or an RNTuple sub-field path, belongs to."""
+    return name.lstrip(".").split(".", 1)[0]
+
+
+def _read_chunk(tree, touched: set[str], start: int, stop: int):
+    """Read one entry range as ``(events, lazy)``.
+
+    ``events`` is what the hooks see. Branches already known to be touched arrive
+    in ONE batched request; every other branch is a lazy placeholder from ``lazy``
+    that materialises only if a hook reaches for it, so a recipe that touches a new
+    branch part-way through a sample still works. ``lazy`` is ``None`` when the
+    backend has no lazy arrays and the whole range was read eagerly.
+    """
+    try:
+        lazy = tree.arrays(entry_start=start, entry_stop=stop, library="ak",
+                           virtual=True, array_cache=None)
+    except (TypeError, ValueError) as exc:
+        if "virtual" not in str(exc):
+            raise
+        return tree.arrays(entry_start=start, entry_stop=stop, library="ak"), None
+    layout = lazy.layout
+    if not touched or not isinstance(layout, ak.contents.RecordArray) or layout.is_tuple:
+        return lazy, lazy
+    eager = tree.arrays(filter_name=lambda name: _top_level(name) in touched,
+                        entry_start=start, entry_stop=stop, library="ak", array_cache=None)
+    events = lazy
+    for name in eager.fields:
+        # An eager field shaped differently from its placeholder (a record whose
+        # sub-fields the filter missed) stays lazy instead of shadowing the branch.
+        if name in layout.fields and layout.content(name).form.is_equal_to(
+                eager.layout.content(name).form):
+            events = ak.with_field(events, eager[name], name)
+    return events, lazy
+
+
+def _newly_touched(lazy, known: set[str]) -> list[str]:
+    """Branches whose lazy placeholders a hook materialised during this chunk."""
+    layout = lazy.layout
+    if not isinstance(layout, ak.contents.RecordArray) or layout.is_tuple:
+        return []
+    return [name for name in layout.fields
+            if name not in known and layout.content(name).is_any_materialized]
+
+
+def _entries_per_chunk(tree, touched: set[str], budget: int, total: int) -> int:
+    """Entries whose touched branches occupy about ``budget`` uncompressed bytes.
+
+    Sized from the branch totals ROOT keeps in the tree header, so it costs no
+    I/O — ``num_entries_for`` reads every basket header of every branch instead,
+    which measured 44 s per file on ntuples with 80-entry baskets. Without branch
+    totals (RNTuple fields, or nothing touched yet) the file's own bytes per entry
+    over-count, which only makes chunks smaller.
+    """
+    if total <= 0:
+        return 1
+    touched_bytes = 0
+    for name in touched:
+        try:
+            touched_bytes += int(tree[name].uncompressed_bytes)
+        except Exception:      # a field without branch totals; size without it
+            continue
+    per_entry = touched_bytes / total
+    if per_entry <= 0:
+        try:
+            per_entry = int(tree.file.source.num_bytes) / total
+        except Exception:
+            per_entry = 0.0
+    if per_entry <= 0:
+        return min(FALLBACK_ENTRIES, total)
+    return max(min(int(budget / per_entry), total), 1)
 
 
 def _invoke(function: Callable[..., Any], events: ak.Array, meta: dict, where: str) -> Any:
@@ -439,6 +513,12 @@ class Cart:
              progress: Callable[[str | None, int, int], None] | None = None) -> tuple[dict, dict]:
         """Read files sequentially, apply hooks, and materialise validated NumPy columns.
 
+        ``step_size`` bounds one chunk: an entry count, or a byte budget such as
+        ``"100 MB"`` for the uncompressed bytes of the branches the recipe touches.
+        Each source starts with a small lazily-read chunk that reveals those branches;
+        every later chunk reads exactly them in one batched request, which is what
+        keeps a thousand-branch NanoAOD or a tiny-basket ntuple fast.
+
         ``progress``, when given, is called after each fully processed chunk with
         ``(sample, raw_rows, kept_rows)`` — raw is the tree entries the chunk covered
         (pre-PREPARE, the same currency as ``num_entries``), kept is what survived KEEP.
@@ -470,6 +550,9 @@ class Cart:
         for sample, entry in self.fileset.items():
             chunks: dict[str, list[np.ndarray]] = {name: [] for name in self.columns}
             weight_chunks: list[np.ndarray] = []
+            # Carried across a sample's files: one recipe, one branch dialect. A file
+            # lacking a touched branch simply keeps that name as a placeholder.
+            touched: set[str] = set()
             for path, tree_name in entry["files"].items():
                 metadata = self._meta(sample, path, tree_name)
                 source_progress = getattr(progress, "source", None)
@@ -477,33 +560,22 @@ class Cart:
                     source_progress(sample, path, tree_name)
                 source = _open_sample_tree(sample, path, tree_name)
                 with source as tree:
-                    if isinstance(step_size, int):
-                        entries_per_chunk = step_size
-                    elif path.startswith(REMOTE):
-                        # num_entries_for reads every basket header of every branch —
-                        # thousands of round trips on a remote file (measured: minutes
-                        # against EOS). One byte ratio gives the same order of
-                        # magnitude for the cost of a single stat.
-                        per_entry = (tree.file.source.num_bytes
-                                     / max(int(tree.num_entries), 1))
-                        entries_per_chunk = int(_byte_count(step_size)
-                                                / max(per_entry, 1e-9))
-                    elif hasattr(tree, "num_entries_for"):
-                        entries_per_chunk = int(tree.num_entries_for(step_size))
+                    total = int(tree.num_entries)
+                    budget = None if isinstance(step_size, int) else _byte_count(step_size)
+                    if budget is None:
+                        entries_per_chunk = max(step_size, 1)
+                    elif touched:
+                        entries_per_chunk = _entries_per_chunk(tree, touched, budget, total)
                     else:
-                        entries_per_chunk = 100_000
-                    entries_per_chunk = max(entries_per_chunk, 1)
-                    for start in range(0, int(tree.num_entries), entries_per_chunk):
-                        stop = min(start + entries_per_chunk, int(tree.num_entries))
-                        try:
-                            # Uproot 5.7 virtual arrays materialise only branches a hook
-                            # touches. This matters on thousand-branch NanoAOD files.
-                            events = tree.arrays(entry_start=start, entry_stop=stop,
-                                                 library="ak", virtual=True)
-                        except TypeError:
-                            # RNTuple implementations without virtual arrays still stay
-                            # bounded to one chunk; correctness is unchanged.
-                            events = tree.arrays(entry_start=start, entry_stop=stop, library="ak")
+                        entries_per_chunk = None
+                    # A sample's first chunk is small and read lazily so the press learns
+                    # which branches the recipe touches. Every later chunk reads exactly
+                    # those in one batched request; a byte budget is sized from them.
+                    first = (entries_per_chunk if touched and entries_per_chunk
+                             else min(PROBE_ENTRIES, entries_per_chunk or PROBE_ENTRIES))
+                    start, stop = 0, min(first, total)
+                    while start < total:
+                        events, lazy = _read_chunk(tree, touched, start, stop)
                         prepared = (_invoke(self.prepare, events, metadata, "PREPARE")
                                     if self.prepare is not None else events)
                         try:
@@ -554,6 +626,11 @@ class Cart:
                             size_progress(sample, len(selected), dict(col_wide))
                         if progress is not None:
                             progress(sample, stop - start, len(selected))
+                        newly = _newly_touched(lazy, touched) if lazy is not None else []
+                        touched.update(newly)
+                        if budget is not None and (newly or entries_per_chunk is None):
+                            entries_per_chunk = _entries_per_chunk(tree, touched, budget, total)
+                        start, stop = stop, min(stop + entries_per_chunk, total)
             output[sample] = {
                 name: np.concatenate(values) if values else np.empty(0, dtype=np.float64)
                 for name, values in chunks.items()
