@@ -3,7 +3,8 @@
 This is a dated status baseline, not a specification or backlog. It was split
 from the retroactive design record written on 2026-08-29 against RowVer Web
 `ce90b16`, RowVer `fd5931a`, and RowVer Verification `a8ac54c`; current repository
-behavior takes precedence.
+behavior takes precedence. On 2026-09-10 the scope was narrowed to pressing
+(ADR 0009): extraction and rendering left this repository, and the format is v7.
 
 ## Product
 
@@ -15,11 +16,12 @@ pass-a-file: a cartridge carries the author's view and a collaborator can adjust
 its selections locally. There are no accounts, synchronization, or hosted
 backend.
 
-This repository owns cartridge creation, Python extraction, source-data access,
-and the canonical v6 contract and fixture corpus. The `rowver_web` repository
-owns browser interaction, rendering, save fidelity, viewer security, offline
-packaging, and deployment. The `rowver_verification` repository owns independent
-end-to-end comparisons of viewer results.
+This repository owns cartridge creation, source-data access, and the canonical
+v6 and v7 contract and fixture corpora. The `rowver_web` repository owns browser
+interaction, rendering, save fidelity, viewer security, offline packaging, and
+deployment. The `rowver_verification` repository owns independent end-to-end
+comparisons of viewer results and, since 2026-09-10, Python extraction and
+rendering.
 
 ## Current capabilities and limits
 
@@ -44,9 +46,10 @@ end-to-end comparisons of viewer results.
 - **Small authoring surface:** `rowver new` creates a study whose `cart.py`
   identifies source samples, preparation and selection logic, and retained
   columns.
-- **Combine extraction:** `rowver extract flattened` now emits per-bin,
+- **Combine extraction (moved):** the flattened extractor emits per-bin,
   per-process yields from either external bin definitions or a saved region map.
-  Exercising that output against a real external-framework target remains open.
+  It lives in `rowver_verification` since 2026-09-10; exercising its output
+  against a real external-framework target remains open there.
 
 ## Product-priority scoreboard
 
@@ -74,5 +77,5 @@ The maintained backlog for these directions lives in GitLab issues rather than
 this status document:
 
 - [Move viewer selection and binning off the main thread](https://gitlab.cern.ch/dgrove/rowver_web/-/work_items/1)
-- [Exercise flattened extraction against an external framework and decide the v6 lock](https://gitlab.cern.ch/dgrove/rowver/-/work_items/3)
+- [Exercise flattened extraction against an external framework and decide the v6 lock](https://gitlab.cern.ch/dgrove/rowver_verification/-/work_items/1)
 - [Decide whether credentialed hosted cartridge pressing is feasible](https://gitlab.cern.ch/dgrove/rowver/-/work_items/2)

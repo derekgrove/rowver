@@ -13,9 +13,9 @@ it DONE here with the commit hash in the same commit that lands the work.
 | 1 ADR 0009 | DONE | e4cdb9b |
 | 2 move extraction | DONE | rowver_verification b1f2be9; rowver 6542cc3 |
 | 3 remove builder | TODO (needs D1) | |
-| 4 delete shims | DONE | filled by the next step (a commit cannot carry its own) |
+| 4 delete shims | DONE | 849a552 |
 | 5 optional trims | TODO (needs D2, D3) | |
-| 6 docs | TODO | |
+| 6 docs | DONE | filled by the next step (a commit cannot carry its own) |
 | 7 readability pass | TODO | |
 | 8 format v8 | TODO (needs D6, D7) | |
 

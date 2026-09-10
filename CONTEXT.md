@@ -16,7 +16,8 @@ together with a saved interactive view.
 _Avoid_: Skim, project file
 
 **Presser**:
-The component that turns a study into a cartridge.
+The component that turns a study into a cartridge. This repository is the
+presser only; the viewer and verification tooling live in their own repositories.
 _Avoid_: Converter, builder
 
 **Viewer**:

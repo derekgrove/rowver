@@ -1,8 +1,8 @@
-# RowVer cartridge builder
+# RowVer presser
 
 RowVer turns ROOT ntuples into a shareable `.rvr` file for interactive plots, tables,
-cuts, and region maps. This repository builds cartridges; a matching RowVer 6 Web build
-opens them entirely in the browser.
+cuts, and region maps. This repository is the presser; a matching RowVer Web build
+opens the cartridges entirely in the browser.
 
 ## Quick start: DATA + MC
 
@@ -48,9 +48,6 @@ rowver new mystudy
 # Edit mystudy/cart.py: files, weights, baseline selection, and columns.
 rowver run mystudy/
 ```
-
-The browser-builder helper (`python -m rowver.builder`) needs the `[live]`
-extra: `pip install 'rowver[live]'`.
 
 For development, mamba resolves the HEP Python stack quickly and reproducibly:
 
@@ -154,12 +151,6 @@ rowver run --no-live mine/
 rowver run --live-robust mine/
 rowver check /path/to/result.rvr
 rowver show /path/to/result.rvr
-rowver extract flattened /path/to/result.rvr --from-map
-rowver extract plot1d /path/to/result.rvr
-rowver extract plot2d /path/to/result.rvr   # plot3d: same grid, surface-rendered
-rowver extract board /path/to/result.rvr
-rowver extract regions /path/to/result.rvr
-rowver render extracts/result/    # needs pip install rowver[render]
 python gate.py          # release gate, from a checkout
 sh wheel_gate.sh        # the documented workflow from an installed wheel in a clean venv
 ```
@@ -173,14 +164,6 @@ cartridge directly:
 `rvr6.write(path, meta, buf)`. Both `write` and `read` run `rvr6.check` internally, so an
 invalid file can be neither produced nor opened. `contract/v6/cases.json` holds the worked
 example of a valid header.
-
-The browser builder is experimental. After building the frontend's `viewer.html`, start its
-authenticated local helper with
-`python -m rowver.builder --root data=/path/to/ntuples --ui ../rowver_web/viewer.html`
-(or, without a local frontend checkout, pair against the hosted page:
-`--ui https://rowver.web.cern.ch`). The printed
-URL contains the pairing token. Arbitrary Python expressions remain a `cart.py` feature and
-are never evaluated by the helper.
 
 ## What is shared
 
