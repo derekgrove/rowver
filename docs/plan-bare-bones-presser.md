@@ -14,7 +14,7 @@ it DONE here with the commit hash in the same commit that lands the work.
 | 2 move extraction | DONE | rowver_verification b1f2be9; rowver 6542cc3 |
 | 3 remove builder | DONE | 506afb4; rowver_web branch `retire-builder` 0e34768 |
 | 4 delete shims | DONE | 849a552 |
-| 5 optional trims | TODO | |
+| 5 optional trims | DONE | filled by the next step (a commit cannot carry its own) |
 | 6 docs | DONE | 8b8b9cc |
 | 7 readability pass | DONE | a5dfbc9 |
 | 8 format v8 | TODO | |

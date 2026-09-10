@@ -69,13 +69,10 @@ def _run(args: argparse.Namespace) -> int:
         print(cart.summary())
         workers, message = _workers(getattr(args, "parallel", None), cart)
         print(message)
-        if args.progress != "plain":
+        if args.live:
             from .dashboard import Dashboard
-            board = Dashboard(cart, robust=args.progress == "robust")
+            board = Dashboard(cart)
         with board.live() if board else contextlib.nullcontext():
-            if board and board.robust:
-                board.index(cart)
-                board.begin_skim()
             result = cart.build(args.out, step_size=step, progress=board, workers=workers)
     except (CartError, FormatError) as exc:
         raise SystemExit(f"error: {exc}") from exc
@@ -112,17 +109,8 @@ def main(argv: list[str] | None = None) -> int:
         help=("process sources with N workers; max uses all logical CPUs; without a value "
               "uses all but two; capped by runnable sources"),
     )
-    progress = run.add_mutually_exclusive_group()
-    progress.add_argument(
-        "--no-live", dest="progress", action="store_const", const="plain",
-        help="plain one-pass execution with no dashboard",
-    )
-    progress.add_argument(
-        "--live-robust", dest="progress", action="store_const", const="robust",
-        help=("indexed live display with exact totals and ETA (opens sources twice; "
-              "with --parallel, indexing stays sequential)"),
-    )
-    run.set_defaults(progress="fast")
+    run.add_argument("--no-live", dest="live", action="store_false",
+                     help="plain one-pass execution with no dashboard")
 
     for name, blurb in (("check", "format validation"), ("show", "print the full cartridge header")):
         p = sub.add_parser(name, help=blurb)

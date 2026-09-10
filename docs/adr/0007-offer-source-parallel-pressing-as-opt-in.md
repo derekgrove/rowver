@@ -8,7 +8,6 @@ in declaration order, checks the global size bound, reports progress, packs,
 validates, compresses, and atomically publishes, preserving the sequential
 cartridge contract at the cost of higher peak memory from process-returned
 arrays.
-The robust live display retains its sequential exact-total indexing pre-pass before
-parallel work begins; ordinary and no-live parallel runs add no scheduling pre-pass.
+Parallel runs add no scheduling pre-pass.
 Bare `--parallel` reserves two logical CPUs; `--parallel max` requests every
 logical CPU, with either mode capped by the number of runnable sources.

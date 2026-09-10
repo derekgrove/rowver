@@ -513,7 +513,7 @@ CART = Cart(
             self.assertTrue(progress.pids)
             self.assertEqual(set(progress.pids), {os.getpid()})
 
-    def test_parallel_cli_validation_auto_count_and_robust_contract(self):
+    def test_parallel_cli_validation_auto_count_and_live_contract(self):
         parsed = []
         with mock.patch("rowver.cli._run", side_effect=lambda args: parsed.append(args) or 0):
             cli.main(["run", "study", "--parallel"])
@@ -529,18 +529,17 @@ CART = Cart(
         cart.summary.return_value = "summary"
         cart.build.return_value = {"file": "out.rvr", "rows": 0, "compressed": 0}
         board = mock.Mock()
-        board.robust = True
         board.live.return_value = mock.MagicMock(__enter__=mock.Mock(return_value=None),
                                                  __exit__=mock.Mock(return_value=False))
         args = mock.Mock(list=False, study="study", step_size="1", out=None,
-                         progress="robust", parallel="auto")
+                         live=True, parallel="auto")
         with mock.patch("rowver.cli.Cart.load", return_value=cart), \
              mock.patch("rowver.dashboard.Dashboard", return_value=board), \
              mock.patch("rowver.cli.os.cpu_count", return_value=10), \
              mock.patch("builtins.print"):
             cli._run(args)
-        board.index.assert_called_once_with(cart)
         cart.build.assert_called_once()
+        self.assertIs(cart.build.call_args.kwargs["progress"], board)
         self.assertEqual(cart.build.call_args.kwargs["workers"], 3)
 
         args.parallel = "max"
@@ -577,7 +576,7 @@ CART = Cart(
                 cart.summary.return_value = "summary"
                 cart.build.return_value = {"file": "out.rvr", "rows": 0, "compressed": 0}
                 args = mock.Mock(list=False, study="study", step_size="1", out=None,
-                                 progress="plain", parallel=parallel)
+                                 live=False, parallel=parallel)
                 with mock.patch("rowver.cli.Cart.load", return_value=cart), \
                      mock.patch("rowver.cli.os.cpu_count", return_value=cores), \
                      mock.patch("builtins.print") as output:

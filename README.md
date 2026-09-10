@@ -107,19 +107,14 @@ Your `cart.py` must say how every sample is weighted:
 Weights may also be a function. An omitted declaration is rejected so forgotten
 weights cannot silently look intentional.
 
-The default display is live and one-pass: it reports the current sample and
-source, scanned and kept rows, elapsed time, and cartridge pressing without
-opening sources merely to calculate progress. Two explicit alternatives are
-available:
+The display is live and one-pass: it reports the current sample and source,
+scanned and kept rows, elapsed time, and cartridge pressing without opening
+sources merely to calculate progress. `--no-live` is plain one-pass execution
+with no dashboard:
 
 ```bash
-rowver run --no-live mine/       # plain one-pass execution, no dashboard
-rowver run --live-robust mine/   # indexed display with exact totals, bars, and ETA
+rowver run --no-live mine/
 ```
-
-`--live-robust` opens every source once for its indexing pre-pass and again for
-the real skim. Use it when exact progress is worth that extra local or remote I/O;
-omit it when minimum time to the completed cartridge matters.
 
 Pressing is sequential by default. Studies with several independent, slow sources
 can opt into source-level worker processes:
@@ -136,8 +131,7 @@ available; default sequential runs also suggest `--parallel`.
 
 Results are always merged in Study declaration order, and only the coordinator
 packs, validates, compresses, reports progress, and publishes the cartridge.
-`--live-robust --parallel` keeps its exact-total indexing pass sequential before
-the parallel skim; `--no-live --parallel` constructs no dashboard. Remote services
+`--no-live --parallel` constructs no dashboard. Remote services
 may throttle concurrent readers, so choose an explicit count when site-specific
 evidence favors a lower limit.
 
@@ -148,7 +142,6 @@ rowver run --list
 rowver run mine/ --out /path/to/result.rvr
 rowver run mine/ --parallel 4
 rowver run --no-live mine/
-rowver run --live-robust mine/
 rowver check /path/to/result.rvr
 rowver show /path/to/result.rvr
 python gate.py          # release gate, from a checkout

@@ -1,6 +1,7 @@
 # Default to the live press display
 
-Status: superseded by ADR-0006
+Status: superseded by ADR-0006; the indexed display was removed on 2026-09-10
+(decision D2 in `docs/plan-bare-bones-presser.md`).
 
 `rowver run` uses the live press display by default for both terminal and
 redirected output, accepting a deliberate metadata pre-pass that opens every
