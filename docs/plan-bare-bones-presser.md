@@ -12,12 +12,12 @@ it DONE here with the commit hash in the same commit that lands the work.
 | 0 land v7 | DONE | bc24ff1 |
 | 1 ADR 0009 | DONE | e4cdb9b |
 | 2 move extraction | DONE | rowver_verification b1f2be9; rowver 6542cc3 |
-| 3 remove builder | DONE | filled by the next step; rowver_web branch `retire-builder` |
+| 3 remove builder | DONE | 506afb4; rowver_web branch `retire-builder` 0e34768 |
 | 4 delete shims | DONE | 849a552 |
-| 5 optional trims | TODO (needs D2, D3) | |
+| 5 optional trims | TODO | |
 | 6 docs | DONE | 8b8b9cc |
 | 7 readability pass | DONE | a5dfbc9 |
-| 8 format v8 | TODO (needs D6, D7) | |
+| 8 format v8 | TODO | |
 
 A step that needs an undecided D-item is skipped, not blocked on: take the next
 step and say so in the report.
@@ -248,9 +248,9 @@ press of the 18-file tau skim set timed against the 82 s sequential baseline.
 ## 5. Decisions Derek owns
 
 - **D1** Browser builder: delete, or relocate to `rowver_web`? **Decided 2026-09-10: delete** from both repositories; a page-only form generator was considered and rejected for lack of an audience.
-- **D2** Keep `--live-robust`?
-- **D3** Keep `--parallel`? (recommended: yes)
-- **D4** Name of the receiving package in `rowver_verification` (`extract` vs `rowver_extract`).
+- **D2** Keep `--live-robust`? **Decided 2026-09-10: drop it.** Reword ADR 0005 and 0006, which promise two explicit alternatives.
+- **D3** Keep `--parallel`? **Decided 2026-09-10: keep.**
+- **D4** Name of the receiving package in `rowver_verification` (`extract` vs `rowver_extract`). **Settled by step 2: `extract`.**
 - **D5** GitLab rowver#2 (hosted credentialed pressing): still open, or closed as
   out of scope now that the product is a local presser?
 
@@ -309,11 +309,11 @@ v8 separately, or hold v7 and ship one reader change.
   and preserve its bytes on save.
   Worked example in `development/rvr8-column-classes.md`.
 
-- **D6** v7 now and v8 later, or fold provenance into the pending format change?
-- **D7** Native dtypes in, or keep `f8`/`i4`/`b1` and accept value-exact copies?
-- **D8** Jagged copies: decided yes (option 2 above). Open sub-choices are the
-  offsets width (int64 is safe; int32 caps content at 2^31 objects) and whether
-  weights are duplicated per object or left to the consumer via offsets.
+- **D6** v7 now and v8 later, or fold provenance into the pending format change? **Decided 2026-09-10: v7 landed as bc24ff1; v8 is a separate format change.**
+- **D7** Native dtypes in, or keep `f8`/`i4`/`b1` and accept value-exact copies? **Decided 2026-09-10: native dtypes in.** Step 8 is a fidelity change; a 64-bit branch must copy exactly.
+- **D8** Jagged copies: decided yes (option 2 above). **Sub-choices decided
+  2026-09-10: int64 offsets; weights are not duplicated per object**, a consumer
+  repeats the event weight over each slice via the offsets.
 
 ## 8. Side exercise: Astra from a blank directory
 
