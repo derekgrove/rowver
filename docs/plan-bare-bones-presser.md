@@ -10,7 +10,7 @@ it DONE here with the commit hash in the same commit that lands the work.
 | Step | Status | Commit |
 |---|---|---|
 | 0 land v7 | DONE | bc24ff1 |
-| 1 ADR 0009 | TODO | |
+| 1 ADR 0009 | DONE | hash filled by step 2 (a commit cannot carry its own) |
 | 2 move extraction | TODO | |
 | 3 remove builder | TODO (needs D1) | |
 | 4 delete shims | TODO | |

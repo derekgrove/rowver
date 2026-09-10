@@ -28,12 +28,14 @@ the evidence is reproducible.
 
 ## Independence boundary
 
-- `rowver` owns cartridge creation, Python extraction, source-data access, and
-  the canonical v6 and core fixture corpora.
+- `rowver` owns cartridge creation, source-data access, and the canonical v6
+  and v7 fixture corpora (ADR 0009).
 - `rowver_web` owns browser interaction, rendering, save fidelity, viewer
   security, offline packaging, and deployment.
 - `rowver_verification` owns checks that reproduce product observables without
-  sharing their result-producing logic.
+  sharing their result-producing logic, Python extraction and rendering, the
+  Python twin of the viewer's authored-state resolver, and the `core` fixture
+  corpus.
 
 Keep verification out of product imports, runtime dependencies, and release
 artifacts. A byte reader may be reused only when the verification explicitly
