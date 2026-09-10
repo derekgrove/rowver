@@ -25,4 +25,3 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-!tests/golden.rvr

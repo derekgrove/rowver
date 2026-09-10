@@ -1,4 +1,4 @@
-"""The ``rowver`` command: new / run / check / show / extract / render."""
+"""The ``rowver`` command: new / run / check / show."""
 from __future__ import annotations
 
 import argparse
@@ -84,17 +84,6 @@ def _run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _extract(args: argparse.Namespace, extra: list[str]) -> int:
-    from .extract import board, cutflow, flattened, plot1d, plot2d, regions
-    kinds = {"flattened": flattened.main, "cutflow": cutflow.main,
-             "plot1d": plot1d.main, "plot2d": plot2d.main,
-             "plot3d": plot2d.main3d, "board": board.main,
-             "regions": regions.main}
-    if args.kind not in kinds:
-        raise SystemExit(f"error: unknown extract kind {args.kind!r} — have: {sorted(kinds)}")
-    return kinds[args.kind](extra)
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rowver", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -138,26 +127,12 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(name, help=blurb)
         p.add_argument("file", type=Path)
 
-    extract = sub.add_parser("extract", help="flattened / cutflow / plots / tables / regions")
-    extract.add_argument("kind", help="what to extract, e.g. flattened")
-
-    sub.add_parser("render",
-                   help="render extracted plot records to png/pdf",
-                   add_help=False)
-
-    args, extra = parser.parse_known_args(argv)
-    if extra and args.command not in ("extract", "render"):
-        parser.error(f"unrecognized arguments: {' '.join(extra)}")
+    args = parser.parse_args(argv)
     if args.command == "new":
         return _new(args)
     if args.command == "run":
         return _run(args)
-    if args.command in ("check", "show"):
-        return rvr6_main([args.command, str(args.file)])
-    if args.command == "render":
-        from .extract import render
-        return render.main(extra)
-    return _extract(args, extra)
+    return rvr6_main([args.command, str(args.file)])
 
 
 if __name__ == "__main__":

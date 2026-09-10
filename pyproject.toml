@@ -13,7 +13,6 @@ dependencies = ["numpy", "awkward", "uproot"]
 
 [project.optional-dependencies]
 live = ["aiohttp"]
-render = ["matplotlib", "mplhep"]
 
 [project.scripts]
 rowver = "rowver.cli:main"
@@ -22,4 +21,4 @@ rowver = "rowver.cli:main"
 include = ["rowver*"]
 
 [tool.setuptools.package-data]
-rowver = ["studies/template/*", "extract/SCHEMAS.md"]
+rowver = ["studies/template/*"]

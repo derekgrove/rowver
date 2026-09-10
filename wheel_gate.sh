@@ -28,7 +28,7 @@ if "$VPY" -m rowver.cli run demo >run.out 2>&1; then
 fi
 grep -q "error:" run.out
 
-# check / show / extract wiring on a real cartridge written via the public API
+# check / show on a real cartridge written via the public API
 "$VPY" - <<'EOF'
 import numpy as np
 from rowver import rvr6
@@ -40,10 +40,6 @@ rvr6.write("gate.rvr", meta, buf)
 EOF
 "$VPY" -m rowver.cli check gate.rvr
 "$VPY" -m rowver.cli show gate.rvr >/dev/null
-if "$VPY" -m rowver.cli extract flattened gate.rvr >extract.out 2>&1; then
-    echo "FAIL: extract without a bins source must refuse"; exit 1
-fi
-grep -q "bins source" extract.out
 
 # the console entry point itself
 "$WORK/venv/bin/rowver" check gate.rvr >/dev/null
