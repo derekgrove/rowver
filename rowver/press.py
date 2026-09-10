@@ -1,24 +1,8 @@
-"""The PRESS: the library that turns a study's cart.py recipe into a .rvr.
+"""Press a study's ``cart.py`` recipe into one ``.rvr`` cartridge.
 
-Study recipes are and remain ``studies/<name>/cart.py`` — this module was
-itself called cart.py once, which confused the press with the recipes it
-presses, hence the rename (owner decision, 2026-08-28).
-
-``rowver run`` exports one ``CART`` (.rvr file) from a study.
-
-a cart.py is intended to be a basic recipe to build your .rvr file, its a:
-1) fileset (remote or local paths to .root files)
-2)
-
-The fileset follows Coffea's familiar shape:
-
-    {"sample": {"files": {"file.root": "Events"},
-                "metadata": {"weights": "genWeight"}}}
-
-Every sample must explicitly declare ``metadata['weights']``.
-Use a branch name or callable for event weights, or ``None`` for an unweighted
-sample. Not declaring a weights expression is refused, because forgotten weights
-and intentionally unweighted simulation are not the same thing.
+A recipe declares a Coffea-shaped fileset, a KEEP selection, the columns to
+press, and ``metadata["weights"]`` for every sample: a branch name, a callable,
+or ``None`` for an unweighted sample.
 """
 from __future__ import annotations
 
@@ -36,7 +20,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from multiprocessing.connection import wait
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 import awkward as ak
@@ -45,11 +29,13 @@ import uproot
 
 from . import rvr6
 
-STUDIES = Path("studies")  # resolved against the caller's cwd, not the package
+STUDIES = Path("studies")
 RESERVED_META = frozenset({"sample", "file", "tree"})
 WEIGHT_MISSPELLINGS = frozenset({
     "weight", "Weights", "WEIGHTS", "weigths", "WEIGHTS_BRANCH", "HAS_WEIGHTS",
 })
+PROBE_ENTRIES = 1024
+FALLBACK_ENTRIES = 100_000
 
 
 class CartError(ValueError):
@@ -110,6 +96,14 @@ def _source_failure(sample: str, path: str, exc: Exception) -> CartError:
     )
 
 
+def _open_sample_tree(sample: str, path: str, tree: str):
+    """Open a tree and translate source failures consistently for users."""
+    try:
+        return _open_tree(path, tree)
+    except Exception as exc:
+        raise _source_failure(sample, path, exc) from exc
+
+
 def _study_hash(study: Path) -> str:
     """Fingerprint executable Python owned by one Study directory."""
     digest = hashlib.sha256()
@@ -125,97 +119,8 @@ def _study_hash(study: Path) -> str:
     return digest.hexdigest()
 
 
-def _raise_parallel_error(kind: str, text: str) -> None:
-    if kind == "interrupt":
-        raise KeyboardInterrupt(text)
-    if kind == "exit":
-        raise SystemExit(text)
-    raise CartError(text)
-
-
-def _parallel_worker(study: str, expected_hash: str, step_size: int | str,
-                     tasks, messages, parent_watch) -> None:
-    """Reload one Study and return source results over an ordinary process pipe."""
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-
-    def stop_with_parent() -> None:
-        try:
-            parent_watch.recv_bytes()
-        except (EOFError, OSError):
-            os._exit(1)
-
-    threading.Thread(target=stop_with_parent, daemon=True).start()
-    current_path: str | None = None
-    try:
-        if _study_hash(Path(study)) != expected_hash:
-            raise CartError("study recipe changed before parallel workers started")
-        cart = Cart.load(study)
-        full_fileset = cart.fileset
-        messages.send(("ready",))
-        while True:
-            task = tasks.get()
-            if task is None:
-                break
-            sample_at, source_at, sample, path, tree = task
-            current_path = path
-            if _study_hash(Path(study)) != expected_hash:
-                raise CartError("study recipe changed after parallel tasks were resolved")
-            samples = list(full_fileset)
-            sources = list(full_fileset.get(sample, {}).get("files", {}).items())
-            if (sample_at >= len(samples) or samples[sample_at] != sample
-                    or source_at >= len(sources) or sources[source_at] != (path, tree)):
-                raise CartError("study fileset changed after parallel tasks were resolved")
-
-            scanned = 0
-
-            class Progress:
-                def source(self, name: str, source: str, tree_name: str) -> None:
-                    messages.send(("source", name, source, tree_name))
-
-                def __call__(self, name: str | None, raw: int, kept: int) -> None:
-                    nonlocal scanned
-                    scanned += raw
-                    messages.send(("chunk", name, raw, kept))
-
-                def _size(self, name: str, kept: int, bits: dict[str, int]) -> None:
-                    messages.send(("size", name, kept, bits))
-
-            entry = full_fileset[sample]
-            cart.fileset = {sample: {
-                "files": {path: tree},
-                "metadata": entry["metadata"],
-            }}
-            try:
-                rows, weights = cart.skim(step_size, Progress())
-            finally:
-                cart.fileset = full_fileset
-            messages.send(("result", sample_at, source_at, sample, scanned,
-                           rows[sample], weights.get(sample)))
-            current_path = None
-        messages.send(("done",))
-    except BaseException as exc:
-        text = _redacted_error(exc, current_path) if current_path else str(exc)
-        if not isinstance(exc, CartError):
-            text = f"{type(exc).__name__}: {text}"
-        kind = ("interrupt" if isinstance(exc, KeyboardInterrupt) else
-                "exit" if isinstance(exc, SystemExit) else "failure")
-        try:
-            messages.send(("error", kind, text))
-        except Exception:
-            pass
-    finally:
-        messages.close()
-
-
-def _open_sample_tree(sample: str, path: str, tree: str):
-    """Open a tree and translate source failures consistently for users."""
-    try:
-        return _open_tree(path, tree)
-    except Exception as exc:
-        raise _source_failure(sample, path, exc) from exc
-
-
 def _call_shape(function: Callable[..., Any], where: str) -> int:
+    """Return 1 or 2 for a hook taking ``events`` or ``events, metadata``."""
     try:
         signature = inspect.signature(function)
     except (TypeError, ValueError) as exc:
@@ -229,9 +134,12 @@ def _call_shape(function: Callable[..., Any], where: str) -> int:
     return len(positional)
 
 
+def _invoke(function: Callable[..., Any], events: ak.Array, meta: dict, where: str) -> Any:
+    return function(events, meta) if _call_shape(function, where) == 2 else function(events)
+
+
 def _byte_count(text: str) -> int:
-    """'100 MB' -> 100_000_000. Matches the grammar uproot step-size strings use,
-    scientific notation included."""
+    """'100 MB' -> 100_000_000, with uproot's step-size grammar."""
     scale = {"b": 1, "kb": 10**3, "mb": 10**6, "gb": 10**9, "tb": 10**12,
              "kib": 2**10, "mib": 2**20, "gib": 2**30, "tib": 2**40}
     match = re.fullmatch(r"\s*([0-9.]+(?:[eE][+-]?[0-9]+)?)\s*([A-Za-z]+)\s*", text)
@@ -240,24 +148,13 @@ def _byte_count(text: str) -> int:
     return int(float(match.group(1)) * scale[match.group(2).lower()])
 
 
-PROBE_ENTRIES = 1024      # lazily read entries that teach the press which branches a recipe touches
-FALLBACK_ENTRIES = 100_000  # chunk bound when neither branch nor file sizes are available
-
-
 def _top_level(name: str) -> str:
     """The top-level field a branch, or an RNTuple sub-field path, belongs to."""
     return name.lstrip(".").split(".", 1)[0]
 
 
 def _read_chunk(tree, touched: set[str], start: int, stop: int):
-    """Read one entry range as ``(events, lazy)``.
-
-    ``events`` is what the hooks see. Branches already known to be touched arrive
-    in ONE batched request; every other branch is a lazy placeholder from ``lazy``
-    that materialises only if a hook reaches for it, so a recipe that touches a new
-    branch part-way through a sample still works. ``lazy`` is ``None`` when the
-    backend has no lazy arrays and the whole range was read eagerly.
-    """
+    """Read one entry range as ``(events, lazy)``; ``lazy`` is None after an eager fallback."""
     try:
         lazy = tree.arrays(entry_start=start, entry_stop=stop, library="ak",
                            virtual=True, array_cache=None)
@@ -270,14 +167,67 @@ def _read_chunk(tree, touched: set[str], start: int, stop: int):
         return lazy, lazy
     eager = tree.arrays(filter_name=lambda name: _top_level(name) in touched,
                         entry_start=start, entry_stop=stop, library="ak", array_cache=None)
+    return _overlay(lazy, eager), lazy
+
+
+def _overlay(lazy: ak.Array, eager: ak.Array) -> ak.Array:
+    """Replace lazy placeholders with eager fields of the same form; the rest stay lazy."""
     events = lazy
     for name in eager.fields:
-        # An eager field shaped differently from its placeholder (a record whose
-        # sub-fields the filter missed) stays lazy instead of shadowing the branch.
-        if name in layout.fields and layout.content(name).form.is_equal_to(
+        if name in lazy.layout.fields and lazy.layout.content(name).form.is_equal_to(
                 eager.layout.content(name).form):
             events = ak.with_field(events, eager[name], name)
-    return events, lazy
+    return events
+
+
+def _newly_touched(lazy, known: set[str]) -> list[str]:
+    """Branches whose lazy placeholders a hook materialised during this chunk."""
+    layout = lazy.layout
+    if not isinstance(layout, ak.contents.RecordArray) or layout.is_tuple:
+        return []
+    return [name for name in layout.fields
+            if name not in known and layout.content(name).is_any_materialized]
+
+
+def _entries_per_chunk(tree, touched: set[str], budget: int, total: int) -> int:
+    """Entries whose touched branches fill ``budget`` bytes, sized from the tree header."""
+    if total <= 0:
+        return 1
+    touched_bytes = 0
+    for name in touched:
+        try:
+            touched_bytes += int(tree[name].uncompressed_bytes)
+        except Exception:
+            continue
+    per_entry = touched_bytes / total
+    if per_entry <= 0:
+        try:
+            per_entry = int(tree.file.source.num_bytes) / total
+        except Exception:
+            per_entry = 0.0
+    if per_entry <= 0:
+        return min(FALLBACK_ENTRIES, total)
+    return max(min(int(budget / per_entry), total), 1)
+
+
+def _chunks(tree, touched: set[str], step_size: int | str) -> Iterator[tuple[ak.Array, int]]:
+    """Yield ``(events, entries)`` per chunk; a fresh touched set starts with a small probe."""
+    total = int(tree.num_entries)
+    budget = None if isinstance(step_size, int) else _byte_count(step_size)
+    if budget is None:
+        per_chunk: int | None = max(step_size, 1)
+    else:
+        per_chunk = _entries_per_chunk(tree, touched, budget, total) if touched else None
+    first = per_chunk if touched else min(PROBE_ENTRIES, per_chunk or PROBE_ENTRIES)
+    start, stop = 0, min(first, total)
+    while start < total:
+        events, lazy = _read_chunk(tree, touched, start, stop)
+        yield events, stop - start
+        newly = _newly_touched(lazy, touched) if lazy is not None else []
+        touched.update(newly)
+        if budget is not None and (newly or per_chunk is None):
+            per_chunk = _entries_per_chunk(tree, touched, budget, total)
+        start, stop = stop, min(stop + per_chunk, total)
 
 
 def _bits(column: np.ndarray) -> int:
@@ -296,45 +246,35 @@ def _joined(arrays: list[np.ndarray]) -> np.ndarray:
     return np.concatenate(populated or arrays) if arrays else np.empty(0, dtype=np.float64)
 
 
-def _newly_touched(lazy, known: set[str]) -> list[str]:
-    """Branches whose lazy placeholders a hook materialised during this chunk."""
-    layout = lazy.layout
-    if not isinstance(layout, ak.contents.RecordArray) or layout.is_tuple:
-        return []
-    return [name for name in layout.fields
-            if name not in known and layout.content(name).is_any_materialized]
+def _notify(progress: Any, event: str, *args: Any) -> None:
+    """Call an optional lifecycle method of a progress callback."""
+    method = getattr(progress, event, None)
+    if method is not None:
+        method(*args)
 
 
-def _entries_per_chunk(tree, touched: set[str], budget: int, total: int) -> int:
-    """Entries whose touched branches occupy about ``budget`` uncompressed bytes.
+class _Capacity:
+    """Refuse a press as soon as its kept rows can no longer fit the column buffer."""
 
-    Sized from the branch totals ROOT keeps in the tree header, so it costs no
-    I/O — ``num_entries_for`` reads every basket header of every branch instead,
-    which measured 44 s per file on ntuples with 80-entry baskets. Without branch
-    totals (RNTuple fields, or nothing touched yet) the file's own bytes per entry
-    over-count, which only makes chunks smaller.
-    """
-    if total <= 0:
-        return 1
-    touched_bytes = 0
-    for name in touched:
-        try:
-            touched_bytes += int(tree[name].uncompressed_bytes)
-        except Exception:      # a field without branch totals; size without it
-            continue
-    per_entry = touched_bytes / total
-    if per_entry <= 0:
-        try:
-            per_entry = int(tree.file.source.num_bytes) / total
-        except Exception:
-            per_entry = 0.0
-    if per_entry <= 0:
-        return min(FALLBACK_ENTRIES, total)
-    return max(min(int(budget / per_entry), total), 1)
+    def __init__(self, cart: "Cart") -> None:
+        self.rows = 0
+        self.bits = {name: 1 for name in cart.columns}
+        weighted = any(entry["metadata"]["weights"] is not None
+                       for entry in cart.fileset.values())
+        self.row_bytes = 4 + (8 if weighted else 0)
 
-
-def _invoke(function: Callable[..., Any], events: ak.Array, meta: dict, where: str) -> Any:
-    return function(events, meta) if _call_shape(function, where) == 2 else function(events)
+    def add(self, sample: str, kept: int, bits: Mapping[str, int]) -> None:
+        self.rows += kept
+        for name, width in bits.items():
+            self.bits[name] = max(self.bits[name], width)
+        packed = self.rows * self.row_bytes + sum(
+            (self.rows * width + 7) // 8 for width in self.bits.values())
+        if packed > rvr6.MAX_DATA_BYTES:
+            raise CartError(
+                f"the kept rows no longer fit the cartridge: "
+                f"{self.rows:,} rows need {packed} bytes, exceeding the "
+                f"{rvr6.MAX_DATA_BYTES}-byte column limit (reached in "
+                f'sample "{sample}") — tighten KEEP or trim the fileset')
 
 
 def _source(value: Any) -> dict | None:
@@ -379,6 +319,120 @@ def _one_dimensional(value: Any, where: str, *, boolean: bool = False) -> np.nda
     if out.dtype.kind == "f" and not np.isfinite(out).all():
         raise CartError(f"{where} contains NaN or infinity")
     return out
+
+
+def _raise_parallel_error(kind: str, text: str) -> None:
+    if kind == "interrupt":
+        raise KeyboardInterrupt(text)
+    if kind == "exit":
+        raise SystemExit(text)
+    raise CartError(text)
+
+
+def _check_alive(processes: list) -> None:
+    for process in processes:
+        if process.exitcode not in (None, 0):
+            raise CartError(
+                f"a parallel worker exited unexpectedly (exit code {process.exitcode})"
+            )
+
+
+def _task_matches(fileset: Mapping[str, dict], task: tuple) -> bool:
+    """True when a task still names the same source at the same position."""
+    sample_at, source_at, sample, path, tree = task
+    samples = list(fileset)
+    sources = list(fileset.get(sample, {}).get("files", {}).items())
+    return (sample_at < len(samples) and samples[sample_at] == sample
+            and source_at < len(sources) and sources[source_at] == (path, tree))
+
+
+def _parallel_worker(study: str, expected_hash: str, step_size: int | str,
+                     tasks, messages, parent_watch) -> None:
+    """Reload one Study and return source results over an ordinary process pipe."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    def stop_with_parent() -> None:
+        try:
+            parent_watch.recv_bytes()
+        except (EOFError, OSError):
+            os._exit(1)
+
+    threading.Thread(target=stop_with_parent, daemon=True).start()
+    current_path: str | None = None
+    try:
+        if _study_hash(Path(study)) != expected_hash:
+            raise CartError("study recipe changed before parallel workers started")
+        cart = Cart.load(study)
+        full_fileset = cart.fileset
+        messages.send(("ready",))
+        while True:
+            task = tasks.get()
+            if task is None:
+                break
+            sample_at, source_at, sample, path, tree = task
+            current_path = path
+            if _study_hash(Path(study)) != expected_hash:
+                raise CartError("study recipe changed after parallel tasks were resolved")
+            if not _task_matches(full_fileset, task):
+                raise CartError("study fileset changed after parallel tasks were resolved")
+
+            scanned = 0
+
+            class Progress:
+                def source(self, name: str, source: str, tree_name: str) -> None:
+                    messages.send(("source", name, source, tree_name))
+
+                def __call__(self, name: str | None, raw: int, kept: int) -> None:
+                    nonlocal scanned
+                    scanned += raw
+                    messages.send(("chunk", name, raw, kept))
+
+                def _size(self, name: str, kept: int, bits: dict[str, int]) -> None:
+                    messages.send(("size", name, kept, bits))
+
+            entry = full_fileset[sample]
+            cart.fileset = {sample: {
+                "files": {path: tree},
+                "metadata": entry["metadata"],
+            }}
+            try:
+                rows, weights = cart.skim(step_size, Progress())
+            finally:
+                cart.fileset = full_fileset
+            messages.send(("result", sample_at, source_at, sample, scanned,
+                           rows[sample], weights.get(sample)))
+            current_path = None
+        messages.send(("done",))
+    except BaseException as exc:
+        text = _redacted_error(exc, current_path) if current_path else str(exc)
+        if not isinstance(exc, CartError):
+            text = f"{type(exc).__name__}: {text}"
+        kind = ("interrupt" if isinstance(exc, KeyboardInterrupt) else
+                "exit" if isinstance(exc, SystemExit) else "failure")
+        try:
+            messages.send(("error", kind, text))
+        except Exception:
+            pass
+    finally:
+        messages.close()
+
+
+def _wait_ready(processes: list, connections: list) -> None:
+    """Block until every worker has reloaded the study, surfacing any that die first."""
+    ready: set[Any] = set()
+    while len(ready) < len(connections):
+        for connection in wait(connections, timeout=0.1):
+            try:
+                message = connection.recv()
+            except EOFError as exc:
+                raise CartError("a parallel worker exited before it was ready") from exc
+            if message[0] == "ready":
+                ready.add(connection)
+            elif message[0] == "error":
+                _raise_parallel_error(*message[1:])
+            else:
+                raise CartError("a parallel worker sent an invalid startup message")
+        _check_alive(processes)
 
 
 class Cart:
@@ -433,6 +487,7 @@ class Cart:
         return cart
 
     def _expand_files(self, base: Path) -> dict[str, dict]:
+        """Resolve local globs against the study directory; remote URLs pass through."""
         out: dict[str, dict] = {}
         for sample_name, raw in self.fileset.items():
             if not isinstance(raw, dict) or set(raw) - {"files", "metadata"}:
@@ -525,134 +580,177 @@ class Cart:
                   meta: dict, where: str) -> Any:
         return events[spec] if isinstance(spec, str) else _invoke(spec, events, meta, where)
 
+    def _select(self, events: ak.Array, metadata: dict, sample: str, path: str) -> ak.Array:
+        """Run PREPARE and KEEP on one chunk and return the events that survive."""
+        prepared = (_invoke(self.prepare, events, metadata, "PREPARE")
+                    if self.prepare is not None else events)
+        try:
+            count = len(prepared)
+        except TypeError as exc:
+            raise CartError("PREPARE must return an event array") from exc
+        mask = _one_dimensional(_invoke(self.keep, prepared, metadata, "KEEP"),
+                                f'{sample} KEEP for {Path(path).name}', boolean=True)
+        if len(mask) != count:
+            raise CartError(f'{sample} KEEP returned {len(mask)} values for {count} events')
+        return prepared[mask]
+
+    def _columns_of(self, selected: ak.Array, metadata: dict, sample: str) -> dict[str, np.ndarray]:
+        """Evaluate every declared column on the selected events."""
+        out: dict[str, np.ndarray] = {}
+        for name, spec in self.columns.items():
+            value = self._evaluate(spec, selected, metadata, f'COLUMNS["{name}"]')
+            column = _one_dimensional(value, f'{sample}.{name}')
+            if len(column) != len(selected):
+                raise CartError(f'{sample}.{name} returned {len(column)} values for '
+                                f'{len(selected)} selected events')
+            out[name] = column
+        return out
+
+    def _weights_of(self, selected: ak.Array, metadata: dict, sample: str) -> np.ndarray:
+        """Evaluate the sample's weights declaration on the selected events."""
+        weight = self.fileset[sample]["metadata"]["weights"]
+        values = _one_dimensional(
+            self._evaluate(weight, selected, metadata, f'{sample} weights'),
+            f'{sample}.weight').astype(np.float64, copy=False)
+        if len(values) != len(selected):
+            raise CartError(f'{sample}.weight length does not match its events')
+        if not np.isfinite(values).all():
+            raise CartError(f'{sample}.weight contains NaN or infinity')
+        return values
+
     def skim(self, step_size: int | str = "100 MB",
              progress: Callable[[str | None, int, int], None] | None = None) -> tuple[dict, dict]:
-        """Read files sequentially, apply hooks, and materialise validated NumPy columns.
-
-        ``step_size`` bounds one chunk: an entry count, or a byte budget such as
-        ``"100 MB"`` for the uncompressed bytes of the branches the recipe touches.
-        Each source starts with a small lazily-read chunk that reveals those branches;
-        every later chunk reads exactly them in one batched request, which is what
-        keeps a thousand-branch NanoAOD or a tiny-basket ntuple fast.
-
-        ``progress``, when given, is called after each fully processed chunk with
-        ``(sample, raw_rows, kept_rows)`` — raw is the tree entries the chunk covered
-        (pre-PREPARE, the same currency as ``num_entries``), kept is what survived KEEP.
-        A callback object may additionally define ``source(sample, path, tree)`` and
-        ``sample_done(sample)`` lifecycle methods; plain callables remain supported.
-        ``build`` additionally calls it once with ``(None, 0, 0)`` when skimming ends
-        and the pack/compress/write phase begins — the long quiet stretch a watcher
-        would otherwise read as a hang. An exception from the callback aborts the
-        build; nothing is written.
-        """
+        """Read every source in order, run the hooks, and return ``(columns, weights)`` by sample."""
         if not self._validated:
             self.validate()
+        capacity = _Capacity(self)
         output: dict[str, dict[str, np.ndarray]] = {}
         output_weights: dict[str, np.ndarray] = {}
-        # Refuse a doomed build EARLY: the wire format caps the column buffer, and a
-        # press that will blow it should say so at the first offending chunk, not
-        # after an hour of skimming (measured: 80 minutes, then the pack refused).
-        # Track each column's widest representation across sources. Boolean-only
-        # columns use one bit per row; mixed boolean/numeric columns widen normally.
-        kept_rows = 0
-        col_bits = {name: 1 for name in self.columns}
-        any_weighted = any(entry["metadata"]["weights"] is not None
-                           for entry in self.fileset.values())
         for sample, entry in self.fileset.items():
             chunks: dict[str, list[np.ndarray]] = {name: [] for name in self.columns}
             weight_chunks: list[np.ndarray] = []
-            # Carried across a sample's files: one recipe, one branch dialect. A file
-            # lacking a touched branch simply keeps that name as a placeholder.
             touched: set[str] = set()
             for path, tree_name in entry["files"].items():
                 metadata = self._meta(sample, path, tree_name)
-                source_progress = getattr(progress, "source", None)
-                if source_progress is not None:
-                    source_progress(sample, path, tree_name)
-                source = _open_sample_tree(sample, path, tree_name)
-                with source as tree:
-                    total = int(tree.num_entries)
-                    budget = None if isinstance(step_size, int) else _byte_count(step_size)
-                    if budget is None:
-                        entries_per_chunk = max(step_size, 1)
-                    elif touched:
-                        entries_per_chunk = _entries_per_chunk(tree, touched, budget, total)
-                    else:
-                        entries_per_chunk = None
-                    # A sample's first chunk is small and read lazily so the press learns
-                    # which branches the recipe touches. Every later chunk reads exactly
-                    # those in one batched request; a byte budget is sized from them.
-                    first = (entries_per_chunk if touched and entries_per_chunk
-                             else min(PROBE_ENTRIES, entries_per_chunk or PROBE_ENTRIES))
-                    start, stop = 0, min(first, total)
-                    while start < total:
-                        events, lazy = _read_chunk(tree, touched, start, stop)
-                        prepared = (_invoke(self.prepare, events, metadata, "PREPARE")
-                                    if self.prepare is not None else events)
-                        try:
-                            prepared_rows = len(prepared)
-                        except TypeError as exc:
-                            raise CartError("PREPARE must return an event array") from exc
-                        mask = _one_dimensional(
-                            _invoke(self.keep, prepared, metadata, "KEEP"),
-                            f'{sample} KEEP for {Path(path).name}', boolean=True)
-                        if len(mask) != prepared_rows:
-                            raise CartError(f'{sample} KEEP returned {len(mask)} values for '
-                                            f'{prepared_rows} events')
-                        selected = prepared[mask]
-                        for name, spec in self.columns.items():
-                            value = self._evaluate(spec, selected, metadata, f'COLUMNS["{name}"]')
-                            column = _one_dimensional(value, f'{sample}.{name}')
-                            if len(column) != len(selected):
-                                raise CartError(f'{sample}.{name} returned {len(column)} values for '
-                                                f'{len(selected)} selected events')
+                _notify(progress, "source", sample, path, tree_name)
+                with _open_sample_tree(sample, path, tree_name) as tree:
+                    for events, entries in _chunks(tree, touched, step_size):
+                        selected = self._select(events, metadata, sample, path)
+                        columns = self._columns_of(selected, metadata, sample)
+                        for name, column in columns.items():
                             chunks[name].append(column)
-                            if column.size and col_bits[name] < 64:
-                                col_bits[name] = max(col_bits[name], _bits(column))
-                        weight = entry["metadata"]["weights"]
-                        if weight is not None:
-                            values = _one_dimensional(
-                                self._evaluate(weight, selected, metadata, f'{sample} weights'),
-                                f'{sample}.weight').astype(np.float64, copy=False)
-                            if len(values) != len(selected):
-                                raise CartError(f'{sample}.weight length does not match its events')
-                            if not np.isfinite(values).all():
-                                raise CartError(f'{sample}.weight contains NaN or infinity')
-                            weight_chunks.append(values)
-                        kept_rows += len(selected)
-                        packed_bytes = kept_rows * (4 + (8 if any_weighted else 0)) + sum(
-                            (kept_rows * bits + 7) // 8 for bits in col_bits.values())
-                        if packed_bytes > rvr6.MAX_DATA_BYTES:
-                            raise CartError(
-                                f"the kept rows no longer fit the cartridge: "
-                                f"{kept_rows:,} rows need {packed_bytes} bytes, exceeding the "
-                                f"{rvr6.MAX_DATA_BYTES}-byte column limit (reached in "
-                                f'sample "{sample}") — tighten KEEP or trim the fileset')
-                        size_progress = getattr(progress, "_size", None)
-                        if size_progress is not None:
-                            size_progress(sample, len(selected), dict(col_bits))
+                        if entry["metadata"]["weights"] is not None:
+                            weight_chunks.append(self._weights_of(selected, metadata, sample))
+                        kept = len(selected)
+                        capacity.add(sample, kept, {
+                            name: _bits(column) for name, column in columns.items()
+                            if column.size and capacity.bits[name] < 64})
+                        size = getattr(progress, "_size", None)
+                        if size is not None:
+                            size(sample, kept, dict(capacity.bits))
                         if progress is not None:
-                            progress(sample, stop - start, len(selected))
-                        newly = _newly_touched(lazy, touched) if lazy is not None else []
-                        touched.update(newly)
-                        if budget is not None and (newly or entries_per_chunk is None):
-                            entries_per_chunk = _entries_per_chunk(tree, touched, budget, total)
-                        start, stop = stop, min(stop + entries_per_chunk, total)
-            output[sample] = {
-                name: _joined(values) for name, values in chunks.items()
-            }
+                            progress(sample, entries, kept)
+            output[sample] = {name: _joined(values) for name, values in chunks.items()}
             if entry["metadata"]["weights"] is not None:
                 output_weights[sample] = (np.concatenate(weight_chunks) if weight_chunks
                                           else np.empty(0, dtype=np.float64))
-            sample_done = getattr(progress, "sample_done", None)
-            if sample_done is not None:
-                sample_done(sample)
+            _notify(progress, "sample_done", sample)
+        return output, output_weights
+
+    def _spawn(self, context, number: int, step_size: int | str, task_queue) -> tuple:
+        """Start one worker; return its process, its message pipe, and its lifeline."""
+        receive, send = context.Pipe(duplex=False)
+        parent_watch, lifeline = context.Pipe(duplex=False)
+        process = context.Process(
+            target=_parallel_worker,
+            args=(str(self.dir), self._recipe_hash, step_size, task_queue, send, parent_watch),
+            name=f"rowver-source-{number + 1}",
+        )
+        try:
+            process.start()
+        except BaseException:
+            receive.close()
+            send.close()
+            parent_watch.close()
+            lifeline.close()
+            raise
+        send.close()
+        parent_watch.close()
+        return process, receive, lifeline
+
+    def _collect(self, tasks: list, processes: list, connections: list, task_queue,
+                 progress: Callable[[str | None, int, int], None] | None) -> dict:
+        """Relay worker messages to the progress callback until every source has returned."""
+        results: dict[tuple[int, int], tuple[str, int, dict, np.ndarray | None]] = {}
+        finished = {sample: 0 for sample in self.fileset}
+        capacity = _Capacity(self)
+        next_task = len(connections)
+        active = set(connections)
+        while active:
+            for connection in wait(active, timeout=0.1):
+                try:
+                    message = connection.recv()
+                except EOFError as exc:
+                    process = processes[connections.index(connection)]
+                    process.join(0.1)
+                    _check_alive([process])
+                    raise CartError("a parallel worker exited without completing") from exc
+                kind, *body = message
+                if kind == "source":
+                    _notify(progress, "source", *body)
+                elif kind == "chunk":
+                    if progress is not None:
+                        progress(*body)
+                elif kind == "size":
+                    capacity.add(*body)
+                elif kind == "result":
+                    sample_at, source_at, sample, scanned, rows, weight = body
+                    if (sample_at, source_at) in results:
+                        raise CartError("a parallel worker returned a source twice")
+                    results[(sample_at, source_at)] = (sample, scanned, rows, weight)
+                    if next_task < len(tasks):
+                        task_queue.put(tasks[next_task])
+                        next_task += 1
+                    else:
+                        task_queue.put(None)
+                    finished[sample] += 1
+                    if finished[sample] == len(self.fileset[sample]["files"]):
+                        _notify(progress, "sample_done", sample)
+                elif kind == "error":
+                    _raise_parallel_error(*body)
+                elif kind == "done":
+                    active.remove(connection)
+                else:
+                    raise CartError("a parallel worker sent an invalid result message")
+            _check_alive(processes)
+        if len(results) != len(tasks):
+            raise CartError("parallel workers did not return every source")
+        return results
+
+    def _merge(self, results: dict) -> tuple[dict, dict]:
+        """Concatenate per-source results in declaration order."""
+        output: dict[str, dict[str, np.ndarray]] = {}
+        output_weights: dict[str, np.ndarray] = {}
+        for sample_at, (sample, entry) in enumerate(self.fileset.items()):
+            pieces = [results[(sample_at, source_at)]
+                      for source_at in range(len(entry["files"]))]
+            output[sample] = {
+                name: _joined([rows[name] for _, scanned, rows, _ in pieces if scanned])
+                for name in self.columns
+            }
+            if entry["metadata"]["weights"] is not None:
+                weights = [weight for *_, weight in pieces]
+                if any(weight is None for weight in weights):
+                    raise CartError(f'weighted sample "{sample}" lost its weights')
+                output_weights[sample] = np.concatenate(weights)
         return output, output_weights
 
     def _parallel_skim(self, workers: int, step_size: int | str,
                        progress: Callable[[str | None, int, int], None] | None
                        ) -> tuple[dict, dict]:
-        """Process one source per task; merge and all side effects stay here."""
+        """Skim one source per task in worker processes; merging and every side effect stay here."""
+        if self._recipe_hash is None:
+            raise CartError("parallel builds require an unchanged loaded Study")
         tasks = [
             (sample_at, source_at, sample, path, tree)
             for sample_at, (sample, entry) in enumerate(self.fileset.items())
@@ -661,156 +759,26 @@ class Cart:
         workers = min(workers, len(tasks))
         context = multiprocessing.get_context("spawn")
         task_queue = context.SimpleQueue()
-        processes = []
-        connections = []
-        lifelines = []
-        expected_hash = self._recipe_hash
-        if expected_hash is None:
-            raise CartError("parallel builds require an unchanged loaded Study")
+        processes: list = []
+        connections: list = []
+        lifelines: list = []
         succeeded = False
         try:
             for number in range(workers):
-                receive, send = context.Pipe(duplex=False)
-                parent_watch, lifeline = context.Pipe(duplex=False)
-                process = context.Process(
-                    target=_parallel_worker,
-                    args=(str(self.dir), expected_hash, step_size, task_queue, send,
-                          parent_watch),
-                    name=f"rowver-source-{number + 1}",
-                )
-                try:
-                    process.start()
-                except BaseException:
-                    receive.close()
-                    send.close()
-                    parent_watch.close()
-                    lifeline.close()
-                    raise
+                process, receive, lifeline = self._spawn(context, number, step_size, task_queue)
                 processes.append(process)
                 connections.append(receive)
                 lifelines.append(lifeline)
-                send.close()
-                parent_watch.close()
-
-            ready: set[Any] = set()
-            while len(ready) < workers:
-                available = wait(connections, timeout=0.1)
-                for connection in available:
-                    try:
-                        message = connection.recv()
-                    except EOFError as exc:
-                        raise CartError("a parallel worker exited before it was ready") from exc
-                    if message[0] == "ready":
-                        ready.add(connection)
-                    elif message[0] == "error":
-                        _raise_parallel_error(*message[1:])
-                    else:
-                        raise CartError("a parallel worker sent an invalid startup message")
-                for process in processes:
-                    if process.exitcode not in (None, 0):
-                        raise CartError(
-                            f"a parallel worker exited unexpectedly (exit code {process.exitcode})"
-                        )
-
-            next_task = workers
+            _wait_ready(processes, connections)
             for task in tasks[:workers]:
                 task_queue.put(task)
-
-            results: dict[tuple[int, int], tuple[str, int, dict, np.ndarray | None]] = {}
-            finished_sources = {sample: 0 for sample in self.fileset}
-            active = set(connections)
-            kept_rows = 0
-            col_bits = {name: 1 for name in self.columns}
-            any_weighted = any(entry["metadata"]["weights"] is not None
-                               for entry in self.fileset.values())
-            while active:
-                available = wait(active, timeout=0.1)
-                for connection in available:
-                    try:
-                        message = connection.recv()
-                    except EOFError as exc:
-                        process = processes[connections.index(connection)]
-                        process.join(0.1)
-                        if process.exitcode not in (None, 0):
-                            raise CartError(
-                                f"a parallel worker exited unexpectedly "
-                                f"(exit code {process.exitcode})"
-                            ) from exc
-                        raise CartError("a parallel worker exited without completing") from exc
-                    kind = message[0]
-                    if kind == "source":
-                        source_progress = getattr(progress, "source", None)
-                        if source_progress is not None:
-                            source_progress(*message[1:])
-                    elif kind == "chunk":
-                        if progress is not None:
-                            progress(*message[1:])
-                    elif kind == "size":
-                        _, sample, count, source_bits = message
-                        kept_rows += count
-                        for name, bits in source_bits.items():
-                            col_bits[name] = max(col_bits[name], bits)
-                        packed_bytes = kept_rows * (4 + (8 if any_weighted else 0)) + sum(
-                            (kept_rows * bits + 7) // 8 for bits in col_bits.values())
-                        if packed_bytes > rvr6.MAX_DATA_BYTES:
-                            raise CartError(
-                                f"the kept rows no longer fit the cartridge: "
-                                f"{kept_rows:,} rows need {packed_bytes} bytes, exceeding the "
-                                f"{rvr6.MAX_DATA_BYTES}-byte column limit (reached in "
-                                f'sample "{sample}") — tighten KEEP or trim the fileset')
-                    elif kind == "result":
-                        _, sample_at, source_at, sample, scanned, rows, weight = message
-                        key = (sample_at, source_at)
-                        if key in results:
-                            raise CartError("a parallel worker returned a source twice")
-                        results[key] = (sample, scanned, rows, weight)
-                        if next_task < len(tasks):
-                            task_queue.put(tasks[next_task])
-                            next_task += 1
-                        else:
-                            task_queue.put(None)
-                        finished_sources[sample] += 1
-                        if finished_sources[sample] == len(self.fileset[sample]["files"]):
-                            sample_done = getattr(progress, "sample_done", None)
-                            if sample_done is not None:
-                                sample_done(sample)
-                    elif kind == "error":
-                        _raise_parallel_error(*message[1:])
-                    elif kind == "done":
-                        active.remove(connection)
-                    else:
-                        raise CartError("a parallel worker sent an invalid result message")
-                for process in processes:
-                    if process.exitcode not in (None, 0):
-                        raise CartError(
-                            f"a parallel worker exited unexpectedly (exit code {process.exitcode})"
-                        )
-
-            if len(results) != len(tasks):
-                raise CartError("parallel workers did not return every source")
+            results = self._collect(tasks, processes, connections, task_queue, progress)
             for process in processes:
                 process.join()
-                if process.exitcode != 0:
-                    raise CartError(
-                        f"a parallel worker exited unexpectedly (exit code {process.exitcode})"
-                    )
-
-            output: dict[str, dict[str, np.ndarray]] = {}
-            output_weights: dict[str, np.ndarray] = {}
-            for sample_at, (sample, entry) in enumerate(self.fileset.items()):
-                pieces = [results[(sample_at, source_at)]
-                          for source_at in range(len(entry["files"]))]
-                output[sample] = {}
-                for name in self.columns:
-                    output[sample][name] = _joined(
-                        [rows[name] for _, scanned, rows, _ in pieces if scanned])
-                if entry["metadata"]["weights"] is not None:
-                    weights = [weight for _, _, _, weight in pieces]
-                    if any(weight is None for weight in weights):
-                        raise CartError(f'weighted sample "{sample}" lost its weights')
-                    output_weights[sample] = np.concatenate(weights)
+            _check_alive(processes)
+            output = self._merge(results)
             succeeded = True
-            return output, output_weights
+            return output
         finally:
             if not succeeded:
                 for process in processes:
@@ -855,7 +823,7 @@ class Cart:
               *, step_size: int | str = "100 MB",
               progress: Callable[[str | None, int, int], None] | None = None,
               workers: int | None = None) -> dict:
-        """Skim and atomically write ``<study>.rvr``.  This is the normal public API."""
+        """Skim and atomically write ``<study>.rvr``; the normal public API."""
         if self.name is None or self.dir is None:
             raise CartError("load the cart with Cart.load(<study>) before building it")
         if workers is not None and (type(workers) is not int or workers < 1):
@@ -866,7 +834,7 @@ class Cart:
                          if workers is None or workers == 1
                          else self._parallel_skim(workers, step_size, progress))
         if progress is not None:
-            progress(None, 0, 0)          # skim done; packing and compressing now
+            progress(None, 0, 0)
         built = datetime.now(timezone.utc).isoformat()
         about = {"name": self.name}
         if self.title:

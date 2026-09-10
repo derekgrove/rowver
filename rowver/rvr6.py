@@ -1,22 +1,9 @@
 """Read RowVer 6/7 cartridges and pack new RowVer 7 cartridges.
 
-The container is deliberately small and language-neutral::
-
-    gzip(u32 little-endian JSON length | UTF-8 JSON | column buffer)
-
-All numeric payloads are little-endian.  Metadata has five named drawers: ``about``,
-``data``, ``view``, ``tabs``, and ``made``; ``rowver`` and the optional ``opens_on`` tab
-index sit beside them. Version 7 adds little-bit-order packed boolean columns.
-
-``data`` is immutable once a file is built.  A browser may merge changes into the other
-drawers, but it must preserve unknown keys and pass the column buffer through byte-for-byte.
-
-Stage blocks are explicit.  A block contains one to six leaf cells (or interior ``null``
-holes) and one of these layouts, expressed in sixths of a row::
-
-    [6] [3,3] [2,2,2] [3,3,6] [6,3,3] [3,3,3,3] [2,2,2,2,2,2]
-
-Leaves may be plots, a yield board, or a region map.  Blocks cannot nest.
+The container is ``gzip(u32 little-endian JSON length | UTF-8 JSON | column buffer)``.
+The header has five drawers: ``about``, ``data``, ``view``, ``tabs``, and ``made``.
+``data`` and the buffer are immutable once written; ``FORMAT.md`` and ``FORMAT7.md``
+define the rest.
 """
 from __future__ import annotations
 
@@ -31,7 +18,7 @@ import tempfile
 import zlib
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Container, Iterator, Mapping
 
 import numpy as np
 
@@ -41,7 +28,6 @@ VERSION = "7.0.0"
 MAX_HEADER_BYTES = 8 * 1024 * 1024
 MAX_DATA_BYTES = 1024 * 1024 * 1024
 MAX_CHIPS = 25
-# the packed percentile ladder — REQUIRED on every column, ordered with lim
 PCTS = (1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99)
 MAX_GRID_REGIONS = 4096
 MAX_REGION_NODES = 8192
@@ -53,6 +39,7 @@ LAYOUTS = frozenset({
 })
 LOCKABLE = ("cuts", "stage", "shown")
 NEUTRAL = {"cuts": {}, "stage": [], "shown": None}
+NAMESPACES = ("sample", "sub", "group")
 
 
 class FormatError(ValueError):
@@ -68,6 +55,13 @@ def _option(value: Any, allowed: Any) -> bool:
     return isinstance(value, str) and value in allowed
 
 
+def _unique_names(value: Any, allowed: Any) -> bool:
+    """True for a list of distinct strings that all name something in ``allowed``."""
+    return (isinstance(value, list)
+            and all(isinstance(name, str) and name in allowed for name in value)
+            and len(set(value)) == len(value))
+
+
 def _nat(value: Any, where: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         _fail(f"{where} must be a non-negative integer")
@@ -79,7 +73,7 @@ def _finite(value: Any, where: str) -> float:
         _fail(f"{where} must be a finite number")
     try:
         out = float(value)
-    except OverflowError:  # an integer too large for float64 is not a finite number
+    except OverflowError:
         _fail(f"{where} must be a finite number")
     if not math.isfinite(out):
         _fail(f"{where} must be a finite number")
@@ -111,7 +105,7 @@ def _made_source(value: Any, where: str, *, nullable: bool = True) -> None:
 
 
 def _made(made: dict, samples: list[dict], columns: list[dict]) -> None:
-    """Validate provenance when present; an empty/redacted drawer remains valid."""
+    """Validate provenance when present; an empty or redacted drawer remains valid."""
     if not made:
         return
     if "built" in made and not isinstance(made["built"], str):
@@ -127,31 +121,7 @@ def _made(made: dict, samples: list[dict], columns: list[dict]) -> None:
         for name, source in declared.items():
             _made_source(source, f'made.columns["{name}"]', nullable=False)
     if "samples" in made:
-        records = made["samples"]
-        if not isinstance(records, list) or len(records) != len(samples):
-            _fail("made.samples must describe every data sample exactly once")
-        expected = {sample["name"]: sample["rows"] for sample in samples}
-        seen: set[str] = set()
-        for i, record in enumerate(records):
-            if not isinstance(record, dict):
-                _fail(f"made.samples[{i}] must be an object")
-            name = record.get("name")
-            if (not isinstance(name, str) or name not in expected or name in seen
-                    or isinstance(record.get("rows"), bool)
-                    or record.get("rows") != expected.get(name)):
-                _fail("made.samples names and row counts must match data.samples")
-            seen.add(name)
-            files = record.get("files")
-            if not isinstance(files, list) or any(
-                    not isinstance(file, dict) or not isinstance(file.get("path"), str)
-                    or not file["path"] or not isinstance(file.get("tree"), str)
-                    or not file["tree"] for file in files):
-                _fail(f'made sample "{name}" has invalid files')
-            if not isinstance(record.get("metadata"), dict):
-                _fail(f'made sample "{name}" metadata must be an object')
-            if "weights" not in record:
-                _fail(f'made sample "{name}" needs a weights declaration (null = unweighted)')
-            _made_source(record["weights"], f'made sample "{name}" weights')
+        _made_samples(made["samples"], samples)
     if "cart" in made and made["cart"] is not None:
         cart = made["cart"]
         if not isinstance(cart, dict):
@@ -161,12 +131,35 @@ def _made(made: dict, samples: list[dict], columns: list[dict]) -> None:
                 _fail(f"made.cart.{key} must be text")
 
 
-def _wire_clean(value: Any) -> str | None:
-    """None when the header holds only values both readers see identically; else why not.
+def _made_samples(records: Any, samples: list[dict]) -> None:
+    if not isinstance(records, list) or len(records) != len(samples):
+        _fail("made.samples must describe every data sample exactly once")
+    expected = {sample["name"]: sample["rows"] for sample in samples}
+    seen: set[str] = set()
+    for i, record in enumerate(records):
+        if not isinstance(record, dict):
+            _fail(f"made.samples[{i}] must be an object")
+        name = record.get("name")
+        if (not isinstance(name, str) or name not in expected or name in seen
+                or isinstance(record.get("rows"), bool)
+                or record.get("rows") != expected.get(name)):
+            _fail("made.samples names and row counts must match data.samples")
+        seen.add(name)
+        files = record.get("files")
+        if not isinstance(files, list) or any(
+                not isinstance(file, dict) or not isinstance(file.get("path"), str)
+                or not file["path"] or not isinstance(file.get("tree"), str)
+                or not file["tree"] for file in files):
+            _fail(f'made sample "{name}" has invalid files')
+        if not isinstance(record.get("metadata"), dict):
+            _fail(f'made sample "{name}" metadata must be an object')
+        if "weights" not in record:
+            _fail(f'made sample "{name}" needs a weights declaration (null = unweighted)')
+        _made_source(record["weights"], f'made sample "{name}" weights')
 
-    Iterative and cycle-tolerant: a circular reference passes through here so that
-    json.dumps can refuse it with the circular-reference error frame() already catches.
-    """
+
+def _wire_clean(value: Any) -> str | None:
+    """Why a header would not survive a JavaScript reader intact, or None when it would."""
     seen: set[int] = set()
     stack = [value]
     while stack:
@@ -192,10 +185,7 @@ def _wire_clean(value: Any) -> str | None:
 
 
 def frame(meta: dict, buf: bytes) -> bytes:
-    """Return the uncompressed v6 frame."""
-    # json.dumps would coerce a non-string key and can silently collide it with a real
-    # one, and a JavaScript reader silently rounds an integer beyond 2**53 — both would
-    # lose metadata on a file that then reads back "successfully".
+    """Return the uncompressed frame, refusing headers a JavaScript reader would alter."""
     problem = _wire_clean(meta)
     if problem:
         _fail(problem)
@@ -209,15 +199,17 @@ def frame(meta: dict, buf: bytes) -> bytes:
 
 
 def _wire_float(text: str) -> float:
+    """Parse a JSON float, refusing the overflow that Python reads as inf and a save as null."""
     out = float(text)
-    if not math.isfinite(out):  # 1e400 parses as inf in Python and as null in a save
+    if not math.isfinite(out):
         raise ValueError("number overflows float64")
     return out
 
 
 def _wire_int(text: str) -> int:
+    """Parse a JSON integer, refusing values a JavaScript reader would round."""
     out = int(text)
-    if abs(out) > 2 ** 53:  # a JavaScript reader would silently round it
+    if abs(out) > 2 ** 53:
         raise ValueError("integer exceeds the float64-exact range")
     return out
 
@@ -238,9 +230,6 @@ def unframe(raw: bytes) -> tuple[dict, bytes]:
             parse_float=_wire_float, parse_int=_wire_int,
         )
     except (UnicodeDecodeError, ValueError, RecursionError) as exc:
-        # ValueError covers JSONDecodeError and the digit-limit guard a hostile header
-        # can trip with an enormous integer literal; RecursionError covers pathological
-        # nesting depth inside the byte limit.
         raise FormatError("header is not valid UTF-8 JSON") from exc
     if not isinstance(meta, dict):
         _fail("header must be a JSON object")
@@ -295,169 +284,24 @@ def _shown(shown: Any, samples: set[str], where: str) -> None:
         _fail(f"{where} shown list contains duplicates or unknown samples")
 
 
+def _stage_kind(value: Any, where: str) -> str:
+    if not isinstance(value, dict) or not isinstance(value.get("kind"), str):
+        _fail(f"{where} has an invalid stage item")
+    return value["kind"]
+
+
 def _stage(stage: Any, where: str, columns: Mapping[str, dict], sources: set[str]) -> None:
+    """Validate a stage: leaves and one-level blocks of leaves."""
     if stage is None:
         return
     if not isinstance(stage, list):
         _fail(f"{where} stage must be a list")
     singletons = {"board": 0, "map": 0}
-
-    def item(value: Any, inside: bool = False) -> None:
-        if not isinstance(value, dict) or not isinstance(value.get("kind"), str):
-            _fail(f"{where} has an invalid stage item")
-        kind = value["kind"]
-        if kind in LEAF_KINDS:
-            if kind in singletons:
-                singletons[kind] += 1
-                if singletons[kind] > 1:
-                    _fail(f"{where} contains more than one {kind}")
-            if kind in {"1d", "2d", "3d"}:
-                if not _option(value.get("varx"), columns):
-                    _fail(f"{where} {kind} plot names an unknown x column")
-                if kind in {"2d", "3d"} and not _option(value.get("vary"), columns):
-                    _fail(f"{where} {kind} plot names an unknown y column")
-                for slot in ("srcs", "mute"):
-                    # a plot's own source/mute lists: absent means default;
-                    # present they must be unique known names
-                    if slot not in value:
-                        continue
-                    entries = value[slot]
-                    if (not isinstance(entries, list)
-                            or any(not isinstance(entry, str) or entry not in sources
-                                   for entry in entries)
-                            or len(set(entries)) != len(entries)):
-                        _fail(f"{where} {kind} plot has an invalid {slot} list")
-            if kind == "board":
-                board_rows = value.get("rows", 2)
-                board_cols = value.get("cols", 2)
-                if (isinstance(board_rows, bool) or not isinstance(board_rows, int)
-                        or not 1 <= board_rows <= 4 or isinstance(board_cols, bool)
-                        or not isinstance(board_cols, int) or not 1 <= board_cols <= 4):
-                    _fail(f"{where} board has an invalid shape")
-                if "cells" in value:
-                    cells = value["cells"]
-                    if (not isinstance(cells, list) or len(cells) > board_rows * board_cols
-                            or any(cell is not None and (not isinstance(cell, str)
-                                   or cell not in sources) for cell in cells)):
-                        _fail(f"{where} board has invalid cells")
-                if "bkgs" in value:
-                    bkgs = value["bkgs"]
-                    if (not isinstance(bkgs, list)
-                            or any(not isinstance(name, str) or name not in sources
-                                   for name in bkgs)
-                            or len(set(bkgs)) != len(bkgs)):
-                        _fail(f"{where} board has invalid backgrounds")
-                if not _option(value.get("channel", "yield"), {"yield", "metrics"}):
-                    _fail(f"{where} board has an invalid channel")
-                if not _option(value.get("err", "poisson_neff"),
-                               {"off", "sumw2", "sqrtn", "poisson_neff", "poisson_raw"}):
-                    _fail(f"{where} board has an invalid uncertainty model")
-                if "met" in value:
-                    metrics = value["met"]
-                    if (not isinstance(metrics, list)
-                            or any(not _option(metric, {"sob", "sig", "zbi"})
-                                   for metric in metrics)
-                            or len(set(metrics)) != len(metrics)):
-                        _fail(f"{where} board has invalid metrics")
-            if kind == "map":
-                for key in ("srcs", "bkg"):
-                    if key not in value:
-                        continue
-                    selected = value[key]
-                    if (not isinstance(selected, list)
-                            or any(not isinstance(name, str) or name not in sources
-                                   for name in selected)
-                            or len(set(selected)) != len(selected)):
-                        _fail(f"{where} map has invalid {key}")
-                if "sig" in value and (not isinstance(value["sig"], str)
-                                        or value["sig"] not in sources):
-                    _fail(f"{where} map has an unknown signal source")
-                if "metric" in value and not _option(value["metric"],
-                                                     {"yields", "sb", "zbi", "neff"}):
-                    _fail(f"{where} map has an invalid metric")
-                if "flip" in value and not isinstance(value["flip"], bool):
-                    _fail(f"{where} map flip must be boolean")
-                if "floor" in value and _finite(value["floor"], f"{where} map floor") < 0:
-                    _fail(f"{where} map floor must be non-negative")
-                if "grid" in value:
-                    grid = value["grid"]
-                    if not isinstance(grid, dict) or not isinstance(grid.get("vars", []), list):
-                        _fail(f"{where} map has an invalid grid")
-                    if "exhaustive" in grid and type(grid["exhaustive"]) is not bool:
-                        _fail(f"{where} map grid exhaustive must be boolean")
-                    variables = grid.get("vars", [])
-                    if len(variables) > 32:
-                        _fail(f"{where} map grid has too many variables")
-                    grid_regions = 1
-                    grid_columns: set[str] = set()
-                    for variable in variables:
-                        if (not isinstance(variable, dict)
-                                or not _option(variable.get("col"), columns)
-                                or not isinstance(variable.get("bands"), list)
-                                or len(variable["bands"]) > 64):
-                            _fail(f"{where} map grid has an invalid variable")
-                        if variable["col"] in grid_columns:
-                            _fail(f"{where} map grid repeats a variable")
-                        grid_columns.add(variable["col"])
-                        grid_regions *= len(variable["bands"]) + 1
-                        if grid_regions > MAX_GRID_REGIONS:
-                            _fail(f"{where} map grid would create too many regions")
-                        column = columns[variable["col"]]
-                        allowed = set(column.get("vals") or [])
-                        taken: set[int] = set()
-                        thresholds: set[float] = set()
-                        for band in variable["bands"]:
-                            if isinstance(band, list):
-                                if (not allowed or not band or len(band) > MAX_CHIPS
-                                        or any(isinstance(member, bool)
-                                               or not isinstance(member, int)
-                                               or member not in allowed or member in taken
-                                               for member in band)
-                                        or len(set(band)) != len(band)):
-                                    _fail(f"{where} map grid has an invalid categorical band")
-                                taken.update(band)
-                            else:
-                                threshold = _finite(band, f"{where} map grid threshold")
-                                if thresholds and threshold <= max(thresholds):
-                                    _fail(f"{where} map grid thresholds must increase")
-                                thresholds.add(threshold)
-
-                node_count = 0
-
-                def node(root: Any, depth: int = 0) -> None:
-                    nonlocal node_count
-                    if root is None:
-                        return
-                    if depth > 64:
-                        _fail(f"{where} map region tree is too deep")
-                    node_count += 1
-                    if node_count > MAX_REGION_NODES:
-                        _fail(f"{where} map region tree has too many nodes")
-                    if not isinstance(root, dict) or set(root) - {"cut", "yes", "no"}:
-                        _fail(f"{where} map has an invalid region node")
-                    cut = root.get("cut")
-                    if not isinstance(cut, dict) or not _option(cut.get("col"), columns):
-                        _fail(f"{where} map cuts on an unknown column")
-                    if set(cut) == {"col", "lt"}:
-                        _finite(cut["lt"], f"{where} map threshold")
-                    elif set(cut) == {"col", "in"} and isinstance(cut["in"], list):
-                        allowed = set(columns[cut["col"]].get("vals") or [])
-                        selected = cut["in"]
-                        if (not allowed or not selected or len(selected) > MAX_CHIPS
-                                or any(isinstance(member, bool) or not isinstance(member, int)
-                                       or member not in allowed for member in selected)
-                                or len(set(selected)) != len(selected)):
-                            _fail(f"{where} map has an invalid categorical cut")
-                    else:
-                        _fail(f"{where} map has an invalid region cut")
-                    node(root.get("yes"), depth + 1)
-                    node(root.get("no"), depth + 1)
-
-                node(value.get("root"))
-            return
-        if kind != "block" or inside:
-            _fail(f"{where} has an unknown or nested stage kind {kind!r}")
-        cells, layout = value.get("cells"), value.get("layout")
+    for entry in stage:
+        if _stage_kind(entry, where) != "block":
+            _leaf(entry, where, columns, sources, singletons)
+            continue
+        cells, layout = entry.get("cells"), entry.get("layout")
         if not isinstance(cells, list) or not 1 <= len(cells) <= 6 or not any(c is not None for c in cells):
             _fail(f"{where} block must have one to six cells and at least one leaf")
         if (not isinstance(layout, list) or len(layout) != len(cells)
@@ -466,10 +310,159 @@ def _stage(stage: Any, where: str, columns: Mapping[str, dict], sources: set[str
             _fail(f"{where} block has an invalid layout")
         for cell in cells:
             if cell is not None:
-                item(cell, True)
+                _leaf(cell, where, columns, sources, singletons)
 
-    for entry in stage:
-        item(entry)
+
+def _leaf(value: Any, where: str, columns: Mapping[str, dict], sources: set[str],
+          singletons: dict[str, int]) -> None:
+    """Validate one plot, board, or map; a block here is a nested block."""
+    kind = _stage_kind(value, where)
+    if kind not in LEAF_KINDS:
+        _fail(f"{where} has an unknown or nested stage kind {kind!r}")
+    if kind in singletons:
+        singletons[kind] += 1
+        if singletons[kind] > 1:
+            _fail(f"{where} contains more than one {kind}")
+    if kind == "board":
+        _board(value, where, sources)
+    elif kind == "map":
+        _map(value, where, columns, sources)
+    else:
+        _plot(value, kind, where, columns, sources)
+
+
+def _plot(value: dict, kind: str, where: str, columns: Mapping[str, dict], sources: set[str]) -> None:
+    if not _option(value.get("varx"), columns):
+        _fail(f"{where} {kind} plot names an unknown x column")
+    if kind in {"2d", "3d"} and not _option(value.get("vary"), columns):
+        _fail(f"{where} {kind} plot names an unknown y column")
+    for slot in ("srcs", "mute"):
+        if slot in value and not _unique_names(value[slot], sources):
+            _fail(f"{where} {kind} plot has an invalid {slot} list")
+
+
+def _board(value: dict, where: str, sources: set[str]) -> None:
+    rows = value.get("rows", 2)
+    cols = value.get("cols", 2)
+    if (isinstance(rows, bool) or not isinstance(rows, int) or not 1 <= rows <= 4
+            or isinstance(cols, bool) or not isinstance(cols, int) or not 1 <= cols <= 4):
+        _fail(f"{where} board has an invalid shape")
+    if "cells" in value:
+        cells = value["cells"]
+        if (not isinstance(cells, list) or len(cells) > rows * cols
+                or any(cell is not None and (not isinstance(cell, str) or cell not in sources)
+                       for cell in cells)):
+            _fail(f"{where} board has invalid cells")
+    if "bkgs" in value and not _unique_names(value["bkgs"], sources):
+        _fail(f"{where} board has invalid backgrounds")
+    if not _option(value.get("channel", "yield"), {"yield", "metrics"}):
+        _fail(f"{where} board has an invalid channel")
+    if not _option(value.get("err", "poisson_neff"),
+                   {"off", "sumw2", "sqrtn", "poisson_neff", "poisson_raw"}):
+        _fail(f"{where} board has an invalid uncertainty model")
+    if "met" in value and not _unique_names(value["met"], {"sob", "sig", "zbi"}):
+        _fail(f"{where} board has invalid metrics")
+
+
+def _map(value: dict, where: str, columns: Mapping[str, dict], sources: set[str]) -> None:
+    for key in ("srcs", "bkg"):
+        if key in value and not _unique_names(value[key], sources):
+            _fail(f"{where} map has invalid {key}")
+    if "sig" in value and (not isinstance(value["sig"], str) or value["sig"] not in sources):
+        _fail(f"{where} map has an unknown signal source")
+    if "metric" in value and not _option(value["metric"], {"yields", "sb", "zbi", "neff"}):
+        _fail(f"{where} map has an invalid metric")
+    if "flip" in value and not isinstance(value["flip"], bool):
+        _fail(f"{where} map flip must be boolean")
+    if "floor" in value and _finite(value["floor"], f"{where} map floor") < 0:
+        _fail(f"{where} map floor must be non-negative")
+    if "grid" in value:
+        _grid(value["grid"], where, columns)
+    _region_tree(value.get("root"), where, columns)
+
+
+def _grid(grid: Any, where: str, columns: Mapping[str, dict]) -> None:
+    if not isinstance(grid, dict) or not isinstance(grid.get("vars", []), list):
+        _fail(f"{where} map has an invalid grid")
+    if "exhaustive" in grid and type(grid["exhaustive"]) is not bool:
+        _fail(f"{where} map grid exhaustive must be boolean")
+    variables = grid.get("vars", [])
+    if len(variables) > 32:
+        _fail(f"{where} map grid has too many variables")
+    regions = 1
+    seen: set[str] = set()
+    for variable in variables:
+        if (not isinstance(variable, dict)
+                or not _option(variable.get("col"), columns)
+                or not isinstance(variable.get("bands"), list)
+                or len(variable["bands"]) > 64):
+            _fail(f"{where} map grid has an invalid variable")
+        if variable["col"] in seen:
+            _fail(f"{where} map grid repeats a variable")
+        seen.add(variable["col"])
+        regions *= len(variable["bands"]) + 1
+        if regions > MAX_GRID_REGIONS:
+            _fail(f"{where} map grid would create too many regions")
+        _bands(variable["bands"], columns[variable["col"]], where)
+
+
+def _bands(bands: list, column: dict, where: str) -> None:
+    """Categorical bands are disjoint value lists; numeric bands are increasing thresholds."""
+    allowed = set(column.get("vals") or [])
+    taken: set[int] = set()
+    thresholds: set[float] = set()
+    for band in bands:
+        if isinstance(band, list):
+            if (not allowed or not band or len(band) > MAX_CHIPS
+                    or any(isinstance(member, bool) or not isinstance(member, int)
+                           or member not in allowed or member in taken for member in band)
+                    or len(set(band)) != len(band)):
+                _fail(f"{where} map grid has an invalid categorical band")
+            taken.update(band)
+        else:
+            threshold = _finite(band, f"{where} map grid threshold")
+            if thresholds and threshold <= max(thresholds):
+                _fail(f"{where} map grid thresholds must increase")
+            thresholds.add(threshold)
+
+
+def _region_cut(cut: Any, where: str, columns: Mapping[str, dict]) -> None:
+    if not isinstance(cut, dict) or not _option(cut.get("col"), columns):
+        _fail(f"{where} map cuts on an unknown column")
+    if set(cut) == {"col", "lt"}:
+        _finite(cut["lt"], f"{where} map threshold")
+    elif set(cut) == {"col", "in"} and isinstance(cut["in"], list):
+        allowed = set(columns[cut["col"]].get("vals") or [])
+        selected = cut["in"]
+        if (not allowed or not selected or len(selected) > MAX_CHIPS
+                or any(isinstance(member, bool) or not isinstance(member, int)
+                       or member not in allowed for member in selected)
+                or len(set(selected)) != len(selected)):
+            _fail(f"{where} map has an invalid categorical cut")
+    else:
+        _fail(f"{where} map has an invalid region cut")
+
+
+def _region_tree(root: Any, where: str, columns: Mapping[str, dict]) -> None:
+    """Validate a binary cut tree of at most 64 levels and MAX_REGION_NODES nodes."""
+    count = 0
+
+    def node(root: Any, depth: int) -> None:
+        nonlocal count
+        if root is None:
+            return
+        if depth > 64:
+            _fail(f"{where} map region tree is too deep")
+        count += 1
+        if count > MAX_REGION_NODES:
+            _fail(f"{where} map region tree has too many nodes")
+        if not isinstance(root, dict) or set(root) - {"cut", "yes", "no"}:
+            _fail(f"{where} map has an invalid region node")
+        _region_cut(root.get("cut"), where, columns)
+        node(root.get("yes"), depth + 1)
+        node(root.get("no"), depth + 1)
+
+    node(root, 0)
 
 
 def _bit_values(buf: bytes | bytearray | memoryview, at: int, rows: int) -> list[int]:
@@ -486,8 +479,274 @@ def _bit_values(buf: bytes | bytearray | memoryview, at: int, rows: int) -> list
     return ([0] if not all_true else []) + ([1] if any_true else [])
 
 
+def _samples(samples: list, rows: int) -> tuple[set[str], list[int], list[bool]]:
+    """Validate data.samples; return their names, row counts, and weighted flags."""
+    names: set[str] = set()
+    counts: list[int] = []
+    weighted: list[bool] = []
+    for i, sample in enumerate(samples):
+        if not isinstance(sample, dict):
+            _fail(f"data.samples[{i}] must be an object")
+        name = sample.get("name")
+        if not isinstance(name, str) or not name.strip() or name in names:
+            _fail(f"sample {i} has an empty or duplicate name")
+        names.add(name)
+        counts.append(_nat(sample.get("rows"), f'sample "{name}" rows'))
+        if type(sample.get("weighted")) is not bool:
+            _fail(f'sample "{name}" does not say whether it is weighted')
+        weighted.append(sample["weighted"])
+    if sum(counts) != rows:
+        _fail(f"samples sum to {sum(counts)} rows; data declares {rows}")
+    return names, counts, weighted
+
+
+def _weight_col(data: dict, weighted: list[bool]) -> str | None:
+    weight_col = data.get("weight_col")
+    if weight_col is not None and (not isinstance(weight_col, str) or not weight_col.strip()):
+        _fail("data.weight_col must be a non-empty string or null")
+    if any(weighted) and weight_col is None:
+        _fail("weighted samples require a weights column")
+    if not any(weighted) and weight_col is not None:
+        _fail("a data-only file must not declare a weights column")
+    return weight_col
+
+
+def _column(col: Any, i: int, rows: int, size: int, version: int,
+            names: Container[str]) -> tuple[str, int, int]:
+    """Validate one column descriptor; return its name, offset, and byte length."""
+    if not isinstance(col, dict):
+        _fail(f"data.cols[{i}] must be an object")
+    name, kind = col.get("name"), col.get("kind")
+    if not isinstance(name, str) or not name.strip() or name in names:
+        _fail(f"column {i} has an empty or duplicate name")
+    if kind not in (("f8", "i4", "b1") if version == 7 else ("f8", "i4")):
+        _fail(f'column "{name}" has unknown kind {kind!r}')
+    width = 1 if kind == "b1" else 8 if kind == "f8" else 4
+    length = (rows + 7) // 8 if kind == "b1" else width * rows
+    at = _nat(col.get("at"), f'column "{name}" offset')
+    if at % width or at + length > size:
+        _fail(f'column "{name}" is unaligned or outside the buffer')
+    lim = _pair(col.get("lim"), f'column "{name}" lim')
+    nice = _pair(col.get("nice"), f'column "{name}" nice')
+    pcts = [_finite(col.get(f"p{q}"), f'column "{name}" p{q}') for q in PCTS]
+    if nice[0] > lim[0] or nice[1] < lim[1]:
+        _fail(f'column "{name}" nice range does not enclose lim')
+    chain = [lim[0], *pcts, lim[1]]
+    if any(a > b for a, b in zip(chain, chain[1:])):
+        _fail(f'column "{name}" percentiles are outside lim or reversed')
+    vals = col.get("vals")
+    if vals is not None:
+        if kind not in ("i4", "b1") or not isinstance(vals, list) or len(vals) > MAX_CHIPS:
+            _fail(f'column "{name}" has invalid categorical values')
+        if (any(isinstance(x, bool) or not isinstance(x, int) for x in vals)
+                or len(set(vals)) != len(vals)):
+            _fail(f'column "{name}" categorical values must be unique integers')
+    return name, at, length
+
+
+def _columns(cols: list, rows: int, size: int, weight_col: str | None,
+             version: int) -> tuple[dict[str, dict], list[tuple[int, int, str]]]:
+    """Validate data.cols; return descriptors by name and their byte ranges."""
+    by_column: dict[str, dict] = {}
+    ranges: list[tuple[int, int, str]] = []
+    declared_bytes = rows * (4 + (8 if weight_col else 0))
+    for i, col in enumerate(cols):
+        name, at, length = _column(col, i, rows, size, version, by_column)
+        by_column[name] = col
+        ranges.append((at, at + length, f'column "{name}"'))
+        declared_bytes += length
+    if weight_col in by_column:
+        _fail(f'{weight_col!r} is both the weights column and a data column')
+    if declared_bytes != size:
+        _fail(f"column declarations need {declared_bytes} bytes; data declares {size}")
+    return by_column, ranges
+
+
+def _offsets(data: dict, rows: int, size: int, weight_col: str | None,
+             ranges: list[tuple[int, int, str]]) -> None:
+    """Place the weights and sample index; refuse any overlap between buffer ranges."""
+    if weight_col is not None:
+        weight_at = _nat(data.get("weight_at"), "data.weight_at")
+        if weight_at % 8 or weight_at + 8 * rows > size:
+            _fail("weights are unaligned or outside the buffer")
+        ranges.append((weight_at, weight_at + 8 * rows, "weights"))
+    elif "weight_at" in data:
+        _fail("an unweighted file must not declare data.weight_at")
+    sample_at = data["sample_at"]
+    if sample_at % 4 or sample_at + 4 * rows > size:
+        _fail("sample index is unaligned or outside the buffer")
+    ranges.append((sample_at, sample_at + 4 * rows, "sample index"))
+    ranges.sort()
+    for previous, current in zip(ranges, ranges[1:]):
+        if current[0] < previous[1]:
+            _fail(f"{current[2]} overlaps {previous[2]}")
+
+
+def _payload(buf: bytes | bytearray | memoryview, data: dict, rows: int,
+             sample_rows: list[int], weight_col: str | None) -> None:
+    """Check the buffer against its descriptors: sample counts, finite weights, lim and vals."""
+    slab = memoryview(buf)
+    count = len(sample_rows)
+    index = np.frombuffer(slab, dtype="<i4", count=rows, offset=data["sample_at"])
+    if rows and (np.any(index < 0) or np.any(index >= count)):
+        bad = int(index[(index < 0) | (index >= count)][0])
+        _fail(f"sample index contains invalid value {bad}")
+    counts = np.bincount(index, minlength=count) if rows else np.zeros(count, dtype=np.int64)
+    if counts.tolist() != sample_rows:
+        _fail(f"sample index counts {counts.tolist()} do not match {sample_rows}")
+    if weight_col is not None:
+        weights = np.frombuffer(slab, dtype="<f8", count=rows, offset=data["weight_at"])
+        if not np.isfinite(weights).all():
+            _fail("weights contain NaN or infinity")
+    for col in data["cols"]:
+        _column_payload(slab, col, rows)
+
+
+def _column_payload(slab: memoryview, col: dict, rows: int) -> None:
+    if col["kind"] == "b1":
+        actual_vals = _bit_values(slab, col["at"], rows)
+        actual = [actual_vals[0], actual_vals[-1]] if rows else [0, 0]
+        if col["lim"] != actual:
+            _fail(f'column "{col["name"]}" lim does not match its payload')
+        if col.get("vals") is not None and col["vals"] != actual_vals:
+            _fail(f'column "{col["name"]}" vals do not match its payload')
+        return
+    values = np.frombuffer(slab, dtype="<" + col["kind"], count=rows, offset=col["at"])
+    if col["kind"] == "f8" and not np.isfinite(values).all():
+        _fail(f'column "{col["name"]}" contains NaN or infinity')
+    if rows:
+        actual = [float(values.min()), float(values.max())]
+        if [float(x) for x in col["lim"]] != actual:
+            _fail(f'column "{col["name"]}" lim does not match its payload')
+    if col.get("vals") is not None:
+        actual_vals = [int(x) for x in np.unique(values)]
+        if col["vals"] != actual_vals:
+            _fail(f'column "{col["name"]}" vals do not match its payload')
+
+
+def _groups(groups: Any, sample_names: set[str]) -> tuple[set[str], set[str]]:
+    """Validate view.groups; return the group and subgroup names it introduces."""
+    if groups is None:
+        return set(), set()
+    if not isinstance(groups, dict):
+        _fail("view.groups must be an object")
+    for key in ("of", "sub"):
+        mapping = groups.get(key, {})
+        if not isinstance(mapping, dict) or any(k not in sample_names or not isinstance(v, str)
+                                                or not v.strip()
+                                                for k, v in mapping.items()):
+            _fail(f"view.groups.{key} must map known samples to names")
+    group_names = set(groups.get("of", {}).values())
+    sub_names = set(groups.get("sub", {}).values())
+    if "order" in groups:
+        order = groups["order"]
+        if (not isinstance(order, list)
+                or any(not isinstance(x, str) or not x.strip() for x in order)
+                or len(set(order)) != len(order)):
+            _fail("view.groups.order must contain unique non-empty group names")
+        group_names.update(order)
+    if sample_names & group_names or sample_names & sub_names or group_names & sub_names:
+        _fail("sample, group, and subgroup names must be unique across namespaces")
+    return group_names, sub_names
+
+
+def _namespaced(value: Any, where: str) -> Iterator[tuple[str, str, Any]]:
+    """Yield ``(namespace, name, item)`` from a view mapping keyed by sample, sub, and group."""
+    if not isinstance(value, dict) or set(value) - set(NAMESPACES):
+        _fail(f"{where} must have sample, sub, and group namespaces")
+    for namespace, mapping in value.items():
+        if not isinstance(mapping, dict):
+            _fail(f"{where}.{namespace} must be an object")
+        for name, item in mapping.items():
+            yield namespace, name, item
+
+
+def _lumis(lumis: Any, allowed: Mapping[str, set[str]]) -> None:
+    if lumis is None:
+        return
+    for namespace, name, value in _namespaced(lumis, "view.lumis"):
+        if name not in allowed[namespace] or value is not None and _finite(
+                value, f"view.lumis.{namespace}.{name}") <= 0:
+            _fail(f"view.lumis.{namespace}.{name} must name a known source and be positive or null")
+
+
+def _look(look: Any, allowed: Mapping[str, set[str]]) -> None:
+    if look is None:
+        return
+    for namespace, name, style in _namespaced(look, "view.look"):
+        where = f"view.look.{namespace}.{name}"
+        if name not in allowed[namespace] or not isinstance(style, dict):
+            _fail(f"{where} must style a known source")
+        _style(style, where)
+
+
+def _style(style: dict, where: str) -> None:
+    if "dash" in style and style["dash"] not in ("solid", "dash", "dot"):
+        _fail(f"{where} dash must be solid, dash, or dot")
+    if "lw" in style:
+        lw = style["lw"]
+        if (isinstance(lw, bool) or not isinstance(lw, (int, float))
+                or not math.isfinite(lw) or lw <= 0 or lw > 32):
+            _fail(f"{where} lw must be a positive number up to 32")
+    if "role" in style and style["role"] not in ("signal", "background", "data"):
+        _fail(f"{where} role must be signal, background, or data")
+    if "errstyle" in style and style["errstyle"] not in ("ticks", "none"):
+        _fail(f"{where} errstyle must be ticks or none")
+    if "binwidth_indicator" in style and not isinstance(style["binwidth_indicator"], bool):
+        _fail(f"{where} binwidth_indicator must be boolean")
+    if "colour" in style:
+        colour = style["colour"]
+        if not isinstance(colour, str) or re.fullmatch(r"#[0-9a-fA-F]{6}", colour) is None:
+            _fail(f"{where}.colour must be #RRGGBB")
+    if "draw" in style and not _option(style["draw"], {"bars", "points"}):
+        _fail(f"{where}.draw must be bars or points")
+
+
+def _view(view: dict, columns: Mapping[str, dict], sample_names: set[str]) -> set[str]:
+    """Validate the locked view; return every source name a stage may cite."""
+    if "cuts" in view and view["cuts"] is None:
+        _fail("locked view cuts may not be null")
+    if "stage" in view and view["stage"] is None:
+        _fail("locked view stage may not be null")
+    _cuts(view.get("cuts"), columns, "locked view")
+    _shown(view.get("shown"), sample_names, "locked view")
+    group_names, sub_names = _groups(view.get("groups"), sample_names)
+    sources = sample_names | group_names | sub_names
+    _stage(view.get("stage"), "locked view", columns, sources)
+    allowed = {"sample": sample_names, "sub": sub_names, "group": group_names}
+    _lumis(view.get("lumis"), allowed)
+    if "lumi" in view:
+        _fail("view.lumi is not part of .rvr 6; use namespaced view.lumis")
+    _look(view.get("look"), allowed)
+    return sources
+
+
+def _tabs(tabs: list, columns: Mapping[str, dict], sample_names: set[str],
+          sources: set[str]) -> None:
+    names: set[str] = set()
+    for i, tab in enumerate(tabs):
+        if not isinstance(tab, dict):
+            _fail(f"tab {i + 1} must be an object")
+        name = tab.get("name")
+        if not isinstance(name, str) or not name.strip() or name in names:
+            _fail(f"tab {i + 1} has an empty or duplicate name")
+        names.add(name)
+        if "cuts" in tab and tab["cuts"] is None:
+            _fail(f'tab "{name}" cuts may not be null')
+        if "stage" in tab and tab["stage"] is None:
+            _fail(f'tab "{name}" stage may not be null')
+        _cuts(tab.get("cuts"), columns, f'tab "{name}"')
+        _shown(tab.get("shown"), sample_names, f'tab "{name}"')
+        _stage(tab.get("stage"), f'tab "{name}"', columns, sources)
+        defaults = tab.get("plot")
+        if isinstance(defaults, dict):
+            for slot in ("srcs", "mute"):
+                if slot in defaults and not _unique_names(defaults[slot], sources):
+                    _fail(f'tab "{name}" plot defaults carry an invalid {slot} list')
+
+
 def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
-    """Validate v6/v7, leaving boolean payloads packed throughout validation."""
+    """Validate a v6 or v7 header against its buffer; boolean payloads stay packed."""
     if not isinstance(meta, dict) or meta.get("rowver") not in READS:
         _fail("RowVer supports .rvr 6 and 7")
     for drawer, kind in (("about", dict), ("data", dict), ("view", dict),
@@ -500,7 +759,7 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
 
     rows = _nat(data.get("rows"), "data.rows")
     size = _nat(data.get("bytes"), "data.bytes")
-    sample_at = _nat(data.get("sample_at"), "data.sample_at")
+    _nat(data.get("sample_at"), "data.sample_at")
     if size > MAX_DATA_BYTES:
         _fail(f"column data exceeds the {MAX_DATA_BYTES}-byte limit")
     if len(buf) != size:
@@ -511,229 +770,14 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
     if not isinstance(cols, list) or not cols:
         _fail("data.cols must be a non-empty list")
 
-    sample_names: set[str] = set()
-    sample_rows: list[int] = []
-    weighted: list[bool] = []
-    for i, sample in enumerate(samples):
-        if not isinstance(sample, dict):
-            _fail(f"data.samples[{i}] must be an object")
-        name = sample.get("name")
-        if not isinstance(name, str) or not name.strip() or name in sample_names:
-            _fail(f"sample {i} has an empty or duplicate name")
-        sample_names.add(name)
-        sample_rows.append(_nat(sample.get("rows"), f'sample "{name}" rows'))
-        if type(sample.get("weighted")) is not bool:
-            _fail(f'sample "{name}" does not say whether it is weighted')
-        weighted.append(sample["weighted"])
-    if sum(sample_rows) != rows:
-        _fail(f"samples sum to {sum(sample_rows)} rows; data declares {rows}")
+    sample_names, sample_rows, weighted = _samples(samples, rows)
+    weight_col = _weight_col(data, weighted)
+    by_column, ranges = _columns(cols, rows, size, weight_col, meta["rowver"])
+    _offsets(data, rows, size, weight_col, ranges)
+    _payload(buf, data, rows, sample_rows, weight_col)
 
-    weight_col = data.get("weight_col")
-    if weight_col is not None and (not isinstance(weight_col, str) or not weight_col.strip()):
-        _fail("data.weight_col must be a non-empty string or null")
-    if any(weighted) and weight_col is None:
-        _fail("weighted samples require a weights column")
-    if not any(weighted) and weight_col is not None:
-        _fail("a data-only file must not declare a weights column")
-
-    ranges: list[tuple[int, int, str]] = []
-    names: set[str] = set()
-    by_column: dict[str, dict] = {}
-    declared_bytes = rows * (4 + (8 if weight_col else 0))
-    for i, col in enumerate(cols):
-        if not isinstance(col, dict):
-            _fail(f"data.cols[{i}] must be an object")
-        name, kind = col.get("name"), col.get("kind")
-        if not isinstance(name, str) or not name.strip() or name in names:
-            _fail(f"column {i} has an empty or duplicate name")
-        names.add(name)
-        by_column[name] = col
-        if kind not in (("f8", "i4", "b1") if meta["rowver"] == 7 else ("f8", "i4")):
-            _fail(f'column "{name}" has unknown kind {kind!r}')
-        width = 1 if kind == "b1" else 8 if kind == "f8" else 4
-        length = (rows + 7) // 8 if kind == "b1" else width * rows
-        at = _nat(col.get("at"), f'column "{name}" offset')
-        if at % width or at + length > size:
-            _fail(f'column "{name}" is unaligned or outside the buffer')
-        ranges.append((at, at + length, f'column "{name}"'))
-        declared_bytes += length
-        lim = _pair(col.get("lim"), f'column "{name}" lim')
-        nice = _pair(col.get("nice"), f'column "{name}" nice')
-        pcts = [_finite(col.get(f"p{q}"), f'column "{name}" p{q}')
-                for q in PCTS]
-        if nice[0] > lim[0] or nice[1] < lim[1]:
-            _fail(f'column "{name}" nice range does not enclose lim')
-        chain = [lim[0], *pcts, lim[1]]
-        if any(a > b for a, b in zip(chain, chain[1:])):
-            _fail(f'column "{name}" percentiles are outside lim or reversed')
-        vals = col.get("vals")
-        if vals is not None:
-            if kind not in ("i4", "b1") or not isinstance(vals, list) or len(vals) > MAX_CHIPS:
-                _fail(f'column "{name}" has invalid categorical values')
-            if (any(isinstance(x, bool) or not isinstance(x, int) for x in vals)
-                    or len(set(vals)) != len(vals)):
-                _fail(f'column "{name}" categorical values must be unique integers')
-    if weight_col in names:
-        _fail(f'{weight_col!r} is both the weights column and a data column')
-    if declared_bytes != size:
-        _fail(f"column declarations need {declared_bytes} bytes; data declares {size}")
-
-    if weight_col is not None:
-        weight_at = _nat(data.get("weight_at"), "data.weight_at")
-        if weight_at % 8 or weight_at + 8 * rows > size:
-            _fail("weights are unaligned or outside the buffer")
-        ranges.append((weight_at, weight_at + 8 * rows, "weights"))
-    elif "weight_at" in data:
-        _fail("an unweighted file must not declare data.weight_at")
-    if sample_at % 4 or sample_at + 4 * rows > size:
-        _fail("sample index is unaligned or outside the buffer")
-    ranges.append((sample_at, sample_at + 4 * rows, "sample index"))
-    ranges.sort()
-    for previous, current in zip(ranges, ranges[1:]):
-        if current[0] < previous[1]:
-            _fail(f"{current[2]} overlaps {previous[2]}")
-
-    slab = memoryview(buf)
-    counts = np.zeros(len(samples), dtype=np.int64)
-    index = np.frombuffer(slab, dtype="<i4", count=rows, offset=sample_at)
-    if rows and (np.any(index < 0) or np.any(index >= len(samples))):
-        bad = int(index[(index < 0) | (index >= len(samples))][0])
-        _fail(f"sample index contains invalid value {bad}")
-    if rows:
-        counts[:] = np.bincount(index, minlength=len(samples))
-    if counts.tolist() != sample_rows:
-        _fail(f"sample index counts {counts.tolist()} do not match {sample_rows}")
-    if weight_col is not None:
-        weights = np.frombuffer(slab, dtype="<f8", count=rows, offset=data["weight_at"])
-        if not np.isfinite(weights).all():
-            _fail("weights contain NaN or infinity")
-    for col in cols:
-        if col["kind"] == "b1":
-            actual_vals = _bit_values(slab, col["at"], rows)
-            actual = [actual_vals[0], actual_vals[-1]] if rows else [0, 0]
-            if col["lim"] != actual:
-                _fail(f'column "{col["name"]}" lim does not match its payload')
-            if col.get("vals") is not None and col["vals"] != actual_vals:
-                _fail(f'column "{col["name"]}" vals do not match its payload')
-            continue
-        values = np.frombuffer(slab, dtype="<" + col["kind"], count=rows, offset=col["at"])
-        if col["kind"] == "f8" and not np.isfinite(values).all():
-            _fail(f'column "{col["name"]}" contains NaN or infinity')
-        if rows:
-            actual = [float(values.min()), float(values.max())]
-            if [float(x) for x in col["lim"]] != actual:
-                _fail(f'column "{col["name"]}" lim does not match its payload')
-        if col.get("vals") is not None:
-            actual_vals = [int(x) for x in np.unique(values)]
-            if col["vals"] != actual_vals:
-                _fail(f'column "{col["name"]}" vals do not match its payload')
-
-    if "cuts" in view and view["cuts"] is None:
-        _fail("locked view cuts may not be null")
-    if "stage" in view and view["stage"] is None:
-        _fail("locked view stage may not be null")
-    _cuts(view.get("cuts"), by_column, "locked view")
-    _shown(view.get("shown"), sample_names, "locked view")
-    groups = view.get("groups")
-    if groups is not None:
-        if not isinstance(groups, dict):
-            _fail("view.groups must be an object")
-        for key in ("of", "sub"):
-            mapping = groups.get(key, {})
-            if not isinstance(mapping, dict) or any(k not in sample_names or not isinstance(v, str)
-                                                    or not v.strip()
-                                                    for k, v in mapping.items()):
-                _fail(f"view.groups.{key} must map known samples to names")
-    group_names = set(groups.get("of", {}).values()) if isinstance(groups, dict) else set()
-    sub_names = set(groups.get("sub", {}).values()) if isinstance(groups, dict) else set()
-    if isinstance(groups, dict) and "order" in groups:
-        order = groups["order"]
-        if (not isinstance(order, list)
-                or any(not isinstance(x, str) or not x.strip() for x in order)
-                or len(set(order)) != len(order)):
-            _fail("view.groups.order must contain unique non-empty group names")
-        group_names.update(order)
-    if (sample_names & group_names or sample_names & sub_names or group_names & sub_names):
-        _fail("sample, group, and subgroup names must be unique across namespaces")
-    sources = sample_names | group_names | sub_names
-    _stage(view.get("stage"), "locked view", by_column, sources)
-    lumis = view.get("lumis")
-    if lumis is not None:
-        if not isinstance(lumis, dict) or set(lumis) - {"sample", "sub", "group"}:
-            _fail("view.lumis must have sample, sub, and group namespaces")
-        allowed = {"sample": sample_names, "sub": sub_names, "group": group_names}
-        for namespace, mapping in lumis.items():
-            if not isinstance(mapping, dict):
-                _fail(f"view.lumis.{namespace} must be an object")
-            for name, value in mapping.items():
-                if name not in allowed[namespace] or value is not None and _finite(
-                        value, f"view.lumis.{namespace}.{name}") <= 0:
-                    _fail(f"view.lumis.{namespace}.{name} must name a known source and be positive or null")
-    if "lumi" in view:
-        _fail("view.lumi is not part of .rvr 6; use namespaced view.lumis")
-    look = view.get("look")
-    if look is not None:
-        if not isinstance(look, dict) or set(look) - {"sample", "sub", "group"}:
-            _fail("view.look must have sample, sub, and group namespaces")
-        allowed = {"sample": sample_names, "sub": sub_names, "group": group_names}
-        for namespace, mapping in look.items():
-            if not isinstance(mapping, dict):
-                _fail(f"view.look.{namespace} must be an object")
-            for name, style in mapping.items():
-                # SHAPE first — a null style must fail, not crash — then key
-                # PRESENCE, exactly as the browser tests it (dash: null is a
-                # broken key there, so it is a broken key here)
-                if name not in allowed[namespace] or not isinstance(style, dict):
-                    _fail(f"view.look.{namespace}.{name} must style a known source")
-                if "dash" in style and style["dash"] not in ("solid", "dash", "dot"):
-                    _fail(f"view.look.{namespace}.{name} dash must be solid, dash, or dot")
-                if "lw" in style:
-                    lw = style["lw"]
-                    if (isinstance(lw, bool) or not isinstance(lw, (int, float))
-                            or not math.isfinite(lw) or lw <= 0 or lw > 32):
-                        _fail(f"view.look.{namespace}.{name} lw must be a positive number up to 32")
-                if "role" in style and style["role"] not in ("signal", "background", "data"):
-                    _fail(f"view.look.{namespace}.{name} role must be signal, background, or data")
-                if "errstyle" in style and style["errstyle"] not in ("ticks", "none"):
-                    _fail(f"view.look.{namespace}.{name} errstyle must be ticks or none")
-                if "binwidth_indicator" in style and not isinstance(style["binwidth_indicator"], bool):
-                    _fail(f"view.look.{namespace}.{name} binwidth_indicator must be boolean")
-                if "colour" in style:
-                    colour = style["colour"]
-                    if (not isinstance(colour, str)
-                            or re.fullmatch(r"#[0-9a-fA-F]{6}", colour) is None):
-                        _fail(f"view.look.{namespace}.{name}.colour must be #RRGGBB")
-                if "draw" in style and not _option(style["draw"], {"bars", "points"}):
-                    _fail(f"view.look.{namespace}.{name}.draw must be bars or points")
-
-    tab_names: set[str] = set()
-    for i, tab in enumerate(tabs):
-        if not isinstance(tab, dict):
-            _fail(f"tab {i + 1} must be an object")
-        name = tab.get("name")
-        if not isinstance(name, str) or not name.strip() or name in tab_names:
-            _fail(f"tab {i + 1} has an empty or duplicate name")
-        tab_names.add(name)
-        if "cuts" in tab and tab["cuts"] is None:
-            _fail(f'tab "{name}" cuts may not be null')
-        if "stage" in tab and tab["stage"] is None:
-            _fail(f'tab "{name}" stage may not be null')
-        _cuts(tab.get("cuts"), by_column, f'tab "{name}"')
-        _shown(tab.get("shown"), sample_names, f'tab "{name}"')
-        _stage(tab.get("stage"), f'tab "{name}"', by_column, sources)
-        defaults = tab.get("plot")
-        # "in", not .get(): a null list must fail here exactly as the browser
-        # fails it, or a backend-approved cart cannot open
-        if isinstance(defaults, dict):
-            for slot in ("srcs", "mute"):
-                if slot not in defaults:
-                    continue
-                entries = defaults[slot]
-                if (not isinstance(entries, list)
-                        or any(not isinstance(entry, str) or entry not in sources
-                               for entry in entries)
-                        or len(set(entries)) != len(entries)):
-                    _fail(f'tab "{name}" plot defaults carry an invalid {slot} list')
+    sources = _view(view, by_column, sample_names)
+    _tabs(tabs, by_column, sample_names, sources)
     if "opens_on" in meta:
         opens = _nat(meta["opens_on"], "opens_on")
         if (tabs and opens >= len(tabs)) or (not tabs and opens != 0):
@@ -756,11 +800,10 @@ def read(path: str | Path) -> tuple[dict, bytes]:
 
 
 def write(path: str | Path, meta: dict, buf: bytes) -> dict:
-    """Atomically write a validated cartridge, preserving ``buf`` byte-for-byte."""
+    """Atomically write a validated cartridge at gzip level 6, preserving ``buf`` byte-for-byte."""
     check(meta, buf)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    # Level 6: level 9 measured 2.5x slower for a 0.3% smaller cartridge (360 MB buffer).
     payload = gzip.compress(frame(meta, buf), compresslevel=6, mtime=0)
     handle, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
     try:
@@ -796,8 +839,7 @@ def _array(value: Any, where: str) -> np.ndarray:
 
 
 def _kind(arrays: list[np.ndarray]) -> str:
-    # The presser has no produced dtype for a sample whose trees have no entries
-    # and represents it as an empty float array. It must not widen real flags.
+    """The stored kind for one column; an empty float array (a sample with no entries) never widens flags."""
     populated = [a for a in arrays if a.size]
     if all(a.dtype.kind == "b" for a in (populated or arrays)):
         return "b1"
@@ -812,10 +854,11 @@ def _kind(arrays: list[np.ndarray]) -> str:
 
 
 def _bump(value: float, up: bool) -> float:
+    """Round outward to two significant digits; a subnormal is its own bound."""
     if value == 0:
         return 0.0
     scale = 10 ** (math.floor(math.log10(abs(value))) - 1)
-    if scale == 0:  # a subnormal input underflows the scale; the value is its own bound
+    if scale == 0:
         return value
     return (math.ceil(value / scale) if up else math.floor(value / scale)) * scale
 
@@ -840,12 +883,9 @@ def _stats(values: np.ndarray, integer: bool) -> dict:
     return out
 
 
-def pack(by_sample: Mapping[str, Mapping[str, Any]], *,
-         weighted: Mapping[str, bool], weights: Mapping[str, Any] | None = None,
-         labels: Mapping[str, Mapping[Any, str]] | None = None,
-         about: Mapping[str, Any] | None = None,
-         made: Mapping[str, Any] | None = None) -> tuple[dict, bytes]:
-    """Pack into v7; populated boolean arrays become bits, never numeric 0/1."""
+def _pack_inputs(by_sample: Mapping[str, Mapping[str, Any]], weighted: Mapping[str, bool]
+                 ) -> tuple[list[str], list[str], dict[str, dict[str, np.ndarray]], dict[str, int]]:
+    """Validate the samples and columns; return names, arrays by sample, and row counts."""
     if not isinstance(by_sample, Mapping) or not by_sample:
         _fail("a cartridge needs at least one sample")
     sample_names = list(by_sample)
@@ -855,7 +895,6 @@ def pack(by_sample: Mapping[str, Mapping[str, Any]], *,
         _fail("weighted declarations must name every sample exactly once")
     if any(type(weighted[name]) is not bool for name in sample_names):
         _fail("every weighted declaration must be boolean")
-
     first = by_sample[sample_names[0]]
     if not isinstance(first, Mapping) or not first:
         _fail("a cartridge needs at least one column")
@@ -875,40 +914,53 @@ def pack(by_sample: Mapping[str, Mapping[str, Any]], *,
         if len(lengths) != 1:
             _fail(f'sample "{sample}" columns have different lengths')
         row_counts[sample] = lengths.pop()
+    return sample_names, column_names, arrays, row_counts
 
-    any_weighted = any(weighted.values())
-    weight_arrays: dict[str, np.ndarray] = {}
-    if any_weighted:
-        if weights is None:
-            _fail("weighted samples require weight arrays")
-        for sample in sample_names:
-            if weighted[sample]:
-                if sample not in weights:
-                    _fail(f'weighted sample "{sample}" has no weight array')
-                value = _array(weights[sample], f'{sample}.weight').astype(np.float64, copy=False)
-                if len(value) != row_counts[sample]:
-                    _fail(f'{sample}.weight length does not match its columns')
-                if not np.isfinite(value).all():
-                    _fail(f'{sample}.weight contains NaN or infinity')
-                weight_arrays[sample] = value
-            else:
-                weight_arrays[sample] = np.ones(row_counts[sample], dtype=np.float64)
-    elif weights and any(name in weights for name in sample_names):
-        _fail("a data-only cartridge may not carry weight arrays")
 
+def _pack_weights(sample_names: list[str], row_counts: Mapping[str, int],
+                  weighted: Mapping[str, bool], weights: Mapping[str, Any] | None
+                  ) -> dict[str, np.ndarray]:
+    """Weight arrays for every sample (ones where unweighted), or empty for a data-only file."""
+    if not any(weighted.values()):
+        if weights and any(name in weights for name in sample_names):
+            _fail("a data-only cartridge may not carry weight arrays")
+        return {}
+    if weights is None:
+        _fail("weighted samples require weight arrays")
+    out: dict[str, np.ndarray] = {}
+    for sample in sample_names:
+        if not weighted[sample]:
+            out[sample] = np.ones(row_counts[sample], dtype=np.float64)
+            continue
+        if sample not in weights:
+            _fail(f'weighted sample "{sample}" has no weight array')
+        value = _array(weights[sample], f'{sample}.weight').astype(np.float64, copy=False)
+        if len(value) != row_counts[sample]:
+            _fail(f'{sample}.weight length does not match its columns')
+        if not np.isfinite(value).all():
+            _fail(f'{sample}.weight contains NaN or infinity')
+        out[sample] = value
+    return out
+
+
+def _pack_buffer(sample_names: list[str], column_names: list[str],
+                 arrays: Mapping[str, Mapping[str, np.ndarray]], row_counts: Mapping[str, int],
+                 weighted: Mapping[str, bool], weight_arrays: Mapping[str, np.ndarray]
+                 ) -> tuple[dict, bytes]:
+    """Lay out weights, numeric columns widest first, the sample index, then packed bits."""
     rows = sum(row_counts.values())
     pieces: list[bytes] = []
     offset = 0
     data: dict[str, Any] = {
         "rows": rows,
         "bytes": 0,
-        "weight_col": "weight" if any_weighted else None,
+        "weight_col": "weight" if weight_arrays else None,
         "sample_at": 0,
         "samples": [{"name": name, "rows": row_counts[name],
                      "weighted": weighted[name]} for name in sample_names],
         "cols": [],
     }
-    if any_weighted:
+    if weight_arrays:
         data["weight_at"] = offset
         combined = np.concatenate([weight_arrays[name] for name in sample_names])
         raw = combined.astype("<f8", copy=False).tobytes()
@@ -917,19 +969,16 @@ def pack(by_sample: Mapping[str, Mapping[str, Any]], *,
 
     kinds = {name: _kind([arrays[sample][name] for sample in sample_names])
              for name in column_names}
-    # Numeric blocks first, widest first: no alignment padding is needed, even
-    # when event counts are odd. Descriptor order still follows the study.
     entries: dict[str, dict] = {}
     bool_pieces: list[tuple[str, bytes]] = []
     for name in sorted(column_names, key=lambda name: {"f8": 0, "i4": 1, "b1": 2}[kinds[name]]):
-        per_sample = [arrays[sample][name] for sample in sample_names]
         kind = kinds[name]
-        combined = np.concatenate(per_sample) if rows else np.empty(0)
+        combined = (np.concatenate([arrays[sample][name] for sample in sample_names])
+                    if rows else np.empty(0))
         dtype = "u1" if kind == "b1" else "<i4" if kind == "i4" else "<f8"
         encoded = combined.astype(dtype, copy=False)
-        entry = {"name": name, "kind": kind, "at": offset,
-                 **_stats(encoded, kind in ("i4", "b1"))}
-        entries[name] = entry
+        entries[name] = {"name": name, "kind": kind, "at": offset,
+                         **_stats(encoded, kind in ("i4", "b1"))}
         if kind == "b1":
             bool_pieces.append((name, np.packbits(encoded, bitorder="little").tobytes()))
             continue
@@ -943,45 +992,53 @@ def pack(by_sample: Mapping[str, Mapping[str, Any]], *,
     ]) if rows else np.empty(0, dtype="<i4")
     pieces.append(index.tobytes())
     offset += index.nbytes
-    # Packed bits follow the aligned numeric arrays; byte boundaries may cross
-    # samples, but event indices and sample membership never change.
     for name, raw in bool_pieces:
         entries[name]["at"] = offset
         pieces.append(raw)
         offset += len(raw)
     data["cols"] = [entries[name] for name in column_names]
     data["bytes"] = offset
+    return data, b"".join(pieces)
 
-    view: dict[str, Any] = {}
-    if labels:
-        cats: dict[str, Any] = {}
-        by_name = {c["name"]: c for c in data["cols"]}
-        for column, names in labels.items():
-            if column not in by_name:
-                _fail(f'labels name unknown column "{column}"')
-            vals = by_name[column].get("vals")
-            if vals is None:
-                _fail(f'labels require categorical integer column "{column}"')
-            rendered = {str(value): str(label) for value, label in names.items()}
-            if set(rendered) != {str(value) for value in vals}:
-                _fail(f'labels for "{column}" must name every value exactly once')
-            cats[column] = {"names": rendered, "bands": []}
-        view["cats"] = cats
+
+def _cats(labels: Mapping[str, Mapping[Any, str]], cols: list[dict]) -> dict[str, Any]:
+    """Category names for every labelled column; each must name every stored value once."""
+    cats: dict[str, Any] = {}
+    by_name = {c["name"]: c for c in cols}
+    for column, names in labels.items():
+        if column not in by_name:
+            _fail(f'labels name unknown column "{column}"')
+        vals = by_name[column].get("vals")
+        if vals is None:
+            _fail(f'labels require categorical integer column "{column}"')
+        rendered = {str(value): str(label) for value, label in names.items()}
+        if set(rendered) != {str(value) for value in vals}:
+            _fail(f'labels for "{column}" must name every value exactly once')
+        cats[column] = {"names": rendered, "bands": []}
+    return cats
+
+
+def pack(by_sample: Mapping[str, Mapping[str, Any]], *,
+         weighted: Mapping[str, bool], weights: Mapping[str, Any] | None = None,
+         labels: Mapping[str, Mapping[Any, str]] | None = None,
+         about: Mapping[str, Any] | None = None,
+         made: Mapping[str, Any] | None = None) -> tuple[dict, bytes]:
+    """Pack into v7; populated boolean arrays become bits, never numeric 0/1."""
+    sample_names, column_names, arrays, row_counts = _pack_inputs(by_sample, weighted)
+    weight_arrays = _pack_weights(sample_names, row_counts, weighted, weights)
+    data, buf = _pack_buffer(sample_names, column_names, arrays, row_counts,
+                             weighted, weight_arrays)
+    view = {"cats": _cats(labels, data["cols"])} if labels else {}
     meta = {"rowver": ROWVER,
             "about": {"name": "study", **dict(about or {})},
             "data": data, "view": view, "tabs": [], "opens_on": 0,
             "made": dict(made or {})}
-    buf = b"".join(pieces)
     check(meta, buf)
     return meta, buf
 
 
 def columns(meta: dict, buf: bytes, *, include_weights: bool = True) -> dict[str, np.ndarray]:
-    """Expose numeric views; unpack boolean columns to one-byte NumPy bool arrays.
-
-    read(), check(), and write() keep the stored buffer packed. Only callers
-    requesting event arrays here allocate unpacked boolean values.
-    """
+    """Numeric views onto the buffer; boolean columns unpack to one-byte NumPy bool arrays."""
     check(meta, buf)
     data, out = meta["data"], {}
     for col in data["cols"]:
@@ -1053,18 +1110,17 @@ def unlock(meta: dict, key: str) -> dict:
 
 
 def show(path: str | Path) -> str:
-    """Return the exact v6 header as readable JSON."""
+    """Return the exact header as readable JSON."""
     meta, _ = read(path)
     return json.dumps(meta, indent=2, ensure_ascii=False)
 
 
 def _main(argv: list[str] | None = None) -> int:
+    """``check`` or ``show`` one cartridge; hostile names never crash or repaint the terminal."""
     parser = argparse.ArgumentParser(description="inspect a RowVer 6 cartridge")
     parser.add_argument("command", choices=("check", "show"))
     parser.add_argument("file", type=Path)
     args = parser.parse_args(argv)
-    # A hostile name may hold a lone surrogate (unprintable as UTF-8) or terminal
-    # control sequences; neither may crash or repaint the terminal.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")
     try:

@@ -15,8 +15,8 @@ it DONE here with the commit hash in the same commit that lands the work.
 | 3 remove builder | TODO (needs D1) | |
 | 4 delete shims | DONE | 849a552 |
 | 5 optional trims | TODO (needs D2, D3) | |
-| 6 docs | DONE | filled by the next step (a commit cannot carry its own) |
-| 7 readability pass | TODO | |
+| 6 docs | DONE | 8b8b9cc |
+| 7 readability pass | DONE | filled by the next step (a commit cannot carry its own) |
 | 8 format v8 | TODO (needs D6, D7) | |
 
 A step that needs an undecided D-item is skipped, not blocked on: take the next

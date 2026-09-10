@@ -35,6 +35,27 @@ def _new(args: argparse.Namespace) -> int:
     return 0
 
 
+def _workers(parallel: int | str | None, cart: Cart) -> tuple[int | None, str]:
+    """Resolve ``--parallel`` to a worker count and the line that reports it."""
+    cores = max(1, os.cpu_count() or 1)
+    if parallel is None:
+        effective = 1
+    else:
+        runnable = sum(len(entry["files"]) for entry in cart.fileset.values())
+        if parallel == "auto":
+            parallel = min(runnable, max(1, cores - 2))
+        elif parallel == "max":
+            parallel = cores
+        effective = min(parallel, runnable)
+    message = (f"using {effective} {'worker' if effective == 1 else 'workers'} "
+               f"({cores} {'core' if cores == 1 else 'cores'} available)")
+    if parallel is None:
+        message += "; try --parallel for faster processing"
+    elif effective == 1:
+        message += "; running sequentially"
+    return None if parallel is None else effective, message
+
+
 def _run(args: argparse.Namespace) -> int:
     if args.list:
         print("\n".join(study_names()))
@@ -44,37 +65,18 @@ def _run(args: argparse.Namespace) -> int:
     step: int | str = int(args.step_size) if str(args.step_size).isdigit() else args.step_size
     board = None
     try:
-        # --path is a compatibility alias: Cart.load now takes paths directly
         cart = Cart.load(args.study)
         print(cart.summary())
-        parallel = getattr(args, "parallel", None)
-        cores = max(1, os.cpu_count() or 1)
-        if parallel is None:
-            effective = 1
-        else:
-            runnable = sum(len(entry["files"]) for entry in cart.fileset.values())
-            if parallel == "auto":
-                parallel = min(runnable, max(1, cores - 2))
-            elif parallel == "max":
-                parallel = cores
-            effective = min(parallel, runnable)
-        message = (f"using {effective} {'worker' if effective == 1 else 'workers'} "
-                   f"({cores} {'core' if cores == 1 else 'cores'} available)")
-        if parallel is None:
-            message += "; try --parallel for faster processing"
-        elif effective == 1:
-            message += "; running sequentially"
+        workers, message = _workers(getattr(args, "parallel", None), cart)
         print(message)
-        workers = None if parallel is None else effective
         if args.progress != "plain":
             from .dashboard import Dashboard
             board = Dashboard(cart, robust=args.progress == "robust")
         with board.live() if board else contextlib.nullcontext():
             if board and board.robust:
-                board.index(cart)      # totals for the bars and the ETA
+                board.index(cart)
                 board.begin_skim()
-            result = cart.build(args.out, step_size=step,
-                                progress=board, workers=workers)
+            result = cart.build(args.out, step_size=step, progress=board, workers=workers)
     except (CartError, FormatError) as exc:
         raise SystemExit(f"error: {exc}") from exc
     if board:
@@ -99,8 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     run.add_argument("study", nargs="?",
                      help="a study directory path, or a name under ./studies/")
-    run.add_argument("--path", action="store_true",
-                     help=argparse.SUPPRESS)  # compatibility: paths now work directly
+    run.add_argument("--path", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--list", action="store_true", help="list studies under ./studies/ and exit")
     run.add_argument("--out", type=Path, help="output .rvr path or directory")
     run.add_argument("--step-size", default="100 MB",
