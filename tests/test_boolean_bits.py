@@ -144,7 +144,7 @@ class BooleanBitsTests(unittest.TestCase):
                            'false': np.zeros(hi-lo, dtype=bool)}
                     for name, lo, hi in [('a', 0, split), ('b', split, n)]
                 }, weighted={'a': False, 'b': False})
-                self.assertEqual(meta['rowver'], 7)
+                self.assertEqual(meta['rowver'], rvr6.ROWVER)
                 self.assertEqual([c['name'] for c in meta['data']['cols']],
                                  ['flag', 'i', 'x', 'true', 'false'])
                 self.assertEqual(len(buf), 16*n + 3*((n+7)//8))

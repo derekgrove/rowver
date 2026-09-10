@@ -230,6 +230,78 @@ class Rvr6Tests(unittest.TestCase):
             rvr6.pack({"sample": {"event": np.array([2 ** 53 + 1], dtype=np.uint64)}},
                       weighted={"sample": False}, about={"name": "bad"})
 
+    def test_v8_digests_pin_every_byte_of_the_buffer(self):
+        data = self.meta["data"]
+        self.assertEqual(data["sha256"], hashlib.sha256(self.buf).hexdigest())
+        for col in data["cols"]:
+            span = self.buf[col["at"]:col["at"] + rvr6._length(col["kind"], data["rows"])]
+            self.assertEqual(col["sha256"], hashlib.sha256(span).hexdigest())
+        # a weight edit keeps every lim and vals true; only the buffer digest can see it
+        edited = bytearray(self.buf)
+        edited[0:8] = np.array([0.6], dtype="<f8").tobytes()
+        with self.assertRaisesRegex(rvr6.FormatError, "data.sha256"):
+            rvr6.check(self.meta, edited)
+        # a value moved inside lim is caught by its column digest
+        edited = bytearray(self.buf)
+        edited[40:48] = np.array([25.0], dtype="<f8").tobytes()
+        meta = copy.deepcopy(self.meta)
+        meta["data"]["sha256"] = hashlib.sha256(edited).hexdigest()
+        with self.assertRaisesRegex(rvr6.FormatError, 'column "pt" sha256'):
+            rvr6.check(meta, edited)
+        for path in (("data", "sha256"), ("data", "cols", 0, "sha256")):
+            meta = copy.deepcopy(self.meta)
+            target = meta
+            for part in path[:-1]:
+                target = target[part]
+            del target[path[-1]]
+            with self.assertRaises(rvr6.FormatError):
+                rvr6.check(meta, self.buf)
+        # a version 7 header carries no digests and is not asked for any
+        meta["rowver"] = 7
+        del meta["data"]["cols"][1]["sha256"]
+        rvr6.check(meta, self.buf)
+
+    def test_column_sources_are_shape_checked_only(self):
+        sources = {"pt": {"class": "copy", "branch": "Muon_pt", "dtype": "float32"},
+                   "njet": {"class": "derived", "from": ["Jet_pt"], "reproducible": "source",
+                            "python": "lambda events: ak.num(events.Jet_pt)"}}
+        meta, buf = rvr6.pack(
+            {"mc": {"pt": np.array([10.5, 20.0]), "njet": np.array([0, 1])}},
+            weighted={"mc": False}, sources=sources)
+        self.assertEqual({c["name"]: c["source"] for c in meta["data"]["cols"]}, sources)
+        self.assertNotIn("source", self.meta["data"]["cols"][0])
+        for broken in ("Muon_pt", {"class": "wat"},
+                       {"class": "copy", "branch": "Muon_pt"},
+                       {"class": "copy", "branch": "", "dtype": "float32"},
+                       {"class": "derived", "from": ["a", "a"], "reproducible": "source", "python": ""},
+                       {"class": "derived", "from": [{}], "reproducible": "source", "python": ""},
+                       {"class": "derived", "from": ["a"], "reproducible": "maybe", "python": ""},
+                       {"class": "derived", "from": ["a"], "reproducible": "cartridge"}):
+            bad = copy.deepcopy(meta)
+            bad["data"]["cols"][0]["source"] = broken
+            with self.subTest(source=broken):
+                with self.assertRaises(rvr6.FormatError):
+                    rvr6.check(bad, buf)
+
+    def test_made_file_identity_is_typed(self):
+        meta = copy.deepcopy(self.meta)
+        files = [{"path": "a.root", "tree": "Events", "uuid": "6f0c1a2e", "entries": 4}]
+        meta["made"]["samples"] = [
+            {"name": "mc", "rows": 2, "files": files, "metadata": {}, "weights": None},
+            {"name": "data", "rows": 2, "files": [], "metadata": {}, "weights": None}]
+        rvr6.check(meta, self.buf)
+        for bad in ({"uuid": 1}, {"entries": True}, {"entries": -1}, {"tree": ""}):
+            broken = copy.deepcopy(meta)
+            broken["made"]["samples"][0]["files"][0].update(bad)
+            with self.subTest(file=bad):
+                with self.assertRaises(rvr6.FormatError):
+                    rvr6.check(broken, self.buf)
+                if bad != {"tree": ""}:
+                    broken["rowver"] = 7
+                    for col in broken["data"]["cols"]:
+                        del col["sha256"]
+                    rvr6.check(broken, self.buf)
+
     def test_promote_and_shadow_does_not_delete_tab_state(self):
         meta = copy.deepcopy(self.meta)
         meta["tabs"] = [

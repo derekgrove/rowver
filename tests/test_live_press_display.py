@@ -35,6 +35,7 @@ class Stream(io.StringIO):
 class Tree:
     def __init__(self, entries: int):
         self.num_entries = entries
+        self.file = mock.Mock(uuid="00000000-0000-0000-0000-000000000000")
 
     def __enter__(self):
         return self

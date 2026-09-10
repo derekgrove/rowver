@@ -1,4 +1,4 @@
-"""Read RowVer 6/7 cartridges and pack new RowVer 7 cartridges.
+"""Read RowVer 6, 7, and 8 cartridges and pack new RowVer 8 cartridges.
 
 The container is ``gzip(u32 little-endian JSON length | UTF-8 JSON | column buffer)``.
 The header has five drawers: ``about``, ``data``, ``view``, ``tabs``, and ``made``.
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -22,15 +23,16 @@ from typing import Any, Container, Iterator, Mapping
 
 import numpy as np
 
-ROWVER = 7
-READS = (6, 7)
-VERSION = "7.0.0"
+ROWVER = 8
+READS = (6, 7, 8)
+VERSION = "8.0.0"
 MAX_HEADER_BYTES = 8 * 1024 * 1024
 MAX_DATA_BYTES = 1024 * 1024 * 1024
 MAX_CHIPS = 25
 PCTS = (1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99)
 MAX_GRID_REGIONS = 4096
 MAX_REGION_NODES = 8192
+WIDTH = {"f8": 8, "i4": 4, "b1": 1}
 
 LEAF_KINDS = frozenset({"1d", "2d", "3d", "board", "map"})
 LAYOUTS = frozenset({
@@ -89,6 +91,11 @@ def _pair(value: Any, where: str) -> tuple[float, float]:
     return lo, hi
 
 
+def _length(kind: str, rows: int) -> int:
+    """Bytes a column of ``kind`` occupies for ``rows`` events."""
+    return (rows + 7) // 8 if kind == "b1" else WIDTH[kind] * rows
+
+
 def _made_source(value: Any, where: str, *, nullable: bool = True) -> None:
     if value is None and nullable:
         return
@@ -104,7 +111,7 @@ def _made_source(value: Any, where: str, *, nullable: bool = True) -> None:
         _fail(f"{where} has an unknown source kind")
 
 
-def _made(made: dict, samples: list[dict], columns: list[dict]) -> None:
+def _made(made: dict, samples: list[dict], columns: list[dict], version: int) -> None:
     """Validate provenance when present; an empty or redacted drawer remains valid."""
     if not made:
         return
@@ -121,7 +128,7 @@ def _made(made: dict, samples: list[dict], columns: list[dict]) -> None:
         for name, source in declared.items():
             _made_source(source, f'made.columns["{name}"]', nullable=False)
     if "samples" in made:
-        _made_samples(made["samples"], samples)
+        _made_samples(made["samples"], samples, version)
     if "cart" in made and made["cart"] is not None:
         cart = made["cart"]
         if not isinstance(cart, dict):
@@ -131,7 +138,7 @@ def _made(made: dict, samples: list[dict], columns: list[dict]) -> None:
                 _fail(f"made.cart.{key} must be text")
 
 
-def _made_samples(records: Any, samples: list[dict]) -> None:
+def _made_samples(records: Any, samples: list[dict], version: int) -> None:
     if not isinstance(records, list) or len(records) != len(samples):
         _fail("made.samples must describe every data sample exactly once")
     expected = {sample["name"]: sample["rows"] for sample in samples}
@@ -145,17 +152,28 @@ def _made_samples(records: Any, samples: list[dict]) -> None:
                 or record.get("rows") != expected.get(name)):
             _fail("made.samples names and row counts must match data.samples")
         seen.add(name)
-        files = record.get("files")
-        if not isinstance(files, list) or any(
-                not isinstance(file, dict) or not isinstance(file.get("path"), str)
-                or not file["path"] or not isinstance(file.get("tree"), str)
-                or not file["tree"] for file in files):
+        if not isinstance(record.get("files"), list):
             _fail(f'made sample "{name}" has invalid files')
+        for file in record["files"]:
+            _made_file(file, f'made sample "{name}"', version)
         if not isinstance(record.get("metadata"), dict):
             _fail(f'made sample "{name}" metadata must be an object')
         if "weights" not in record:
             _fail(f'made sample "{name}" needs a weights declaration (null = unweighted)')
         _made_source(record["weights"], f'made sample "{name}" weights')
+
+
+def _made_file(file: Any, where: str, version: int) -> None:
+    """A source file is its path and tree; from v8 its optional uuid and entries are typed."""
+    if (not isinstance(file, dict)
+            or any(not isinstance(file.get(key), str) or not file[key] for key in ("path", "tree"))):
+        _fail(f"{where} has invalid files")
+    if version < 8:
+        return
+    if "uuid" in file and not isinstance(file["uuid"], str):
+        _fail(f"{where} file uuid must be text")
+    if "entries" in file:
+        _nat(file["entries"], f"{where} file entries")
 
 
 def _wire_clean(value: Any) -> str | None:
@@ -469,7 +487,7 @@ def _bit_values(buf: bytes | bytearray | memoryview, at: int, rows: int) -> list
     """Validate tail bits and find distinct values without unpacking event arrays."""
     if not rows:
         return []
-    packed = np.frombuffer(buf, dtype=np.uint8, count=(rows + 7) // 8, offset=at)
+    packed = np.frombuffer(buf, dtype=np.uint8, count=_length("b1", rows), offset=at)
     tail = rows % 8
     if tail and int(packed[-1]) >> tail:
         _fail("boolean column has nonzero unused tail bits")
@@ -511,6 +529,26 @@ def _weight_col(data: dict, weighted: list[bool]) -> str | None:
     return weight_col
 
 
+def _col_source(source: Any, where: str) -> None:
+    """Shape-check a column's provenance; nothing in it is executed or cross-checked."""
+    if not isinstance(source, dict):
+        _fail(f"{where} source must be an object")
+    if source.get("class") == "copy":
+        if any(not isinstance(source.get(key), str) or not source[key]
+               for key in ("branch", "dtype")):
+            _fail(f"{where} copy source needs branch and dtype text")
+        return
+    if source.get("class") != "derived":
+        _fail(f"{where} source class must be copy or derived")
+    inputs = source.get("from")
+    if (not isinstance(inputs, list)
+            or any(not isinstance(x, str) or not x for x in inputs)
+            or len(set(inputs)) != len(inputs)
+            or not _option(source.get("reproducible"), ("cartridge", "source"))
+            or not isinstance(source.get("python"), str)):
+        _fail(f"{where} derived source needs from, reproducible, and python")
+
+
 def _column(col: Any, i: int, rows: int, size: int, version: int,
             names: Container[str]) -> tuple[str, int, int]:
     """Validate one column descriptor; return its name, offset, and byte length."""
@@ -519,13 +557,17 @@ def _column(col: Any, i: int, rows: int, size: int, version: int,
     name, kind = col.get("name"), col.get("kind")
     if not isinstance(name, str) or not name.strip() or name in names:
         _fail(f"column {i} has an empty or duplicate name")
-    if kind not in (("f8", "i4", "b1") if version == 7 else ("f8", "i4")):
+    if kind not in (("f8", "i4", "b1") if version >= 7 else ("f8", "i4")):
         _fail(f'column "{name}" has unknown kind {kind!r}')
-    width = 1 if kind == "b1" else 8 if kind == "f8" else 4
-    length = (rows + 7) // 8 if kind == "b1" else width * rows
+    length = _length(kind, rows)
     at = _nat(col.get("at"), f'column "{name}" offset')
-    if at % width or at + length > size:
+    if at % WIDTH[kind] or at + length > size:
         _fail(f'column "{name}" is unaligned or outside the buffer')
+    if version >= 8:
+        if not isinstance(col.get("sha256"), str):
+            _fail(f'column "{name}" needs a sha256')
+        if "source" in col:
+            _col_source(col["source"], f'column "{name}"')
     lim = _pair(col.get("lim"), f'column "{name}" lim')
     nice = _pair(col.get("nice"), f'column "{name}" nice')
     pcts = [_finite(col.get(f"p{q}"), f'column "{name}" p{q}') for q in PCTS]
@@ -549,7 +591,7 @@ def _columns(cols: list, rows: int, size: int, weight_col: str | None,
     """Validate data.cols; return descriptors by name and their byte ranges."""
     by_column: dict[str, dict] = {}
     ranges: list[tuple[int, int, str]] = []
-    declared_bytes = rows * (4 + (8 if weight_col else 0))
+    declared_bytes = _length("i4", rows) + (_length("f8", rows) if weight_col else 0)
     for i, col in enumerate(cols):
         name, at, length = _column(col, i, rows, size, version, by_column)
         by_column[name] = col
@@ -567,15 +609,15 @@ def _offsets(data: dict, rows: int, size: int, weight_col: str | None,
     """Place the weights and sample index; refuse any overlap between buffer ranges."""
     if weight_col is not None:
         weight_at = _nat(data.get("weight_at"), "data.weight_at")
-        if weight_at % 8 or weight_at + 8 * rows > size:
+        if weight_at % WIDTH["f8"] or weight_at + _length("f8", rows) > size:
             _fail("weights are unaligned or outside the buffer")
-        ranges.append((weight_at, weight_at + 8 * rows, "weights"))
+        ranges.append((weight_at, weight_at + _length("f8", rows), "weights"))
     elif "weight_at" in data:
         _fail("an unweighted file must not declare data.weight_at")
     sample_at = data["sample_at"]
-    if sample_at % 4 or sample_at + 4 * rows > size:
+    if sample_at % WIDTH["i4"] or sample_at + _length("i4", rows) > size:
         _fail("sample index is unaligned or outside the buffer")
-    ranges.append((sample_at, sample_at + 4 * rows, "sample index"))
+    ranges.append((sample_at, sample_at + _length("i4", rows), "sample index"))
     ranges.sort()
     for previous, current in zip(ranges, ranges[1:]):
         if current[0] < previous[1]:
@@ -583,8 +625,8 @@ def _offsets(data: dict, rows: int, size: int, weight_col: str | None,
 
 
 def _payload(buf: bytes | bytearray | memoryview, data: dict, rows: int,
-             sample_rows: list[int], weight_col: str | None) -> None:
-    """Check the buffer against its descriptors: sample counts, finite weights, lim and vals."""
+             sample_rows: list[int], weight_col: str | None, digests: bool) -> None:
+    """Check the buffer against its descriptors: sample counts, finite weights, lim, vals, digests."""
     slab = memoryview(buf)
     count = len(sample_rows)
     index = np.frombuffer(slab, dtype="<i4", count=rows, offset=data["sample_at"])
@@ -600,6 +642,18 @@ def _payload(buf: bytes | bytearray | memoryview, data: dict, rows: int,
             _fail("weights contain NaN or infinity")
     for col in data["cols"]:
         _column_payload(slab, col, rows)
+    if digests:
+        _hashes(slab, data, rows)
+
+
+def _hashes(slab: memoryview, data: dict, rows: int) -> None:
+    """Recompute the buffer and per-column SHA-256 digests a v8 header declares."""
+    if data["sha256"] != hashlib.sha256(slab).hexdigest():
+        _fail("data.sha256 does not match the buffer")
+    for col in data["cols"]:
+        span = slab[col["at"]:col["at"] + _length(col["kind"], rows)]
+        if col["sha256"] != hashlib.sha256(span).hexdigest():
+            _fail(f'column "{col["name"]}" sha256 does not match its payload')
 
 
 def _column_payload(slab: memoryview, col: dict, rows: int) -> None:
@@ -746,9 +800,14 @@ def _tabs(tabs: list, columns: Mapping[str, dict], sample_names: set[str],
 
 
 def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
-    """Validate a v6 or v7 header against its buffer; boolean payloads stay packed."""
+    """Validate a v6, v7, or v8 header against its buffer; boolean payloads stay packed."""
+    _check(meta, buf, digests=True)
+
+
+def _check(meta: dict, buf: bytes | bytearray | memoryview, *, digests: bool) -> None:
+    """The validator; ``digests`` recomputes the v8 SHA-256s, which pack skips for its own buffer."""
     if not isinstance(meta, dict) or meta.get("rowver") not in READS:
-        _fail("RowVer supports .rvr 6 and 7")
+        _fail("RowVer supports .rvr 6, 7, and 8")
     for drawer, kind in (("about", dict), ("data", dict), ("view", dict),
                          ("tabs", list), ("made", dict)):
         if not isinstance(meta.get(drawer), kind):
@@ -757,9 +816,12 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
     if not isinstance(about.get("name"), str) or not about["name"].strip():
         _fail("about.name must be a non-empty string")
 
+    version = meta["rowver"]
     rows = _nat(data.get("rows"), "data.rows")
     size = _nat(data.get("bytes"), "data.bytes")
     _nat(data.get("sample_at"), "data.sample_at")
+    if version >= 8 and not isinstance(data.get("sha256"), str):
+        _fail("data.sha256 must be text")
     if size > MAX_DATA_BYTES:
         _fail(f"column data exceeds the {MAX_DATA_BYTES}-byte limit")
     if len(buf) != size:
@@ -772,9 +834,9 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
 
     sample_names, sample_rows, weighted = _samples(samples, rows)
     weight_col = _weight_col(data, weighted)
-    by_column, ranges = _columns(cols, rows, size, weight_col, meta["rowver"])
+    by_column, ranges = _columns(cols, rows, size, weight_col, version)
     _offsets(data, rows, size, weight_col, ranges)
-    _payload(buf, data, rows, sample_rows, weight_col)
+    _payload(buf, data, rows, sample_rows, weight_col, digests and version >= 8)
 
     sources = _view(view, by_column, sample_names)
     _tabs(tabs, by_column, sample_names, sources)
@@ -782,7 +844,7 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
         opens = _nat(meta["opens_on"], "opens_on")
         if (tabs and opens >= len(tabs)) or (not tabs and opens != 0):
             _fail("opens_on does not name an existing tab")
-    _made(meta["made"], samples, cols)
+    _made(meta["made"], samples, cols, version)
 
 
 def read(path: str | Path) -> tuple[dict, bytes]:
@@ -945,8 +1007,8 @@ def _pack_weights(sample_names: list[str], row_counts: Mapping[str, int],
 
 def _pack_buffer(sample_names: list[str], column_names: list[str],
                  arrays: Mapping[str, Mapping[str, np.ndarray]], row_counts: Mapping[str, int],
-                 weighted: Mapping[str, bool], weight_arrays: Mapping[str, np.ndarray]
-                 ) -> tuple[dict, bytes]:
+                 weighted: Mapping[str, bool], weight_arrays: Mapping[str, np.ndarray],
+                 sources: Mapping[str, Mapping[str, Any]]) -> tuple[dict, bytes]:
     """Lay out weights, numeric columns widest first, the sample index, then packed bits."""
     rows = sum(row_counts.values())
     pieces: list[bytes] = []
@@ -954,6 +1016,7 @@ def _pack_buffer(sample_names: list[str], column_names: list[str],
     data: dict[str, Any] = {
         "rows": rows,
         "bytes": 0,
+        "sha256": "",
         "weight_col": "weight" if weight_arrays else None,
         "sample_at": 0,
         "samples": [{"name": name, "rows": row_counts[name],
@@ -977,12 +1040,15 @@ def _pack_buffer(sample_names: list[str], column_names: list[str],
                     if rows else np.empty(0))
         dtype = "u1" if kind == "b1" else "<i4" if kind == "i4" else "<f8"
         encoded = combined.astype(dtype, copy=False)
+        raw = (np.packbits(encoded, bitorder="little").tobytes() if kind == "b1"
+               else encoded.tobytes())
         entries[name] = {"name": name, "kind": kind, "at": offset,
+                         **({"source": dict(sources[name])} if name in sources else {}),
+                         "sha256": hashlib.sha256(raw).hexdigest(),
                          **_stats(encoded, kind in ("i4", "b1"))}
         if kind == "b1":
-            bool_pieces.append((name, np.packbits(encoded, bitorder="little").tobytes()))
+            bool_pieces.append((name, raw))
             continue
-        raw = encoded.tobytes()
         pieces.append(raw)
         offset += len(raw)
 
@@ -996,9 +1062,11 @@ def _pack_buffer(sample_names: list[str], column_names: list[str],
         entries[name]["at"] = offset
         pieces.append(raw)
         offset += len(raw)
+    buf = b"".join(pieces)
     data["cols"] = [entries[name] for name in column_names]
     data["bytes"] = offset
-    return data, b"".join(pieces)
+    data["sha256"] = hashlib.sha256(buf).hexdigest()
+    return data, buf
 
 
 def _cats(labels: Mapping[str, Mapping[Any, str]], cols: list[dict]) -> dict[str, Any]:
@@ -1022,24 +1090,29 @@ def pack(by_sample: Mapping[str, Mapping[str, Any]], *,
          weighted: Mapping[str, bool], weights: Mapping[str, Any] | None = None,
          labels: Mapping[str, Mapping[Any, str]] | None = None,
          about: Mapping[str, Any] | None = None,
-         made: Mapping[str, Any] | None = None) -> tuple[dict, bytes]:
-    """Pack into v7; populated boolean arrays become bits, never numeric 0/1."""
+         made: Mapping[str, Any] | None = None,
+         sources: Mapping[str, Mapping[str, Any]] | None = None) -> tuple[dict, bytes]:
+    """Pack into v8; ``sources`` is per-column provenance, and every span gets a SHA-256."""
     sample_names, column_names, arrays, row_counts = _pack_inputs(by_sample, weighted)
     weight_arrays = _pack_weights(sample_names, row_counts, weighted, weights)
     data, buf = _pack_buffer(sample_names, column_names, arrays, row_counts,
-                             weighted, weight_arrays)
+                             weighted, weight_arrays, sources or {})
     view = {"cats": _cats(labels, data["cols"])} if labels else {}
     meta = {"rowver": ROWVER,
             "about": {"name": "study", **dict(about or {})},
             "data": data, "view": view, "tabs": [], "opens_on": 0,
             "made": dict(made or {})}
-    check(meta, buf)
+    _check(meta, buf, digests=False)
     return meta, buf
 
 
 def columns(meta: dict, buf: bytes, *, include_weights: bool = True) -> dict[str, np.ndarray]:
     """Numeric views onto the buffer; boolean columns unpack to one-byte NumPy bool arrays."""
     check(meta, buf)
+    return _views(meta, buf, include_weights)
+
+
+def _views(meta: dict, buf: bytes, include_weights: bool) -> dict[str, np.ndarray]:
     data, out = meta["data"], {}
     for col in data["cols"]:
         if col["kind"] == "b1":
@@ -1059,7 +1132,7 @@ def columns(meta: dict, buf: bytes, *, include_weights: bool = True) -> dict[str
 def read_by_sample(path: str | Path) -> tuple[dict, dict[str, dict[str, np.ndarray]]]:
     """Read a cartridge and split its columns by declared sample index."""
     meta, buf = read(path)
-    data, all_columns = meta["data"], columns(meta, buf)
+    data, all_columns = meta["data"], _views(meta, buf, True)
     index = np.frombuffer(buf, dtype="<i4", count=data["rows"], offset=data["sample_at"])
     return meta, {
         sample["name"]: {name: values[index == i] for name, values in all_columns.items()}
@@ -1117,7 +1190,7 @@ def show(path: str | Path) -> str:
 
 def _main(argv: list[str] | None = None) -> int:
     """``check`` or ``show`` one cartridge; hostile names never crash or repaint the terminal."""
-    parser = argparse.ArgumentParser(description="inspect a RowVer 6 cartridge")
+    parser = argparse.ArgumentParser(description="inspect a RowVer cartridge")
     parser.add_argument("command", choices=("check", "show"))
     parser.add_argument("file", type=Path)
     args = parser.parse_args(argv)

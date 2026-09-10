@@ -2,7 +2,9 @@
 
 A recipe declares a Coffea-shaped fileset, a KEEP selection, the columns to
 press, and ``metadata["weights"]`` for every sample: a branch name, a callable,
-or ``None`` for an unweighted sample.
+or ``None`` for an unweighted sample. Hooks read the events they are given and
+return new values; writing into a NumPy view of an Awkward buffer is outside
+Awkward's contract and corrupts what every later hook and the cartridge see.
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from multiprocessing.connection import wait
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping, NamedTuple
 from urllib.parse import urlsplit, urlunsplit
 
 import awkward as ak
@@ -40,6 +42,32 @@ FALLBACK_ENTRIES = 100_000
 
 class CartError(ValueError):
     """A study is ambiguous, unsafe to build, or produces invalid columns."""
+
+
+class Trace(NamedTuple):
+    """What a skim observed: each column's inputs, dtypes, and copy status, who reshaped the record, and each source's identity."""
+    inputs: dict[str, set[str]]
+    derived: set[str]
+    writers: set[tuple[str, ...]]
+    dtypes: dict[str, set[str]]
+    files: dict[tuple[str, str], dict]
+
+
+class _Selection(NamedTuple):
+    """One chunk after PREPARE and KEEP: the survivors, what the hooks read, and how they reshaped the record."""
+    events: ak.Array
+    reads: set[str]
+    rebuilt: bool
+    writers: set[tuple[str, ...]]
+
+
+class _Skimmed(NamedTuple):
+    """One source's results as a parallel worker returns them."""
+    sample: str
+    scanned: int
+    rows: dict[str, np.ndarray]
+    weight: np.ndarray | None
+    trace: Trace
 
 
 def study_names(root: Path = STUDIES) -> list[str]:
@@ -153,6 +181,97 @@ def _top_level(name: str) -> str:
     return name.lstrip(".").split(".", 1)[0]
 
 
+def _field_names(where: Any) -> Iterator[str]:
+    """The field names an item selection names, at any depth of a tuple or list."""
+    if isinstance(where, str):
+        yield where
+    elif isinstance(where, (list, tuple)):
+        for item in where:
+            yield from _field_names(item)
+
+
+_READS: set[str] = set()
+_WRITES: set[str] = set()
+
+
+def _quiet(method: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap an array method so its own layout reads do not count as whole-record use."""
+    def wrapped(self: Any, *args: Any, **kwargs: Any) -> Any:
+        _Events._selecting += 1
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            _Events._selecting -= 1
+    return wrapped
+
+
+class _Events(ak.Array):
+    """Records in ``_READS`` the fields a hook selects, or ``*`` once it reaches the whole record."""
+
+    _selecting = 0
+
+    @property
+    def _layout(self) -> Any:
+        if not _Events._selecting:
+            _READS.add("*")
+        return self.__dict__["_layout"]
+
+    @_layout.setter
+    def _layout(self, layout: Any) -> None:
+        if not _Events._selecting:
+            _WRITES.add("*")
+        self.__dict__["_layout"] = layout
+
+    fields = property(_quiet(ak.Array.fields.fget))
+    __len__ = _quiet(ak.Array.__len__)
+    __getattr__ = _quiet(ak.Array.__getattr__)
+
+    @_quiet
+    def __getitem__(self, where: Any) -> Any:
+        parts = where if isinstance(where, tuple) else (where,)
+        if any(isinstance(part, (int, np.integer)) for part in parts):
+            _READS.add("*")
+        _READS.update(_field_names(where))
+        return super().__getitem__(where)
+
+    @_quiet
+    def __setitem__(self, where: Any, what: Any) -> None:
+        _WRITES.update(_field_names(where))
+        super().__setitem__(where, what)
+
+
+_WATCHERS: dict[type, type] = {}
+
+
+def _watcher(base: type) -> type:
+    """The ``_Events`` subclass that observes arrays of class ``base``."""
+    if issubclass(base, _Events):
+        return base
+    if base not in _WATCHERS:
+        _WATCHERS[base] = _Events if base is ak.Array else type(base.__name__, (_Events, base), {})
+    return _WATCHERS[base]
+
+
+def _watched(events: ak.Array) -> ak.Array:
+    """Return ``events`` observed by ``_Events``, keeping any record name and behavior it already has."""
+    name = events.layout.purelist_parameter("__record__") or "rowver.events"
+    local = events.behavior or {}
+    base = {**ak.behavior, **local}.get(("*", name), ak.Array)
+    behavior = {**local, ("*", name): _watcher(base)}
+    return ak.with_parameter(events, "__record__", name, behavior=behavior)
+
+
+def _expand(read: set[str], branches: set[str]) -> set[str]:
+    """The branches a hook's selections name; ``*`` means it may have used every branch."""
+    return set(branches) if "*" in read else read & branches
+
+
+def _inputs(read: set[str], branches: set[str], prepared: set[str], rebuilt: bool) -> set[str]:
+    """Branches a column's values came from; a rebuilt record or a made field adds PREPARE's reads."""
+    own = _expand(read, branches)
+    return own | _expand(prepared, branches) if rebuilt or read - branches else own
+
+
 def _read_chunk(tree, touched: set[str], start: int, stop: int):
     """Read one entry range as ``(events, lazy)``; ``lazy`` is None after an eager fallback."""
     try:
@@ -161,13 +280,13 @@ def _read_chunk(tree, touched: set[str], start: int, stop: int):
     except (TypeError, ValueError) as exc:
         if "virtual" not in str(exc):
             raise
-        return tree.arrays(entry_start=start, entry_stop=stop, library="ak"), None
+        return _watched(tree.arrays(entry_start=start, entry_stop=stop, library="ak")), None
     layout = lazy.layout
     if not touched or not isinstance(layout, ak.contents.RecordArray) or layout.is_tuple:
-        return lazy, lazy
+        return _watched(lazy), lazy
     eager = tree.arrays(filter_name=lambda name: _top_level(name) in touched,
                         entry_start=start, entry_stop=stop, library="ak", array_cache=None)
-    return _overlay(lazy, eager), lazy
+    return _watched(_overlay(lazy, eager)), lazy
 
 
 def _overlay(lazy: ak.Array, eager: ak.Array) -> ak.Array:
@@ -396,11 +515,11 @@ def _parallel_worker(study: str, expected_hash: str, step_size: int | str,
                 "metadata": entry["metadata"],
             }}
             try:
-                rows, weights = cart.skim(step_size, Progress())
+                rows, weights, trace = cart.skim(step_size, Progress())
             finally:
                 cart.fileset = full_fileset
             messages.send(("result", sample_at, source_at, sample, scanned,
-                           rows[sample], weights.get(sample)))
+                           rows[sample], weights.get(sample), trace))
             current_path = None
         messages.send(("done",))
     except BaseException as exc:
@@ -580,31 +699,55 @@ class Cart:
                   meta: dict, where: str) -> Any:
         return events[spec] if isinstance(spec, str) else _invoke(spec, events, meta, where)
 
-    def _select(self, events: ak.Array, metadata: dict, sample: str, path: str) -> ak.Array:
-        """Run PREPARE and KEEP on one chunk and return the events that survive."""
+    def _select(self, events: ak.Array, branches: set[str], metadata: dict, sample: str,
+                path: str) -> _Selection:
+        """Run PREPARE and KEEP on one chunk; a KEEP that writes fields counts as rebuilding the record."""
+        _READS.clear()
+        _WRITES.clear()
         prepared = (_invoke(self.prepare, events, metadata, "PREPARE")
                     if self.prepare is not None else events)
+        reads, writers = set(_READS), set()
+        rebuilt = bool("*" in _READS or _WRITES & branches or "*" in _WRITES
+                       or not isinstance(prepared, _Events))
+        if rebuilt or _WRITES:
+            writers.add(("prepare",))
         try:
             count = len(prepared)
         except TypeError as exc:
             raise CartError("PREPARE must return an event array") from exc
+        if not isinstance(prepared, _Events):
+            prepared = _watched(prepared)
+        _READS.clear()
+        _WRITES.clear()
         mask = _one_dimensional(_invoke(self.keep, prepared, metadata, "KEEP"),
                                 f'{sample} KEEP for {Path(path).name}', boolean=True)
+        if _WRITES:
+            reads |= _READS
+            rebuilt = True
+            writers.add(("keep",))
         if len(mask) != count:
             raise CartError(f'{sample} KEEP returned {len(mask)} values for {count} events')
-        return prepared[mask]
+        return _Selection(prepared[mask], reads, rebuilt, writers)
 
-    def _columns_of(self, selected: ak.Array, metadata: dict, sample: str) -> dict[str, np.ndarray]:
-        """Evaluate every declared column on the selected events."""
+    def _columns_of(self, selected: ak.Array, metadata: dict, sample: str
+                    ) -> tuple[dict[str, np.ndarray], dict[str, set[str]], set[tuple[str, ...]]]:
+        """Evaluate every declared column; return the columns, what each selected, and which ones wrote."""
         out: dict[str, np.ndarray] = {}
+        reads: dict[str, set[str]] = {}
+        writers: set[tuple[str, ...]] = set()
         for name, spec in self.columns.items():
+            _READS.clear()
+            _WRITES.clear()
             value = self._evaluate(spec, selected, metadata, f'COLUMNS["{name}"]')
             column = _one_dimensional(value, f'{sample}.{name}')
             if len(column) != len(selected):
                 raise CartError(f'{sample}.{name} returned {len(column)} values for '
                                 f'{len(selected)} selected events')
             out[name] = column
-        return out
+            reads[name] = set(_READS)
+            if _WRITES:
+                writers.add(("column", name))
+        return out, reads, writers
 
     def _weights_of(self, selected: ak.Array, metadata: dict, sample: str) -> np.ndarray:
         """Evaluate the sample's weights declaration on the selected events."""
@@ -619,13 +762,15 @@ class Cart:
         return values
 
     def skim(self, step_size: int | str = "100 MB",
-             progress: Callable[[str | None, int, int], None] | None = None) -> tuple[dict, dict]:
-        """Read every source in order, run the hooks, and return ``(columns, weights)`` by sample."""
+             progress: Callable[[str | None, int, int], None] | None = None
+             ) -> tuple[dict, dict, Trace]:
+        """Read every source in order, run the hooks, and return ``(columns, weights, trace)``."""
         if not self._validated:
             self.validate()
         capacity = _Capacity(self)
         output: dict[str, dict[str, np.ndarray]] = {}
         output_weights: dict[str, np.ndarray] = {}
+        trace = Trace({}, set(), set(), {}, {})
         for sample, entry in self.fileset.items():
             chunks: dict[str, list[np.ndarray]] = {name: [] for name in self.columns}
             weight_chunks: list[np.ndarray] = []
@@ -634,14 +779,28 @@ class Cart:
                 metadata = self._meta(sample, path, tree_name)
                 _notify(progress, "source", sample, path, tree_name)
                 with _open_sample_tree(sample, path, tree_name) as tree:
+                    trace.files[path, tree_name] = {"uuid": str(tree.file.uuid),
+                                                    "entries": int(tree.num_entries)}
                     for events, entries in _chunks(tree, touched, step_size):
-                        selected = self._select(events, metadata, sample, path)
-                        columns = self._columns_of(selected, metadata, sample)
+                        branches = set(events.fields)
+                        selected = self._select(events, branches, metadata, sample, path)
+                        columns, reads, writers = self._columns_of(selected.events, metadata,
+                                                                   sample)
                         for name, column in columns.items():
                             chunks[name].append(column)
+                            trace.dtypes.setdefault(name, set()).add(str(column.dtype))
+                        rebuilt = selected.rebuilt or bool(writers)
+                        hook_reads = selected.reads.union(*(reads[name] for _, name in writers))
+                        for name, read in reads.items():
+                            trace.inputs.setdefault(name, set()).update(
+                                _inputs(read, branches, hook_reads, rebuilt))
+                            if rebuilt or callable(self.columns[name]) or read - branches:
+                                trace.derived.add(name)
+                        trace.writers.update(selected.writers, writers)
                         if entry["metadata"]["weights"] is not None:
-                            weight_chunks.append(self._weights_of(selected, metadata, sample))
-                        kept = len(selected)
+                            weight_chunks.append(
+                                self._weights_of(selected.events, metadata, sample))
+                        kept = len(selected.events)
                         capacity.add(sample, kept, {
                             name: _bits(column) for name, column in columns.items()
                             if column.size and capacity.bits[name] < 64})
@@ -655,7 +814,7 @@ class Cart:
                 output_weights[sample] = (np.concatenate(weight_chunks) if weight_chunks
                                           else np.empty(0, dtype=np.float64))
             _notify(progress, "sample_done", sample)
-        return output, output_weights
+        return output, output_weights, trace
 
     def _spawn(self, context, number: int, step_size: int | str, task_queue) -> tuple:
         """Start one worker; return its process, its message pipe, and its lifeline."""
@@ -681,7 +840,7 @@ class Cart:
     def _collect(self, tasks: list, processes: list, connections: list, task_queue,
                  progress: Callable[[str | None, int, int], None] | None) -> dict:
         """Relay worker messages to the progress callback until every source has returned."""
-        results: dict[tuple[int, int], tuple[str, int, dict, np.ndarray | None]] = {}
+        results: dict[tuple[int, int], _Skimmed] = {}
         finished = {sample: 0 for sample in self.fileset}
         capacity = _Capacity(self)
         next_task = len(connections)
@@ -704,10 +863,10 @@ class Cart:
                 elif kind == "size":
                     capacity.add(*body)
                 elif kind == "result":
-                    sample_at, source_at, sample, scanned, rows, weight = body
+                    sample_at, source_at, sample, scanned, rows, weight, trace = body
                     if (sample_at, source_at) in results:
                         raise CartError("a parallel worker returned a source twice")
-                    results[(sample_at, source_at)] = (sample, scanned, rows, weight)
+                    results[(sample_at, source_at)] = _Skimmed(sample, scanned, rows, weight, trace)
                     if next_task < len(tasks):
                         task_queue.put(tasks[next_task])
                         next_task += 1
@@ -727,27 +886,36 @@ class Cart:
             raise CartError("parallel workers did not return every source")
         return results
 
-    def _merge(self, results: dict) -> tuple[dict, dict]:
-        """Concatenate per-source results in declaration order."""
+    def _merge(self, results: dict) -> tuple[dict, dict, Trace]:
+        """Concatenate per-source results in declaration order and union their traces."""
         output: dict[str, dict[str, np.ndarray]] = {}
         output_weights: dict[str, np.ndarray] = {}
+        trace = Trace({}, set(), set(), {}, {})
         for sample_at, (sample, entry) in enumerate(self.fileset.items()):
             pieces = [results[(sample_at, source_at)]
                       for source_at in range(len(entry["files"]))]
             output[sample] = {
-                name: _joined([rows[name] for _, scanned, rows, _ in pieces if scanned])
+                name: _joined([piece.rows[name] for piece in pieces if piece.scanned])
                 for name in self.columns
             }
             if entry["metadata"]["weights"] is not None:
-                weights = [weight for *_, weight in pieces]
+                weights = [piece.weight for piece in pieces]
                 if any(weight is None for weight in weights):
                     raise CartError(f'weighted sample "{sample}" lost its weights')
                 output_weights[sample] = np.concatenate(weights)
-        return output, output_weights
+            for piece in pieces:
+                for name, read in piece.trace.inputs.items():
+                    trace.inputs.setdefault(name, set()).update(read)
+                trace.derived.update(piece.trace.derived)
+                trace.writers.update(piece.trace.writers)
+                for name, seen in piece.trace.dtypes.items():
+                    trace.dtypes.setdefault(name, set()).update(seen)
+                trace.files.update(piece.trace.files)
+        return output, output_weights, trace
 
     def _parallel_skim(self, workers: int, step_size: int | str,
                        progress: Callable[[str | None, int, int], None] | None
-                       ) -> tuple[dict, dict]:
+                       ) -> tuple[dict, dict, Trace]:
         """Skim one source per task in worker processes; merging and every side effect stay here."""
         if self._recipe_hash is None:
             raise CartError("parallel builds require an unchanged loaded Study")
@@ -792,7 +960,37 @@ class Cart:
                 lifeline.close()
             task_queue.close()
 
-    def _provenance(self, rows: Mapping[str, Mapping[str, np.ndarray]], built: str) -> dict:
+    def _writer(self, writer: tuple[str, ...]) -> Callable[..., Any]:
+        """The hook a writer key names: ``("prepare",)``, ``("keep",)``, or ``("column", name)``."""
+        return self.columns[writer[1]] if writer[0] == "column" else getattr(self, writer[0])
+
+    def _writer_order(self, writer: tuple[str, ...]) -> int:
+        """PREPARE first, KEEP second, then columns in declaration order."""
+        keys = [("prepare",), ("keep",), *(("column", name) for name in self.columns)]
+        return keys.index(writer)
+
+    def _sources(self, trace: Trace) -> dict[str, dict]:
+        """Per-column provenance for every column that ran: a copy names its branch and dtype, a derived column its inputs."""
+        copied = {spec for name, spec in self.columns.items()
+                  if isinstance(spec, str) and name not in trace.derived}
+        out: dict[str, dict] = {}
+        for name, spec in self.columns.items():
+            if name not in trace.inputs:
+                continue
+            if isinstance(spec, str) and name not in trace.derived:
+                dtype = np.result_type(*sorted(trace.dtypes[name]))
+                out[name] = {"class": "copy", "branch": spec, "dtype": str(dtype)}
+            else:
+                inputs = trace.inputs[name]
+                origins = [spec] if callable(spec) else [
+                    self._writer(writer) for writer in sorted(trace.writers, key=self._writer_order)]
+                out[name] = {"class": "derived", "from": sorted(inputs),
+                             "reproducible": "cartridge" if inputs <= copied else "source",
+                             "python": "\n\n".join(_source(origin)["source"] for origin in origins)}
+        return out
+
+    def _provenance(self, rows: Mapping[str, Mapping[str, np.ndarray]], built: str,
+                    files: Mapping[tuple[str, str], dict]) -> dict:
         if self.source is None:
             config = None
         else:
@@ -805,7 +1003,7 @@ class Cart:
             samples.append({
                 "name": name,
                 "rows": len(next(iter(rows[name].values()))),
-                "files": [{"path": path, "tree": tree}
+                "files": [{"path": path, "tree": tree, **files[path, tree]}
                           for path, tree in entry["files"].items()],
                 "metadata": {k: v for k, v in entry["metadata"].items() if k != "weights"},
                 "weights": _source(entry["metadata"]["weights"]),
@@ -830,9 +1028,9 @@ class Cart:
             raise CartError("workers must be a positive integer")
         if workers is not None and workers > 1 and self.source is None:
             raise CartError("parallel builds require a Cart loaded from a study directory")
-        rows, weights = (self.skim(step_size, progress)
-                         if workers is None or workers == 1
-                         else self._parallel_skim(workers, step_size, progress))
+        rows, weights, trace = (self.skim(step_size, progress)
+                                if workers is None or workers == 1
+                                else self._parallel_skim(workers, step_size, progress))
         if progress is not None:
             progress(None, 0, 0)
         built = datetime.now(timezone.utc).isoformat()
@@ -848,7 +1046,8 @@ class Cart:
             weights=weights,
             labels=self.labels,
             about=about,
-            made=self._provenance(rows, built),
+            made=self._provenance(rows, built, trace.files),
+            sources=self._sources(trace),
         )
         meta["view"].update(deepcopy(self.view))
         target = Path(destination) if destination else self.dir / f"{self.name}.rvr"
