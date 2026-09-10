@@ -164,9 +164,6 @@ python gate.py          # release gate, from a checkout
 sh wheel_gate.sh        # the documented workflow from an installed wheel in a clean venv
 ```
 
-`python run_rowver.py …` and `python rvr6.py check|show …` keep working from a
-checkout as thin shims for one transition period.
-
 ## Programmatic use
 
 A study's `cart.py` recipe is the front door (the library that presses it is

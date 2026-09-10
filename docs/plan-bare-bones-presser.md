@@ -11,9 +11,9 @@ it DONE here with the commit hash in the same commit that lands the work.
 |---|---|---|
 | 0 land v7 | DONE | bc24ff1 |
 | 1 ADR 0009 | DONE | e4cdb9b |
-| 2 move extraction | DONE | rowver_verification b1f2be9; rowver hash filled by step 3 (a commit cannot carry its own) |
+| 2 move extraction | DONE | rowver_verification b1f2be9; rowver 6542cc3 |
 | 3 remove builder | TODO (needs D1) | |
-| 4 delete shims | TODO | |
+| 4 delete shims | DONE | filled by the next step (a commit cannot carry its own) |
 | 5 optional trims | TODO (needs D2, D3) | |
 | 6 docs | TODO | |
 | 7 readability pass | TODO | |

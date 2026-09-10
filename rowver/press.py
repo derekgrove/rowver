@@ -4,7 +4,7 @@ Study recipes are and remain ``studies/<name>/cart.py`` — this module was
 itself called cart.py once, which confused the press with the recipes it
 presses, hence the rename (owner decision, 2026-08-28).
 
-run_rowver.py exports one ``CART`` (.rvr file) from a study.
+``rowver run`` exports one ``CART`` (.rvr file) from a study.
 
 a cart.py is intended to be a basic recipe to build your .rvr file, its a:
 1) fileset (remote or local paths to .root files)

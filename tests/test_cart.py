@@ -34,7 +34,7 @@ class CartTests(unittest.TestCase):
             study = root / "studies" / "mine"
             study.mkdir(parents=True)
             (study / "cart.py").write_text(textwrap.dedent(f"""
-                from cart import Cart
+                from rowver import Cart
 
                 def keep(events, metadata):
                     return events.pt >= metadata["threshold"]

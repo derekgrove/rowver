@@ -11,8 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from rowver.builder import Service, create_app, viewer_url
 from rowver.builder_spec import SpecError, compile_spec, validate_spec
-from cart import Cart
-from rowver import rvr6
+from rowver import Cart, rvr6
 
 
 def study(source: str = "data", path: str = "events.root") -> dict:
