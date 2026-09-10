@@ -6,4 +6,3 @@ dependencies:
   - numpy =2.4
   - awkward =2.11
   - uproot =5.7
-  - aiohttp =3.13

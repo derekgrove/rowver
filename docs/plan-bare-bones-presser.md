@@ -12,11 +12,11 @@ it DONE here with the commit hash in the same commit that lands the work.
 | 0 land v7 | DONE | bc24ff1 |
 | 1 ADR 0009 | DONE | e4cdb9b |
 | 2 move extraction | DONE | rowver_verification b1f2be9; rowver 6542cc3 |
-| 3 remove builder | TODO (needs D1) | |
+| 3 remove builder | DONE | filled by the next step; rowver_web branch `retire-builder` |
 | 4 delete shims | DONE | 849a552 |
 | 5 optional trims | TODO (needs D2, D3) | |
 | 6 docs | DONE | 8b8b9cc |
-| 7 readability pass | DONE | filled by the next step (a commit cannot carry its own) |
+| 7 readability pass | DONE | a5dfbc9 |
 | 8 format v8 | TODO (needs D6, D7) | |
 
 A step that needs an undecided D-item is skipped, not blocked on: take the next
@@ -247,7 +247,7 @@ press of the 18-file tau skim set timed against the 82 s sequential baseline.
 
 ## 5. Decisions Derek owns
 
-- **D1** Browser builder: delete, or relocate to `rowver_web`?
+- **D1** Browser builder: delete, or relocate to `rowver_web`? **Decided 2026-09-10: delete** from both repositories; a page-only form generator was considered and rejected for lack of an audience.
 - **D2** Keep `--live-robust`?
 - **D3** Keep `--parallel`? (recommended: yes)
 - **D4** Name of the receiving package in `rowver_verification` (`extract` vs `rowver_extract`).
