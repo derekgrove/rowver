@@ -24,7 +24,7 @@ cross-repository checks, see `docs/agents/verification.md`.
 After `/code-review` passes and before committing, the working agent runs an adversarial review by the *other* vendor's model — never itself:
 
 - Claude is the worker → reviewer is Codex: `codex exec "<review prompt>"`
-- Codex is the worker → reviewer is Claude Opus 5: `claude -p --model claude-opus-5 "<review prompt>"`
+- Codex is the worker → reviewer is Claude fable 5.1: `claude -p --model claude-fable-5.1 "<review prompt>"`
 
 Review prompt (same for both): `Adversarially review the staged diff (git diff --cached) for correctness bugs. Context: <one-line summary of the change and its intent>. End your reply with exactly AGREED or REJECTED (with findings).` Procedure per round:
 

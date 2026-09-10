@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .DS_Store
 
+# Private development diagrams, drafts, and working notes.
+/development/
+
 # Studies are private until explicitly published.
 studies/*
 !studies/template/
