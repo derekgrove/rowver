@@ -1,4 +1,4 @@
-"""Read and write RowVer 6 cartridges.
+"""Read RowVer 6/7 cartridges and pack new RowVer 7 cartridges.
 
 The container is deliberately small and language-neutral::
 
@@ -6,7 +6,7 @@ The container is deliberately small and language-neutral::
 
 All numeric payloads are little-endian.  Metadata has five named drawers: ``about``,
 ``data``, ``view``, ``tabs``, and ``made``; ``rowver`` and the optional ``opens_on`` tab
-index sit beside them.  Version 6 is the only supported format.
+index sit beside them. Version 7 adds little-bit-order packed boolean columns.
 
 ``data`` is immutable once a file is built.  A browser may merge changes into the other
 drawers, but it must preserve unknown keys and pass the column buffer through byte-for-byte.
@@ -35,9 +35,9 @@ from typing import Any, Mapping
 
 import numpy as np
 
-ROWVER = 6
-READS = (6,)
-VERSION = "6.0.0"
+ROWVER = 7
+READS = (6, 7)
+VERSION = "7.0.0"
 MAX_HEADER_BYTES = 8 * 1024 * 1024
 MAX_DATA_BYTES = 1024 * 1024 * 1024
 MAX_CHIPS = 25
@@ -472,10 +472,24 @@ def _stage(stage: Any, where: str, columns: Mapping[str, dict], sources: set[str
         item(entry)
 
 
+def _bit_values(buf: bytes | bytearray | memoryview, at: int, rows: int) -> list[int]:
+    """Validate tail bits and find distinct values without unpacking event arrays."""
+    if not rows:
+        return []
+    packed = np.frombuffer(buf, dtype=np.uint8, count=(rows + 7) // 8, offset=at)
+    tail = rows % 8
+    if tail and int(packed[-1]) >> tail:
+        _fail("boolean column has nonzero unused tail bits")
+    any_true = bool(np.any(packed))
+    all_true = bool(np.all(packed[:-1] == 255)) and int(packed[-1]) == (
+        (1 << tail) - 1 if tail else 255)
+    return ([0] if not all_true else []) + ([1] if any_true else [])
+
+
 def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
-    """Validate the complete v6 contract with explicit, optimisation-safe errors."""
-    if not isinstance(meta, dict) or meta.get("rowver") != ROWVER:
-        _fail("RowVer supports .rvr 6 only")
+    """Validate v6/v7, leaving boolean payloads packed throughout validation."""
+    if not isinstance(meta, dict) or meta.get("rowver") not in READS:
+        _fail("RowVer supports .rvr 6 and 7")
     for drawer, kind in (("about", dict), ("data", dict), ("view", dict),
                          ("tabs", list), ("made", dict)):
         if not isinstance(meta.get(drawer), kind):
@@ -525,7 +539,7 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
     ranges: list[tuple[int, int, str]] = []
     names: set[str] = set()
     by_column: dict[str, dict] = {}
-    bytes_per_row = 4 + (8 if weight_col else 0)
+    declared_bytes = rows * (4 + (8 if weight_col else 0))
     for i, col in enumerate(cols):
         if not isinstance(col, dict):
             _fail(f"data.cols[{i}] must be an object")
@@ -534,14 +548,15 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
             _fail(f"column {i} has an empty or duplicate name")
         names.add(name)
         by_column[name] = col
-        if kind not in ("f8", "i4"):
+        if kind not in (("f8", "i4", "b1") if meta["rowver"] == 7 else ("f8", "i4")):
             _fail(f'column "{name}" has unknown kind {kind!r}')
-        width = 8 if kind == "f8" else 4
+        width = 1 if kind == "b1" else 8 if kind == "f8" else 4
+        length = (rows + 7) // 8 if kind == "b1" else width * rows
         at = _nat(col.get("at"), f'column "{name}" offset')
-        if at % width or at + width * rows > size:
+        if at % width or at + length > size:
             _fail(f'column "{name}" is unaligned or outside the buffer')
-        ranges.append((at, at + width * rows, f'column "{name}"'))
-        bytes_per_row += width
+        ranges.append((at, at + length, f'column "{name}"'))
+        declared_bytes += length
         lim = _pair(col.get("lim"), f'column "{name}" lim')
         nice = _pair(col.get("nice"), f'column "{name}" nice')
         pcts = [_finite(col.get(f"p{q}"), f'column "{name}" p{q}')
@@ -553,15 +568,15 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
             _fail(f'column "{name}" percentiles are outside lim or reversed')
         vals = col.get("vals")
         if vals is not None:
-            if kind != "i4" or not isinstance(vals, list) or len(vals) > MAX_CHIPS:
+            if kind not in ("i4", "b1") or not isinstance(vals, list) or len(vals) > MAX_CHIPS:
                 _fail(f'column "{name}" has invalid categorical values')
             if (any(isinstance(x, bool) or not isinstance(x, int) for x in vals)
                     or len(set(vals)) != len(vals)):
                 _fail(f'column "{name}" categorical values must be unique integers')
     if weight_col in names:
         _fail(f'{weight_col!r} is both the weights column and a data column')
-    if bytes_per_row * rows != size:
-        _fail(f"column declarations need {bytes_per_row * rows} bytes; data declares {size}")
+    if declared_bytes != size:
+        _fail(f"column declarations need {declared_bytes} bytes; data declares {size}")
 
     if weight_col is not None:
         weight_at = _nat(data.get("weight_at"), "data.weight_at")
@@ -593,6 +608,14 @@ def check(meta: dict, buf: bytes | bytearray | memoryview) -> None:
         if not np.isfinite(weights).all():
             _fail("weights contain NaN or infinity")
     for col in cols:
+        if col["kind"] == "b1":
+            actual_vals = _bit_values(slab, col["at"], rows)
+            actual = [actual_vals[0], actual_vals[-1]] if rows else [0, 0]
+            if col["lim"] != actual:
+                _fail(f'column "{col["name"]}" lim does not match its payload')
+            if col.get("vals") is not None and col["vals"] != actual_vals:
+                _fail(f'column "{col["name"]}" vals do not match its payload')
+            continue
         values = np.frombuffer(slab, dtype="<" + col["kind"], count=rows, offset=col["at"])
         if col["kind"] == "f8" and not np.isfinite(values).all():
             _fail(f'column "{col["name"]}" contains NaN or infinity')
@@ -773,6 +796,11 @@ def _array(value: Any, where: str) -> np.ndarray:
 
 
 def _kind(arrays: list[np.ndarray]) -> str:
+    # The presser has no produced dtype for a sample whose trees have no entries
+    # and represents it as an empty float array. It must not widen real flags.
+    populated = [a for a in arrays if a.size]
+    if all(a.dtype.kind == "b" for a in (populated or arrays)):
+        return "b1"
     integral = all(a.dtype.kind in "biu" for a in arrays)
     if integral and all(not a.size or (a.min() >= np.iinfo(np.int32).min
                                        and a.max() <= np.iinfo(np.int32).max) for a in arrays):
@@ -817,7 +845,7 @@ def pack(by_sample: Mapping[str, Mapping[str, Any]], *,
          labels: Mapping[str, Mapping[Any, str]] | None = None,
          about: Mapping[str, Any] | None = None,
          made: Mapping[str, Any] | None = None) -> tuple[dict, bytes]:
-    """Pack per-sample, one-dimensional numeric columns into a fresh v6 document."""
+    """Pack into v7; populated boolean arrays become bits, never numeric 0/1."""
     if not isinstance(by_sample, Mapping) or not by_sample:
         _fail("a cartridge needs at least one sample")
     sample_names = list(by_sample)
@@ -887,15 +915,24 @@ def pack(by_sample: Mapping[str, Mapping[str, Any]], *,
         pieces.append(raw)
         offset += len(raw)
 
-    for name in column_names:
+    kinds = {name: _kind([arrays[sample][name] for sample in sample_names])
+             for name in column_names}
+    # Numeric blocks first, widest first: no alignment padding is needed, even
+    # when event counts are odd. Descriptor order still follows the study.
+    entries: dict[str, dict] = {}
+    bool_pieces: list[tuple[str, bytes]] = []
+    for name in sorted(column_names, key=lambda name: {"f8": 0, "i4": 1, "b1": 2}[kinds[name]]):
         per_sample = [arrays[sample][name] for sample in sample_names]
-        kind = _kind(per_sample)
+        kind = kinds[name]
         combined = np.concatenate(per_sample) if rows else np.empty(0)
-        dtype = "<i4" if kind == "i4" else "<f8"
+        dtype = "u1" if kind == "b1" else "<i4" if kind == "i4" else "<f8"
         encoded = combined.astype(dtype, copy=False)
         entry = {"name": name, "kind": kind, "at": offset,
-                 **_stats(encoded, kind == "i4")}
-        data["cols"].append(entry)
+                 **_stats(encoded, kind in ("i4", "b1"))}
+        entries[name] = entry
+        if kind == "b1":
+            bool_pieces.append((name, np.packbits(encoded, bitorder="little").tobytes()))
+            continue
         raw = encoded.tobytes()
         pieces.append(raw)
         offset += len(raw)
@@ -906,6 +943,13 @@ def pack(by_sample: Mapping[str, Mapping[str, Any]], *,
     ]) if rows else np.empty(0, dtype="<i4")
     pieces.append(index.tobytes())
     offset += index.nbytes
+    # Packed bits follow the aligned numeric arrays; byte boundaries may cross
+    # samples, but event indices and sample membership never change.
+    for name, raw in bool_pieces:
+        entries[name]["at"] = offset
+        pieces.append(raw)
+        offset += len(raw)
+    data["cols"] = [entries[name] for name in column_names]
     data["bytes"] = offset
 
     view: dict[str, Any] = {}
@@ -933,10 +977,20 @@ def pack(by_sample: Mapping[str, Mapping[str, Any]], *,
 
 
 def columns(meta: dict, buf: bytes, *, include_weights: bool = True) -> dict[str, np.ndarray]:
-    """Return zero-copy NumPy views over every declared column."""
+    """Expose numeric views; unpack boolean columns to one-byte NumPy bool arrays.
+
+    read(), check(), and write() keep the stored buffer packed. Only callers
+    requesting event arrays here allocate unpacked boolean values.
+    """
     check(meta, buf)
     data, out = meta["data"], {}
     for col in data["cols"]:
+        if col["kind"] == "b1":
+            packed = np.frombuffer(buf, dtype=np.uint8, count=(data["rows"] + 7) // 8,
+                                   offset=col["at"])
+            out[col["name"]] = np.unpackbits(packed, count=data["rows"],
+                                             bitorder="little").view(np.bool_)
+            continue
         out[col["name"]] = np.frombuffer(buf, dtype="<" + col["kind"],
                                          count=data["rows"], offset=col["at"])
     if include_weights and data.get("weight_col"):

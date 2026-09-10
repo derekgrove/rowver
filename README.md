@@ -190,5 +190,7 @@ are never evaluated by the helper.
 A cartridge includes the selected numeric columns and the exact `cart.py` provenance,
 including input paths. Review that metadata before sharing outside your collaboration.
 
-RowVer supports `.rvr` version 6 only. [FORMAT.md](FORMAT.md) defines the contract and
-`rowver/rvr6.py` is the reference implementation.
+RowVer reads `.rvr` versions 6 and 7 and presses new cartridges as version 7.
+[FORMAT7.md](FORMAT7.md) adds packed boolean columns to the
+[version 6 contract](FORMAT.md). `rowver/rvr6.py` remains the reference implementation.
+Existing v6-only viewers need a reader update before opening version 7 cartridges.

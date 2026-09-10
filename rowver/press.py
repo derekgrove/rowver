@@ -177,8 +177,8 @@ def _parallel_worker(study: str, expected_hash: str, step_size: int | str,
                     scanned += raw
                     messages.send(("chunk", name, raw, kept))
 
-                def _size(self, name: str, kept: int, wide: dict[str, bool]) -> None:
-                    messages.send(("size", name, kept, wide))
+                def _size(self, name: str, kept: int, bits: dict[str, int]) -> None:
+                    messages.send(("size", name, kept, bits))
 
             entry = full_fileset[sample]
             cart.fileset = {sample: {
@@ -278,6 +278,22 @@ def _read_chunk(tree, touched: set[str], start: int, stop: int):
                 eager.layout.content(name).form):
             events = ak.with_field(events, eager[name], name)
     return events, lazy
+
+
+def _bits(column: np.ndarray) -> int:
+    """Bits per row this chunk needs in the cartridge; never above what pack uses."""
+    if column.dtype.kind == "b":
+        return 1
+    i32 = np.iinfo(np.int32)
+    if column.dtype.kind in "iu" and column.min() >= i32.min and column.max() <= i32.max:
+        return 32
+    return 64
+
+
+def _joined(arrays: list[np.ndarray]) -> np.ndarray:
+    """Concatenate chunks, letting only populated ones decide the dtype."""
+    populated = [a for a in arrays if a.size]
+    return np.concatenate(populated or arrays) if arrays else np.empty(0, dtype=np.float64)
 
 
 def _newly_touched(lazy, known: set[str]) -> list[str]:
@@ -536,17 +552,12 @@ class Cart:
         # Refuse a doomed build EARLY: the wire format caps the column buffer, and a
         # press that will blow it should say so at the first offending chunk, not
         # after an hour of skimming (measured: 80 minutes, then the pack refused).
-        # The estimate mirrors pack's own layout — 4-byte sample index per row, one
-        # 8-byte weight slab when any sample is weighted, and per column 4 bytes
-        # while its chunks stay integer-typed inside int32 (pack narrows those to
-        # i4) or 8 once anything wider appears. A column can only WIDEN, so the
-        # running total is a lower bound tightening toward pack's exact size:
-        # a refusal here is certain, never premature.
+        # Track each column's widest representation across sources. Boolean-only
+        # columns use one bit per row; mixed boolean/numeric columns widen normally.
         kept_rows = 0
-        col_wide: dict[str, bool] = {name: False for name in self.columns}
+        col_bits = {name: 1 for name in self.columns}
         any_weighted = any(entry["metadata"]["weights"] is not None
                            for entry in self.fileset.values())
-        i32 = np.iinfo(np.int32)
         for sample, entry in self.fileset.items():
             chunks: dict[str, list[np.ndarray]] = {name: [] for name in self.columns}
             weight_chunks: list[np.ndarray] = []
@@ -596,11 +607,8 @@ class Cart:
                                 raise CartError(f'{sample}.{name} returned {len(column)} values for '
                                                 f'{len(selected)} selected events')
                             chunks[name].append(column)
-                            if not col_wide[name] and (
-                                    column.dtype.kind not in "biu" or
-                                    (column.size and (column.min() < i32.min or
-                                                      column.max() > i32.max))):
-                                col_wide[name] = True
+                            if column.size and col_bits[name] < 64:
+                                col_bits[name] = max(col_bits[name], _bits(column))
                         weight = entry["metadata"]["weights"]
                         if weight is not None:
                             values = _one_dimensional(
@@ -612,18 +620,17 @@ class Cart:
                                 raise CartError(f'{sample}.weight contains NaN or infinity')
                             weight_chunks.append(values)
                         kept_rows += len(selected)
-                        row_bytes = (4 + (8 if any_weighted else 0)
-                                     + sum(8 if wide else 4
-                                           for wide in col_wide.values()))
-                        if kept_rows * row_bytes > rvr6.MAX_DATA_BYTES:
+                        packed_bytes = kept_rows * (4 + (8 if any_weighted else 0)) + sum(
+                            (kept_rows * bits + 7) // 8 for bits in col_bits.values())
+                        if packed_bytes > rvr6.MAX_DATA_BYTES:
                             raise CartError(
                                 f"the kept rows no longer fit the cartridge: "
-                                f"{kept_rows:,} rows x {row_bytes} bytes exceeds the "
+                                f"{kept_rows:,} rows need {packed_bytes} bytes, exceeding the "
                                 f"{rvr6.MAX_DATA_BYTES}-byte column limit (reached in "
                                 f'sample "{sample}") — tighten KEEP or trim the fileset')
                         size_progress = getattr(progress, "_size", None)
                         if size_progress is not None:
-                            size_progress(sample, len(selected), dict(col_wide))
+                            size_progress(sample, len(selected), dict(col_bits))
                         if progress is not None:
                             progress(sample, stop - start, len(selected))
                         newly = _newly_touched(lazy, touched) if lazy is not None else []
@@ -632,8 +639,7 @@ class Cart:
                             entries_per_chunk = _entries_per_chunk(tree, touched, budget, total)
                         start, stop = stop, min(stop + entries_per_chunk, total)
             output[sample] = {
-                name: np.concatenate(values) if values else np.empty(0, dtype=np.float64)
-                for name, values in chunks.items()
+                name: _joined(values) for name, values in chunks.items()
             }
             if entry["metadata"]["weights"] is not None:
                 output_weights[sample] = (np.concatenate(weight_chunks) if weight_chunks
@@ -714,7 +720,7 @@ class Cart:
             finished_sources = {sample: 0 for sample in self.fileset}
             active = set(connections)
             kept_rows = 0
-            col_wide = {name: False for name in self.columns}
+            col_bits = {name: 1 for name in self.columns}
             any_weighted = any(entry["metadata"]["weights"] is not None
                                for entry in self.fileset.values())
             while active:
@@ -740,17 +746,16 @@ class Cart:
                         if progress is not None:
                             progress(*message[1:])
                     elif kind == "size":
-                        _, sample, count, source_wide = message
+                        _, sample, count, source_bits = message
                         kept_rows += count
-                        for name, wide in source_wide.items():
-                            col_wide[name] = col_wide[name] or wide
-                        row_bytes = (4 + (8 if any_weighted else 0)
-                                     + sum(8 if wide else 4
-                                           for wide in col_wide.values()))
-                        if kept_rows * row_bytes > rvr6.MAX_DATA_BYTES:
+                        for name, bits in source_bits.items():
+                            col_bits[name] = max(col_bits[name], bits)
+                        packed_bytes = kept_rows * (4 + (8 if any_weighted else 0)) + sum(
+                            (kept_rows * bits + 7) // 8 for bits in col_bits.values())
+                        if packed_bytes > rvr6.MAX_DATA_BYTES:
                             raise CartError(
                                 f"the kept rows no longer fit the cartridge: "
-                                f"{kept_rows:,} rows x {row_bytes} bytes exceeds the "
+                                f"{kept_rows:,} rows need {packed_bytes} bytes, exceeding the "
                                 f"{rvr6.MAX_DATA_BYTES}-byte column limit (reached in "
                                 f'sample "{sample}") — tighten KEEP or trim the fileset')
                     elif kind == "result":
@@ -797,9 +802,8 @@ class Cart:
                           for source_at in range(len(entry["files"]))]
                 output[sample] = {}
                 for name in self.columns:
-                    arrays = [rows[name] for _, scanned, rows, _ in pieces if scanned]
-                    output[sample][name] = (np.concatenate(arrays) if arrays else
-                                            np.empty(0, dtype=np.float64))
+                    output[sample][name] = _joined(
+                        [rows[name] for _, scanned, rows, _ in pieces if scanned])
                 if entry["metadata"]["weights"] is not None:
                     weights = [weight for _, _, _, weight in pieces]
                     if any(weight is None for weight in weights):

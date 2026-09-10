@@ -30,7 +30,7 @@ unweighted according to the study's needs.
 _Avoid_: Dataset
 
 **Column**:
-A named numeric value retained for every selected event and available to the
+A named numeric or boolean value retained for every selected event and available to the
 viewer for plotting and selections.
 _Avoid_: Variable, branch, field
 

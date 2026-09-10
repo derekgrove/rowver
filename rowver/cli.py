@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     run.set_defaults(progress="fast")
 
-    for name, blurb in (("check", "format validation"), ("show", "print the full v6 header")):
+    for name, blurb in (("check", "format validation"), ("show", "print the full cartridge header")):
         p = sub.add_parser(name, help=blurb)
         p.add_argument("file", type=Path)
 
