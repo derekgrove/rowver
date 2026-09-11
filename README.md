@@ -153,19 +153,22 @@ sh wheel_gate.sh        # the documented workflow from an installed wheel in a c
 A study's `cart.py` recipe is the front door (the library that presses it is
 `rowver/press.py`; `from rowver import Cart`), but a script can also write a
 cartridge directly:
-`meta, buf = rvr6.pack(by_sample, weighted=..., weights=...)` then
-`rvr6.write(path, meta, buf)`. Both `write` and `read` run `rvr6.check` internally, so an
-invalid file can be neither produced nor opened. `contract/v6/cases.json` holds the worked
+`meta, buf = rvr.pack(by_sample, weighted=..., weights=..., made=...)` then
+`rvr.write(path, meta, buf)`. Both `write` and `read` run `rvr.check` internally, so an
+invalid file can be neither produced nor opened. `contract/v9/cases.json` holds the worked
 example of a valid header.
 
 ## What is shared
 
-A cartridge includes the selected numeric columns and the exact `cart.py` provenance,
-including input paths. Review that metadata before sharing outside your collaboration.
+A cartridge includes the selected columns and a snapshot of the recipe: the
+whole `cart.py` text, each sample's metadata, the bare file names with their
+tree and entry count, and the presser version that built it. The file records
+carry no directory, but the recipe text is stored verbatim, input paths and
+URLs included. Review that snapshot before sharing outside your collaboration.
 
-RowVer reads `.rvr` versions 6, 7, and 8 and presses new cartridges as version 8.
-[FORMAT7.md](FORMAT7.md) adds packed boolean columns to the
-[version 6 contract](FORMAT.md); [FORMAT8.md](FORMAT8.md) adds native dtypes,
-column provenance, payload digests, and jagged copies. `rowver/rvr6.py` remains
-the reference implementation. Viewers that read only version 6 or 7 need a reader
-update before opening version 8 cartridges.
+The format is `.rvr` 9, specified whole in [FORMAT.md](FORMAT.md). A cartridge
+carries only the data, its statistics, and the recipe snapshot; a tool that
+keeps state in one does so under a top-level key of its own. `rowver/rvr.py` is
+the reference implementation, and `contract/v9/cases.json` is the corpus an
+independent reader must agree with. The RowVer Web reader for version 9 is a
+pending handoff; until it lands the viewer opens only earlier cartridges.

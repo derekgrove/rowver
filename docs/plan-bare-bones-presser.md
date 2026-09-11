@@ -22,8 +22,8 @@ it DONE here with the commit hash in the same commit that lands the work.
 | 8.3 v8 jagged copies | DONE | 92cab56 |
 | 8.4 FORMAT8 and corpus | DONE | 7c050ad; the `rowver_web` copy of `contract/v8` lands with the viewer handoff |
 | 9.1 FORMAT.md v9 review | DONE | 57845f0 |
-| 9.2 v9 code and corpus | DONE | filled by the next step (a commit cannot carry its own); rowver_verification `check_corpus_sync.py` re-pointed in the same session; gate 97 tests |
-| 9.3 docs sweep | | README, CONTEXT, docs/agents, docstrings: one version, no 6–8 references; memory note |
+| 9.2 v9 code and corpus | DONE | 9d0daa7; rowver_verification 54baca6 (`check_corpus_sync.py` re-pointed); gate 98 tests |
+| 9.3 docs sweep | DONE | filled by the next step (a commit cannot carry its own); README, CONTEXT, docs/agents, product-status: one version, no 6–8 references; memory note |
 | 9.4 recipe snapshot acceptance | | press a `cart.py`, reconstruct it from `made` alone, Derek judges side by side |
 
 A step that needs an undecided D-item is skipped, not blocked on: take the next

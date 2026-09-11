@@ -11,8 +11,9 @@ data available for exploration.
 _Avoid_: Config, job
 
 **Cartridge**:
-A self-contained `.rvr` file containing a study's selected events and columns
-together with a saved interactive view.
+A self-contained `.rvr` file containing a study's selected events and columns,
+the statistics that describe them, and a snapshot of the recipe that produced
+them. A tool that keeps state in a cartridge does so under a key of its own.
 _Avoid_: Skim, project file
 
 **Presser**:
@@ -31,8 +32,8 @@ unweighted according to the study's needs.
 _Avoid_: Dataset
 
 **Column**:
-A named numeric or boolean value retained for every selected event and available to the
-viewer for plotting and selections.
+A named value retained for every selected event, a number, a boolean, or a
+copied list of numbers, available to the viewer for plotting and selections.
 _Avoid_: Variable, branch, field
 
 **Region map**:
@@ -41,7 +42,7 @@ _Avoid_: Binning, category tree
 
 **View**:
 The plots, tabs, selections, region maps, sample presentation, and visual theme
-saved in a cartridge.
+the viewer saves in a cartridge under its own key.
 _Avoid_: Session, workspace
 
 **Independent verification**:

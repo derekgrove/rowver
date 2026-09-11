@@ -4,21 +4,22 @@ This is a dated status baseline, not a specification or backlog. It was split
 from the retroactive design record written on 2026-08-29 against RowVer Web
 `ce90b16`, RowVer `fd5931a`, and RowVer Verification `a8ac54c`; current repository
 behavior takes precedence. On 2026-09-10 the scope was narrowed to pressing
-(ADR 0009): extraction and rendering left this repository. The format is v8
-since the same day (`FORMAT8.md`).
+(ADR 0009): extraction and rendering left this repository. On 2026-09-11 the
+cartridge became only the data (ADR 0010): one format, `FORMAT.md`. The
+viewer's move to that format is a pending handoff.
 
 ## Product
 
 RowVer is a web app for CMS high-energy physicists to analyze collision and
 simulated Monte Carlo data. A Python presser filters ntuples into a compact
-`.rvr` v6 cartridge; the browser viewer opens it for plots, cut sliders, yield
+`.rvr` cartridge; the browser viewer opens it for plots, cut sliders, yield
 tables, and region maps without an installation or server. Collaboration is
 pass-a-file: a cartridge carries the author's view and a collaborator can adjust
 its selections locally. There are no accounts, synchronization, or hosted
 backend.
 
 This repository owns cartridge creation, source-data access, and the canonical
-v6, v7, and v8 contract and fixture corpora. The `rowver_web` repository owns browser
+`contract/v9` contract and fixture corpus. The `rowver_web` repository owns browser
 interaction, rendering, save fidelity, viewer security, offline packaging, and
 deployment. The `rowver_verification` repository owns independent end-to-end
 comparisons of viewer results and, since 2026-09-10, Python extraction and
@@ -40,10 +41,12 @@ rendering.
   row, 272 MiB cartridge and a 347 MB stress cartridge that loaded in about 2.5
   seconds. The viewer runs on the main thread, so approaching the format's 1 GiB
   buffer ceiling is expected to freeze the tab.
-- **Portable views:** an `.rvr` contains the selected data and saved interactive
-  view. Format validation is implemented independently in Python and TypeScript
-  against a shared contract corpus, with a separate headless verification suite
-  for rendered yields.
+- **Portable views:** an `.rvr` contains the selected data, its statistics,
+  and the recipe snapshot; the viewer will keep its saved view under a key of
+  its own once the pending handoff lands. Format validation is implemented
+  independently in Python and TypeScript against a shared contract corpus; the
+  TypeScript side still reads the previous format until that handoff. A
+  separate headless verification suite covers rendered yields.
 - **Small authoring surface:** `rowver new` creates a study whose `cart.py`
   identifies source samples, preparation and selection logic, and retained
   columns.
@@ -67,7 +70,7 @@ rendering.
 5. **Minimize duplicated skims, storage, and computation — partial:** cartridges
    replace private skims for interactive slices but do not alter upstream ntuple
    production.
-6. **Portable and reproducible views — done:** the v6 cartridge and offline
+6. **Portable and reproducible views — done:** the cartridge and offline
    viewer carry data and view state together.
 7. **Create a cartridge from one small document — done:** the normal authoring
    surface is one `cart.py` study recipe.
