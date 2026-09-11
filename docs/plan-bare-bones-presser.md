@@ -20,7 +20,11 @@ it DONE here with the commit hash in the same commit that lands the work.
 | 8.1 v8 provenance | DONE | bd08af2 |
 | 8.2 v8 native dtypes | DONE | ddf79b1 |
 | 8.3 v8 jagged copies | DONE | 92cab56 |
-| 8.4 FORMAT8 and corpus | DONE | filled by the viewer handoff (a commit cannot carry its own); the `rowver_web` copy of `contract/v8` lands with that handoff |
+| 8.4 FORMAT8 and corpus | DONE | 7c050ad; the `rowver_web` copy of `contract/v8` lands with the viewer handoff |
+| 9.1 FORMAT.md v9 review | DONE | filled by the next step (a commit cannot carry its own) |
+| 9.2 v9 code and corpus | | `rvr6.py` → `rvr.py` reading 9 only; page grammar deleted; presser writes v9; `contract/v9`; v6–v8 corpora and FORMAT7/8 deleted |
+| 9.3 docs sweep | | README, CONTEXT, docs/agents, docstrings: one version, no 6–8 references; memory note |
+| 9.4 recipe snapshot acceptance | | press a `cart.py`, reconstruct it from `made` alone, Derek judges side by side |
 
 A step that needs an undecided D-item is skipped, not blocked on: take the next
 step and say so in the report.
@@ -248,6 +252,79 @@ In order, each its own commit:
 Gate per commit: `python gate.py`, `sh wheel_gate.sh`, corpus sync, and a
 press of the 18-file tau skim set timed against the 82 s sequential baseline.
 
+### Step 9 — format v9: the cartridge is only the data (needs D9–D21)
+
+The decision record is `docs/handoffs/2026-09-11-rvr-is-only-data.md` (D9 to
+D20, the resulting header in full, the 14 review choices, D20's deletion
+list). Supersedes §2's "Keep both; FORMAT7 stays the delta. No module rename"
+and §1's Format row: there is one version, `rowver: 9`, and nothing reads 6,
+7, or 8. The `FORMAT.md` v9 draft is already in the working tree, unstaged.
+
+1. **9.1 review.** Read the handoff's "Status of step 1" section. Put each of
+   its 14 numbered choices to Derek (AskUserQuestion, a few per question) and
+   apply the verdicts to `FORMAT.md`; record them as D21 below. Apply D20:
+   drop every version 6 to 8 reference from the draft (intro history pointers,
+   §2.2's "versions 6 to 8 used", §8's "entered earlier versions", all of
+   §10 Versions); the retired-key rejection stays. Write
+   `docs/adr/0010-make-the-cartridge-only-the-data.md`: data plus statistics
+   plus recipe snapshot, consumer state under one top-level key, one current
+   version with no legacy readers because there are no users yet. Commit
+   `FORMAT.md`, the handoff, the ADR, and this plan together after the
+   review gate (docs-only diff, Codex still reviews).
+2. **9.2 code and corpus.** `git mv rowver/rvr6.py rowver/rvr.py`; `ROWVER =
+   9`, `VERSION = "9.0.0"`, no `READS`, no `KINDS` by version, no `version`
+   parameters. Delete `_cuts`, `_cut`, `_shown`, `_stage`, `_stage_kind`,
+   `_leaf`, `_plot`, `_board`, `_map`, `_grid`, `_bands`, `_region_cut`,
+   `_region_tree`, `_groups`, `_namespaced`, `_lumis`, `_look`, `_style`,
+   `_view`, `_tabs`, `_cats`, `effective`, `lumi_of`, `lock`, `unlock`, and
+   the constants `MAX_CHIPS`, `MAX_GRID_REGIONS`, `MAX_REGION_NODES`,
+   `LEAF_KINDS`, `LAYOUTS`, `LOCKABLE`, `NEUTRAL`, `NAMESPACES`. `_check`:
+   top level is `rowver`, `data`, `made`, consumer keys; `view`, `tabs`,
+   `opens_on`, `about` rejected; every `made` key required except `title`
+   and `note` (D21.2); `made.samples` a dict keyed by sample name equal to the data
+   names, `files` a dict keyed by UUID of `{file, tree, entries}` with no
+   path separator in `file`; `made.sha256` and `made.cart.sha256`
+   recomputed; `names` beside `vals` labels every value once; `vals`
+   uncapped by the format; the empty-column stub enforced for every kind.
+   `pack`: `labels` go to `data.cols[].names`; `made` in, `about` out;
+   `study_name` first; `MAX_CHIPS` becomes the presser constant `MAX_VALS`
+   (25, presser config, not format): `vals` is emitted only when the distinct
+   count is at most it, and the presser warns once per integer or `b1`
+   column it left without `vals`. `Cart` loses its `view` argument and the
+   `meta["view"].update` in `build`, with the test that pins the kwarg.
+   `press.py` `_provenance`: `study_name`, `title`, `note`, `by`, `built`,
+   `samples` keyed by name with `files` keyed by UUID (bare `file`, `tree`,
+   `entries`), no `columns`, `skimmed`, `cart.path`, `cart.mtime`; refuse two
+   files with one UUID in one sample; compute `made.sha256` last. `rvr.py`
+   `_main` (behind `cli.py check`) prints `made.study_name` instead of
+   `about.name`. `git rm FORMAT7.md FORMAT8.md contract/v6 contract/v7
+   contract/v8`; write `contract/v9/cases.json` (base header, buffer, values
+   every reader returns, header-path and buffer-patch cases with verdicts,
+   including a `made` whose `metadata` holds an integral float, a float
+   outside the no-exponent range, and `0.0`, for the `made.sha256` hazard) and
+   pin it in `tests/test_contract.py`. Every `rvr6` reference in `rowver`,
+   `tests`, `gate.py`, and `wheel_gate.sh` (which calls `rvr6.pack` with
+   `about`) follows the rename. `rowver_web` is NOT touched; in
+   `rowver_verification` only `check_corpus_sync.py` changes, to pair `v9`
+   in place of `v6`, with its `FROZEN.md` entry, and that gate stays red
+   until the viewer handoff (sequence item 4 of the handoff document) lands
+   `contract/v9` in `rowver_web`.
+3. **9.3 docs sweep.** `README.md`, `CONTEXT.md`, `docs/agents/*.md`,
+   `docs/product-status.md`, module docstrings, and `CLAUDE.md` if it names
+   a version: one format, `FORMAT.md`, no 6 to 8. ADRs 0001–0009 and the
+   dated handoffs stay as written. Memory note for future sessions.
+4. **9.4 acceptance.** Write a `cart.py` with two samples, a branch weight
+   and a Python weight, `keep` and `prepare` hooks, a labelled integer
+   column, a jagged copy; press it; from `made` alone reconstruct samples,
+   files by UUID with tree and entries, weights declarations, metadata,
+   hooks, recipe text and sha, and lay the reconstruction beside the
+   original. Derek judges; findings become a further step or close step 9.
+
+Gate per commit: `python gate.py` (the count drops well below 100 with the
+page grammar gone; record the new number), `sh wheel_gate.sh`, a press of
+`studies/jetmet_2018_simple`, and for 9.2 the 18-file tau skim press timed
+against the 82 s baseline. Codex adversarial rounds per `CLAUDE.md`.
+
 ## 5. Decisions Derek owns
 
 - **D1** Browser builder: delete, or relocate to `rowver_web`? **Decided 2026-09-10: delete** from both repositories; a page-only form generator was considered and rejected for lack of an audience.
@@ -256,6 +333,36 @@ press of the 18-file tau skim set timed against the 82 s sequential baseline.
 - **D4** Name of the receiving package in `rowver_verification` (`extract` vs `rowver_extract`). **Settled by step 2: `extract`.**
 - **D5** GitLab rowver#2 (hosted credentialed pressing): still open, or closed as
   out of scope now that the product is a local presser?
+- **D9–D20** The cartridge is only the data. **Decided 2026-09-11**; the full
+  text of each is in `docs/handoffs/2026-09-11-rvr-is-only-data.md`. In one
+  line each: D9 `view`/`tabs`/`opens_on` leave the file, statistics stay;
+  D10 `made.samples` keyed by name, `files` keyed by ROOT UUID, no paths;
+  D11 superseded by D20; D12 no cap on `vals`, presser warns; D13 FORMAT.md
+  rewritten whole; D14 retired keys rejected; D15 `about` folds into `made`
+  as `study_name` and `title`; D16 consumer state under one top-level key,
+  `cart.path`/`cart.mtime`/`skimmed` dropped; D17 `made.columns` dropped,
+  `data.cols[].source` is the provenance; D18 `made.sha256` over canonical
+  JSON; D19 file records keep the bare filename; D20 versions 6 to 8 are
+  deleted, nothing reads them, `rvr6.py` becomes `rvr.py`, ADRs and handoffs
+  stay as history. Also 2026-09-11: all thirteen percentiles p1–p99 are
+  required on every flat column.
+- **D21** The 14 choices the FORMAT.md draft made where D9–D20 were silent
+  (handoff, "Status of step 1"). **Decided 2026-09-11, step 9.1.** The draft's
+  position stands on every choice but two: (1) `about` rejected with the
+  other retired keys; (2) **the full snapshot is required**, not only
+  `study_name` and `sha256`: `by`, `built`, `samples`, `keep`, `prepare`,
+  `cart` are required (`prepare` and `cart` may be `null`), `title` and
+  `note` optional; (3) `made.cart.sha256` recomputed; (4) the v9 corpus
+  carries a `made` with a float-valued `metadata` field, implementations
+  that lose the lexeme verify from raw text; (5) `names` labels every
+  `vals` member exactly once; (6) `file` may not contain `/` or `\`; (7) a
+  consumer key's value is an object and the seven presser/retired names are
+  reserved; (8) sample and column names are two namespaces; (9) weight
+  direction rules are validated prose; (10) sample contiguity is presser
+  behaviour; (11) `by` is text; (12) key order is presser behaviour;
+  (13) the example consumer is written `"<tool>"`; (14) moot, FORMAT7/8 are
+  deleted by D20. Also ruled: the presser's `about.note` becomes optional
+  `made.note`, which D15 had not named.
 
 ## 6. Order and size
 
@@ -270,6 +377,7 @@ press of the 18-file tau skim set timed against the 82 s sequential baseline.
 | 6 | rowver | README rewrite | — |
 | 7 | rowver | comments only | after 2–5 |
 | 8 | rowver, web, verification | ~400 added, 4 commits | after 7, D6, D7 |
+| 9 | rowver | ~600 removed, ~200 changed, 4 commits | after 8, D9–D21; viewer handoff after 9.2 |
 
 Steps 3, 4, and 6 are independent once 2 has landed. Step 7 runs after them;
 step 8 after 7 so the format work lands on clean code.

@@ -1,15 +1,23 @@
-# `.rvr` 6 — the normative specification
+# `.rvr` 9 — the base specification
 
-This document is the standard. `rvr6.py check` and the browser's `check6` are the
-two reference validators; where prose and validator disagree, that is a defect in
-one of them, pinned by the shared corpus `contract/v6/cases.json` (byte-identical
-in both repositories). Rules marked *reader behaviour* describe what conforming
-readers DO with a value (clamping, defaulting) — the validators accept the wire
-value as written.
+A cartridge is a data product: the columns of a study, the statistics that
+describe their distributions, and a snapshot of the recipe that produced them.
+It knows nothing about any tool that reads it. This document is the whole
+standard for version 9. `rowver check` is the reference validator; independent
+implementations agree with it through the shared corpus
+`contract/v9/cases.json` (ADR 0004): a base header, its buffer, the values
+every reader must return, and cases that set header paths or patch buffer
+bytes and state the verdict. Where prose and validator disagree, that is a
+defect in one of them, pinned by the corpus.
 
-Version 6 is a FREEZE CANDIDATE (2026-08-28). Once the owner declares the lock,
-future changes may only ADD metadata under the extension policy below — no key
-may change meaning, type, or default.
+The reasons behind the rules are ADR 0010 and decisions D9 to D21 in
+`docs/plan-bare-bones-presser.md`; the handoff
+`docs/handoffs/2026-09-11-rvr-is-only-data.md` carries their full text.
+
+Rules marked *presser behaviour* describe what `rowver run` writes; the
+validators accept any wire value that satisfies the stated rule, not only the
+presser's choice. Rules marked *reader guidance* are advice to consumers and
+are not validated.
 
 ## 1. Container
 
@@ -17,275 +25,402 @@ may change meaning, type, or default.
 gzip( u32 little-endian header length | UTF-8 JSON header | column buffer )
 ```
 
-- Header length: `1 ≤ len ≤ 8_388_608` bytes (8 MiB). The header is UTF-8 JSON.
-- Number lexemes: an INTEGER-spelled lexeme (no `.`/`e`) must have magnitude
-  at most 2^53 — 2^53 is legal, anything beyond is refused, INCLUDING
-  even-valued integers a double could represent exactly (the cap is the rule,
-  not representability). Float-spelled lexemes are IEEE doubles by
-  definition (their nearest-double reading IS their value). Any lexeme
-  overflowing to infinity is refused. This is what makes additive metadata
-  round-trip-safe.
-- Column buffer: at most `1_073_741_824` bytes (1 GiB), little-endian throughout.
-- Compressed container cap in the browser: 512 MiB.
+- The header length is `1 ≤ len ≤ 8_388_608` bytes (8 MiB). The header is one
+  UTF-8 JSON object; every key is a string.
+- Number lexemes: an INTEGER-spelled lexeme (no `.`, no `e`) must have
+  magnitude at most 2^53. 2^53 itself is legal; anything beyond is refused,
+  INCLUDING even integers a double could represent exactly (the cap is the
+  rule, not representability). Float-spelled lexemes are IEEE doubles by
+  definition (their nearest-double reading IS their value). Any lexeme that
+  overflows to infinity is refused, and `NaN`, `Infinity`, and `-Infinity`
+  are not JSON. This rule is what makes additive metadata round-trip-safe
+  between implementations whose only number type is the double.
+- Strings: every string, escaped or not, must decode to Unicode scalar
+  values. An escape that spells an unpaired surrogate (`"\ud800"`) is
+  refused, since it has no UTF-8 encoding and no canonical digest (§5).
+- The column buffer is at most `1_073_741_824` bytes (1 GiB), little-endian
+  throughout, and follows the header immediately. Its length is declared in
+  `data.bytes` and must match exactly.
+- The gzip member's modification time is *presser behaviour*: zero, so that
+  pressing the same inputs twice gives the same bytes.
 
 ## 2. Header shape
 
-Top level: `rowver: 6` (required), optional `opens_on` (natural number; with
-empty `tabs` it must be `0`; otherwise `< tabs.length`), and exactly these five
-drawers, all REQUIRED (empty allowed where noted):
+Top level: `rowver: 9` (required), the two drawers `data` and `made` (both
+required objects), and any number of consumer keys (§2.1). Nothing else.
 
-| drawer  | type    | may be empty | holds |
-|---------|---------|--------------|-------|
-| `about` | object  | no (needs non-empty `name`) | study identity |
-| `data`  | object  | no  | immutable buffer geometry |
-| `view`  | object  | yes | settings shared by every tab |
-| `tabs`  | array   | yes | ordered page setups |
-| `made`  | object  | yes | provenance; emptying it never changes a plotted number |
+| key     | type   | written by | holds |
+|---------|--------|------------|-------|
+| `rowver`| `9`    | presser    | the version |
+| `data`  | object | presser    | buffer geometry, statistics, provenance, digests; never rewritten (W3) |
+| `made`  | object | presser    | the recipe snapshot: study identity, samples and their files, hooks, recipe text |
 
-Unknown keys: see §9 (extension policy).
+*Presser behaviour*: keys are emitted in the order `rowver`, `data`, `made`.
+Key order carries no meaning; writers preserve it (W2).
+
+### 2.1 Consumer keys
+
+State that belongs to a tool rather than to the data lives under ONE top-level
+key named for that tool, `"<tool>": {…}`; the presser never writes such a
+key, every writer preserves it (W4), and this sentence is the whole of the
+format's knowledge of it. The value is a JSON object, so the
+consumer owns a namespace rather than a slot. Consumer keys sit outside every
+digest in §5, and a consumer's key may not be `rowver`, `data`, `made`, or
+one of the retired names in §2.2. Nothing under a consumer key may change what
+the data drawer means.
+
+### 2.2 Retired keys
+
+A version 9 header carrying `view`, `tabs`, `opens_on`, or `about` at the top
+level is REJECTED. The rejection is what keeps a retired drawer from being
+written by habit: tool state belongs under a consumer key (§2.1) and study
+identity in `made` (§6).
 
 ## 3. `data` — the immutable drawer
 
-Never rewritten by any writer (W3). Keys:
+Never rewritten by any writer (W3). Keys, all REQUIRED unless marked:
 
-- `rows` — natural number of entries (events). One buffer row = one entry.
-- `bytes` — exact byte length of the column buffer. Must equal the sum of all
-  declared spans, and every span must fit inside it without overlap.
-- `weight_col` — string name of the weight column, or `null` for none.
-  When non-null, `weight_at` is required: an 8-aligned byte offset of a
-  contiguous `f8[rows]` array. The weight column name must not collide with a
-  data column name.
-- `sample_at` — 4-aligned byte offset of the per-row sample-index column:
-  `i4[rows]`, each value a valid index into `samples`. (It locates the
-  sample-membership array, NOT "where the data begins" — every column carries
-  its own offset.)
+- `rows` — natural number of entries (events). One buffer row is one entry;
+  event order is buffer order and never changes.
+- `bytes` — exact byte length of the column buffer. It must equal the sum of
+  every declared span (§4), and the spans must tile the buffer exactly.
+- `sha256` — SHA-256 of the whole column buffer, 64 lowercase hexadecimal
+  characters (§5).
+- `weight_col` — the weight column's name (non-blank text), or `null` when no
+  sample is weighted. When non-null, `weight_at` is required: an 8-aligned
+  byte offset of a contiguous `f8[rows]` array of finite values. When null,
+  `weight_at` must be absent. The weight column name must not equal any data
+  column name; it is not listed in `cols`.
+- `sample_at` — 4-aligned byte offset of the sample index, `i4[rows]`, each
+  value a valid index into `samples`, with the count of each value equal to
+  that sample's `rows`. It locates sample membership, not "where the data
+  begins"; every column carries its own offset. *Presser behaviour*: the rows
+  of each sample are contiguous and follow `samples` order. *Reader
+  guidance*: use the index, never assume contiguity.
 - `samples` — non-empty array of `{ name, rows, weighted }`:
-  - `name`: non-empty string, unique across samples AND across every
-    group/subgroup name (stage references are strings, so the namespace is one).
-  - `rows`: natural; the per-sample values must sum to `data.rows`.
-  - `weighted`: boolean. `false` means observed counts, never scaled.
-- `cols` — non-empty array of column records:
-  - `name`: non-empty unique string (same shared namespace).
-  - `kind`: `"f8"` or `"i4"` only. Width 8 or 4 bytes.
-  - `at`: byte offset, aligned to the column width; span `width × rows` must
-    fit the buffer and overlap nothing.
-  - `lim`: `[min, max]`, finite, `min ≤ max` — the measured extremes.
-  - `nice`: `[lo, hi]`, finite, must ENCLOSE `lim` — slider endpoints.
-  - `p1`, `p5`, `p10`, `p20`, `p30`, `p40`, `p50`, `p60`, `p70`, `p80`,
-    `p90`, `p95`, `p99`: finite exact whole-cart percentiles, computed by
-    the packer, all REQUIRED, ordered:
-    `lim[0] ≤ p1 ≤ … ≤ p99 ≤ lim[1]`. (Owner decision 2026-08-30: the
-    percentile ladder is wire content — the zoom feature reads
-    p80/p90/p95/p99 and readers no longer measure a missing quantile; the
-    rest are packed for future features at negligible header cost.)
-    An EMPTY column stamps thirteen zeros (with `lim` `[0, 0]`) — the
-    packer's stub, normative.
-  - `vals` (optional, `i4` only): the distinct values of a small categorical
-    column — unique integers, at most 25 (`MAX_CHIPS`). Its presence makes the
-    column categorical: cuts select values, plots bin one-per-value.
-  - `names` (optional beside `vals`): the packer's labels keyed by value —
-    carried metadata. Readers DISPLAY labels from `view.cats[col].names`
-    (§4), never from here; writers copy these into `cats` when creating the
-    view.
+  - `name`: non-blank text, unique among samples.
+  - `rows`: natural; the per-sample values sum to `data.rows`.
+  - `weighted`: boolean. `false` means observed counts, never scaled. When
+    any sample is weighted the file carries a weight column (*presser
+    behaviour*: unweighted samples hold weight 1.0 in it); when no sample is
+    weighted the file carries none (`weight_col: null`).
+- `cols` — non-empty array of column records (§3.1).
 
-## 4. `view` — shared page state
+### 3.1 Column records
 
-All optional unless noted.
+Every record has:
 
-- `groups` — `{ of: {sample→group}, sub: {sample→subgroup}, order: [group…] }`.
-  Referenced samples must exist; `order` lists top-level groups (may include an
-  empty group, so a destination can exist before members). Group and subgroup
-  names obey the one-namespace uniqueness rule. Nesting is exactly two levels:
-  a sample may carry a group, a subgroup, or both; subgroups never nest.
-- `cats` — per-column categorical metadata:
-  `{ colName: { names?: { value → label }, bands?: [{ label, vals, at? }] } }`.
-  `names` are the display labels for declared values (readers take labels from
-  HERE, not from `data.cols`); `bands` group declared values for cutting, with
-  per-column-disjoint `vals`.
-- `lumis` — `{ sample|sub|group: { name: number|null } }`. Positive finite or
-  `null`; names must exist in their namespace. The outermost configured tier
-  wins (group over subgroup over sample).
-- `look` — `{ sample|sub|group: { name: style } }`. A style is an object; the
-  modeled keys are:
-  - `colour`: `"#rrggbb"` exactly (6 hex digits).
-  - `draw`: `"bars"` | `"points"`.
-  - `dash`: `"solid"` | `"dash"` | `"dot"` (bars only; absent = solid).
-  - `lw`: number, `0 < lw ≤ 32` — this source's own line width.
-  - `errstyle`: `"ticks"` | `"none"` (points only).
-  - `binwidth_indicator`: boolean. An explicit value wins. When absent, the
-    Viewer defaults points with `errstyle: "none"` to `false` and points with
-    absent/`"ticks"` errstyle to `true`; bars preserve the value latently but
-    never render the indicator. Python matplotlib rendering is deferred.
-  - `role`: `"signal"` | `"background"` | `"data"` — stored and preserved,
-    read by nothing since 2026-08-28 (kept for round-trip fidelity).
-  Unknown keys inside a style object currently RIDE THROUGH unvalidated (an
-  open interior; see §9's pending decision).
-- `label` — `{ exp, tag, right }` strings: the experiment strip. *Reader
-  behaviour*: malformed shapes are ignored, not refused.
-- `fom` — `[numerator, denominator]` group names for the figure-of-merit
-  pair. *Reader behaviour*: malformed shapes read as unset.
-- `syst` — the ZBi relative systematic, number or numeric string; *reader
-  behaviour*: a garbled value reads as the default `0.05`, never as `0`.
-- `shown` — array of sample names to draw; absent = all shown. (Also valid
-  per-tab; a locked `view.shown` is the shared truth.)
-- `cuts`, `stage` — when present in `view`, these LOCK the concern: every tab
-  shows the shared copy and each tab's own copy lies dormant
-  (promote-and-shadow; unlocking restores the dormant copies).
-- `prefs`:
-  - `theme`: `"professional"` | `"graphite"` | `"cgb"` | `"pocket"`. The
-    retired wire value `"retro"` reads as `"cgb"` and migrates on an edited
-    save while surviving a no-op save byte-for-byte. Unknown theme ids ride
-    through saves untouched.
-  - `textScale`: display size hint (string).
-  - `exportScale`: PNG export scale, number 1–8.
+- `name`: non-blank text, unique among columns and different from
+  `weight_col`.
+- `kind`: the storage dtype (§3.2).
+- `at`: byte offset of the column's span (for `jagged`, of its offsets span),
+  aligned to the kind's element width; a `b1` span is byte-aligned.
+- `sha256`: SHA-256 of the column's bytes (§5).
+- `source` (optional): provenance (§3.4).
 
-## 5. `tabs`
+A flat record (any kind but `jagged`) also carries the statistics of §3.3. A
+`jagged` record carries `content` instead (§3.5). Unknown keys on a column
+record ride as metadata (§8).
 
-Each entry: `{ name, cuts?, chips?/shown?, stage?, plot?, … }`.
+### 3.2 Kinds
 
-- `name`: non-empty string, unique among tabs.
-- `cuts`: keyed by column NAME (the page keys its internal state by index;
-  the wire never does): `{ colName: [lo, hi] }` for continuous columns
-  (inclusive; `null` opens one end) and `{ colName: { "in": [values…] } }`
-  for categorical columns (declared values only). Present-but-`null` cuts
-  are invalid.
-- `shown`: as in `view`.
-- `plot`: DEFAULTS merged into every plot leaf of this tab's stage. Any plot
-  key is legal here; `srcs`/`mute` obey the same rules as on a leaf (below).
-- `stage`: ordered array of leaves and blocks (never `null`):
-  - Leaf kinds: `1d`, `2d`, `3d`, `board`, `map`.
-  - `block`: `{ kind: "block", cells: [leaf|null ×1–6], layout }` with layout
-    one of `[6] [3,3] [2,2,2] [3,3,6] [6,3,3] [3,3,3,3] [2,2,2,2,2,2]`;
-    blocks never nest; at least one cell is non-null.
-  - At most one `board` and one `map` per effective stage.
+`kind` names the little-endian storage type and its width in bytes:
 
-### 5.1 Plot leaves (`1d`/`2d`/`3d`)
+| kind | type | width |
+|---|---|---|
+| `f8`, `f4` | IEEE float | 8, 4 |
+| `i8`, `i4`, `i2`, `i1` | two's-complement integer | 8, 4, 2, 1 |
+| `u8`, `u4`, `u2`, `u1` | unsigned integer | 8, 4, 2, 1 |
+| `b1` | one bit per event, packed (§3.2.1) | 1 bit; the span is `ceil(rows / 8)` bytes |
+| `jagged` | one list of numbers per event (§3.5) | two spans |
 
-- `varx` required, and `vary` for `2d`/`3d` — must name declared columns.
-- `srcs` (optional): the sources THIS plot draws — unique known source names
-  (sample/subgroup/group namespace). Absent = every shown source (the meaning
-  of every file from before the key). `[]` is a real state: an empty skeleton.
-  A name that is not currently a top-level drawn source is INERT, not invalid
-  (grouping is runtime-mutable; the name may return).
-- `mute` (optional): sources kept in the plot's panel but drawn as nothing.
-  Same validation as `srcs`.
-- Binning: `nb` (*reader behaviour*: clamped to 2–200, default 40), `nby`
-  (2D/3D; absent = follows `nb`, same clamp), `binspace`/`binspacey`:
-  `"lin"`|`"log"`; absent = follow the log-axis flag. Validators accept any
-  number on the wire; the clamps are how readers draw them.
-- Axes: `logx/logy/logz` booleans; `xauto/yauto/zauto` booleans (absent =
-  auto); `xmin/xmax/ymin/ymax/zmin/zmax` numbers or numeric strings — a manual
-  range is the HISTOGRAM range (overflow folds into end bins per `oflow`).
-- `oflow`: absent/`true` piles overflow into end bins; `false` drops it.
-- `norm`: `"yield"` (default) | `"shape"`.
-- `err`: `"off"` | `"sumw2"` | `"sqrtn"` | `"poisson_neff"` | `"poisson_raw"`.
-- Pull (1D only): `pull` boolean — draws only when a points source faces
-  bars; `pullref` (bars-source name or absent = the stack), `pullh` (*reader
-  behaviour*: clamped 12–45, % of figure), `pmax` (σ window, default 5),
-  `pulltitle`, `pullband` (absent = on).
-- Dressing: `stack`, `legend`, `legendmax` (≥2), `legendpos`
-  (`below`|`right`|`float`), `legendxy`, `frame`, `inward`, `gridx/gridy`,
-  `xtitle/ytitle`, `x/yticksize`, `x/ytitlesize`, `padauto/padl/padb`,
-  `lw`, `ms`, `fillop` (0–100), `explabel`, `showcuts`, `cmt`, `backend`
-  (`root`|`plotly`), `aspect` (`free`|`16:9`|`3:2`|`4:3`|`1:1`), `wfrac`
-  (30–100), `hpx` (200–900), `rootui`.
-- Block membership: `sheet`, `quad`, `layout`, `shared` — see §5 block rules;
-  `shared` broadcasts the whitelisted styling keys across the block.
-- Carried legacy keys — modeled by readers, unvalidated, preserved on save:
-  `span`, `pmin`, `decouple`, `compare`, `d3style`, `layer`, `layer2`, `view`,
-  `cmpmode`, `titles`, `anno`, `drawcol`, `draw`, `lines`, `merge`.
+Every span is aligned to its element width; `b1` spans are byte-aligned. Float
+payloads are finite: a NaN or infinity anywhere in a float column, in float
+jagged content, or in the weights is a format error.
 
-### 5.2 `board`
+*Presser behaviour*: a **copied** branch is stored in the common NumPy dtype of
+every chunk read, so `kind` and `source.dtype` name the same type for every
+copy (`f4` and `float32`, `u8` and `uint64`, `b1` and `bool`). A copy whose
+chunks have no exact common dtype (a 64-bit integer beside a float, or `uint64`
+beside a signed integer) is refused at press time. A **derived** column is
+promoted to `f8`, `i4`, or `b1`: booleans in every populated sample give `b1`,
+integers within int32 give `i4`, anything else gives `f8`, and an integer
+outside int32 must still fit within ±2^53. Empty samples never force a
+populated column to widen; if every sample is empty the declared array dtypes
+decide. Readers accept any kind on any column regardless of `source`.
 
-`rows`/`cols` integers 1–4 (default 2×2); `cells` at most `rows × cols`
-entries, each `null` or a known source; `bkgs` unique known sources;
-`channel`: `"yield"`|`"metrics"`; `err`: the uncertainty enum above (default
-`poisson_neff`); `met`: unique subset of `["sob","sig","zbi"]` (absent = all).
+#### 3.2.1 Packed booleans
 
-### 5.3 `map`
+Event `i` of a `b1` span at `at` is bit `i % 8`, least significant bit first,
+of byte `at + floor(i / 8)`; false is 0 and true is 1. Bits continue across
+sample boundaries. Unused high bits of the final byte MUST be zero. An empty
+column occupies zero bytes. A validator checks the tail bits and finds `lim`
+and `vals` from the packed bytes without unpacking.
 
-`srcs`/`bkg` unique known sources; `sig` a known source; `floor` ≥ 0;
-`metric`: `"yields"`|`"sb"`|`"zbi"`|`"neff"`; `flip` boolean; `view`: a free
-string riding as metadata — `"bubbles"` selects the map face, anything else
-reads as the yields table. `grid`: `{ vars: [{col, bands}], exhaustive? }`
-with ≤ 32 variables, ≤ 64 bands each, product of `(bands+1)` ≤ 4096 regions.
-A band entry is EITHER a finite numeric threshold (thresholds strictly
-increase) or a list — a disjoint non-empty set of declared categorical values
-(≤ 25); the validators type-check each entry by its own shape, so the editor,
-not the wire, keeps thresholds off categorical columns. `root`: a binary
-region tree of `{ cut: {col, lt|in}, yes, no }` nodes, depth ≤ 64, ≤ 8192
-nodes; an absent or `null` child is a leaf (a node may have none).
+### 3.3 Statistics (flat columns)
 
-## 6. `about` and `made`
+These are facts about the column's distribution, written by the presser and
+carried for every consumer that draws or cuts on the data. All REQUIRED on a
+flat column:
 
-`about` requires a non-empty string `name`; `title` and other keys are free
-identity metadata. `made` is provenance with a PARTIALLY VALIDATED core:
-when present, `samples` must be records whose `name` and `rows` MATCH
-`data.samples` one-to-one (each with `files` `[{path, tree}]`, `metadata`,
-and a `weights` declaration — `{kind: "branch", value}`, `{kind: "python",
-name}`, or none), and the source-carrying fields (`keep`, `prepare`,
-`columns`, `cart`) are shape-checked. `built` is type-checked
-(text) when present; the remaining conventional keys — `skimmed` (ISO
-timestamp by convention), `by`, `merged` — ride as metadata, NOT validated. Additional keys ride as metadata. Neither drawer may influence a plotted number.
+- `lim`: `[min, max]` as float64, finite, `min ≤ max`. Validators compare it
+  with the payload: it must equal the observed extremes exactly when the
+  column has rows. For `b1` the extremes are the numeric 0 and 1 that occur.
+- `nice`: `[lo, hi]`, finite, and it must ENCLOSE `lim`: `lo ≤ lim[0]` and
+  `lim[1] ≤ hi`. It is a rounded outer range for display. *Presser behaviour*:
+  outward to two significant digits, snapped to integers for integer and `b1`
+  kinds, and widened to `lo + 1` when the two ends coincide; only the
+  enclosure is normative.
+- The percentile ladder: `p1`, `p5`, `p10`, `p20`, `p30`, `p40`, `p50`,
+  `p60`, `p70`, `p80`, `p90`, `p95`, `p99`. ALL THIRTEEN are REQUIRED on
+  every flat column, whatever its kind; a record missing any one of them is
+  a format error, and no subset (a median alone, a `p50` and `p90` pair) is
+  a conforming ladder. Each is a finite percentile over EVERY row of the
+  column (not a sample), computed on a float64 view of the values, and the
+  ladder is ordered: `lim[0] ≤ p1 ≤ p5 ≤ … ≤ p95 ≤ p99 ≤ lim[1]`. Validators
+  check presence, finiteness, and the chain, not the values. *Presser
+  behaviour*: linear interpolation between order statistics. The whole ladder
+  is stored so that a tool that needs a quantile reads it rather than
+  re-measuring the column; the header cost is thirteen numbers per column.
 
-## 7. The column buffer
+An EMPTY column (zero rows) carries exactly `lim: [0, 0]`, `nice: [0, 1]`,
+thirteen zero percentiles, and for integer and `b1` kinds `vals: []`. The stub
+is normative for every kind: validators enforce it in place of the observed
+extremes.
 
-Contiguous little-endian arrays at the declared offsets: each data column
-(`f8`/`i4`), the optional weight column (`f8` at `weight_at`), and the sample
-index (`i4[rows]` at `sample_at`, values `0 ≤ v < samples.length`, with the
-per-sample row counts matching `samples[].rows`). Spans must tile `data.bytes`
-exactly — no gaps, no overlaps. Readers may copy the buffer to obtain 8-byte
-alignment; writers pass it through untouched (W3).
+An integer column with a value beyond 2^53 in magnitude keeps `lim` only as
+exactly as float64 allows, spells that `nice` bound as a float, and carries no
+`vals` (§3.3.1 requires integer-spelled members, which §1 caps at 2^53).
 
-## 8. The writer contract
+#### 3.3.1 `vals` and `names`
 
-- **W1 — merge, never rebuild.** A writer starts from the header exactly as it
-  arrived and merges edits into it. Rebuilding any object from a literal is
+- `vals` (optional; integer and `b1` kinds only, never on a float kind): the
+  COMPLETE list of distinct values in the column, unique integers in ascending
+  order. Validators compare it with the payload. Its presence declares that
+  the column takes values from a known finite set, which a consumer may treat
+  as categories. The format sets no cap on its length beyond the header limit
+  of §1; *presser behaviour*: the presser enumerates an integer or `b1`
+  column only when its distinct count is at most a threshold of the presser's
+  own, and warns at press time about each column it therefore left without
+  `vals`. Consumers decide what is small enough to show.
+- `names` (optional; requires `vals`): labels keyed by value, each key the
+  decimal spelling of a member of `vals` and each label text, for example
+  `{"11": "electron", "13": "muon", "15": "tau"}`. Every member of `vals` is
+  named exactly once. `names` is the one place labels live; there is no other.
+
+### 3.4 Provenance
+
+`source` is optional on any column, for columns the presser could not
+observe. When present it is one of:
+
+- `{"class": "copy", "branch": <text>, "dtype": <text>}`: the column is the
+  named branch, unchanged, read as the named NumPy dtype.
+- `{"class": "derived", "from": [<branch>…], "reproducible": "cartridge" |
+  "source", "python": <text>}`: the column was computed from the listed
+  branches (distinct, non-empty names; branches, not columns). `cartridge`
+  means every input branch is itself a copy in this file; `source` means the
+  ROOT files are needed. `python` is the text of the hook or hooks that
+  produced it, including which branches the hook actually read.
+
+Validators check the shape only. Nothing in `source` is executed, and nothing
+is cross-checked against the buffer or against `made`. The recipe's own
+declarations are in `made.cart.source` (§6), verbatim; `source` records what
+the presser observed.
+
+### 3.5 Jagged columns
+
+A column that holds one list of numbers per event has `kind: "jagged"`, an
+`at`, and a `content` object; it is two spans:
+
+- **offsets** at `at`: `i8[rows + 1]`, 8-aligned. `offsets[0]` is 0, the
+  sequence never decreases, and `offsets[rows]` equals `content.count`. Event
+  `i` owns `content[offsets[i] : offsets[i + 1]]`.
+- **content** at `content.at`: `content.count` values of `content.kind`, any
+  kind except `jagged`, aligned to its width; `b1` content packs per §3.2.1
+  with `content.count` bits and zero tail bits; float content is finite.
+
+Items follow event order, so lists continue across sample boundaries and the
+sample index locates each event's list. One level only: an item is a number.
+Weights are per event; a consumer that wants a weight per item repeats the
+event's weight over its slice. A jagged column carries no `lim`, `nice`,
+percentiles, `vals`, or `names`; validators ignore any that appear. *Reader
+guidance*: a consumer that wants one value per event skips the kind and
+preserves its bytes on save; others rebuild the lists from the two spans.
+
+## 4. The column buffer
+
+Contiguous little-endian arrays at the declared offsets: the optional weight
+column (`f8[rows]` at `weight_at`), the sample index (`i4[rows]` at
+`sample_at`), every flat column, and both spans of every jagged column. The
+buffer length equals:
+
+```text
+rows × (4 + (8 if weights are present else 0))
++ sum over flat columns of (rows × width, or ceil(rows / 8) for b1)
++ sum over jagged columns of (8 × (rows + 1) + content bytes by the same rule)
+```
+
+All spans must be in bounds and non-overlapping, and together fill the buffer.
+There are no padding bytes.
+
+*Presser behaviour*: weights first, then every span four bytes or wider from
+widest to narrowest (a jagged column's offsets and content are two spans,
+placed by their own widths), then the sample index, then spans narrower than
+four bytes widest first, then packed bits; spans of equal width keep the
+study's declaration order. Any row count therefore leaves every span aligned.
+Column descriptors keep declaration order. *Reader guidance*: use offsets and
+never assume physical block order. Readers may copy the buffer to obtain
+8-byte alignment; writers pass it through untouched (W3).
+
+The 1 GiB limit applies to the whole packed buffer, jagged content included.
+Pressing, including parallel pressing, accounts for packed spans in its running
+size check.
+
+Validators read the payload against its descriptors: sample index range and
+per-sample counts, finite weights and floats, zero tail bits, `lim` and `vals`
+of every flat column against the observed values, and the digests of §5.
+
+## 5. Digests
+
+Four digests are simple proofs of three things: the bytes (whole and per
+column), the recipe text, the provenance record. Each is 64 lowercase
+hexadecimal characters of SHA-256.
+
+- `data.sha256` — of the whole column buffer. REQUIRED.
+- `data.cols[].sha256` — of one column's bytes; for a jagged column, the
+  offsets span followed by the content span. REQUIRED on every column.
+- `made.cart.sha256` — of the UTF-8 encoding of `made.cart.source`, the
+  recipe text. REQUIRED when `made.cart` is an object.
+- `made.sha256` — of the canonical JSON of `made` with the `sha256` key
+  itself absent. REQUIRED. Canonical JSON is: object keys sorted by Unicode
+  code point at every level, no whitespace (`,` and `:` as the only
+  separators), strings escaped only where JSON requires it with non-ASCII
+  characters kept as UTF-8, integers as their decimal digits, floats in the
+  grammar of Python's `repr(float)`: the shortest digits that round-trip,
+  written without an exponent when `1e-4 ≤ |x| < 1e16` or `x` is a zero
+  (`0.0`, `-0.0`), and otherwise as `d.ddde±XX` with a signed exponent of at
+  least two digits, an integral value keeping `.0` (`1.0` stays `1.0`,
+  `1e16` is `1e+16`, `1e-5` is `1e-05`), the whole encoded as UTF-8. This is
+  Python's
+  `json.dumps(made, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`;
+  a serializer of another language reproduces this grammar rather than its
+  own (JavaScript's `JSON.stringify` writes `10000000000000000` and
+  `0.00001` for the two examples).
+  The digest covers every key in `made`, including extension keys (§8).
+  An implementation whose parsed numbers lose the integer/float lexeme
+  distinction (`1.0` read as `1`) cannot recompute the digest from a parsed
+  header when `made` holds a float-valued field; it verifies the digest from
+  the raw header text instead. `contract/v9/cases.json` carries a `made`
+  whose `metadata` holds float-valued fields: an integral float, one
+  outside the no-exponent range, and a zero, so that every implementation
+  meets each case.
+
+Validators recompute all four on read and on write; a mismatch is a format
+error. A save that preserves the buffer needs no new data digests. The
+digests prove that a file agrees with itself, not that it is the file the
+presser wrote: a writer that alters the buffer, its statistics, and every
+digest together produces a self-consistent file, and only comparison with the
+original's `data.sha256` detects it. That is why W3 forbids it rather than a
+validator refusing it. A writer that changes anything in `made` recomputes
+`made.sha256`. Consumer keys (§2.1) are outside all four.
+
+## 6. `made` — the recipe snapshot
+
+`made` is what the recipe declared and what the presser did, enough to lay the
+snapshot beside the original `cart.py` and judge them consistent. Nothing in
+it changes the meaning of a stored number. The snapshot is REQUIRED in full:
+every key below is required unless marked optional, and a `made` missing one
+is a format error. A writer that changes any of them recomputes the digest
+(§5).
+
+- `study_name` — REQUIRED, non-blank text. *Presser behaviour*: the first key
+  of `made`.
+- `title` — optional text.
+- `note` — optional text, free prose the recipe attached to the study.
+- `by` — REQUIRED text naming the presser and its version, for example
+  `"RowVer 9.0.0"`.
+- `built` — REQUIRED text, an ISO 8601 UTC timestamp by convention.
+- `sha256` — REQUIRED (§5).
+- `samples` — REQUIRED object keyed by sample name. Its keys must equal the
+  set of `data.samples[].name`. Each value is an object with three REQUIRED
+  keys:
+  - `files`: object keyed by ROOT file UUID (text; the version 1 `TUUID`
+    every ROOT file carries in its header, unique across files, preserved by
+    a byte copy, replaced by any re-skim or merge). Each value is
+    `{ file, tree, entries }`: `file` the bare filename (non-blank text with
+    no `/` or `\`; no directory is ever stored), `tree` the tree name
+    (non-blank text), `entries` the tree's entry count (natural). The object
+    shape makes two files with one UUID in one sample unrepresentable;
+    *presser behaviour*: such a pair is refused at press time. The same UUID
+    may appear under two samples.
+  - `weights`: a source declaration (below) or `null` for unweighted.
+  - `metadata`: object, the recipe's per-sample metadata minus `weights`.
+    Free content under §1's number rule.
+- `keep` — REQUIRED; a source declaration, never `null`.
+- `prepare` — REQUIRED; a source declaration, or `null` when the recipe has
+  none.
+- `cart` — REQUIRED; `{ sha256, source }` with `source` the whole recipe text
+  and `sha256` its digest (§5), or `null` when the recipe was not loaded from
+  a file. No path or modification time is stored.
+
+A **source declaration** is `{"kind": "branch", "value": <non-empty text>}`
+or `{"kind": "python", "name": <text>, "doc": <text>, "source": <text>}`,
+the latter carrying a callable's name, docstring, and source text. Nothing in
+`made` is executed.
+
+Unknown keys in `made` and in its records ride as metadata (§8) and are
+covered by `made.sha256`.
+
+## 7. The writer contract
+
+- **W1 — merge, never rebuild.** A writer starts from the header exactly as
+  it arrived and merges edits into it. Rebuilding any object from a literal is
   the defect class that silently drops keys.
 - **W2 — a no-op save is a fixed point.** Saving without edits re-emits the
-  writer's canonical serialization of the UNCHANGED header: every key and
-  value preserved (even the retired `"retro"` theme; it migrates only on an
-  edited save), and saving a writer's own output again is byte-identical.
-  Member ORDER is preserved up to the host's canonical enumeration —
-  JavaScript sorts integer-like object keys first, so such keys may reorder
-  on the FIRST save; after that the order is fixed.
+  writer's canonical serialization of the UNCHANGED header, every key and
+  value preserved, and saving a writer's own output again is byte-identical.
+  Member order is preserved up to the host's canonical enumeration: a host
+  whose object enumeration sorts integer-like keys first (as `names` keys are)
+  may reorder them on the FIRST save; after that the order is fixed.
   Third-party formatting (pretty-printing, key spacing) canonicalizes on the
-  first save; strengthening W2 to raw-byte retention is on the pre-lock list.
+  first save.
 - **W3 — `data` is never written.** The drawer is immutable and the column
-  buffer passes through as the same bytes.
+  buffer passes through as the same bytes, so `data.sha256` and every column
+  digest are constant for the life of the file.
 - **W4 — unknown keys survive.** A key the writer has never heard of survives
-  a save wherever the extension policy (§9) admits it.
+  a save wherever the extension policy (§8) admits it. Consumer keys (§2.1)
+  are the first case: a writer that is not that consumer carries the key
+  through untouched.
+- **W5 — a changed `made` is re-digested.** A writer that edits `made`
+  recomputes `made.sha256`; one that does not touch `made` leaves the digest
+  alone and re-emits `made` with every number lexeme as it arrived, so the
+  digest still verifies. A host whose serializer cannot keep `1.0` distinct
+  from `1` (W2's canonicalization) splices the original JSON text of `made`
+  into its output instead of re-serializing it.
 
-## 9. Extension policy (additive metadata)
+## 8. Extension policy (additive metadata)
 
-Frozen-format changes are ADDITIVE ONLY, in these places:
+Changes within version 9 are ADDITIVE ONLY, in these places:
 
-- Any new key at the top level, inside `about`, `made`, `view.prefs`, on a tab
-  entry, or on any stage leaf/block — readers preserve and ignore them.
-- New OPTIONAL keys on existing modeled objects require a spec revision here
-  plus corpus cases in both repos before any writer emits them (as `srcs`,
-  `mute`, `dash`, `lw` were added; the percentile ladder entered this way
-  before being promoted to REQUIRED on 2026-08-30).
-- Closed interiors: `view.lumis` tiers, region-tree nodes, and categorical
-  cut objects validate strictly — new keys there are a spec revision, not
-  free metadata. `view.look` styles validate their KNOWN keys strictly but
-  let unknown keys ride (§4) — an open interior until the owner decision
-  below lands.
-- [OWNER DECISION PENDING 2026-08-28]: whether to additionally freeze one
-  designated `extensions` container at top level as the sole future home for
-  free-form metadata. Until decided, put new free metadata at top level.
-- Extension values must obey §1's number-safety rule.
+- A new top-level key is a consumer key (§2.1) and needs no spec change.
+- New keys inside `made`, on a `made.samples` record, on a file record, or on
+  a column record ride as metadata: readers preserve and ignore them. Making
+  such a key MODELED (validated, or read by the presser or `rowver check`)
+  requires a revision of this document plus cases in `contract/v9/cases.json`
+  before any writer emits it.
+- No key may change meaning, type, or default within the version.
+- A revision that removes or redefines a key is a new version number.
+- Extension values obey §1's number-safety rule.
+- The 2026-08-28 question of a designated `extensions` container is closed by
+  §2.1: free metadata that belongs to a tool lives under that tool's key;
+  free metadata about the data belongs in `made`.
 
-## 10. Limits (both validators)
+## 9. Limits
 
 | limit | value |
 |---|---|
 | header bytes | 8 MiB |
 | column buffer | 1 GiB |
-| categorical values / band members | 25 |
-| block cells | 1–6, layouts as listed |
-| board | ≤ 4 × 4 |
-| grid variables / bands / regions | 32 / 64 / 4096 |
-| region tree depth / nodes | 64 / 8192 |
-| bins per axis | 2–200 (*reader clamp*, not validated — §5.1) |
-| tabs `opens_on` | `< tabs.length` (0 when empty) |
+| integer lexeme magnitude | 2^53 |
+| `vals` length | unbounded by the format |
+| samples, columns | at least one each; otherwise unbounded |
