@@ -18,7 +18,6 @@ import multiprocessing
 import os
 import signal
 import threading
-from copy import deepcopy
 from datetime import datetime, timezone
 from multiprocessing.connection import wait
 from pathlib import Path
@@ -29,7 +28,7 @@ import awkward as ak
 import numpy as np
 import uproot
 
-from . import rvr6
+from . import rvr
 
 STUDIES = Path("studies")
 RESERVED_META = frozenset({"sample", "file", "tree"})
@@ -84,6 +83,19 @@ def _open_tree(path: str, tree: str):
     options = ({"handler": uproot.source.xrootd.XRootDSource}
                if path.startswith("root://") else {})
     return uproot.open({path: tree}, **options)
+
+
+def _basename(path: str) -> str:
+    """The bare file name of a local path or a URL, without directory, query, or fragment."""
+    return Path(urlsplit(path).path if _remote(path) else path).name
+
+
+def _claim_uuid(claimed: dict[tuple[str, str], str], sample: str, uuid: str, path: str) -> None:
+    """Refuse a second file of one sample with the same ROOT UUID."""
+    first = claimed.setdefault((sample, uuid), path)
+    if first != path:
+        raise CartError(f'sample "{sample}" lists two files with UUID {uuid}: '
+                        f'{_redacted_source(first)} and {_redacted_source(path)}')
 
 
 def _redacted_source(path: str) -> str:
@@ -357,27 +369,27 @@ def _read_dtype(seen: set[str]) -> np.dtype | None:
     return dtype
 
 
-def _flat(column: np.ndarray | rvr6.Jagged) -> np.ndarray:
+def _flat(column: np.ndarray | rvr.Jagged) -> np.ndarray:
     """The values a column stores: a Jagged's content, else the array itself."""
-    return column.content if isinstance(column, rvr6.Jagged) else column
+    return column.content if isinstance(column, rvr.Jagged) else column
 
 
-def _cast(column: np.ndarray | rvr6.Jagged, dtype: np.dtype) -> np.ndarray | rvr6.Jagged:
+def _cast(column: np.ndarray | rvr.Jagged, dtype: np.dtype) -> np.ndarray | rvr.Jagged:
     """The column with its values in ``dtype``."""
-    if isinstance(column, rvr6.Jagged):
-        return rvr6.Jagged(column.counts, column.content.astype(dtype, copy=False))
+    if isinstance(column, rvr.Jagged):
+        return rvr.Jagged(column.counts, column.content.astype(dtype, copy=False))
     return column.astype(dtype, copy=False)
 
 
-def _joined(pieces: list, where: str) -> np.ndarray | rvr6.Jagged:
+def _joined(pieces: list, where: str) -> np.ndarray | rvr.Jagged:
     """Concatenate one column's chunks; populated chunks decide the dtype, and an empty flat chunk never decides the shape."""
-    lists = [piece for piece in pieces if isinstance(piece, rvr6.Jagged)]
-    flat = [piece for piece in pieces if not isinstance(piece, rvr6.Jagged)]
+    lists = [piece for piece in pieces if isinstance(piece, rvr.Jagged)]
+    flat = [piece for piece in pieces if not isinstance(piece, rvr.Jagged)]
     if lists and any(piece.size for piece in flat):
         raise CartError(f"{where} is one value per event in some chunks and one list per event in others")
     if lists:
-        return rvr6.Jagged(np.concatenate([piece.counts for piece in lists]),
-                           _joined([piece.content for piece in lists], where))
+        return rvr.Jagged(np.concatenate([piece.counts for piece in lists]),
+                          _joined([piece.content for piece in lists], where))
     populated = [piece for piece in flat if piece.size]
     return np.concatenate(populated or flat) if flat else np.empty(0, dtype=np.float64)
 
@@ -404,9 +416,9 @@ class _Capacity:
                        for entry in cart.fileset.values())
         self.row_bytes = 4 + (8 if weighted else 0)
 
-    def observe(self, sample: str, name: str, column: np.ndarray | rvr6.Jagged, derived: bool) -> None:
+    def observe(self, sample: str, name: str, column: np.ndarray | rvr.Jagged, derived: bool) -> None:
         """Record one chunk of a column as pack will see it: its shape, its dtype, and for populated integers their range."""
-        if isinstance(column, rvr6.Jagged):
+        if isinstance(column, rvr.Jagged):
             self.lists.add(name)
         column = _flat(column)
         self.read[name].add(str(column.dtype))
@@ -449,11 +461,11 @@ class _Capacity:
             packed += (values * self._bits(name) + 7) // 8
             if name in self.lists:
                 packed += 8 * (self.rows + 1)
-        if packed > rvr6.MAX_DATA_BYTES:
+        if packed > rvr.MAX_DATA_BYTES:
             raise CartError(
                 f"the kept rows no longer fit the cartridge: "
                 f"{self.rows:,} rows need {packed} bytes, exceeding the "
-                f"{rvr6.MAX_DATA_BYTES}-byte column limit (reached in "
+                f"{rvr.MAX_DATA_BYTES}-byte column limit (reached in "
                 f'sample "{sample}") — tighten KEEP or trim the fileset')
 
     def _bits(self, name: str) -> int:
@@ -515,13 +527,13 @@ def _one_dimensional(value: Any, where: str, *, boolean: bool = False) -> np.nda
     return out
 
 
-def _column(value: Any, where: str) -> np.ndarray | rvr6.Jagged:
+def _column(value: Any, where: str) -> np.ndarray | rvr.Jagged:
     """One value per event as a NumPy array, or one list of numbers per event as a Jagged."""
     if not isinstance(value, ak.Array) or value.ndim != 2:
         return _one_dimensional(value, where)
     counts = _one_dimensional(ak.num(value, axis=1), where)
-    return rvr6.Jagged(counts.astype(np.int64, copy=False),
-                       _one_dimensional(ak.flatten(value, axis=1), where))
+    return rvr.Jagged(counts.astype(np.int64, copy=False),
+                      _one_dimensional(ak.flatten(value, axis=1), where))
 
 
 def _raise_parallel_error(kind: str, text: str) -> None:
@@ -645,14 +657,12 @@ class Cart:
                  columns: Mapping[str, str | Callable[..., Any]],
                  keep: Callable[..., Any], prepare: Callable[..., Any] | None = None,
                  labels: Mapping[str, Mapping[Any, str]] | None = None,
-                 view: Mapping[str, Any] | None = None,
                  title: str | None = None, note: str | None = None):
         self.fileset = {name: dict(entry) for name, entry in fileset.items()}
         self.columns = dict(columns)
         self.keep = keep
         self.prepare = prepare
         self.labels = dict(labels or {})
-        self.view = deepcopy(dict(view or {}))
         self.title = title
         self.note = note
         self.name: str | None = None
@@ -745,6 +755,9 @@ class Cart:
         for sample, entry in self.fileset.items():
             if not entry["files"]:
                 raise CartError(f'sample "{sample}" matched no files')
+            for path in entry["files"]:
+                if "\\" in _basename(path):
+                    raise CartError(f'sample "{sample}" file {path!r} has a backslash in its name')
             metadata = entry["metadata"]
             collision = RESERVED_META & set(metadata)
             if collision:
@@ -762,16 +775,19 @@ class Cart:
             if callable(weight):
                 _call_shape(weight, f'{sample} weights')
                 _source(weight)
-            _jsonable({k: v for k, v in metadata.items() if k != "weights"},
-                      f'sample "{sample}" metadata')
+            plain = {k: v for k, v in metadata.items() if k != "weights"}
+            problem = rvr._wire_clean(_jsonable(plain, f'sample "{sample}" metadata'))
+            if problem:
+                raise CartError(f'sample "{sample}" metadata: {problem}')
         for column, mapping in self.labels.items():
             if column not in self.columns or not isinstance(mapping, Mapping):
                 raise CartError(f'LABELS["{column}"] must name a real column')
+            if any(isinstance(value, bool) or not isinstance(value, int) for value in mapping):
+                raise CartError(f'LABELS["{column}"] keys must be the stored integers')
         if self.title is not None and not isinstance(self.title, str):
             raise CartError("title must be text")
         if self.note is not None and not isinstance(self.note, str):
             raise CartError("note must be text")
-        _jsonable(self.view, "view")
         self._validated = True
 
     def _meta(self, sample: str, path: str, tree: str) -> dict:
@@ -816,7 +832,7 @@ class Cart:
     def _columns_of(self, selected: ak.Array, metadata: dict, sample: str
                     ) -> tuple[dict[str, Any], dict[str, set[str]], set[tuple[str, ...]]]:
         """Evaluate every declared column; return the columns, what each selected, and which ones wrote."""
-        out: dict[str, np.ndarray | rvr6.Jagged] = {}
+        out: dict[str, np.ndarray | rvr.Jagged] = {}
         reads: dict[str, set[str]] = {}
         writers: set[tuple[str, ...]] = set()
         for name, spec in self.columns.items():
@@ -824,8 +840,8 @@ class Cart:
             _WRITES.clear()
             value = self._evaluate(spec, selected, metadata, f'COLUMNS["{name}"]')
             column = _column(value, f'{sample}.{name}')
-            if rvr6.rows_in(column) != len(selected):
-                raise CartError(f'{sample}.{name} returned {rvr6.rows_in(column)} values for '
+            if rvr.rows_in(column) != len(selected):
+                raise CartError(f'{sample}.{name} returned {rvr.rows_in(column)} values for '
                                 f'{len(selected)} selected events')
             out[name] = column
             reads[name] = set(_READS)
@@ -855,6 +871,7 @@ class Cart:
         output: dict[str, dict[str, Any]] = {}
         output_weights: dict[str, np.ndarray] = {}
         trace = Trace({}, set(), set(), {}, {})
+        claimed: dict[tuple[str, str], str] = {}
         for sample, entry in self.fileset.items():
             chunks: dict[str, list] = {name: [] for name in self.columns}
             weight_chunks: list[np.ndarray] = []
@@ -865,6 +882,7 @@ class Cart:
                 with _open_sample_tree(sample, path, tree_name) as tree:
                     trace.files[path, tree_name] = {"uuid": str(tree.file.uuid),
                                                     "entries": int(tree.num_entries)}
+                    _claim_uuid(claimed, sample, str(tree.file.uuid), path)
                     for events, entries in _chunks(tree, touched, step_size):
                         branches = set(events.fields)
                         selected = self._select(events, branches, metadata, sample, path)
@@ -886,7 +904,7 @@ class Cart:
                                 self._weights_of(selected.events, metadata, sample))
                         kept = len(selected.events)
                         items = {name: len(column.content) for name, column in columns.items()
-                                 if isinstance(column, rvr6.Jagged)}
+                                 if isinstance(column, rvr.Jagged)}
                         for name, column in columns.items():
                             capacity.observe(sample, name, column, name in trace.derived)
                         capacity.add(sample, kept, items)
@@ -930,6 +948,7 @@ class Cart:
         """Relay worker messages to the progress callback until every source has returned."""
         results: dict[tuple[int, int], _Skimmed] = {}
         finished = {sample: 0 for sample in self.fileset}
+        claimed: dict[tuple[str, str], str] = {}
         capacity = _Capacity(self)
         next_task = len(connections)
         active = set(connections)
@@ -956,6 +975,8 @@ class Cart:
                     if (sample_at, source_at) in results:
                         raise CartError("a parallel worker returned a source twice")
                     results[(sample_at, source_at)] = _Skimmed(sample, scanned, rows, weight, trace)
+                    for (path, _), record in trace.files.items():
+                        _claim_uuid(claimed, sample, record["uuid"], path)
                     if next_task < len(tasks):
                         task_queue.put(tasks[next_task])
                         next_task += 1
@@ -1068,14 +1089,14 @@ class Cart:
     def _as_read(self, output: dict[str, dict[str, Any]], trace: Trace) -> None:
         """Give every sample each column's shape, then cast every copy to the common dtype it was read as."""
         for name in self.columns:
-            lists = [arrays[name] for arrays in output.values() if isinstance(arrays[name], rvr6.Jagged)]
+            lists = [arrays[name] for arrays in output.values() if isinstance(arrays[name], rvr.Jagged)]
             for arrays in output.values():
-                if lists and not isinstance(arrays[name], rvr6.Jagged):
+                if lists and not isinstance(arrays[name], rvr.Jagged):
                     if arrays[name].size:
                         raise CartError(f'column "{name}" is one value per event in some samples '
                                         "and one list per event in others")
-                    arrays[name] = rvr6.Jagged(np.zeros(0, dtype=np.int64),
-                                               np.empty(0, dtype=lists[0].content.dtype))
+                    arrays[name] = rvr.Jagged(np.zeros(0, dtype=np.int64),
+                                              np.empty(0, dtype=lists[0].content.dtype))
         for name in self._copies(trace) & set(trace.dtypes):
             dtype = _read_dtype(trace.dtypes[name])
             if dtype is None:
@@ -1104,33 +1125,40 @@ class Cart:
                              "python": "\n\n".join(_source(origin)["source"] for origin in origins)}
         return out
 
-    def _provenance(self, rows: Mapping[str, Mapping[str, np.ndarray]], built: str,
-                    files: Mapping[tuple[str, str], dict]) -> dict:
+    def _files(self, sample: str, files: Mapping[tuple[str, str], dict]) -> dict[str, dict]:
+        """The sample's file records keyed by ROOT UUID: bare name, tree, and entries."""
+        claimed: dict[tuple[str, str], str] = {}
+        out: dict[str, dict] = {}
+        for path, tree in self.fileset[sample]["files"].items():
+            uuid, entries = files[path, tree]["uuid"], files[path, tree]["entries"]
+            _claim_uuid(claimed, sample, uuid, path)
+            out[uuid] = {"file": _basename(path), "tree": tree, "entries": entries}
+        return out
+
+    def _provenance(self, built: str, files: Mapping[tuple[str, str], dict]) -> dict:
+        """The ``made`` snapshot: study identity, samples by name, hooks, and recipe text; pack digests it."""
         if self.source is None:
             config = None
         else:
             text = self.source.read_text(encoding="utf-8")
-            stat = self.source.stat()
-            config = {"path": str(self.source), "mtime": stat.st_mtime,
-                      "sha256": hashlib.sha256(text.encode()).hexdigest(), "source": text}
-        samples = []
-        for name, entry in self.fileset.items():
-            samples.append({
-                "name": name,
-                "rows": rvr6.rows_in(next(iter(rows[name].values()))),
-                "files": [{"path": path, "tree": tree, **files[path, tree]}
-                          for path, tree in entry["files"].items()],
-                "metadata": {k: v for k, v in entry["metadata"].items() if k != "weights"},
-                "weights": _source(entry["metadata"]["weights"]),
-            })
-        return {
-            "by": f"RowVer {rvr6.VERSION}", "built": built, "skimmed": built,
-            "samples": samples,
+            config = {"sha256": rvr.cart_digest(text), "source": text}
+        made: dict[str, Any] = {"study_name": self.name}
+        if self.title:
+            made["title"] = self.title
+        if self.note:
+            made["note"] = self.note
+        made.update({
+            "by": f"RowVer {rvr.VERSION}", "built": built,
+            "samples": {name: {"files": self._files(name, files),
+                               "weights": _source(entry["metadata"]["weights"]),
+                               "metadata": {k: v for k, v in entry["metadata"].items()
+                                            if k != "weights"}}
+                        for name, entry in self.fileset.items()},
             "keep": _source(self.keep),
             "prepare": _source(self.prepare),
-            "columns": {name: _source(value) for name, value in self.columns.items()},
             "cart": config,
-        }
+        })
+        return made
 
     def build(self, destination: str | Path | None = None,
               *, step_size: int | str = "100 MB",
@@ -1149,26 +1177,19 @@ class Cart:
         if progress is not None:
             progress(None, 0, 0)
         built = datetime.now(timezone.utc).isoformat()
-        about = {"name": self.name}
-        if self.title:
-            about["title"] = self.title
-        if self.note:
-            about["note"] = self.note
-        meta, buf = rvr6.pack(
+        meta, buf = rvr.pack(
             rows,
             weighted={name: self.fileset[name]["metadata"]["weights"] is not None
                       for name in self.fileset},
             weights=weights,
             labels=self.labels,
-            about=about,
-            made=self._provenance(rows, built, trace.files),
+            made=self._provenance(built, trace.files),
             sources=self._sources(trace),
         )
-        meta["view"].update(deepcopy(self.view))
         target = Path(destination) if destination else self.dir / f"{self.name}.rvr"
         if target.suffix != ".rvr":
             target = target / f"{self.name}.rvr"
-        return rvr6.write(target, meta, buf)
+        return rvr.write(target, meta, buf)
 
     def summary(self) -> str:
         """Return a terse pre-build summary."""

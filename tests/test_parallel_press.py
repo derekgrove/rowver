@@ -14,7 +14,7 @@ from unittest import mock
 import numpy as np
 import uproot
 
-from rowver import Cart, rvr6
+from rowver import Cart, rvr
 from rowver import CartError, cli
 
 
@@ -124,7 +124,7 @@ class ParallelPressTests(unittest.TestCase):
                 with mock.patch("rowver.press.datetime", Clock):
                     result = Cart.load(root).build(output, step_size=5, workers=workers)
                 actual = Path(result["file"]).read_bytes()
-                rvr6.read(result["file"])
+                rvr.read(result["file"])
                 self.assertEqual(actual, expected)
 
     def test_production_merge_ignores_reverse_completion_order(self):
@@ -142,7 +142,7 @@ class ParallelPressTests(unittest.TestCase):
             root = Path(directory)
             result = Cart.load(self.local_study(root, recipe=recipe)).build(
                 root / "ordered.rvr", step_size=8, workers=3)
-            _, samples = rvr6.read_by_sample(result["file"])
+            _, samples = rvr.read_by_sample(result["file"])
         np.testing.assert_array_equal(samples["sample"]["x"], np.arange(24))
 
     def local_study(self, root: Path, *, recipe: str = "",
@@ -192,13 +192,13 @@ CART = Cart(
             study = self.local_study(root, recipe=recipe)
             target = root / "existing.rvr"
             target.write_bytes(b"previous cartridge")
-            original = rvr6.MAX_DATA_BYTES
-            rvr6.MAX_DATA_BYTES = 150  # each source fits; their combined 24 rows do not
+            original = rvr.MAX_DATA_BYTES
+            rvr.MAX_DATA_BYTES = 150  # each source fits; their combined 24 rows do not
             try:
                 with self.assertRaisesRegex(CartError, "no longer fit"):
                     Cart.load(study).build(target, step_size=4, workers=3)
             finally:
-                rvr6.MAX_DATA_BYTES = original
+                rvr.MAX_DATA_BYTES = original
             self.assertEqual(target.read_bytes(), b"previous cartridge")
             self.assertFalse(any(child.name.startswith("rowver-source-")
                                  for child in multiprocessing.active_children()))
@@ -396,16 +396,16 @@ CART = Cart(
                 path = root / f"source-{number:04d}-{'x' * 100}.root"
                 os.link(original, path)
                 paths.append(path)
-            files = ",\n".join(f"        {str(path)!r}: 'Events'" for path in paths)
+            # one hard-linked file under a thousand samples: one UUID per sample is allowed
+            samples = ",\n".join(
+                f"        'sample-{number:04d}': {{'files': {{{str(path)!r}: 'Events'}}, "
+                "'metadata': {'weights': None}}" for number, path in enumerate(paths))
             (study / "cart.py").write_text(f"""from rowver import Cart
 
 CART = Cart(
-    fileset={{"sample": {{
-        "files": {{
-{files}
-        }},
-        "metadata": {{"weights": None}},
-    }}}},
+    fileset={{
+{samples}
+    }},
     keep=lambda events: events.x == events.x,
     columns={{"x": "x"}},
 )
@@ -419,7 +419,7 @@ CART = Cart(
                 timeout=30,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            meta, _ = rvr6.read(target)
+            meta, _ = rvr.read(target)
             self.assertEqual(meta["data"]["rows"], 1000)
 
     def test_parallel_workers_exit_if_coordinator_dies(self):
@@ -500,8 +500,8 @@ CART = Cart(
             progress = Progress()
             target = root / "existing.rvr"
             target.write_bytes(b"old")
-            failures = (("rowver.rvr6.gzip.compress", OSError("compress failed")),
-                        ("rowver.rvr6.os.replace", OSError("publish failed")))
+            failures = (("rowver.rvr.gzip.compress", OSError("compress failed")),
+                        ("rowver.rvr.os.replace", OSError("publish failed")))
             for patched, failure in failures:
                 with self.subTest(patched=patched), \
                      mock.patch(patched, side_effect=failure), \

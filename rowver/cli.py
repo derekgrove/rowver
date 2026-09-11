@@ -6,10 +6,11 @@ import contextlib
 import importlib.resources
 import os
 import shutil
+import warnings
 from pathlib import Path
 
 from .press import Cart, CartError, study_names
-from .rvr6 import FormatError, _main as rvr6_main
+from .rvr import FormatError, _main as rvr_main
 
 
 def _positive_int(value: str) -> int | str:
@@ -72,12 +73,16 @@ def _run(args: argparse.Namespace) -> int:
         if args.live:
             from .dashboard import Dashboard
             board = Dashboard(cart)
-        with board.live() if board else contextlib.nullcontext():
-            result = cart.build(args.out, step_size=step, progress=board, workers=workers)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with board.live() if board else contextlib.nullcontext():
+                result = cart.build(args.out, step_size=step, progress=board, workers=workers)
     except (CartError, FormatError) as exc:
         raise SystemExit(f"error: {exc}") from exc
     if board:
         board.draw(final=True)
+    for warning in caught:
+        print(f"warning: {warning.message}")
     print(f"wrote {result['file']} — {result['rows']:,} rows, "
           f"{result['compressed'] / 1024 / 1024:.1f} MiB")
     return 0
@@ -121,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         return _new(args)
     if args.command == "run":
         return _run(args)
-    return rvr6_main([args.command, str(args.file)])
+    return rvr_main([args.command, str(args.file)])
 
 
 if __name__ == "__main__":

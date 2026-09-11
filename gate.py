@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 
 
 def main() -> int:
-    production = ["rowver/__init__.py", "rowver/press.py", "rowver/rvr6.py", "rowver/cli.py",
+    production = ["rowver/__init__.py", "rowver/press.py", "rowver/rvr.py", "rowver/cli.py",
                   "rowver/dashboard.py"]
     missing = [name for name in production if not (ROOT / name).is_file()]
     if missing:

@@ -21,8 +21,8 @@ it DONE here with the commit hash in the same commit that lands the work.
 | 8.2 v8 native dtypes | DONE | ddf79b1 |
 | 8.3 v8 jagged copies | DONE | 92cab56 |
 | 8.4 FORMAT8 and corpus | DONE | 7c050ad; the `rowver_web` copy of `contract/v8` lands with the viewer handoff |
-| 9.1 FORMAT.md v9 review | DONE | filled by the next step (a commit cannot carry its own) |
-| 9.2 v9 code and corpus | | `rvr6.py` → `rvr.py` reading 9 only; page grammar deleted; presser writes v9; `contract/v9`; v6–v8 corpora and FORMAT7/8 deleted |
+| 9.1 FORMAT.md v9 review | DONE | 57845f0 |
+| 9.2 v9 code and corpus | DONE | filled by the next step (a commit cannot carry its own); rowver_verification `check_corpus_sync.py` re-pointed in the same session; gate 97 tests |
 | 9.3 docs sweep | | README, CONTEXT, docs/agents, docstrings: one version, no 6–8 references; memory note |
 | 9.4 recipe snapshot acceptance | | press a `cart.py`, reconstruct it from `made` alone, Derek judges side by side |
 

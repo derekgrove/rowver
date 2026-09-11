@@ -10,8 +10,9 @@ import awkward as ak
 import numpy as np
 import uproot
 
-from rowver import rvr6
+from rowver import rvr
 from rowver import Cart, CartError
+from support import snapshot
 
 
 class CartTests(unittest.TestCase):
@@ -59,10 +60,10 @@ class CartTests(unittest.TestCase):
             cart = Cart.load("mine", root / "studies")
             self.assertEqual(cart.name, "mine")
             result = cart.build(root / "mine.rvr", step_size=2)
-            meta, samples = rvr6.read(result["file"])
-            split_meta, split = rvr6.read_by_sample(result["file"])
+            meta, samples = rvr.read(result["file"])
+            split_meta, split = rvr.read_by_sample(result["file"])
 
-        self.assertEqual(meta["about"]["name"], "mine")
+        self.assertEqual(meta["made"]["study_name"], "mine")
         self.assertEqual([s["rows"] for s in meta["data"]["samples"]], [3, 2])
         self.assertEqual([s["weighted"] for s in meta["data"]["samples"]], [True, False])
         self.assertEqual(split_meta["made"]["cart"]["sha256"],
@@ -97,11 +98,10 @@ class CartTests(unittest.TestCase):
                 )
             """), encoding="utf-8")
             result = Cart.load(study).build(root / "mine.rvr", step_size=2)
-            meta, _ = rvr6.read(result["file"])
+            meta, _ = rvr.read(result["file"])
             with uproot.open(ntuple) as file:
                 uuid = str(file.file.uuid)
-            files = meta["made"]["samples"][0]["files"]
-            self.assertEqual(Path(files[0]["path"]), ntuple.resolve())
+            files = meta["made"]["samples"]["mc"]["files"]
 
         sources = {c["name"]: c["source"] for c in meta["data"]["cols"]}
         self.assertEqual(sources["pt"], {"class": "copy", "branch": "pt", "dtype": "float32"})
@@ -111,8 +111,7 @@ class CartTests(unittest.TestCase):
         # KEEP already read pt, so only a fresh view can attribute it to the column
         self.assertEqual(sources["twice"]["from"], ["pt"])
         self.assertEqual(sources["twice"]["reproducible"], "cartridge")
-        self.assertEqual([(f["tree"], f["uuid"], f["entries"]) for f in files],
-                         [("Events", uuid, 4)])
+        self.assertEqual(files, {uuid: {"file": "events.root", "tree": "Events", "entries": 4}})
 
     def test_inputs_include_a_branch_a_column_first_reads_later_in_the_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -347,14 +346,15 @@ class CartTests(unittest.TestCase):
             )
             # 64 rows x (4 index + 4 f4 + 8 u8 + 1 u1 + 4 i4) = 1344: exactly fits as copies,
             # while widening pt to f8 or n to i4 would need 1600 or 1536
-            with patch.object(rvr6, "MAX_DATA_BYTES", 1344):
+            with patch.object(rvr, "MAX_DATA_BYTES", 1344):
                 rows, weights, trace = cart.skim(step_size=16)
-                meta, buf = rvr6.pack(rows, weighted={"mc": False}, weights=weights,
-                                      sources=cart._sources(trace))
+                with self.assertWarns(UserWarning):
+                    meta, buf = rvr.pack(rows, weighted={"mc": False}, weights=weights,
+                                         sources=cart._sources(trace), made=snapshot("mc"))
         self.assertEqual({c["name"]: c["kind"] for c in meta["data"]["cols"]},
                          {"pt": "f4", "event": "u8", "n": "u1", "twice": "i4"})
         self.assertEqual(len(buf), 1344)
-        columns = rvr6.columns(meta, buf)
+        columns = rvr.columns(meta, buf)
         np.testing.assert_array_equal(columns["event"], np.arange(2 ** 62, 2 ** 62 + 64))
         self.assertEqual(columns["event"].dtype, np.uint64)
 
@@ -374,12 +374,12 @@ class CartTests(unittest.TestCase):
             # parallel estimate may stop at the 32 bits each file needs on its own
             for workers in (None, 2):
                 with self.subTest(workers=workers):
-                    with patch.object(rvr6, "MAX_DATA_BYTES", 23999):
+                    with patch.object(rvr, "MAX_DATA_BYTES", 23999):
                         with self.assertRaisesRegex(CartError, "no longer fit"):
                             Cart.load(root).build(root / "never.rvr", workers=workers)
-                    with patch.object(rvr6, "MAX_DATA_BYTES", 24000):
+                    with patch.object(rvr, "MAX_DATA_BYTES", 24000):
                         out = Cart.load(root).build(root / f"{workers}.rvr", workers=workers)
-                    meta, buf = rvr6.read(out["file"])
+                    meta, buf = rvr.read(out["file"])
                     col = meta["data"]["cols"][0]
                     self.assertEqual((col["kind"], col["source"]["dtype"], len(buf)),
                                      ("i8", "int64", 24000))
@@ -404,16 +404,16 @@ class CartTests(unittest.TestCase):
             # read, so 3 rows x (4 index + 4 f4) = 24 bytes is the whole cartridge
             for workers in (None, 2):
                 with self.subTest(workers=workers):
-                    with patch.object(rvr6, "MAX_DATA_BYTES", 23):
+                    with patch.object(rvr, "MAX_DATA_BYTES", 23):
                         with self.assertRaisesRegex(CartError, "no longer fit"):
                             Cart.load(root).build(root / "never.rvr", workers=workers)
-                    with patch.object(rvr6, "MAX_DATA_BYTES", 24):
+                    with patch.object(rvr, "MAX_DATA_BYTES", 24):
                         out = Cart.load(root).build(root / f"{workers}.rvr", workers=workers)
-                    meta, buf = rvr6.read(out["file"])
+                    meta, buf = rvr.read(out["file"])
                     col = meta["data"]["cols"][0]
                     self.assertEqual((col["kind"], col["source"]["dtype"], len(buf)),
                                      ("f4", "float32", 24))
-                    np.testing.assert_array_equal(rvr6.columns(meta, buf)["n"], [-1, 65535, 1.5])
+                    np.testing.assert_array_equal(rvr.columns(meta, buf)["n"], [-1, 65535, 1.5])
 
     def test_a_copy_read_as_dtypes_with_no_exact_common_type_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -458,10 +458,10 @@ class CartTests(unittest.TestCase):
             for workers in (None, 3):
                 with self.subTest(workers=workers):
                     out = Cart.load(root).build(root / f"{workers}.rvr", workers=workers)
-                    meta, buf = rvr6.read(out["file"])
+                    meta, buf = rvr.read(out["file"])
                     col = meta["data"]["cols"][0]
                     self.assertEqual((col["kind"], col["source"]["class"]), ("i4", "derived"))
-                    np.testing.assert_array_equal(rvr6.columns(meta, buf)["n"], [1, 2, -1, 2, 3])
+                    np.testing.assert_array_equal(rvr.columns(meta, buf)["n"], [1, 2, -1, 2, 3])
 
     def test_a_column_that_never_ran_has_no_source(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -482,10 +482,10 @@ class CartTests(unittest.TestCase):
                 )
             """), encoding="utf-8")
             result = Cart.load(study).build(root / "mine.rvr")
-            meta, _ = rvr6.read(result["file"])
+            meta, _ = rvr.read(result["file"])
         self.assertEqual(meta["data"]["rows"], 0)
         self.assertEqual([("source" in col) for col in meta["data"]["cols"]], [False, False])
-        self.assertEqual(meta["made"]["samples"][0]["files"][0]["entries"], 0)
+        self.assertEqual([f["entries"] for f in meta["made"]["samples"]["mc"]["files"].values()], [0])
 
     def test_file_identity_is_kept_per_tree_when_samples_share_a_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -533,42 +533,108 @@ class CartTests(unittest.TestCase):
                 keep=lambda events: events.pt >= 0,
                 columns={"pt": "pt"},
             )
-            from rowver import rvr6 as _rvr6
-            original = _rvr6.MAX_DATA_BYTES
+            from rowver import rvr as _rvr
+            original = _rvr.MAX_DATA_BYTES
             # 64 rows x (4 index + 8 f8 column) = 768 > 256; no weight slab (data)
-            _rvr6.MAX_DATA_BYTES = 256
+            _rvr.MAX_DATA_BYTES = 256
             try:
                 with self.assertRaisesRegex(CartError, "no longer fit"):
                     cart.skim(step_size=16)
             finally:
-                _rvr6.MAX_DATA_BYTES = original
+                _rvr.MAX_DATA_BYTES = original
 
-    def test_build_seeds_saved_view_state(self):
+    def test_the_snapshot_is_the_recipe_with_its_digest(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            ntuple = root / "events.root"
-            with uproot.recreate(ntuple) as output:
-                output["Events"] = {"pt": np.array([25.0])}
+            for name in ("mc", "data"):
+                with uproot.recreate(root / f"{name}.root") as output:
+                    output["Events"] = {"pt": np.array([25.0, 5.0]), "w": np.array([0.5, 2.0]),
+                                        "lepton": np.array([11, 13], dtype=np.int32)}
             study = root / "mine"
             study.mkdir()
-            (study / "cart.py").write_text(textwrap.dedent(f"""
+            recipe = textwrap.dedent(f"""
                 from rowver import Cart
 
+                def prepare(events):
+                    "Nothing to do."
+                    return events
+
+                def keep(events, metadata):
+                    return events.pt > metadata["cut"]
+
                 CART = Cart(
-                    fileset={{"tt": {{"files": {{{str(ntuple)!r}: "Events"}},
-                                      "metadata": {{"weights": None}}}}}},
-                    keep=lambda events: events.pt > 0,
-                    columns={{"pt": "pt"}},
-                    view={{"groups": {{"of": {{"tt": "top"}}, "order": ["top"]}}}},
+                    fileset={{"mc": {{"files": {{{str(root / "mc.root")!r}: "Events"}},
+                                      "metadata": {{"weights": "w", "cut": 0, "xsec": 1.0}}}},
+                              "data": {{"files": {{{str(root / "data.root")!r}: "Events"}},
+                                        "metadata": {{"weights": None, "cut": 10.5}}}}}},
+                    prepare=prepare, keep=keep,
+                    columns={{"pt": "pt", "lepton": "lepton"}},
+                    labels={{"lepton": {{11: "electron", 13: "muon"}}}},
+                    title="Two samples", note="a note",
                 )
-            """), encoding="utf-8")
-
+            """)
+            (study / "cart.py").write_text(recipe, encoding="utf-8")
             result = Cart.load(study).build(root / "mine.rvr")
-            meta, _ = rvr6.read(result["file"])
+            meta, _ = rvr.read(result["file"])
+            uuids = {}
+            for name in ("mc", "data"):
+                with uproot.open(root / f"{name}.root") as file:
+                    uuids[name] = str(file.file.uuid)
+        made = meta["made"]
+        self.assertEqual(list(made), ["study_name", "title", "note", "by", "built", "samples",
+                                      "keep", "prepare", "cart", "sha256"])
+        self.assertEqual((made["study_name"], made["title"], made["note"], made["by"]),
+                         ("mine", "Two samples", "a note", f"RowVer {rvr.VERSION}"))
+        self.assertEqual(made["samples"], {
+            "mc": {"files": {uuids["mc"]: {"file": "mc.root", "tree": "Events", "entries": 2}},
+                   "weights": {"kind": "branch", "value": "w"},
+                   "metadata": {"cut": 0, "xsec": 1.0}},
+            "data": {"files": {uuids["data"]: {"file": "data.root", "tree": "Events", "entries": 2}},
+                     "weights": None, "metadata": {"cut": 10.5}}})
+        self.assertEqual((made["keep"]["kind"], made["keep"]["name"]), ("python", "keep"))
+        self.assertEqual(made["prepare"]["doc"], "Nothing to do.")
+        self.assertEqual(made["cart"]["source"], recipe)
+        self.assertEqual(made["sha256"], rvr.made_digest(made))
+        self.assertEqual({c["name"]: c.get("names") for c in meta["data"]["cols"]},
+                         {"pt": None, "lepton": {"11": "electron", "13": "muon"}})
+        self.assertEqual(set(meta), {"rowver", "data", "made"})
 
-        self.assertEqual(meta["view"], {
-            "groups": {"of": {"tt": "top"}, "order": ["top"]},
-        })
+    def test_recipes_the_snapshot_cannot_carry_are_refused_before_any_read(self):
+        def cart(**changes):
+            keys = {"fileset": {"s": {"files": {"x.root": "Events"}, "metadata": {"weights": None}}},
+                    "keep": lambda events: events.x > 0, "columns": {"x": "x"}, **changes}
+            return Cart(**keys)
+
+        with self.assertRaisesRegex(CartError, "keys must be the stored integers"):
+            cart(labels={"x": {True: "yes", False: "no"}}).validate()
+        with self.assertRaisesRegex(CartError, "keys must be the stored integers"):
+            cart(labels={"x": {1.0: "one"}}).validate()
+        for bad in ({"run": 2 ** 60}, {"k": "\ud800"}, {2018: "a", "era": "b"}):
+            with self.subTest(metadata=bad), self.assertRaisesRegex(CartError, "metadata"):
+                cart(fileset={"s": {"files": {"x.root": "Events"},
+                                    "metadata": {"weights": None, **bad}}}).validate()
+        with self.assertRaisesRegex(CartError, "backslash"):
+            cart(fileset={"s": {"files": {"/data/run\\v2.root": "Events"},
+                                "metadata": {"weights": None}}}).validate()
+
+    def test_two_files_with_one_uuid_in_a_sample_are_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with uproot.recreate(root / "a.root") as output:
+                output["Events"] = {"pt": np.array([25.0])}
+            (root / "copy.root").write_bytes((root / "a.root").read_bytes())
+            (root / "cart.py").write_text(textwrap.dedent("""
+                from rowver import Cart
+                CART = Cart(fileset={"s": {"files": {"a.root": "Events", "copy.root": "Events"},
+                                           "metadata": {"weights": None}}},
+                            keep=lambda events: events.pt > 0, columns={"pt": "pt"})
+            """), encoding="utf-8")
+            with self.assertRaisesRegex(CartError, "two files with UUID"), \
+                    patch("rowver.press.Cart._provenance", side_effect=AssertionError("late")):
+                Cart.load(root).build(root / "twice.rvr")
+            with self.assertRaisesRegex(CartError, "two files with UUID"), \
+                    patch("rowver.press.Cart._provenance", side_effect=AssertionError("late")):
+                Cart.load(root).build(root / "twice.rvr", workers=2)
 
     def test_byte_budget_chunks_follow_the_branches_the_recipe_touches(self):
         with tempfile.TemporaryDirectory() as directory:

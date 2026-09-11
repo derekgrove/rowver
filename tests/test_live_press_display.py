@@ -15,7 +15,7 @@ import numpy as np
 import uproot
 
 from rowver import Cart, CartError
-from rowver import cli, rvr6
+from rowver import cli, rvr
 from rowver.dashboard import Dashboard, cells, source_name
 
 
@@ -178,11 +178,11 @@ class SummaryAndCliTests(unittest.TestCase):
                     with contextlib.redirect_stdout(Stream()):
                         cli._run(args)
                     counts.append(opened - before)
-                    results.append(rvr6.read_by_sample(root / f"{live}.rvr"))
+                    results.append(rvr.read_by_sample(root / f"{live}.rvr"))
 
         self.assertEqual(counts, [1, 1])
         for meta, samples in results[1:]:
-            self.assertEqual(meta["about"], results[0][0]["about"])
+            self.assertEqual(meta["made"]["study_name"], results[0][0]["made"]["study_name"])
             self.assertEqual(meta["data"], results[0][0]["data"])
             np.testing.assert_array_equal(samples["sample"]["x"],
                                           results[0][1]["sample"]["x"])

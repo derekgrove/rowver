@@ -1,4 +1,4 @@
-"""v8 jagged copies: int64 offsets plus flat content, stored for readers other than the viewer."""
+"""Jagged copies: int64 offsets plus flat content, one list of numbers per event."""
 import copy
 import hashlib
 import tempfile
@@ -11,8 +11,9 @@ import awkward as ak
 import numpy as np
 import uproot
 
-from rowver import Cart, CartError, press, rvr6
-from rowver.rvr6 import Jagged
+from rowver import Cart, CartError, press, rvr
+from rowver.rvr import Jagged
+from support import snapshot
 
 
 def jagged(lists, dtype=None):
@@ -24,11 +25,12 @@ def jagged(lists, dtype=None):
 class JaggedPackTests(unittest.TestCase):
     def setUp(self):
         self.jets = {"mc": [[1.5, 2.5], [], [3.5]], "data": [[4.5, 5.5, 6.5], [7.5]]}
-        self.meta, self.buf = rvr6.pack(
+        self.meta, self.buf = rvr.pack(
             {"mc": {"jet": jagged(self.jets["mc"], np.float32), "pt": np.array([10.5, 20.0, 30.0])},
              "data": {"jet": jagged(self.jets["data"], np.float32), "pt": np.array([40.0, 50.0])}},
             weighted={"mc": True, "data": False}, weights={"mc": np.array([0.5, 2.0, 1.0])},
-            sources={"jet": {"class": "copy", "branch": "Jet_pt", "dtype": "float32"}})
+            sources={"jet": {"class": "copy", "branch": "Jet_pt", "dtype": "float32"}},
+            made=snapshot("mc", "data"))
         self.jet = self.meta["data"]["cols"][0]
 
     def test_offsets_and_content_are_two_aligned_spans_placed_by_width(self):
@@ -49,11 +51,11 @@ class JaggedPackTests(unittest.TestCase):
     def test_readers_rebuild_the_lists_and_split_them_by_sample(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "jagged.rvr"
-            rvr6.write(path, self.meta, self.buf)
-            back, payload = rvr6.read(path)
-            _, by_sample = rvr6.read_by_sample(path)
+            rvr.write(path, self.meta, self.buf)
+            back, payload = rvr.read(path)
+            _, by_sample = rvr.read_by_sample(path)
         self.assertEqual(payload, self.buf)
-        columns = rvr6.columns(back, payload)
+        columns = rvr.columns(back, payload)
         self.assertEqual(columns["jet"].to_list(), self.jets["mc"] + self.jets["data"])
         self.assertEqual(str(ak.type(columns["jet"])), "5 * var * float32")
         np.testing.assert_array_equal(columns["pt"], [10.5, 20.0, 30.0, 40.0, 50.0])
@@ -61,14 +63,14 @@ class JaggedPackTests(unittest.TestCase):
             self.assertEqual(by_sample[sample]["jet"].to_list(), lists)
 
     def test_derived_lists_promote_like_flat_columns_and_bits_pack(self):
-        meta, buf = rvr6.pack(
+        meta, buf = rvr.pack(
             {"a": {"n": jagged([[1, 2], [3]]), "flag": jagged([[True, False, True], []]),
                    "none": jagged([[], []]), "big": jagged([[2 ** 62], []], np.int64)},
              "b": {"n": Jagged(np.zeros(0, np.int64), np.empty(0, np.int64)),
                    "flag": Jagged(np.zeros(0, np.int64), np.empty(0, bool)),
                    "none": Jagged(np.zeros(0, np.int64), np.empty(0)),
                    "big": Jagged(np.zeros(0, np.int64), np.empty(0, np.int64))}},
-            weighted={"a": False, "b": False},
+            weighted={"a": False, "b": False}, made=snapshot("a", "b"),
             sources={"big": {"class": "copy", "branch": "event", "dtype": "int64"}})
         cols = {c["name"]: c for c in meta["data"]["cols"]}
         self.assertEqual({name: c["content"]["kind"] for name, c in cols.items()},
@@ -79,19 +81,19 @@ class JaggedPackTests(unittest.TestCase):
         self.assertEqual(len(buf), 4 * 24 + 12 + 8 + 8 + 1)
         self.assertEqual(cols["flag"]["content"]["at"], len(buf) - 1)
         self.assertEqual(buf[-1], 0b101)
-        columns = rvr6.columns(meta, buf)
+        columns = rvr.columns(meta, buf)
         self.assertEqual(columns["n"].to_list(), [[1, 2], [3]])
         self.assertEqual(columns["flag"].to_list(), [[True, False, True], []])
         self.assertEqual(columns["none"].to_list(), [[], []])
         self.assertEqual(columns["big"].to_list(), [[2 ** 62], []])
         corrupt = bytearray(buf)
         corrupt[-1] |= 0b1000
-        with self.assertRaisesRegex(rvr6.FormatError, "tail bits"):
-            rvr6.check(meta, corrupt)
+        with self.assertRaisesRegex(rvr.FormatError, "tail bits"):
+            rvr.check(meta, corrupt)
 
     def test_pack_refuses_lists_it_cannot_store(self):
         def packed(value, **columns):
-            rvr6.pack({"s": {"jet": value, **columns}}, weighted={"s": False})
+            rvr.pack({"s": {"jet": value, **columns}}, weighted={"s": False}, made=snapshot("s"))
 
         for bad, message in ((Jagged(np.array([-1, 3]), np.arange(2.0)), "non-negative"),
                              (Jagged(np.array([1, 2]), np.arange(2.0)), "add up"),
@@ -101,17 +103,18 @@ class JaggedPackTests(unittest.TestCase):
                              (Jagged(np.array([1, 1]), np.array([1.0, np.nan])), "NaN"),
                              (Jagged(np.array([1, 1]), np.array(["a", "b"])), "numeric"),
                              (Jagged(np.array([1, 1]), np.ma.masked_array([1.0, 2.0], [0, 1])), "masked")):
-            with self.subTest(message=message), self.assertRaisesRegex(rvr6.FormatError, message):
+            with self.subTest(message=message), self.assertRaisesRegex(rvr.FormatError, message):
                 packed(bad)
-        with self.assertRaisesRegex(rvr6.FormatError, "different lengths"):
+        with self.assertRaisesRegex(rvr.FormatError, "different lengths"):
             packed(jagged([[1.0], [2.0]]), pt=np.arange(3.0))
-        with self.assertRaisesRegex(rvr6.FormatError, "some samples"):
-            rvr6.pack({"a": {"jet": jagged([[1.0]])}, "b": {"jet": np.array([1.0])}},
-                      weighted={"a": False, "b": False})
-        with self.assertRaisesRegex(rvr6.FormatError, "categorical"):
-            rvr6.pack({"a": {"jet": jagged([[1]])}}, weighted={"a": False}, labels={"jet": {1: "one"}})
+        with self.assertRaisesRegex(rvr.FormatError, "some samples"):
+            rvr.pack({"a": {"jet": jagged([[1.0]])}, "b": {"jet": np.array([1.0])}},
+                     weighted={"a": False, "b": False}, made=snapshot("a", "b"))
+        with self.assertRaisesRegex(rvr.FormatError, "categorical"):
+            rvr.pack({"a": {"jet": jagged([[1]])}}, weighted={"a": False}, labels={"jet": {1: "one"}},
+                     made=snapshot("a"))
 
-    def test_check_refuses_offsets_content_and_views_that_lie(self):
+    def test_check_refuses_offsets_and_content_that_lie(self):
         def edited(change, fix_digest=False):
             meta, buf = copy.deepcopy(self.meta), bytearray(self.buf)
             change(meta, buf)
@@ -133,25 +136,15 @@ class JaggedPackTests(unittest.TestCase):
             "content width": (lambda m, b: m["data"]["cols"][0]["content"].update(kind="f8"), "outside"),
             "offsets unaligned": (lambda m, b: m["data"]["cols"][0].update(at=44), "unaligned"),
             "offsets overlap": (lambda m, b: m["data"]["cols"][0].update(at=88), "overlaps"),
-            "cut": (lambda m, b: m["tabs"].append({"name": "t", "cuts": {"jet": [0, 1]}}), "not a column"),
-            "plot": (lambda m, b: m["tabs"].append({"name": "t", "stage": [{"kind": "1d", "varx": "jet"}]}), "unknown x"),
-            "grid": (lambda m, b: m["tabs"].append({"name": "t", "stage": [{"kind": "map", "grid": {
-                "vars": [{"col": "jet", "bands": [1]}]}}]}), "grid"),
         }
         for label, (change, message) in cases.items():
-            with self.subTest(label), self.assertRaisesRegex(rvr6.FormatError, message):
-                rvr6.check(*edited(change, fix_digest=True))
+            with self.subTest(label), self.assertRaisesRegex(rvr.FormatError, message):
+                rvr.check(*edited(change, fix_digest=True))
         # a valid but different offsets array and a moved content value fail only their digest
         for change in (lambda m, b: b.__setitem__(slice(48, 56), (1).to_bytes(8, "little")),
                        lambda m, b: b.__setitem__(slice(128, 132), np.array([1.75], "<f4").tobytes())):
-            with self.assertRaisesRegex(rvr6.FormatError, 'column "jet" sha256'):
-                rvr6.check(*edited(change, fix_digest=True))
-        meta, buf = edited(lambda m, b: None)
-        meta["rowver"] = 7
-        for col in meta["data"]["cols"]:
-            del col["sha256"]
-        with self.assertRaisesRegex(rvr6.FormatError, "unknown kind"):
-            rvr6.check(meta, buf)
+            with self.assertRaisesRegex(rvr.FormatError, 'column "jet" sha256'):
+                rvr.check(*edited(change, fix_digest=True))
 
 
 class JaggedPressTests(unittest.TestCase):
@@ -193,12 +186,12 @@ class JaggedPressTests(unittest.TestCase):
             size = 160 * 3 + 4 * 328 + 156 + 5 + 312 + 312
             for workers in (None, 2):
                 with self.subTest(workers=workers):
-                    with patch.object(rvr6, "MAX_DATA_BYTES", size - 1):
+                    with patch.object(rvr, "MAX_DATA_BYTES", size - 1):
                         with self.assertRaisesRegex(CartError, "no longer fit"):
                             Cart.load(root).build(root / "never.rvr", step_size=7, workers=workers)
-                    with patch.object(rvr6, "MAX_DATA_BYTES", size):
+                    with patch.object(rvr, "MAX_DATA_BYTES", size):
                         out = Cart.load(root).build(root / f"{workers}.rvr", step_size=7, workers=workers)
-                    meta, buf = rvr6.read(out["file"])
+                    meta, buf = rvr.read(out["file"])
                     self.assertEqual(len(buf), size)
                     cols = {c["name"]: c for c in meta["data"]["cols"]}
                     self.assertEqual({name: (c["kind"], c.get("content", {}).get("kind")) for name, c in cols.items()},
@@ -209,7 +202,7 @@ class JaggedPressTests(unittest.TestCase):
                     self.assertEqual(cols["twice"]["source"]["from"], ["jet"])
                     self.assertEqual(cols["twice"]["source"]["reproducible"], "cartridge")
                     self.assertEqual([s["rows"] for s in meta["data"]["samples"]], [40, 0, 0])
-                    columns = rvr6.columns(meta, buf)
+                    columns = rvr.columns(meta, buf)
                     self.assertEqual(columns["jet"].to_list(), expected)
                     self.assertEqual(columns["flag"].to_list(), (jets > 2).to_list())
                     self.assertEqual(columns["n"].to_list(), ak.values_astype(jets, np.int64).to_list())

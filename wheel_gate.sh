@@ -31,12 +31,15 @@ grep -q "error:" run.out
 # check / show on a real cartridge written via the public API
 "$VPY" - <<'EOF'
 import numpy as np
-from rowver import rvr6
-meta, buf = rvr6.pack(
+from rowver import rvr
+made = {"study_name": "wheel-gate", "by": f"RowVer {rvr.VERSION}", "built": "wheel_gate",
+        "samples": {"mc": {"files": {}, "weights": {"kind": "branch", "value": "w"}, "metadata": {}},
+                    "data": {"files": {}, "weights": None, "metadata": {}}},
+        "keep": {"kind": "branch", "value": "pass"}, "prepare": None, "cart": None}
+meta, buf = rvr.pack(
     {"mc": {"pt": np.array([10.5, 20.0])}, "data": {"pt": np.array([30.0, 40.0])}},
-    weighted={"mc": True, "data": False}, weights={"mc": np.array([0.5, 2.0])},
-    about={"name": "wheel-gate"}, made={"built": "wheel_gate", "cart": None})
-rvr6.write("gate.rvr", meta, buf)
+    weighted={"mc": True, "data": False}, weights={"mc": np.array([0.5, 2.0])}, made=made)
+rvr.write("gate.rvr", meta, buf)
 EOF
 "$VPY" -m rowver.cli check gate.rvr
 "$VPY" -m rowver.cli show gate.rvr >/dev/null
