@@ -23,8 +23,9 @@ it DONE here with the commit hash in the same commit that lands the work.
 | 8.4 FORMAT8 and corpus | DONE | 7c050ad; the `rowver_web` copy of `contract/v8` lands with the viewer handoff |
 | 9.1 FORMAT.md v9 review | DONE | 57845f0 |
 | 9.2 v9 code and corpus | DONE | 9d0daa7; rowver_verification 54baca6 (`check_corpus_sync.py` re-pointed); gate 98 tests |
-| 9.3 docs sweep | DONE | filled by the next step (a commit cannot carry its own); README, CONTEXT, docs/agents, product-status: one version, no 6–8 references; memory note |
-| 9.4 recipe snapshot acceptance | | press a `cart.py`, reconstruct it from `made` alone, Derek judges side by side |
+| 9.3 docs sweep | DONE | b43ceec; README, CONTEXT, docs/agents, product-status: one version, no 6–8 references; memory note |
+| 9.4 recipe snapshot acceptance | DONE | filled by the next commit (a commit cannot carry its own); `studies/snapshot_acceptance`, record in `docs/handoffs/2026-09-11-snapshot-acceptance.md`; Derek's verdict on the record is the open item |
+| 9.5 derived provenance through `prepare` | PROPOSED, Derek decides | finding of 9.4: a callable column's `source.python` omits the `prepare` text that made the field it read, a string column's includes it; fix in `Cart._sources`, test, corpus unchanged |
 
 A step that needs an undecided D-item is skipped, not blocked on: take the next
 step and say so in the report.

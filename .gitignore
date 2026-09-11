@@ -15,6 +15,9 @@ studies/*
 !studies/jetmet_2018_advanced/cart.py
 !studies/data_sig_bg_example/
 !studies/data_sig_bg_example/cart.py
+!studies/snapshot_acceptance/
+!studies/snapshot_acceptance/cart.py
+!studies/snapshot_acceptance/reconstruct.py
 # Built cartridges are artifacts, not source.
 *.rvr
 
