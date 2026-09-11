@@ -81,5 +81,5 @@ The maintained backlog for these directions lives in GitLab issues rather than
 this status document:
 
 - [Move viewer selection and binning off the main thread](https://gitlab.cern.ch/dgrove/rowver_web/-/work_items/1)
-- [Exercise flattened extraction against an external framework and decide the v6 lock](https://gitlab.cern.ch/dgrove/rowver_verification/-/work_items/1)
+- [Exercise flattened extraction against an external framework and decide the format lock](https://gitlab.cern.ch/dgrove/rowver_verification/-/work_items/1)
 - [Decide whether credentialed hosted cartridge pressing is feasible](https://gitlab.cern.ch/dgrove/rowver/-/work_items/2)
