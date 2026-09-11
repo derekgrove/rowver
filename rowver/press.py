@@ -349,14 +349,12 @@ def _chunks(tree, touched: set[str], step_size: int | str) -> Iterator[tuple[ak.
         start, stop = stop, min(stop + per_chunk, total)
 
 
-def _bits(column: np.ndarray) -> int:
-    """Bits per row this chunk needs in the cartridge; never above what pack uses."""
-    if column.dtype.kind == "b":
-        return 1
-    i32 = np.iinfo(np.int32)
-    if column.dtype.kind in "iu" and column.min() >= i32.min and column.max() <= i32.max:
-        return 32
-    return 64
+def _read_dtype(seen: set[str]) -> np.dtype | None:
+    """The common dtype a copied branch was read as; a 64-bit integer beside a float or the other signedness has none."""
+    dtype = np.result_type(*sorted(seen))
+    if dtype.kind == "f" and any(np.dtype(d).kind in "iu" and np.dtype(d).itemsize == 8 for d in seen):
+        return None
+    return dtype
 
 
 def _joined(arrays: list[np.ndarray]) -> np.ndarray:
@@ -377,23 +375,69 @@ class _Capacity:
 
     def __init__(self, cart: "Cart") -> None:
         self.rows = 0
-        self.bits = {name: 1 for name in cart.columns}
+        self.read: dict[str, set[str]] = {name: set() for name in cart.columns}
+        self.joined: dict[str, dict[str, set[str]]] = {name: {} for name in cart.columns}
+        self.span: dict[str, tuple[int, int]] = {}
+        self.derived: set[str] = set()
         weighted = any(entry["metadata"]["weights"] is not None
                        for entry in cart.fileset.values())
         self.row_bytes = 4 + (8 if weighted else 0)
 
-    def add(self, sample: str, kept: int, bits: Mapping[str, int]) -> None:
+    def observe(self, sample: str, name: str, column: np.ndarray, derived: bool) -> None:
+        """Record one chunk of a column as pack will see it: its dtype and, for populated integers, their range."""
+        self.read[name].add(str(column.dtype))
+        if derived:
+            self.derived.add(name)
+        if not column.size:
+            return
+        self.joined[name].setdefault(sample, set()).add(str(column.dtype))
+        if column.dtype.kind in "iu":
+            lo, hi = int(column.min()), int(column.max())
+            if name in self.span:
+                lo, hi = min(lo, self.span[name][0]), max(hi, self.span[name][1])
+            self.span[name] = (lo, hi)
+
+    def state(self) -> tuple:
+        return self.read, self.joined, self.span, self.derived
+
+    def merge(self, state: tuple) -> None:
+        """Union what a worker observed."""
+        read, joined, span, derived = state
+        for name in self.read:
+            self.read[name] |= read[name]
+            for sample, dtypes in joined[name].items():
+                self.joined[name].setdefault(sample, set()).update(dtypes)
+        for name, (lo, hi) in span.items():
+            if name in self.span:
+                lo, hi = min(lo, self.span[name][0]), max(hi, self.span[name][1])
+            self.span[name] = (lo, hi)
+        self.derived |= derived
+
+    def add(self, sample: str, kept: int) -> None:
+        """Count kept rows, then refuse once the packed buffer would exceed the limit."""
         self.rows += kept
-        for name, width in bits.items():
-            self.bits[name] = max(self.bits[name], width)
         packed = self.rows * self.row_bytes + sum(
-            (self.rows * width + 7) // 8 for width in self.bits.values())
+            (self.rows * self._bits(name) + 7) // 8 for name in self.read)
         if packed > rvr6.MAX_DATA_BYTES:
             raise CartError(
                 f"the kept rows no longer fit the cartridge: "
                 f"{self.rows:,} rows need {packed} bytes, exceeding the "
                 f"{rvr6.MAX_DATA_BYTES}-byte column limit (reached in "
                 f'sample "{sample}") — tighten KEEP or trim the fileset')
+
+    def _bits(self, name: str) -> int:
+        """Bits per row pack will store: a copy's read dtype, else f8, i4, or b1 from the per-sample joins."""
+        if not self.read[name]:
+            return 1
+        dtype = None if name in self.derived else _read_dtype(self.read[name])
+        if dtype is not None:
+            return 1 if dtype.kind == "b" else 8 * dtype.itemsize
+        joined = [np.result_type(*sorted(dtypes)) for dtypes in self.joined[name].values()]
+        if not joined or np.result_type(*joined).kind == "b":
+            return 1
+        lo, hi = self.span.get(name, (0, 0))
+        i32 = np.iinfo(np.int32)
+        return 32 if all(d.kind in "biu" for d in joined) and i32.min <= lo and hi <= i32.max else 64
 
 
 def _source(value: Any) -> dict | None:
@@ -506,8 +550,8 @@ def _parallel_worker(study: str, expected_hash: str, step_size: int | str,
                     scanned += raw
                     messages.send(("chunk", name, raw, kept))
 
-                def _size(self, name: str, kept: int, bits: dict[str, int]) -> None:
-                    messages.send(("size", name, kept, bits))
+                def _size(self, name: str, kept: int, state: tuple) -> None:
+                    messages.send(("size", name, kept, state))
 
             entry = full_fileset[sample]
             cart.fileset = {sample: {
@@ -801,12 +845,12 @@ class Cart:
                             weight_chunks.append(
                                 self._weights_of(selected.events, metadata, sample))
                         kept = len(selected.events)
-                        capacity.add(sample, kept, {
-                            name: _bits(column) for name, column in columns.items()
-                            if column.size and capacity.bits[name] < 64})
+                        for name, column in columns.items():
+                            capacity.observe(sample, name, column, name in trace.derived)
+                        capacity.add(sample, kept)
                         size = getattr(progress, "_size", None)
                         if size is not None:
-                            size(sample, kept, dict(capacity.bits))
+                            size(sample, kept, capacity.state())
                         if progress is not None:
                             progress(sample, entries, kept)
             output[sample] = {name: _joined(values) for name, values in chunks.items()}
@@ -814,6 +858,7 @@ class Cart:
                 output_weights[sample] = (np.concatenate(weight_chunks) if weight_chunks
                                           else np.empty(0, dtype=np.float64))
             _notify(progress, "sample_done", sample)
+        self._as_read(output, trace)
         return output, output_weights, trace
 
     def _spawn(self, context, number: int, step_size: int | str, task_queue) -> tuple:
@@ -861,7 +906,8 @@ class Cart:
                     if progress is not None:
                         progress(*body)
                 elif kind == "size":
-                    capacity.add(*body)
+                    capacity.merge(body[2])
+                    capacity.add(*body[:2])
                 elif kind == "result":
                     sample_at, source_at, sample, scanned, rows, weight, trace = body
                     if (sample_at, source_at) in results:
@@ -911,6 +957,7 @@ class Cart:
                 for name, seen in piece.trace.dtypes.items():
                     trace.dtypes.setdefault(name, set()).update(seen)
                 trace.files.update(piece.trace.files)
+        self._as_read(output, trace)
         return output, output_weights, trace
 
     def _parallel_skim(self, workers: int, step_size: int | str,
@@ -969,17 +1016,32 @@ class Cart:
         keys = [("prepare",), ("keep",), *(("column", name) for name in self.columns)]
         return keys.index(writer)
 
+    def _copies(self, trace: Trace) -> set[str]:
+        """Columns declared as a branch name that no hook was observed to derive."""
+        return {name for name, spec in self.columns.items()
+                if isinstance(spec, str) and name not in trace.derived}
+
+    def _as_read(self, output: dict[str, dict[str, np.ndarray]], trace: Trace) -> None:
+        """Cast every copy to the common dtype it was read as, so pack stores exactly that."""
+        for name in self._copies(trace) & set(trace.dtypes):
+            dtype = _read_dtype(trace.dtypes[name])
+            if dtype is None:
+                raise CartError(f'column "{name}" was read as {", ".join(sorted(trace.dtypes[name]))}, '
+                                "which have no exact common dtype")
+            for arrays in output.values():
+                arrays[name] = arrays[name].astype(dtype, copy=False)
+
     def _sources(self, trace: Trace) -> dict[str, dict]:
         """Per-column provenance for every column that ran: a copy names its branch and dtype, a derived column its inputs."""
-        copied = {spec for name, spec in self.columns.items()
-                  if isinstance(spec, str) and name not in trace.derived}
+        copies = self._copies(trace)
+        copied = {self.columns[name] for name in copies}
         out: dict[str, dict] = {}
         for name, spec in self.columns.items():
             if name not in trace.inputs:
                 continue
-            if isinstance(spec, str) and name not in trace.derived:
-                dtype = np.result_type(*sorted(trace.dtypes[name]))
-                out[name] = {"class": "copy", "branch": spec, "dtype": str(dtype)}
+            if name in copies:
+                out[name] = {"class": "copy", "branch": spec,
+                             "dtype": str(_read_dtype(trace.dtypes[name]))}
             else:
                 inputs = trace.inputs[name]
                 origins = [spec] if callable(spec) else [

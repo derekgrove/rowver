@@ -32,7 +32,10 @@ MAX_CHIPS = 25
 PCTS = (1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99)
 MAX_GRID_REGIONS = 4096
 MAX_REGION_NODES = 8192
-WIDTH = {"f8": 8, "i4": 4, "b1": 1}
+WIDTH = {"f8": 8, "f4": 4, "i8": 8, "i4": 4, "i2": 2, "i1": 1,
+         "u8": 8, "u4": 4, "u2": 2, "u1": 1, "b1": 1}
+KINDS = {6: ("f8", "i4"), 7: ("f8", "i4", "b1")}
+EXACT = 2 ** 53
 
 LEAF_KINDS = frozenset({"1d", "2d", "3d", "board", "map"})
 LAYOUTS = frozenset({
@@ -197,7 +200,7 @@ def _wire_clean(value: Any) -> str | None:
             stack.extend(item)
         elif isinstance(item, bool):
             continue
-        elif isinstance(item, int) and abs(item) > 2 ** 53:
+        elif isinstance(item, int) and abs(item) > EXACT:
             return "header integers must fit exactly in float64 (absolute value <= 2**53)"
     return None
 
@@ -227,7 +230,7 @@ def _wire_float(text: str) -> float:
 def _wire_int(text: str) -> int:
     """Parse a JSON integer, refusing values a JavaScript reader would round."""
     out = int(text)
-    if abs(out) > 2 ** 53:
+    if abs(out) > EXACT:
         raise ValueError("integer exceeds the float64-exact range")
     return out
 
@@ -557,7 +560,7 @@ def _column(col: Any, i: int, rows: int, size: int, version: int,
     name, kind = col.get("name"), col.get("kind")
     if not isinstance(name, str) or not name.strip() or name in names:
         _fail(f"column {i} has an empty or duplicate name")
-    if kind not in (("f8", "i4", "b1") if version >= 7 else ("f8", "i4")):
+    if not _option(kind, KINDS.get(version, WIDTH)):
         _fail(f'column "{name}" has unknown kind {kind!r}')
     length = _length(kind, rows)
     at = _nat(col.get("at"), f'column "{name}" offset')
@@ -578,7 +581,7 @@ def _column(col: Any, i: int, rows: int, size: int, version: int,
         _fail(f'column "{name}" percentiles are outside lim or reversed')
     vals = col.get("vals")
     if vals is not None:
-        if kind not in ("i4", "b1") or not isinstance(vals, list) or len(vals) > MAX_CHIPS:
+        if kind[0] == "f" or not isinstance(vals, list) or len(vals) > MAX_CHIPS:
             _fail(f'column "{name}" has invalid categorical values')
         if (any(isinstance(x, bool) or not isinstance(x, int) for x in vals)
                 or len(set(vals)) != len(vals)):
@@ -666,7 +669,7 @@ def _column_payload(slab: memoryview, col: dict, rows: int) -> None:
             _fail(f'column "{col["name"]}" vals do not match its payload')
         return
     values = np.frombuffer(slab, dtype="<" + col["kind"], count=rows, offset=col["at"])
-    if col["kind"] == "f8" and not np.isfinite(values).all():
+    if col["kind"][0] == "f" and not np.isfinite(values).all():
         _fail(f'column "{col["name"]}" contains NaN or infinity')
     if rows:
         actual = [float(values.min()), float(values.max())]
@@ -900,18 +903,30 @@ def _array(value: Any, where: str) -> np.ndarray:
     return out
 
 
-def _kind(arrays: list[np.ndarray]) -> str:
-    """The stored kind for one column; an empty float array (a sample with no entries) never widens flags."""
-    populated = [a for a in arrays if a.size]
-    if all(a.dtype.kind == "b" for a in (populated or arrays)):
+def _kind(arrays: list[np.ndarray], source: Mapping[str, Any] | None) -> str:
+    """The stored kind: a copy keeps the dtype it was read as, a derived column widens to f8, i4, or b1."""
+    populated = [a for a in arrays if a.size] or arrays
+    dtypes = [a.dtype for a in populated]
+    copy = source is not None and source.get("class") == "copy"
+    if copy:
+        try:
+            dtypes.append(np.dtype(source["dtype"]))
+        except TypeError as exc:
+            raise FormatError(f"copy dtype {source['dtype']!r} is not a NumPy dtype") from exc
+    dtype = np.result_type(*dtypes)
+    native = f"{dtype.kind}{dtype.itemsize}"
+    if dtype.kind == "b":
         return "b1"
-    integral = all(a.dtype.kind in "biu" for a in arrays)
-    if integral and all(not a.size or (a.min() >= np.iinfo(np.int32).min
-                                       and a.max() <= np.iinfo(np.int32).max) for a in arrays):
-        return "i4"
-    if integral and any(a.size and (a.min() < -(2 ** 53) or a.max() > 2 ** 53)
-                        for a in arrays):
-        _fail("integer columns outside int32 must fit exactly in float64 (absolute value <= 2**53)")
+    if copy and dtype.kind == "f" and any(d.kind in "iu" and d.itemsize == 8 for d in dtypes):
+        _fail("a copy read as 64-bit integers beside floats or the other signedness has no exact common dtype")
+    if copy and native in WIDTH:
+        return native
+    if all(a.dtype.kind in "biu" for a in populated):
+        i32 = np.iinfo(np.int32)
+        if all(not a.size or i32.min <= a.min() and a.max() <= i32.max for a in populated):
+            return "i4"
+        if any(a.size and (a.min() < -EXACT or a.max() > EXACT) for a in populated):
+            _fail("integer columns outside int32 must fit exactly in float64 (absolute value <= 2**53)")
     return "f8"
 
 
@@ -925,7 +940,13 @@ def _bump(value: float, up: bool) -> float:
     return (math.ceil(value / scale) if up else math.floor(value / scale)) * scale
 
 
+def _wire_number(value: float) -> int | float:
+    """An integer where a JavaScript reader keeps it exact, otherwise a float."""
+    return int(value) if value == int(value) and abs(value) <= EXACT else _finite(value, "nice")
+
+
 def _stats(values: np.ndarray, integer: bool) -> dict:
+    """lim, nice, percentiles, and for an integer column with few distinct values, vals."""
     if not values.size:
         return {"lim": [0, 0], "nice": [0, 1],
                 **{f"p{q}": 0 for q in PCTS},
@@ -936,11 +957,12 @@ def _stats(values: np.ndarray, integer: bool) -> dict:
         nice_lo, nice_hi = math.floor(nice_lo), math.ceil(nice_hi)
     if nice_lo == nice_hi:
         nice_hi = nice_lo + 1
-    out = {"lim": [lo, hi], "nice": [nice_lo, nice_hi],
-           **{f"p{q}": float(np.percentile(values, q)) for q in PCTS}}
-    if integer:
+    floats = values.astype(np.float64, copy=False)
+    out = {"lim": [lo, hi], "nice": [_wire_number(nice_lo), _wire_number(nice_hi)],
+           **{f"p{q}": float(np.percentile(floats, q)) for q in PCTS}}
+    if integer and len(np.unique(values[:4096])) <= MAX_CHIPS:
         unique = np.unique(values)
-        if len(unique) <= MAX_CHIPS:
+        if len(unique) <= MAX_CHIPS and -EXACT <= unique[0] and unique[-1] <= EXACT:
             out["vals"] = [int(x) for x in unique]
     return out
 
@@ -1009,10 +1031,9 @@ def _pack_buffer(sample_names: list[str], column_names: list[str],
                  arrays: Mapping[str, Mapping[str, np.ndarray]], row_counts: Mapping[str, int],
                  weighted: Mapping[str, bool], weight_arrays: Mapping[str, np.ndarray],
                  sources: Mapping[str, Mapping[str, Any]]) -> tuple[dict, bytes]:
-    """Lay out weights, numeric columns widest first, the sample index, then packed bits."""
+    """Lay out weights, columns of four bytes or more widest first, the sample index, narrower columns, then packed bits."""
     rows = sum(row_counts.values())
     pieces: list[bytes] = []
-    offset = 0
     data: dict[str, Any] = {
         "rows": rows,
         "bytes": 0,
@@ -1023,48 +1044,41 @@ def _pack_buffer(sample_names: list[str], column_names: list[str],
                      "weighted": weighted[name]} for name in sample_names],
         "cols": [],
     }
+
+    def put(raw: bytes) -> int:
+        """Append one span to the buffer; return where it starts."""
+        at, data["bytes"] = data["bytes"], data["bytes"] + len(raw)
+        pieces.append(raw)
+        return at
+
     if weight_arrays:
-        data["weight_at"] = offset
         combined = np.concatenate([weight_arrays[name] for name in sample_names])
-        raw = combined.astype("<f8", copy=False).tobytes()
-        pieces.append(raw)
-        offset += len(raw)
-
-    kinds = {name: _kind([arrays[sample][name] for sample in sample_names])
-             for name in column_names}
+        data["weight_at"] = put(combined.astype("<f8", copy=False).tobytes())
     entries: dict[str, dict] = {}
-    bool_pieces: list[tuple[str, bytes]] = []
-    for name in sorted(column_names, key=lambda name: {"f8": 0, "i4": 1, "b1": 2}[kinds[name]]):
-        kind = kinds[name]
-        combined = (np.concatenate([arrays[sample][name] for sample in sample_names])
-                    if rows else np.empty(0))
-        dtype = "u1" if kind == "b1" else "<i4" if kind == "i4" else "<f8"
-        encoded = combined.astype(dtype, copy=False)
-        raw = (np.packbits(encoded, bitorder="little").tobytes() if kind == "b1"
-               else encoded.tobytes())
-        entries[name] = {"name": name, "kind": kind, "at": offset,
+    raws: dict[str, bytes] = {}
+    for name in column_names:
+        kind = _kind([arrays[sample][name] for sample in sample_names], sources.get(name))
+        dtype = "u1" if kind == "b1" else "<" + kind
+        encoded = np.concatenate([arrays[sample][name].astype(dtype, copy=False)
+                                  for sample in sample_names])
+        raws[name] = (np.packbits(encoded, bitorder="little").tobytes() if kind == "b1"
+                      else encoded.tobytes())
+        entries[name] = {"name": name, "kind": kind, "at": 0,
                          **({"source": dict(sources[name])} if name in sources else {}),
-                         "sha256": hashlib.sha256(raw).hexdigest(),
-                         **_stats(encoded, kind in ("i4", "b1"))}
-        if kind == "b1":
-            bool_pieces.append((name, raw))
-            continue
-        pieces.append(raw)
-        offset += len(raw)
-
-    data["sample_at"] = offset
-    index = np.concatenate([
-        np.full(row_counts[name], i, dtype="<i4") for i, name in enumerate(sample_names)
-    ]) if rows else np.empty(0, dtype="<i4")
-    pieces.append(index.tobytes())
-    offset += index.nbytes
-    for name, raw in bool_pieces:
-        entries[name]["at"] = offset
-        pieces.append(raw)
-        offset += len(raw)
+                         "sha256": hashlib.sha256(raws[name]).hexdigest(),
+                         **_stats(encoded, kind[0] != "f")}
+    order = sorted(column_names, key=lambda name: (entries[name]["kind"] == "b1",
+                                                   -WIDTH[entries[name]["kind"]]))
+    wide = [name for name in order if WIDTH[entries[name]["kind"]] >= 4]
+    for name in wide:
+        entries[name]["at"] = put(raws[name])
+    index = np.concatenate([np.full(row_counts[name], i, dtype="<i4")
+                            for i, name in enumerate(sample_names)])
+    data["sample_at"] = put(index.tobytes())
+    for name in order[len(wide):]:
+        entries[name]["at"] = put(raws[name])
     buf = b"".join(pieces)
     data["cols"] = [entries[name] for name in column_names]
-    data["bytes"] = offset
     data["sha256"] = hashlib.sha256(buf).hexdigest()
     return data, buf
 

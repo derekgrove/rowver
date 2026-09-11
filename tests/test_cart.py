@@ -4,6 +4,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import awkward as ak
 import numpy as np
@@ -327,8 +328,140 @@ class CartTests(unittest.TestCase):
                                               "metadata": {"weights": None}}},
                         keep=lambda events: events.pt < 0, columns={"pt": "pt"})
             rows, _, trace = cart.skim()
-        self.assertEqual(rows["none"]["pt"].dtype, np.float64)
+        self.assertEqual(rows["none"]["pt"].dtype, np.float32)
         self.assertEqual(cart._sources(trace)["pt"]["dtype"], "float32")
+
+    def test_copies_press_in_their_branch_dtype_and_the_size_estimate_knows_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ntuple = Path(directory) / "events.root"
+            with uproot.recreate(ntuple) as output:
+                output["Events"] = {"pt": np.arange(64, dtype=np.float32),
+                                    "event": np.arange(2 ** 62, 2 ** 62 + 64, dtype=np.uint64),
+                                    "n": np.arange(64, dtype=np.uint8)}
+            cart = Cart(
+                fileset={"mc": {"files": {str(ntuple): "Events"},
+                                "metadata": {"weights": None}}},
+                keep=lambda events: events.pt >= 0,
+                columns={"pt": "pt", "event": "event", "n": "n",
+                         "twice": lambda events: 2 * events.n},
+            )
+            # 64 rows x (4 index + 4 f4 + 8 u8 + 1 u1 + 4 i4) = 1344: exactly fits as copies,
+            # while widening pt to f8 or n to i4 would need 1600 or 1536
+            with patch.object(rvr6, "MAX_DATA_BYTES", 1344):
+                rows, weights, trace = cart.skim(step_size=16)
+                meta, buf = rvr6.pack(rows, weighted={"mc": False}, weights=weights,
+                                      sources=cart._sources(trace))
+        self.assertEqual({c["name"]: c["kind"] for c in meta["data"]["cols"]},
+                         {"pt": "f4", "event": "u8", "n": "u1", "twice": "i4"})
+        self.assertEqual(len(buf), 1344)
+        columns = rvr6.columns(meta, buf)
+        np.testing.assert_array_equal(columns["event"], np.arange(2 ** 62, 2 ** 62 + 64))
+        self.assertEqual(columns["event"].dtype, np.uint64)
+
+    def test_a_copy_read_as_two_dtypes_is_sized_and_stored_as_their_common_dtype(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for stem, dtype in (("u", np.uint32), ("i", np.int32)):
+                with uproot.recreate(root / f"{stem}.root") as output:
+                    output["Events"] = {"n": np.arange(1000, dtype=dtype)}
+            (root / "cart.py").write_text(textwrap.dedent("""
+                from rowver import Cart
+                CART = Cart(fileset={"mc": {"files": {"u.root": "Events", "i.root": "Events"},
+                                            "metadata": {"weights": None}}},
+                            keep=lambda events: events.n >= 0, columns={"n": "n"})
+            """), encoding="utf-8")
+            # 2000 rows x (4 index + 8 i8) = 24000; neither a sequential nor a per-file
+            # parallel estimate may stop at the 32 bits each file needs on its own
+            for workers in (None, 2):
+                with self.subTest(workers=workers):
+                    with patch.object(rvr6, "MAX_DATA_BYTES", 23999):
+                        with self.assertRaisesRegex(CartError, "no longer fit"):
+                            Cart.load(root).build(root / "never.rvr", workers=workers)
+                    with patch.object(rvr6, "MAX_DATA_BYTES", 24000):
+                        out = Cart.load(root).build(root / f"{workers}.rvr", workers=workers)
+                    meta, buf = rvr6.read(out["file"])
+                    col = meta["data"]["cols"][0]
+                    self.assertEqual((col["kind"], col["source"]["dtype"], len(buf)),
+                                     ("i8", "int64", 24000))
+
+    def test_a_copy_is_stored_in_the_dtype_read_across_files_and_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for stem, values in (("a1", np.array([-1], dtype=np.int8)),
+                                 ("a2", np.array([65535], dtype=np.uint16)),
+                                 ("b", np.array([1.5], dtype=np.float32))):
+                with uproot.recreate(root / f"{stem}.root") as output:
+                    output["Events"] = {"n": values}
+            (root / "cart.py").write_text(textwrap.dedent("""
+                from rowver import Cart
+                CART = Cart(fileset={"a": {"files": {"a1.root": "Events", "a2.root": "Events"},
+                                           "metadata": {"weights": None}},
+                                     "b": {"files": {"b.root": "Events"},
+                                           "metadata": {"weights": None}}},
+                            keep=lambda events: events.n != 0, columns={"n": "n"})
+            """), encoding="utf-8")
+            # int8 and uint16 join as int32 inside sample a, yet float32 holds every value
+            # read, so 3 rows x (4 index + 4 f4) = 24 bytes is the whole cartridge
+            for workers in (None, 2):
+                with self.subTest(workers=workers):
+                    with patch.object(rvr6, "MAX_DATA_BYTES", 23):
+                        with self.assertRaisesRegex(CartError, "no longer fit"):
+                            Cart.load(root).build(root / "never.rvr", workers=workers)
+                    with patch.object(rvr6, "MAX_DATA_BYTES", 24):
+                        out = Cart.load(root).build(root / f"{workers}.rvr", workers=workers)
+                    meta, buf = rvr6.read(out["file"])
+                    col = meta["data"]["cols"][0]
+                    self.assertEqual((col["kind"], col["source"]["dtype"], len(buf)),
+                                     ("f4", "float32", 24))
+                    np.testing.assert_array_equal(rvr6.columns(meta, buf)["n"], [-1, 65535, 1.5])
+
+    def test_a_copy_read_as_dtypes_with_no_exact_common_type_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for stem, dtype in (("u", np.uint64), ("i", np.int64)):
+                with uproot.recreate(root / f"{stem}.root") as output:
+                    output["Events"] = {"n": np.array([2 ** 63 + 1, 1], dtype=dtype)
+                                        if dtype is np.uint64 else np.array([-1, 1], dtype=dtype)}
+            (root / "cart.py").write_text(textwrap.dedent("""
+                from rowver import Cart
+                CART = Cart(fileset={"mc": {"files": {"u.root": "Events", "i.root": "Events"},
+                                            "metadata": {"weights": None}}},
+                            keep=lambda events: events.n != 0, columns={"n": "n"})
+            """), encoding="utf-8")
+            for workers in (None, 2):
+                with self.subTest(workers=workers):
+                    with self.assertRaisesRegex(CartError, "no exact common dtype"):
+                        Cart.load(root).build(root / "never.rvr", workers=workers)
+
+    def test_a_copy_derived_only_in_a_later_sample_is_promoted_not_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for stem, values in (("u", np.array([1, 2], dtype=np.uint64)),
+                                 ("i", np.array([-1, 2], dtype=np.int64)),
+                                 ("p", np.array([3], dtype=np.int64))):
+                with uproot.recreate(root / f"{stem}.root") as output:
+                    output["Events"] = {"n": values}
+            (root / "cart.py").write_text(textwrap.dedent("""
+                import awkward as ak
+                from rowver import Cart
+
+                def prepare(events, metadata):
+                    return ak.with_field(events, events.n, "n") if metadata["sample"] == "p" else events
+
+                CART = Cart(fileset={s: {"files": {f"{s}.root": "Events"}, "metadata": {"weights": None}}
+                                     for s in ("u", "i", "p")},
+                            prepare=prepare, keep=lambda events: events.n != 0, columns={"n": "n"})
+            """), encoding="utf-8")
+            # uint64 beside int64 has no exact copy dtype, but the rebuilt record in the last
+            # sample makes n derived, and the derived promotion holds these values as i4
+            # whichever order the samples finish in
+            for workers in (None, 3):
+                with self.subTest(workers=workers):
+                    out = Cart.load(root).build(root / f"{workers}.rvr", workers=workers)
+                    meta, buf = rvr6.read(out["file"])
+                    col = meta["data"]["cols"][0]
+                    self.assertEqual((col["kind"], col["source"]["class"]), ("i4", "derived"))
+                    np.testing.assert_array_equal(rvr6.columns(meta, buf)["n"], [1, 2, -1, 2, 3])
 
     def test_a_column_that_never_ran_has_no_source(self):
         with tempfile.TemporaryDirectory() as directory:

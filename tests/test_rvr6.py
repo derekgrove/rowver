@@ -302,6 +302,91 @@ class Rvr6Tests(unittest.TestCase):
                         del col["sha256"]
                     rvr6.check(broken, self.buf)
 
+    def test_copies_keep_their_dtype_and_derived_columns_still_widen(self):
+        derived = {"class": "derived", "from": ["b"], "reproducible": "source", "python": "f"}
+        values = {"f4": np.array([1.5, 2.5, 3.5], dtype=np.float32),
+                  "u8": np.array([2 ** 63, 1, 2 ** 53 + 1], dtype=np.uint64),
+                  "i8": np.array([-(2 ** 62), 0, 1], dtype=np.int64),
+                  "i2": np.array([-3, 0, 3], dtype=np.int16),
+                  "u1": np.array([0, 200, 255], dtype=np.uint8),
+                  "f2": np.array([0.5, 1.0, 1.5], dtype=np.float16),
+                  "d8": np.array([1, 2, 3], dtype=np.int64),
+                  "bit": np.array([True, False, True])}
+        sources = {name: {"class": "copy", "branch": "b", "dtype": str(value.dtype)}
+                   for name, value in values.items() if name != "d8"} | {"d8": derived}
+        meta, buf = rvr6.pack({"s": values}, weighted={"s": False}, sources=sources)
+        kinds = {c["name"]: c["kind"] for c in meta["data"]["cols"]}
+        self.assertEqual(kinds, {"f4": "f4", "u8": "u8", "i8": "i8", "i2": "i2", "u1": "u1",
+                                 "f2": "f8", "d8": "i4", "bit": "b1"})
+        self.assertEqual(len(buf), 3 * (4 + 4 + 8 + 8 + 2 + 1 + 8 + 4) + 1)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "native.rvr"
+            rvr6.write(path, meta, buf)
+            back, payload = rvr6.read(path)
+        columns = rvr6.columns(back, payload)
+        for name, expected in values.items():
+            np.testing.assert_array_equal(columns[name], expected)
+            if name not in ("f2", "d8", "bit"):
+                self.assertEqual(columns[name].dtype, expected.dtype)
+        # 64-bit values beyond 2**53 reach the header only as floats a JavaScript reader keeps
+        u8 = {c["name"]: c for c in back["data"]["cols"]}["u8"]
+        self.assertNotIn("vals", u8)
+        self.assertIsInstance(u8["nice"][1], float)
+        # the sample index sits after the 8-byte columns, so every span is aligned for odd rows
+        for col in back["data"]["cols"]:
+            self.assertEqual(col["at"] % rvr6.WIDTH[col["kind"]], 0, col["name"])
+        self.assertEqual(back["data"]["sample_at"] % 4, 0)
+        self.assertLess(back["data"]["sample_at"], min(c["at"] for c in back["data"]["cols"]
+                                                       if c["kind"] in ("i2", "u1", "b1")))
+        small = {name: values[name] for name in ("f4", "i2", "u1", "f2", "d8", "bit")}
+        without_sources, _ = rvr6.pack({"s": small}, weighted={"s": False})
+        self.assertEqual({c["name"]: c["kind"] for c in without_sources["data"]["cols"]},
+                         {"f4": "f8", "i2": "i4", "u1": "i4", "f2": "f8", "d8": "i4", "bit": "b1"})
+
+    def test_a_copy_without_an_exact_common_dtype_is_refused(self):
+        copy = {"n": {"class": "copy", "branch": "n", "dtype": "uint64"}}
+        for other in (np.array([-1], dtype=np.int64), np.array([1.5], dtype=np.float32)):
+            with self.subTest(other=other.dtype), \
+                    self.assertRaisesRegex(rvr6.FormatError, "no exact common dtype"):
+                rvr6.pack({"a": {"n": np.array([7], dtype=np.uint64)}, "b": {"n": other}},
+                          weighted={"a": False, "b": False}, sources=copy)
+        # the same samples without a copy claim take the derived promotion
+        meta, _ = rvr6.pack({"a": {"n": np.array([7], dtype=np.uint64)},
+                             "b": {"n": np.array([-1], dtype=np.int64)}},
+                            weighted={"a": False, "b": False})
+        self.assertEqual(meta["data"]["cols"][0]["kind"], "i4")
+        # the dtype a branch was read as decides the kind even where every kept value is narrower
+        wider, _ = rvr6.pack({"a": {"n": np.array([7], dtype=np.int32)}}, weighted={"a": False},
+                             sources={"n": {"class": "copy", "branch": "n", "dtype": "int64"}})
+        self.assertEqual(wider["data"]["cols"][0]["kind"], "i8")
+        with self.assertRaisesRegex(rvr6.FormatError, "not a NumPy dtype"):
+            rvr6.pack({"a": {"n": np.array([7], dtype=np.int32)}}, weighted={"a": False},
+                      sources={"n": {"class": "copy", "branch": "n", "dtype": "Int_t"}})
+        with self.assertRaisesRegex(rvr6.FormatError, "fit exactly"):
+            rvr6.pack({"a": {"n": np.array([2 ** 63], dtype=np.uint64)},
+                       "b": {"n": np.array([-1], dtype=np.int64)}},
+                      weighted={"a": False, "b": False})
+        # a bound the header cannot hold as a float is a format error, not a crash
+        with self.assertRaisesRegex(rvr6.FormatError, "finite"):
+            rvr6.pack({"a": {"x": np.array([1.75e308])}}, weighted={"a": False})
+
+    def test_an_empty_sample_never_promotes_a_copy_before_it_is_stored(self):
+        meta, buf = rvr6.pack({"a": {"n": np.array([2 ** 62 + 1], dtype=np.int64)},
+                               "b": {"n": np.empty(0, dtype=np.float64)}},
+                              weighted={"a": False, "b": False},
+                              sources={"n": {"class": "copy", "branch": "n", "dtype": "int64"}})
+        self.assertEqual(meta["data"]["cols"][0]["kind"], "i8")
+        np.testing.assert_array_equal(rvr6.columns(meta, buf)["n"], [2 ** 62 + 1])
+
+    def test_native_kinds_are_version_8_only(self):
+        meta, buf = rvr6.pack({"s": {"n": np.array([1, 2], dtype=np.uint8)}}, weighted={"s": False},
+                              sources={"n": {"class": "copy", "branch": "n", "dtype": "uint8"}})
+        self.assertEqual(meta["data"]["cols"][0]["vals"], [1, 2])
+        meta["rowver"] = 7
+        del meta["data"]["cols"][0]["sha256"]
+        with self.assertRaisesRegex(rvr6.FormatError, "unknown kind"):
+            rvr6.check(meta, buf)
+
     def test_promote_and_shadow_does_not_delete_tab_state(self):
         meta = copy.deepcopy(self.meta)
         meta["tabs"] = [

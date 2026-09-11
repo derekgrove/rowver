@@ -17,8 +17,8 @@ it DONE here with the commit hash in the same commit that lands the work.
 | 5 optional trims | DONE | 2e77040 |
 | 6 docs | DONE | 8b8b9cc |
 | 7 readability pass | DONE | a5dfbc9 |
-| 8.1 v8 provenance | DONE | filled by the next step (a commit cannot carry its own) |
-| 8.2 v8 native dtypes | TODO | |
+| 8.1 v8 provenance | DONE | bd08af2 |
+| 8.2 v8 native dtypes | DONE | filled by the next step (a commit cannot carry its own) |
 | 8.3 v8 jagged copies | TODO | |
 | 8.4 FORMAT8 and corpus | TODO | |
 
