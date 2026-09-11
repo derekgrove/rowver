@@ -65,7 +65,7 @@ class _Skimmed(NamedTuple):
     """One source's results as a parallel worker returns them."""
     sample: str
     scanned: int
-    rows: dict[str, np.ndarray]
+    rows: dict[str, Any]
     weight: np.ndarray | None
     trace: Trace
 
@@ -357,10 +357,29 @@ def _read_dtype(seen: set[str]) -> np.dtype | None:
     return dtype
 
 
-def _joined(arrays: list[np.ndarray]) -> np.ndarray:
-    """Concatenate chunks, letting only populated ones decide the dtype."""
-    populated = [a for a in arrays if a.size]
-    return np.concatenate(populated or arrays) if arrays else np.empty(0, dtype=np.float64)
+def _flat(column: np.ndarray | rvr6.Jagged) -> np.ndarray:
+    """The values a column stores: a Jagged's content, else the array itself."""
+    return column.content if isinstance(column, rvr6.Jagged) else column
+
+
+def _cast(column: np.ndarray | rvr6.Jagged, dtype: np.dtype) -> np.ndarray | rvr6.Jagged:
+    """The column with its values in ``dtype``."""
+    if isinstance(column, rvr6.Jagged):
+        return rvr6.Jagged(column.counts, column.content.astype(dtype, copy=False))
+    return column.astype(dtype, copy=False)
+
+
+def _joined(pieces: list, where: str) -> np.ndarray | rvr6.Jagged:
+    """Concatenate one column's chunks; populated chunks decide the dtype, and an empty flat chunk never decides the shape."""
+    lists = [piece for piece in pieces if isinstance(piece, rvr6.Jagged)]
+    flat = [piece for piece in pieces if not isinstance(piece, rvr6.Jagged)]
+    if lists and any(piece.size for piece in flat):
+        raise CartError(f"{where} is one value per event in some chunks and one list per event in others")
+    if lists:
+        return rvr6.Jagged(np.concatenate([piece.counts for piece in lists]),
+                           _joined([piece.content for piece in lists], where))
+    populated = [piece for piece in flat if piece.size]
+    return np.concatenate(populated or flat) if flat else np.empty(0, dtype=np.float64)
 
 
 def _notify(progress: Any, event: str, *args: Any) -> None:
@@ -379,12 +398,17 @@ class _Capacity:
         self.joined: dict[str, dict[str, set[str]]] = {name: {} for name in cart.columns}
         self.span: dict[str, tuple[int, int]] = {}
         self.derived: set[str] = set()
+        self.lists: set[str] = set()
+        self.items: dict[str, int] = {name: 0 for name in cart.columns}
         weighted = any(entry["metadata"]["weights"] is not None
                        for entry in cart.fileset.values())
         self.row_bytes = 4 + (8 if weighted else 0)
 
-    def observe(self, sample: str, name: str, column: np.ndarray, derived: bool) -> None:
-        """Record one chunk of a column as pack will see it: its dtype and, for populated integers, their range."""
+    def observe(self, sample: str, name: str, column: np.ndarray | rvr6.Jagged, derived: bool) -> None:
+        """Record one chunk of a column as pack will see it: its shape, its dtype, and for populated integers their range."""
+        if isinstance(column, rvr6.Jagged):
+            self.lists.add(name)
+        column = _flat(column)
         self.read[name].add(str(column.dtype))
         if derived:
             self.derived.add(name)
@@ -398,11 +422,11 @@ class _Capacity:
             self.span[name] = (lo, hi)
 
     def state(self) -> tuple:
-        return self.read, self.joined, self.span, self.derived
+        return self.read, self.joined, self.span, self.derived, self.lists
 
     def merge(self, state: tuple) -> None:
         """Union what a worker observed."""
-        read, joined, span, derived = state
+        read, joined, span, derived, lists = state
         for name in self.read:
             self.read[name] |= read[name]
             for sample, dtypes in joined[name].items():
@@ -412,12 +436,19 @@ class _Capacity:
                 lo, hi = min(lo, self.span[name][0]), max(hi, self.span[name][1])
             self.span[name] = (lo, hi)
         self.derived |= derived
+        self.lists |= lists
 
-    def add(self, sample: str, kept: int) -> None:
-        """Count kept rows, then refuse once the packed buffer would exceed the limit."""
+    def add(self, sample: str, kept: int, items: Mapping[str, int]) -> None:
+        """Count kept rows and list items, then refuse once the packed buffer would exceed the limit."""
         self.rows += kept
-        packed = self.rows * self.row_bytes + sum(
-            (self.rows * self._bits(name) + 7) // 8 for name in self.read)
+        for name, count in items.items():
+            self.items[name] += count
+        packed = self.rows * self.row_bytes
+        for name in self.read:
+            values = self.items[name] if name in self.lists else self.rows
+            packed += (values * self._bits(name) + 7) // 8
+            if name in self.lists:
+                packed += 8 * (self.rows + 1)
         if packed > rvr6.MAX_DATA_BYTES:
             raise CartError(
                 f"the kept rows no longer fit the cartridge: "
@@ -482,6 +513,15 @@ def _one_dimensional(value: Any, where: str, *, boolean: bool = False) -> np.nda
     if out.dtype.kind == "f" and not np.isfinite(out).all():
         raise CartError(f"{where} contains NaN or infinity")
     return out
+
+
+def _column(value: Any, where: str) -> np.ndarray | rvr6.Jagged:
+    """One value per event as a NumPy array, or one list of numbers per event as a Jagged."""
+    if not isinstance(value, ak.Array) or value.ndim != 2:
+        return _one_dimensional(value, where)
+    counts = _one_dimensional(ak.num(value, axis=1), where)
+    return rvr6.Jagged(counts.astype(np.int64, copy=False),
+                       _one_dimensional(ak.flatten(value, axis=1), where))
 
 
 def _raise_parallel_error(kind: str, text: str) -> None:
@@ -550,8 +590,8 @@ def _parallel_worker(study: str, expected_hash: str, step_size: int | str,
                     scanned += raw
                     messages.send(("chunk", name, raw, kept))
 
-                def _size(self, name: str, kept: int, state: tuple) -> None:
-                    messages.send(("size", name, kept, state))
+                def _size(self, name: str, kept: int, items: dict, state: tuple) -> None:
+                    messages.send(("size", name, kept, items, state))
 
             entry = full_fileset[sample]
             cart.fileset = {sample: {
@@ -774,18 +814,18 @@ class Cart:
         return _Selection(prepared[mask], reads, rebuilt, writers)
 
     def _columns_of(self, selected: ak.Array, metadata: dict, sample: str
-                    ) -> tuple[dict[str, np.ndarray], dict[str, set[str]], set[tuple[str, ...]]]:
+                    ) -> tuple[dict[str, Any], dict[str, set[str]], set[tuple[str, ...]]]:
         """Evaluate every declared column; return the columns, what each selected, and which ones wrote."""
-        out: dict[str, np.ndarray] = {}
+        out: dict[str, np.ndarray | rvr6.Jagged] = {}
         reads: dict[str, set[str]] = {}
         writers: set[tuple[str, ...]] = set()
         for name, spec in self.columns.items():
             _READS.clear()
             _WRITES.clear()
             value = self._evaluate(spec, selected, metadata, f'COLUMNS["{name}"]')
-            column = _one_dimensional(value, f'{sample}.{name}')
-            if len(column) != len(selected):
-                raise CartError(f'{sample}.{name} returned {len(column)} values for '
+            column = _column(value, f'{sample}.{name}')
+            if rvr6.rows_in(column) != len(selected):
+                raise CartError(f'{sample}.{name} returned {rvr6.rows_in(column)} values for '
                                 f'{len(selected)} selected events')
             out[name] = column
             reads[name] = set(_READS)
@@ -812,11 +852,11 @@ class Cart:
         if not self._validated:
             self.validate()
         capacity = _Capacity(self)
-        output: dict[str, dict[str, np.ndarray]] = {}
+        output: dict[str, dict[str, Any]] = {}
         output_weights: dict[str, np.ndarray] = {}
         trace = Trace({}, set(), set(), {}, {})
         for sample, entry in self.fileset.items():
-            chunks: dict[str, list[np.ndarray]] = {name: [] for name in self.columns}
+            chunks: dict[str, list] = {name: [] for name in self.columns}
             weight_chunks: list[np.ndarray] = []
             touched: set[str] = set()
             for path, tree_name in entry["files"].items():
@@ -832,7 +872,7 @@ class Cart:
                                                                    sample)
                         for name, column in columns.items():
                             chunks[name].append(column)
-                            trace.dtypes.setdefault(name, set()).add(str(column.dtype))
+                            trace.dtypes.setdefault(name, set()).add(str(_flat(column).dtype))
                         rebuilt = selected.rebuilt or bool(writers)
                         hook_reads = selected.reads.union(*(reads[name] for _, name in writers))
                         for name, read in reads.items():
@@ -845,15 +885,18 @@ class Cart:
                             weight_chunks.append(
                                 self._weights_of(selected.events, metadata, sample))
                         kept = len(selected.events)
+                        items = {name: len(column.content) for name, column in columns.items()
+                                 if isinstance(column, rvr6.Jagged)}
                         for name, column in columns.items():
                             capacity.observe(sample, name, column, name in trace.derived)
-                        capacity.add(sample, kept)
+                        capacity.add(sample, kept, items)
                         size = getattr(progress, "_size", None)
                         if size is not None:
-                            size(sample, kept, capacity.state())
+                            size(sample, kept, items, capacity.state())
                         if progress is not None:
                             progress(sample, entries, kept)
-            output[sample] = {name: _joined(values) for name, values in chunks.items()}
+            output[sample] = {name: _joined(values, f"{sample}.{name}")
+                              for name, values in chunks.items()}
             if entry["metadata"]["weights"] is not None:
                 output_weights[sample] = (np.concatenate(weight_chunks) if weight_chunks
                                           else np.empty(0, dtype=np.float64))
@@ -906,8 +949,8 @@ class Cart:
                     if progress is not None:
                         progress(*body)
                 elif kind == "size":
-                    capacity.merge(body[2])
-                    capacity.add(*body[:2])
+                    capacity.merge(body[3])
+                    capacity.add(*body[:3])
                 elif kind == "result":
                     sample_at, source_at, sample, scanned, rows, weight, trace = body
                     if (sample_at, source_at) in results:
@@ -941,7 +984,8 @@ class Cart:
             pieces = [results[(sample_at, source_at)]
                       for source_at in range(len(entry["files"]))]
             output[sample] = {
-                name: _joined([piece.rows[name] for piece in pieces if piece.scanned])
+                name: _joined([piece.rows[name] for piece in pieces if piece.scanned],
+                              f"{sample}.{name}")
                 for name in self.columns
             }
             if entry["metadata"]["weights"] is not None:
@@ -1021,15 +1065,24 @@ class Cart:
         return {name for name, spec in self.columns.items()
                 if isinstance(spec, str) and name not in trace.derived}
 
-    def _as_read(self, output: dict[str, dict[str, np.ndarray]], trace: Trace) -> None:
-        """Cast every copy to the common dtype it was read as, so pack stores exactly that."""
+    def _as_read(self, output: dict[str, dict[str, Any]], trace: Trace) -> None:
+        """Give every sample each column's shape, then cast every copy to the common dtype it was read as."""
+        for name in self.columns:
+            lists = [arrays[name] for arrays in output.values() if isinstance(arrays[name], rvr6.Jagged)]
+            for arrays in output.values():
+                if lists and not isinstance(arrays[name], rvr6.Jagged):
+                    if arrays[name].size:
+                        raise CartError(f'column "{name}" is one value per event in some samples '
+                                        "and one list per event in others")
+                    arrays[name] = rvr6.Jagged(np.zeros(0, dtype=np.int64),
+                                               np.empty(0, dtype=lists[0].content.dtype))
         for name in self._copies(trace) & set(trace.dtypes):
             dtype = _read_dtype(trace.dtypes[name])
             if dtype is None:
                 raise CartError(f'column "{name}" was read as {", ".join(sorted(trace.dtypes[name]))}, '
                                 "which have no exact common dtype")
             for arrays in output.values():
-                arrays[name] = arrays[name].astype(dtype, copy=False)
+                arrays[name] = _cast(arrays[name], dtype)
 
     def _sources(self, trace: Trace) -> dict[str, dict]:
         """Per-column provenance for every column that ran: a copy names its branch and dtype, a derived column its inputs."""
@@ -1064,7 +1117,7 @@ class Cart:
         for name, entry in self.fileset.items():
             samples.append({
                 "name": name,
-                "rows": len(next(iter(rows[name].values()))),
+                "rows": rvr6.rows_in(next(iter(rows[name].values()))),
                 "files": [{"path": path, "tree": tree, **files[path, tree]}
                           for path, tree in entry["files"].items()],
                 "metadata": {k: v for k, v in entry["metadata"].items() if k != "weights"},

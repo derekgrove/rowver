@@ -19,8 +19,9 @@ import tempfile
 import zlib
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Container, Iterator, Mapping
+from typing import Any, Container, Iterator, Mapping, NamedTuple
 
+import awkward as ak
 import numpy as np
 
 ROWVER = 8
@@ -49,6 +50,17 @@ NAMESPACES = ("sample", "sub", "group")
 
 class FormatError(ValueError):
     """A cartridge is malformed or contradicts its own column buffer."""
+
+
+class Jagged(NamedTuple):
+    """One list per event as two flat arrays: how many items each event has, and every item in event order."""
+    counts: np.ndarray
+    content: np.ndarray
+
+
+def rows_in(value: Jagged | np.ndarray) -> int:
+    """Events in a column value."""
+    return len(value.counts) if isinstance(value, Jagged) else len(value)
 
 
 def _fail(message: str) -> None:
@@ -97,6 +109,24 @@ def _pair(value: Any, where: str) -> tuple[float, float]:
 def _length(kind: str, rows: int) -> int:
     """Bytes a column of ``kind`` occupies for ``rows`` events."""
     return (rows + 7) // 8 if kind == "b1" else WIDTH[kind] * rows
+
+
+def _span(at: Any, kind: str, count: int, size: int, where: str) -> tuple[int, int]:
+    """Bounds-check an aligned span of ``count`` values of ``kind``; return its start and byte length."""
+    at = _nat(at, f"{where} offset")
+    length = _length(kind, count)
+    if at % WIDTH[kind] or at + length > size:
+        _fail(f"{where} is unaligned or outside the buffer")
+    return at, length
+
+
+def _spans(col: dict, rows: int) -> list[tuple[int, int]]:
+    """The ``(at, length)`` byte spans of a validated column: one, or offsets and content for a jagged one."""
+    if col["kind"] != "jagged":
+        return [(col["at"], _length(col["kind"], rows))]
+    content = col["content"]
+    return [(col["at"], _length("i8", rows + 1)),
+            (content["at"], _length(content["kind"], content["count"]))]
 
 
 def _made_source(value: Any, where: str, *, nullable: bool = True) -> None:
@@ -552,25 +582,37 @@ def _col_source(source: Any, where: str) -> None:
         _fail(f"{where} derived source needs from, reproducible, and python")
 
 
+def _jagged(col: dict, name: str, rows: int, size: int) -> list[tuple[int, int, str]]:
+    """Validate a jagged column's offsets and content spans; return them as byte ranges."""
+    content = col.get("content")
+    if not isinstance(content, dict) or not _option(content.get("kind"), WIDTH):
+        _fail(f'column "{name}" content needs a kind')
+    count = _nat(content.get("count"), f'column "{name}" content count')
+    at, length = _span(col.get("at"), "i8", rows + 1, size, f'column "{name}" offsets')
+    content_at, content_length = _span(content.get("at"), content["kind"], count, size,
+                                       f'column "{name}" content')
+    return [(at, at + length, f'column "{name}" offsets'),
+            (content_at, content_at + content_length, f'column "{name}" content')]
+
+
 def _column(col: Any, i: int, rows: int, size: int, version: int,
-            names: Container[str]) -> tuple[str, int, int]:
-    """Validate one column descriptor; return its name, offset, and byte length."""
+            names: Container[str]) -> tuple[str, list[tuple[int, int, str]]]:
+    """Validate one column descriptor; return its name and the byte ranges it occupies."""
     if not isinstance(col, dict):
         _fail(f"data.cols[{i}] must be an object")
     name, kind = col.get("name"), col.get("kind")
     if not isinstance(name, str) or not name.strip() or name in names:
         _fail(f"column {i} has an empty or duplicate name")
-    if not _option(kind, KINDS.get(version, WIDTH)):
-        _fail(f'column "{name}" has unknown kind {kind!r}')
-    length = _length(kind, rows)
-    at = _nat(col.get("at"), f'column "{name}" offset')
-    if at % WIDTH[kind] or at + length > size:
-        _fail(f'column "{name}" is unaligned or outside the buffer')
     if version >= 8:
         if not isinstance(col.get("sha256"), str):
             _fail(f'column "{name}" needs a sha256')
         if "source" in col:
             _col_source(col["source"], f'column "{name}"')
+        if kind == "jagged":
+            return name, _jagged(col, name, rows, size)
+    if not _option(kind, KINDS.get(version, WIDTH)):
+        _fail(f'column "{name}" has unknown kind {kind!r}')
+    at, length = _span(col.get("at"), kind, rows, size, f'column "{name}"')
     lim = _pair(col.get("lim"), f'column "{name}" lim')
     nice = _pair(col.get("nice"), f'column "{name}" nice')
     pcts = [_finite(col.get(f"p{q}"), f'column "{name}" p{q}') for q in PCTS]
@@ -586,25 +628,25 @@ def _column(col: Any, i: int, rows: int, size: int, version: int,
         if (any(isinstance(x, bool) or not isinstance(x, int) for x in vals)
                 or len(set(vals)) != len(vals)):
             _fail(f'column "{name}" categorical values must be unique integers')
-    return name, at, length
+    return name, [(at, at + length, f'column "{name}"')]
 
 
 def _columns(cols: list, rows: int, size: int, weight_col: str | None,
              version: int) -> tuple[dict[str, dict], list[tuple[int, int, str]]]:
-    """Validate data.cols; return descriptors by name and their byte ranges."""
+    """Validate data.cols; return the columns a view may cite, by name, and every byte range."""
     by_column: dict[str, dict] = {}
     ranges: list[tuple[int, int, str]] = []
     declared_bytes = _length("i4", rows) + (_length("f8", rows) if weight_col else 0)
     for i, col in enumerate(cols):
-        name, at, length = _column(col, i, rows, size, version, by_column)
+        name, spans = _column(col, i, rows, size, version, by_column)
         by_column[name] = col
-        ranges.append((at, at + length, f'column "{name}"'))
-        declared_bytes += length
+        ranges.extend(spans)
+        declared_bytes += sum(end - at for at, end, _ in spans)
     if weight_col in by_column:
         _fail(f'{weight_col!r} is both the weights column and a data column')
     if declared_bytes != size:
         _fail(f"column declarations need {declared_bytes} bytes; data declares {size}")
-    return by_column, ranges
+    return {name: col for name, col in by_column.items() if col["kind"] != "jagged"}, ranges
 
 
 def _offsets(data: dict, rows: int, size: int, weight_col: str | None,
@@ -654,12 +696,32 @@ def _hashes(slab: memoryview, data: dict, rows: int) -> None:
     if data["sha256"] != hashlib.sha256(slab).hexdigest():
         _fail("data.sha256 does not match the buffer")
     for col in data["cols"]:
-        span = slab[col["at"]:col["at"] + _length(col["kind"], rows)]
-        if col["sha256"] != hashlib.sha256(span).hexdigest():
+        digest = hashlib.sha256()
+        for at, length in _spans(col, rows):
+            digest.update(slab[at:at + length])
+        if col["sha256"] != digest.hexdigest():
             _fail(f'column "{col["name"]}" sha256 does not match its payload')
 
 
+def _jagged_payload(slab: memoryview, col: dict, rows: int) -> None:
+    """Offsets must start at 0, never decrease, and end at the content count; content must be finite."""
+    offsets = np.frombuffer(slab, dtype="<i8", count=rows + 1, offset=col["at"])
+    content = col["content"]
+    if offsets[0] != 0 or offsets[-1] != content["count"] or np.any(offsets[1:] < offsets[:-1]):
+        _fail(f'column "{col["name"]}" offsets do not describe its content')
+    if content["kind"] == "b1":
+        _bit_values(slab, content["at"], content["count"])
+    elif content["kind"][0] == "f":
+        values = np.frombuffer(slab, dtype="<" + content["kind"], count=content["count"],
+                               offset=content["at"])
+        if not np.isfinite(values).all():
+            _fail(f'column "{col["name"]}" contains NaN or infinity')
+
+
 def _column_payload(slab: memoryview, col: dict, rows: int) -> None:
+    if col["kind"] == "jagged":
+        _jagged_payload(slab, col, rows)
+        return
     if col["kind"] == "b1":
         actual_vals = _bit_values(slab, col["at"], rows)
         actual = [actual_vals[0], actual_vals[-1]] if rows else [0, 0]
@@ -887,7 +949,7 @@ def write(path: str | Path, meta: dict, buf: bytes) -> dict:
             "bytes": len(buf), "compressed": len(payload)}
 
 
-def _array(value: Any, where: str) -> np.ndarray:
+def _flat(value: Any, where: str) -> np.ndarray:
     if np.ma.isMaskedArray(value):
         _fail(f"{where} is masked; fill or reject missing values explicitly")
     try:
@@ -901,6 +963,16 @@ def _array(value: Any, where: str) -> np.ndarray:
     if out.dtype.kind == "f" and not np.isfinite(out).all():
         _fail(f"{where} contains NaN or infinity")
     return out
+
+
+def _array(value: Any, where: str) -> np.ndarray | Jagged:
+    """A flat numeric array, or a Jagged whose counts are non-negative and add up to its content."""
+    if not isinstance(value, Jagged):
+        return _flat(value, where)
+    counts, content = _flat(value.counts, f"{where} counts"), _flat(value.content, where)
+    if counts.dtype.kind not in "iu" or np.any(counts < 0) or counts.sum(dtype=object) != len(content):
+        _fail(f"{where} counts must be non-negative integers that add up to its content")
+    return Jagged(counts.astype(np.int64, copy=False), content)
 
 
 def _kind(arrays: list[np.ndarray], source: Mapping[str, Any] | None) -> str:
@@ -994,10 +1066,13 @@ def _pack_inputs(by_sample: Mapping[str, Mapping[str, Any]], weighted: Mapping[s
         if not isinstance(values, Mapping) or list(values) != column_names:
             _fail(f'sample "{sample}" does not have the same ordered columns')
         arrays[sample] = {name: _array(values[name], f'{sample}.{name}') for name in column_names}
-        lengths = {len(value) for value in arrays[sample].values()}
+        lengths = {rows_in(value) for value in arrays[sample].values()}
         if len(lengths) != 1:
             _fail(f'sample "{sample}" columns have different lengths')
         row_counts[sample] = lengths.pop()
+    for name in column_names:
+        if len({isinstance(arrays[sample][name], Jagged) for sample in sample_names}) != 1:
+            _fail(f'column "{name}" is one value per event in some samples and one list per event in others')
     return sample_names, column_names, arrays, row_counts
 
 
@@ -1054,33 +1129,51 @@ def _pack_buffer(sample_names: list[str], column_names: list[str],
     if weight_arrays:
         combined = np.concatenate([weight_arrays[name] for name in sample_names])
         data["weight_at"] = put(combined.astype("<f8", copy=False).tobytes())
-    entries: dict[str, dict] = {}
-    raws: dict[str, bytes] = {}
+    spans: list[tuple[str, bytes, dict]] = []
     for name in column_names:
-        kind = _kind([arrays[sample][name] for sample in sample_names], sources.get(name))
-        dtype = "u1" if kind == "b1" else "<" + kind
-        encoded = np.concatenate([arrays[sample][name].astype(dtype, copy=False)
-                                  for sample in sample_names])
-        raws[name] = (np.packbits(encoded, bitorder="little").tobytes() if kind == "b1"
-                      else encoded.tobytes())
-        entries[name] = {"name": name, "kind": kind, "at": 0,
-                         **({"source": dict(sources[name])} if name in sources else {}),
-                         "sha256": hashlib.sha256(raws[name]).hexdigest(),
-                         **_stats(encoded, kind[0] != "f")}
-    order = sorted(column_names, key=lambda name: (entries[name]["kind"] == "b1",
-                                                   -WIDTH[entries[name]["kind"]]))
-    wide = [name for name in order if WIDTH[entries[name]["kind"]] >= 4]
-    for name in wide:
-        entries[name]["at"] = put(raws[name])
+        values = [arrays[sample][name] for sample in sample_names]
+        entry: dict[str, Any] = {"name": name}
+        if isinstance(values[0], Jagged):
+            kind = _kind([value.content for value in values], sources.get(name))
+            offsets = np.zeros(rows + 1, dtype="<i8")
+            np.cumsum(np.concatenate([value.counts for value in values]), out=offsets[1:])
+            _, raw = _encoded(kind, [value.content for value in values])
+            entry.update(kind="jagged", at=0,
+                         content={"kind": kind, "at": 0, "count": int(offsets[-1])})
+            spans += [("i8", offsets.tobytes(), entry), (kind, raw, entry["content"])]
+            raw, stats = offsets.tobytes() + raw, {}
+        else:
+            kind = _kind(values, sources.get(name))
+            encoded, raw = _encoded(kind, values)
+            entry.update(kind=kind, at=0)
+            spans.append((kind, raw, entry))
+            stats = _stats(encoded, kind[0] != "f")
+        if name in sources:
+            entry["source"] = dict(sources[name])
+        entry["sha256"] = hashlib.sha256(raw).hexdigest()
+        entry.update(stats)
+        data["cols"].append(entry)
+    spans.sort(key=lambda span: (span[0] == "b1", -WIDTH[span[0]]))
+    wide = sum(WIDTH[kind] >= 4 for kind, _, _ in spans)
+    for kind, raw, owner in spans[:wide]:
+        owner["at"] = put(raw)
     index = np.concatenate([np.full(row_counts[name], i, dtype="<i4")
                             for i, name in enumerate(sample_names)])
     data["sample_at"] = put(index.tobytes())
-    for name in order[len(wide):]:
-        entries[name]["at"] = put(raws[name])
+    for kind, raw, owner in spans[wide:]:
+        owner["at"] = put(raw)
     buf = b"".join(pieces)
-    data["cols"] = [entries[name] for name in column_names]
     data["sha256"] = hashlib.sha256(buf).hexdigest()
     return data, buf
+
+
+def _encoded(kind: str, arrays: list[np.ndarray]) -> tuple[np.ndarray, bytes]:
+    """Concatenate ``arrays`` as ``kind``; return the values and their little-endian bytes, bits packed."""
+    dtype = "u1" if kind == "b1" else "<" + kind
+    values = np.concatenate([array.astype(dtype, copy=False) for array in arrays])
+    if kind == "b1":
+        return values, np.packbits(values, bitorder="little").tobytes()
+    return values, values.tobytes()
 
 
 def _cats(labels: Mapping[str, Mapping[Any, str]], cols: list[dict]) -> dict[str, Any]:
@@ -1120,30 +1213,37 @@ def pack(by_sample: Mapping[str, Mapping[str, Any]], *,
     return meta, buf
 
 
-def columns(meta: dict, buf: bytes, *, include_weights: bool = True) -> dict[str, np.ndarray]:
-    """Numeric views onto the buffer; boolean columns unpack to one-byte NumPy bool arrays."""
+def columns(meta: dict, buf: bytes, *, include_weights: bool = True
+            ) -> dict[str, np.ndarray | ak.Array]:
+    """Views onto the buffer: NumPy arrays, bools unpacked to one byte each, and Awkward arrays for jagged columns."""
     check(meta, buf)
     return _views(meta, buf, include_weights)
 
 
-def _views(meta: dict, buf: bytes, include_weights: bool) -> dict[str, np.ndarray]:
+def _values(buf: bytes, span: dict, count: int) -> np.ndarray:
+    """``count`` values of ``span["kind"]`` at ``span["at"]``; bits unpack to NumPy bools."""
+    if span["kind"] == "b1":
+        packed = np.frombuffer(buf, dtype=np.uint8, count=(count + 7) // 8, offset=span["at"])
+        return np.unpackbits(packed, count=count, bitorder="little").view(np.bool_)
+    return np.frombuffer(buf, dtype="<" + span["kind"], count=count, offset=span["at"])
+
+
+def _views(meta: dict, buf: bytes, include_weights: bool) -> dict[str, np.ndarray | ak.Array]:
     data, out = meta["data"], {}
     for col in data["cols"]:
-        if col["kind"] == "b1":
-            packed = np.frombuffer(buf, dtype=np.uint8, count=(data["rows"] + 7) // 8,
-                                   offset=col["at"])
-            out[col["name"]] = np.unpackbits(packed, count=data["rows"],
-                                             bitorder="little").view(np.bool_)
-            continue
-        out[col["name"]] = np.frombuffer(buf, dtype="<" + col["kind"],
-                                         count=data["rows"], offset=col["at"])
+        if col["kind"] == "jagged":
+            offsets = np.frombuffer(buf, dtype="<i8", count=data["rows"] + 1, offset=col["at"])
+            content = _values(buf, col["content"], col["content"]["count"])
+            out[col["name"]] = ak.unflatten(content, np.diff(offsets))
+        else:
+            out[col["name"]] = _values(buf, col, data["rows"])
     if include_weights and data.get("weight_col"):
         out[data["weight_col"]] = np.frombuffer(
             buf, dtype="<f8", count=data["rows"], offset=data["weight_at"])
     return out
 
 
-def read_by_sample(path: str | Path) -> tuple[dict, dict[str, dict[str, np.ndarray]]]:
+def read_by_sample(path: str | Path) -> tuple[dict, dict[str, dict[str, np.ndarray | ak.Array]]]:
     """Read a cartridge and split its columns by declared sample index."""
     meta, buf = read(path)
     data, all_columns = meta["data"], _views(meta, buf, True)
