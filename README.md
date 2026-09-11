@@ -163,7 +163,9 @@ example of a valid header.
 A cartridge includes the selected numeric columns and the exact `cart.py` provenance,
 including input paths. Review that metadata before sharing outside your collaboration.
 
-RowVer reads `.rvr` versions 6 and 7 and presses new cartridges as version 7.
+RowVer reads `.rvr` versions 6, 7, and 8 and presses new cartridges as version 8.
 [FORMAT7.md](FORMAT7.md) adds packed boolean columns to the
-[version 6 contract](FORMAT.md). `rowver/rvr6.py` remains the reference implementation.
-Existing v6-only viewers need a reader update before opening version 7 cartridges.
+[version 6 contract](FORMAT.md); [FORMAT8.md](FORMAT8.md) adds native dtypes,
+column provenance, payload digests, and jagged copies. `rowver/rvr6.py` remains
+the reference implementation. Viewers that read only version 6 or 7 need a reader
+update before opening version 8 cartridges.

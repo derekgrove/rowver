@@ -28,8 +28,8 @@ the evidence is reproducible.
 
 ## Independence boundary
 
-- `rowver` owns cartridge creation, source-data access, and the canonical v6
-  and v7 fixture corpora (ADR 0009).
+- `rowver` owns cartridge creation, source-data access, and the canonical v6,
+  v7, and v8 fixture corpora (the boundary is ADR 0009's; v8 is `FORMAT8.md`).
 - `rowver_web` owns browser interaction, rendering, save fidelity, viewer
   security, offline packaging, and deployment.
 - `rowver_verification` owns checks that reproduce product observables without

@@ -19,8 +19,8 @@ it DONE here with the commit hash in the same commit that lands the work.
 | 7 readability pass | DONE | a5dfbc9 |
 | 8.1 v8 provenance | DONE | bd08af2 |
 | 8.2 v8 native dtypes | DONE | ddf79b1 |
-| 8.3 v8 jagged copies | DONE | filled by the next step (a commit cannot carry its own) |
-| 8.4 FORMAT8 and corpus | TODO | |
+| 8.3 v8 jagged copies | DONE | 92cab56 |
+| 8.4 FORMAT8 and corpus | DONE | filled by the viewer handoff (a commit cannot carry its own); the `rowver_web` copy of `contract/v8` lands with that handoff |
 
 A step that needs an undecided D-item is skipped, not blocked on: take the next
 step and say so in the report.
@@ -43,7 +43,7 @@ step and say so in the report.
 |---|---|---|
 | CLI | `rowver new`, `rowver run` (`--out`, `--step-size`, `--parallel`, progress flags), `rowver check`, `rowver show` | `rowver extract …`, `rowver render` |
 | Library | `Cart`, `CartError`, `FormatError`, `study_names`; `rvr6.pack/write/read/check/read_by_sample` | `rowver.extract.*`, `rowver.builder`, `rowver.builder_spec` |
-| Format | v7 per `FORMAT7.md`; reads v6 and v7; writes v7 | storage-driven format changes (type pilots closed this); step 8's v8 is provenance and jagged copies, pending D6, D7 |
+| Format | v7 per `FORMAT7.md`; reads v6 and v7; writes v7; step 8 takes it to v8 per `FORMAT8.md` | storage-driven format changes (type pilots closed this); step 8's v8 is provenance and jagged copies, pending D6, D7 |
 | Owns | cartridge creation, source-data access, canonical `contract/v6` and `contract/v7` corpora | Python extraction, plot rendering, browser-builder helper, the viewer-resolver twin (`extract/core.py`) and its `contract/core` corpus |
 | Deps | numpy, awkward, uproot | aiohttp (`[live]`), matplotlib + mplhep (`[render]`) |
 

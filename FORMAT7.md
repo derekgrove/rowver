@@ -2,7 +2,8 @@
 
 Version 7 retains the container, metadata drawers, weighting, sample membership,
 and event-index semantics of [version 6](FORMAT.md). This document specifies its
-only changes. Readers support both versions; newly pressed cartridges use 7.
+only changes. Readers support both versions; newly pressed cartridges used 7 until
+[version 8](FORMAT8.md), which retains everything here.
 Saving an existing cartridge preserves its version, data drawer, and buffer.
 The historical `rvr6` Python module name remains a supported import path.
 

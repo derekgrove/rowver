@@ -2,8 +2,8 @@
 
 The container is ``gzip(u32 little-endian JSON length | UTF-8 JSON | column buffer)``.
 The header has five drawers: ``about``, ``data``, ``view``, ``tabs``, and ``made``.
-``data`` and the buffer are immutable once written; ``FORMAT.md`` and ``FORMAT7.md``
-define the rest.
+``data`` and the buffer are immutable once written; ``FORMAT.md``, ``FORMAT7.md``,
+and ``FORMAT8.md`` define the rest.
 """
 from __future__ import annotations
 

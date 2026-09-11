@@ -4,7 +4,8 @@ This is a dated status baseline, not a specification or backlog. It was split
 from the retroactive design record written on 2026-08-29 against RowVer Web
 `ce90b16`, RowVer `fd5931a`, and RowVer Verification `a8ac54c`; current repository
 behavior takes precedence. On 2026-09-10 the scope was narrowed to pressing
-(ADR 0009): extraction and rendering left this repository, and the format is v7.
+(ADR 0009): extraction and rendering left this repository. The format is v8
+since the same day (`FORMAT8.md`).
 
 ## Product
 
@@ -17,7 +18,7 @@ its selections locally. There are no accounts, synchronization, or hosted
 backend.
 
 This repository owns cartridge creation, source-data access, and the canonical
-v6 and v7 contract and fixture corpora. The `rowver_web` repository owns browser
+v6, v7, and v8 contract and fixture corpora. The `rowver_web` repository owns browser
 interaction, rendering, save fidelity, viewer security, offline packaging, and
 deployment. The `rowver_verification` repository owns independent end-to-end
 comparisons of viewer results and, since 2026-09-10, Python extraction and

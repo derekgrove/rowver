@@ -7,6 +7,8 @@ import json
 import unittest
 from pathlib import Path
 
+import awkward as ak
+
 from rowver import rvr6
 
 
@@ -17,7 +19,7 @@ def apply(meta: dict, operations: list[dict]) -> dict:
         path = operation["path"]
         for part in path[:-1]:
             target = target[part]
-        if operation["op"] == "set":
+        if operation.get("op", "set") == "set":
             target[path[-1]] = operation["value"]
         elif operation["op"] == "delete":
             del target[path[-1]]
@@ -66,6 +68,29 @@ class ContractCorpusTests(unittest.TestCase):
                 else:
                     with self.assertRaises(rvr6.FormatError):
                         rvr6.unframe(frame)
+
+    # Full-file pin for the hand-synced v8 corpus, like the v6 and v7 pins.
+    V8_CORPUS_SHA256 = "3ccd6e7019017cbb61849106ec38c2e5abc03261af079e9e0f15e62a058cff5c"
+
+    def test_v8_corpus_pinned(self):
+        raw = (Path(__file__).parents[1] / "contract/v8/cases.json").read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), self.V8_CORPUS_SHA256)
+
+    def test_shared_v8_cases(self):
+        corpus = json.loads((Path(__file__).parents[1] / "contract/v8/cases.json").read_text())
+        for case in corpus["cases"]:
+            with self.subTest(case=case["id"]):
+                meta = apply(corpus["base"], case.get("ops", []))
+                buf = bytearray(base64.b64decode(corpus["buffer_b64"]))
+                for at, value in case.get("bytes", []):
+                    buf[at] = value
+                if not case["accept"]:
+                    with self.assertRaises(rvr6.FormatError):
+                        rvr6.check(meta, buf)
+                    continue
+                arrays = rvr6.columns(meta, buf)
+                for name, values in corpus["expected"].items():
+                    self.assertEqual(ak.to_list(arrays[name]), values, name)
 
     def test_region_recipes_have_hard_complexity_limits(self):
         corpus = json.loads((Path(__file__).parents[1] / "contract/v6/cases.json").read_text())
