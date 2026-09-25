@@ -1,0 +1,13 @@
+tiny
+Samples: 2 | Files: 2 | Workers: 1
+
+Done  File                                                       Entries         Kept      Avg ev/s
+ 1/2  a.root                                                         200          159  <rate>
+ 2/2  b.root                                                         120           98  <rate>
+
+Samples
+  alpha: 159 rows
+  beta: 98 rows
+
+Wrote <study>/tiny.rvr
+257 rows | 5 columns | 0.0 MB | 0:00:00

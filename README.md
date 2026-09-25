@@ -74,3 +74,47 @@ rowver validate studies/my_study/my_study.rvr         # check the file agrees wi
 ```
 
 The file format is described in [FORMAT.md](FORMAT.md).
+
+## When a file cannot be read
+
+A file that cannot be opened or read is tried once more. If it fails again, the press
+names it, leaves it out, and carries on with the other files; the summary at the end
+says how many were left out. A sample none of whose files could be read is left out of
+the `.rvr` file. When no file at all can be read, nothing is written.
+
+## For programs: `--out` and `--progress json`
+
+```bash
+rowver --version                                             # rowver 11.1.0
+python -m rowver run studies/my_study --out /some/where.rvr --parallel 4 --progress json
+```
+
+`--out` writes the file somewhere other than `<study>/<study>.rvr`; a file half written
+when a press stops is removed, and an `--out` that names a folder, or sits under a
+file, ends with a `write` error. `--progress json` prints one JSON object per line on
+stdout instead of the table, and a recipe's own `print` goes to stderr. The exit status
+is 0 when the file was written and 1 otherwise. SIGTERM or SIGINT stops the press, ends
+its workers and exits 1.
+
+| `event` | fields |
+| --- | --- |
+| `start` | `study`, `samples`, `files`, `workers`, `presser` (the version), `out`, `inputs` (`[sample, path]` in recipe order) |
+| `file` | `index` (into `inputs`), `path`, `state`, and by state: `opening` (again on the retry); `reading` with `done`, `total`, `kept` (one line per 100,000 entries); `done` with `entries`, `kept`, `seconds`; `failed` with `message`, the reader's own |
+| `pack` | `rows`: every file is read and the columns are being written |
+| `wrote` | `path`, `rows`, `columns`, `bytes`, `seconds`, `failed` (`[{sample, path, message}]`), `left_out` (samples with no file read) |
+| `error` | `kind` (`recipe`, `input`, `write` or `cancelled`), `message`, `traceback` (empty for `input` and `cancelled`) |
+
+With `--parallel`, the recipe first runs on the first 1,000 events of the first file
+in the presser itself, so a broken hook is an `error` of kind `recipe` before any worker
+starts. Workers write their own `file` lines, each shorter than 512 bytes so lines from
+different workers never mix.
+
+## Tests
+
+```bash
+python -m pytest tests        # or, without pytest: python -m unittest discover -s tests
+```
+
+The tests write small ROOT files and press them locally. One test opens the pressed file
+with RowVer Web's own reader; it runs when `ROWVER_WEB` names a rowver_web checkout with
+a built `dist/validate.mjs`, and is skipped otherwise.
