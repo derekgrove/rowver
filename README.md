@@ -56,7 +56,18 @@ cp studies/simple/cart.py studies/my_study/
 ```
 
 Edit `studies/my_study/cart.py`: point it at your files, choose which events
-to `keep`, and list the `columns` you want. Then:
+to `keep`, and list the `columns` you want. Hooks such as `keep` go above the
+`# ---- recipe ----` line; below it, `FILESET`, `COLUMNS`, `LABELS` and `CART` hold plain
+values, which is what lets the RowVer app edit the file in a form
+([docs/recipe-dialect.md](docs/recipe-dialect.md)). Try the recipe on the first 1,000 events
+before pressing everything:
+
+```bash
+rowver check studies/my_study             # the first sample; --sample NAME, or --all for every one
+rowver probe root://.../some/file.root    # the trees and branches of one file, with first values
+```
+
+Then:
 
 ```bash
 rowver run studies/my_study
@@ -103,6 +114,27 @@ its workers and exits 1.
 | `pack` | `rows`: every file is read and the columns are being written |
 | `wrote` | `path`, `rows`, `columns`, `bytes`, `seconds`, `failed` (`[{sample, path, message}]`), `left_out` (samples with no file read) |
 | `error` | `kind` (`recipe`, `input`, `write` or `cancelled`), `message`, `traceback` (empty for `input` and `cancelled`) |
+
+`check`, `probe` and `recipe` speak JSON too, each with `--json`:
+
+```bash
+python -m rowver check studies/my_study --json [--sample NAME | --all] [--parallel N]
+python -m rowver probe some/file.root --json [--tree Events]
+python -m rowver recipe studies/my_study --json
+```
+
+- `check` prints a `start` line (`study`, `samples`, `workers`), then one line per sample:
+  `checked` with `index`, `sample`, `path`, `tree`, `entries`, `read`, `kept`, `touched` (the
+  branches the recipe read) and `columns` (`name`, `kind` of `flat`, `jagged` or
+  `unsupported`, `type`, `first` values, and a `note` when a column has the wrong number of
+  values); or `error` with `kind` `recipe` or `input`. A recipe that does not load, or a
+  `--sample` that is not in it, is one `error` line and nothing else. It exits 0 when every
+  sample was checked. Each sample costs one file open, so `--all` on many remote samples takes a while.
+- `probe` prints one `probe` line: `path`, `uuid`, `seconds` and `trees`, each with `name`,
+  `entries` and `branches` (`name`, `type`, `kind`, the first three values). NaN and
+  infinities come as the text `"nan"`, `"inf"` and `"-inf"`.
+- `recipe` reads `cart.py` without running it and prints what the app's form needs, or why
+  the file is shown as text; [docs/recipe-dialect.md](docs/recipe-dialect.md) has the fields.
 
 With `--parallel`, the recipe first runs on the first 1,000 events of the first file
 in the presser itself, so a broken hook is an `error` of kind `recipe` before any worker

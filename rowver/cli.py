@@ -1,13 +1,13 @@
-"""The rowver command: run, dump, validate."""
+"""The rowver command: run, check, probe, recipe, dump, validate."""
 import argparse
 import os
 import sys
 
-from . import __version__, dump, run, validate
+from . import __version__, check, dump, probe, recipe, run, validate
 
 
 def main():
-    """Parse the command line and hand off to run, dump, or validate."""
+    """Parse the command line and hand off to the command named."""
     parser = argparse.ArgumentParser(prog="rowver")
     parser.add_argument("--version", action="version", version=f"rowver {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -17,6 +17,20 @@ def main():
     press.add_argument("--parallel", nargs="?", const=os.cpu_count(), default=1, type=int, metavar="N")
     press.add_argument("--progress", choices=("table", "json"), default="table",
                        help="table for people (the default); json for one JSON object per line")
+    trying = commands.add_parser("check", help="try <study>/cart.py on the first 1,000 events of a sample's first file")
+    trying.add_argument("study")
+    which = trying.add_mutually_exclusive_group()
+    which.add_argument("--sample", metavar="NAME", help="the sample to try (default: the first)")
+    which.add_argument("--all", action="store_true", help="try every sample: one file open each")
+    trying.add_argument("--parallel", nargs="?", const=os.cpu_count(), default=1, type=int, metavar="N")
+    trying.add_argument("--json", action="store_true", help="one JSON object per line")
+    looking = commands.add_parser("probe", help="list a ROOT file's trees and branches with their first values")
+    looking.add_argument("file")
+    looking.add_argument("--tree", metavar="T", help="only this tree")
+    looking.add_argument("--json", action="store_true", help="one JSON object")
+    reading = commands.add_parser("recipe", help="read <study>/cart.py for the app's recipe form, without running it")
+    reading.add_argument("study")
+    reading.add_argument("--json", action="store_true", help="one JSON object")
     dump_parser = commands.add_parser("dump", help="print the inside of an .rvr file, or only the parts named")
     dump_parser.add_argument("file")
     dump_parser.add_argument("--fileset", action="store_true", help="only the files that were read")
@@ -26,6 +40,12 @@ def main():
     args = parser.parse_args()
     if args.command == "run":
         sys.exit(run.main(args.study, args.parallel, args.out, args.progress == "json"))
+    elif args.command == "check":
+        sys.exit(check.main(args.study, args.sample, args.all, args.parallel, args.json))
+    elif args.command == "probe":
+        sys.exit(probe.main(args.file, args.tree, args.json))
+    elif args.command == "recipe":
+        sys.exit(recipe.main(args.study, args.json))
     elif args.command == "dump":
         dump.main(args.file, args.fileset, args.cart, args.columns)
     else:

@@ -86,3 +86,52 @@ def rowver(*args, timeout=180, **extra):
     """Run `python -m rowver ...` from this checkout; the completed process."""
     return subprocess.run([sys.executable, "-m", "rowver", *map(str, args)], env=environment(**extra),
                           capture_output=True, text=True, timeout=timeout)
+
+
+NUMPY = {"bool": np.bool_, "float": np.float32, "double": np.float64, "int8_t": np.int8, "uint8_t": np.uint8,
+         "int16_t": np.int16, "uint16_t": np.uint16, "int32_t": np.int32, "uint32_t": np.uint32,
+         "int64_t": np.int64, "uint64_t": np.uint64}
+
+
+def values(rng, name, typename, size):
+    """Believable values for one NanoAOD-style branch, so a recipe's selection keeps some events."""
+    dtype = NUMPY[typename.removesuffix("[]")]
+    field = name.rsplit("_", 1)[-1]
+    if dtype is np.bool_:
+        return rng.random(size) < 0.8
+    if field == "charge":
+        return rng.choice(np.array([-1, 1], dtype=dtype), size)
+    if field == "eta":
+        return rng.normal(0, 1.4, size).astype(dtype)
+    if field == "phi":
+        return rng.uniform(-np.pi, np.pi, size).astype(dtype)
+    if "Iso" in name:
+        return rng.exponential(0.05, size).astype(dtype)
+    if "btag" in name:
+        return rng.random(size).astype(dtype)
+    if name == "genWeight":
+        return rng.choice(np.array([-1, 1]), size).astype(dtype) * 25000
+    if np.issubdtype(dtype, np.integer):
+        return rng.integers(0, 5, size).astype(dtype)
+    return (15 + rng.exponential(30, size)).astype(dtype)
+
+
+def nano(path, branches, events=1000, seed=0):
+    """A TTree like a NanoAOD file's, holding only the branches named ({name: typename}): each
+    collection's jagged branches share one counter, which uproot writes as n<Collection>."""
+    rng = np.random.default_rng(seed)
+    collections = sorted({name.split("_", 1)[0] for name, typename in branches.items() if typename.endswith("[]")})
+    data = {}
+    for collection in collections:
+        counts = rng.integers(0, 5, events)
+        data[collection] = ak.zip({name.split("_", 1)[1]: ak.unflatten(values(rng, name, typename, int(counts.sum())),
+                                                                        counts)
+                                   for name, typename in branches.items()
+                                   if typename.endswith("[]") and name.split("_", 1)[0] == collection})
+    for name, typename in branches.items():
+        if not typename.endswith("[]") and not (name[:1] == "n" and name[1:] in collections):
+            data[name] = values(rng, name, typename, events)
+    with uproot.recreate(path) as out:
+        out.mktree("Events", {name: array.type.content if isinstance(array, ak.Array) else array.dtype
+                              for name, array in data.items()})
+        out["Events"].extend(data)

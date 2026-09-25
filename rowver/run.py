@@ -117,13 +117,20 @@ def evaluate(cart, events, metadata):
     return {name: guarded(f"column {name}", value, spec, events, metadata) for name, spec in cart.columns.items()}
 
 
-def touched(cart, tree, metadata):
-    """The branches the recipe reads, found by running it on the first events of a tree."""
+def trial(cart, tree, metadata, stop=PROBE):
+    """Run the recipe on the first events of a tree: the branches it read, the events read and kept,
+    and the columns it made from them."""
     touched = set()
     wrap = lambda events: events if isinstance(events, Probe) else Probe(events, touched)
-    events = wrap(tree.arrays(entry_stop=PROBE))
-    evaluate(cart, select(cart, events, metadata, wrap), metadata)
-    return sorted(touched & set(tree.keys()))
+    events = wrap(tree.arrays(entry_stop=stop))
+    kept = select(cart, events, metadata, wrap)
+    columns = evaluate(cart, kept, metadata)
+    return sorted(touched & set(tree.keys())), len(events), len(kept), columns
+
+
+def touched(cart, tree, metadata):
+    """The branches the recipe reads, found by running it on the first events of a tree."""
+    return trial(cart, tree, metadata)[0]
 
 
 def tree_of(path, spec):

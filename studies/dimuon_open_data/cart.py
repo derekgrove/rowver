@@ -6,9 +6,6 @@ import numpy as np
 
 from rowver import Cart
 
-MUONS = ("https://opendata.cern.ch/eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/"
-         "Run2012BC_DoubleMuParked_Muons.root")
-
 
 def prepare(events):
     """Order each event's muons by pT, highest first; this file does not."""
@@ -34,23 +31,50 @@ def charge(events):
     return events.Muon_charge[:, 0] + events.Muon_charge[:, 1]
 
 
+def muon1_pt(events):
+    """The leading muon's pT."""
+    return events.Muon_pt[:, 0]
+
+
+def muon1_eta(events):
+    """The leading muon's eta."""
+    return events.Muon_eta[:, 0]
+
+
+def muon2_pt(events):
+    """The second muon's pT."""
+    return events.Muon_pt[:, 1]
+
+
+# ---- recipe ----
 FILESET = {
-    "DoubleMuParked 2012B+C": {"files": {MUONS: {"tree": "Events", "stop": 800_000}}, "metadata": {}},
+    "DoubleMuParked 2012B+C": {
+        "files": {
+            "https://opendata.cern.ch/eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/Run2012BC_DoubleMuParked_Muons.root": {"tree": "Events", "stop": 800000},
+        },
+        "metadata": {},
+    },
+}
+
+COLUMNS = {
+    "mass": mass,
+    "charge": charge,
+    "Nmuon": "nMuon",
+    "Muon1_pt": muon1_pt,
+    "Muon1_eta": muon1_eta,
+    "Muon2_pt": muon2_pt,
+}
+
+LABELS = {
+    "charge": {-2: "mu- mu-", 0: "mu+ mu-", 2: "mu+ mu+"},
 }
 
 CART = Cart(
     fileset=FILESET,
-    prepare=prepare,
+    columns=COLUMNS,
     keep=keep,
-    columns={
-        "mass": mass,
-        "charge": charge,
-        "Nmuon": "nMuon",
-        "Muon1_pt": lambda events: events.Muon_pt[:, 0],
-        "Muon1_eta": lambda events: events.Muon_eta[:, 0],
-        "Muon2_pt": lambda events: events.Muon_pt[:, 1],
-    },
-    labels={"charge": {-2: "mu- mu-", 0: "mu+ mu-", 2: "mu+ mu+"}},
+    prepare=prepare,
+    labels=LABELS,
     title="CMS Open Data dimuons",
     note="2012 DoubleMuParked (Runs B and C) from CMS Open Data, the first 800,000 events, those with two or more muons.",
 )
