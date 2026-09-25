@@ -1,5 +1,9 @@
-"""Press ROOT ntuples into .rvr cartridges."""
-from .press import Cart, CartError, study_names
-from .rvr import FormatError
+"""What a recipe imports: `from rowver import Cart`."""
 
-__all__ = ["Cart", "CartError", "FormatError", "study_names"]
+
+class Cart:
+    """What a recipe exports: the fileset, the hooks, the columns, and labels."""
+
+    def __init__(self, *, fileset, columns, keep, prepare=None, labels=None, title=None, note=None):
+        self.fileset, self.columns, self.keep, self.prepare = fileset, columns, keep, prepare
+        self.labels, self.title, self.note = labels or {}, title, note

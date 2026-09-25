@@ -4,18 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rowver"
-version = "0.1.0"
-description = "Press ROOT ntuples into .rvr cartridges."
+version = "11.0.0"
+description = "Turn ROOT ntuples into .rvr files for RowVer Web."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = ["numpy", "awkward", "uproot"]
 
 [project.scripts]
 rowver = "rowver.cli:main"
 
-[tool.setuptools.packages.find]
-include = ["rowver*"]
-
-[tool.setuptools.package-data]
-rowver = ["studies/template/*"]
+[tool.setuptools]
+packages = ["rowver"]
