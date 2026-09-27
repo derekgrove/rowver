@@ -16,12 +16,14 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import uproot
 
 from . import rvr, terminal
 from .terminal import JsonProgress, Progress
 
 PROBE = 1000
+ENTRY = "__rowver_entry__"  # each event's entry number, carried through prepare and keep
 STEP = 100_000
 GRACE = 3.0  # seconds the main thread has to take a signal before the watchdog ends the press
 
@@ -117,11 +119,19 @@ def call(hook, events, metadata):
     return hook(events, metadata) if len(inspect.signature(hook).parameters) == 2 else hook(events)
 
 
-def select(cart, events, metadata, wrap=lambda events: events):
-    """Run prepare and keep on one chunk; return the survivors."""
+def select(cart, events, metadata, first=0, wrap=lambda events: events):
+    """Run prepare and keep on one chunk whose first entry is `first`; return the survivors and each
+    survivor's entry number. The number rides along as a field, so whatever prepare and keep do
+    (select, reorder), every row keeps the entry it came from."""
+    events[ENTRY] = np.arange(first, first + len(events), dtype=np.int64)
     if cart.prepare is not None:
         events = wrap(guarded("prepare", call, cart.prepare, events, metadata))
-    return guarded("keep", lambda: events[call(cart.keep, events, metadata)])
+    kept = guarded("keep", lambda: events[call(cart.keep, events, metadata)])
+    try:
+        return kept, np.asarray(kept[ENTRY], dtype=np.int64)
+    except Exception as error:
+        raise RecipeError("prepare or keep returned events without the fields they were given "
+                          f"({describe(error)}); add fields to the events, or select from them") from error
 
 
 def value(spec, events, metadata):
@@ -140,7 +150,7 @@ def trial(cart, tree, metadata, stop=PROBE):
     touched = set()
     wrap = lambda events: events if isinstance(events, Probe) else Probe(events, touched)
     events = wrap(tree.arrays(entry_stop=stop))
-    kept = select(cart, events, metadata, wrap)
+    kept, _ = select(cart, events, metadata, wrap=wrap)
     columns = evaluate(cart, kept, metadata)
     return sorted(touched & set(tree.keys())), len(events), len(kept), columns
 
@@ -156,21 +166,24 @@ def tree_of(path, spec):
 
 
 def read(cart, metadata, path, spec, show=lambda done, total, kept: None):
-    """Skim one file, or its first `stop` entries: columns, file record, entries scanned, rows kept."""
+    """Skim one file, or its first `stop` entries: columns, file record, the entry number of each kept
+    row, entries scanned, rows kept."""
     tree_name, stop = (spec, None) if isinstance(spec, str) else (spec["tree"], spec["stop"])
     tree = tree_of(path, spec)
     record = {"tree": tree_name, "uuid": str(tree.file.uuid), "entries": int(tree.num_entries)}
     if stop is not None:
         record["stop"] = stop
     total = tree.num_entries if stop is None else min(stop, tree.num_entries)
-    columns, done, kept = {name: [] for name in cart.columns}, 0, 0
+    columns, entries, done, kept = {name: [] for name in cart.columns}, [], 0, 0
     for chunk in tree.iterate(touched(cart, tree, metadata), step_size=STEP, entry_stop=stop):
-        events = select(cart, chunk, metadata)
+        events, numbers = select(cart, chunk, metadata, done)
+        entries.append(numbers)
         for name, array in evaluate(cart, events, metadata).items():
             columns[name].append(array)
         done, kept = done + len(chunk), kept + len(events)
         show(done, total, kept)
-    return columns, {path: record}, done, kept
+    entries = np.concatenate(entries) if entries else np.empty(0, np.int64)
+    return columns, {path: record}, entries, done, kept
 
 
 def twice(action):
@@ -189,7 +202,8 @@ def twice(action):
 
 
 def attempt(cart, sample, path, spec, progress):
-    """Read one file with one retry, reporting it done or failed: (columns, files, entries, kept) or None."""
+    """Read one file with one retry, reporting it done or failed: (columns, files, entry numbers,
+    entries scanned, rows kept) or None."""
     metadata = {**cart.fileset[sample]["metadata"], "file": path}
 
     def once():
@@ -203,8 +217,8 @@ def attempt(cart, sample, path, spec, progress):
     if result is None:
         progress.failed(path, reason)
         return None, reason
-    progress.finish(path, *result[2:])
-    return result[:4], None
+    progress.finish(path, *result[3:])
+    return result[:5], None
 
 
 def read_in_worker(study, sample, path, spec, place, json):
@@ -255,7 +269,7 @@ def skim(cart, jobs, progress, failed):
         if result is None:
             failed.append({"sample": sample, "path": path, "message": reason})
         else:
-            pieces[sample].append(result[:2])
+            pieces[sample].append(result[:3])
     return pieces
 
 
@@ -291,9 +305,9 @@ def skim_parallel(cart, study, jobs, workers, progress, failed):
                 if not progress.json:
                     progress.failed(path, reason)
             else:
-                finished[futures[future]] = (sample, result[:2])
+                finished[futures[future]] = (sample, result[:3])
                 if not progress.json:
-                    progress.finish(path, *result[2:])
+                    progress.finish(path, *result[3:])
     except BaseException:
         stop(pool)
         raise
@@ -306,10 +320,14 @@ def skim_parallel(cart, study, jobs, workers, progress, failed):
 
 
 def gather(cart, pieces):
-    """Join each sample's columns and file records, leaving out a sample none of whose files was read."""
-    return {sample: {"columns": {name: rvr.join([p for c, _ in pieces[sample] for p in c[name]])
+    """Join each sample's columns, entry numbers and file records, and list its files in row order with
+    the rows each gave, leaving out a sample none of whose files was read."""
+    return {sample: {"columns": {name: rvr.join([p for c, _, _ in pieces[sample] for p in c[name]])
                                  for name in cart.columns},
-                     "files": {path: record for _, files in pieces[sample] for path, record in files.items()}}
+                     "entry": np.concatenate([e for _, _, e in pieces[sample]]),
+                     "files": {path: record for _, files, _ in pieces[sample] for path, record in files.items()},
+                     "inputs": [{"sample": sample, "path": path, "rows": len(e)}
+                                for _, files, e in pieces[sample] for path in files]}
             for sample in cart.fileset if pieces[sample]}
 
 
@@ -356,13 +374,13 @@ def press(study, workers, target, json, stage):
     progress.samples(samples)
     stage["kind"] = "recipe"  # packing fails only on column values the recipe made
     progress.pack(sum(len(next(iter(s["columns"].values()))) for s in samples.values()))
-    data, buffer = rvr.pack(samples, cart.labels)
+    data, arrays = rvr.pack(samples, cart.labels, [i for s in samples.values() for i in s["inputs"]])
     header = {"rowver": rvr.VERSION, "data": data,
               "made": made(study.name, cart, source, samples, imported)}
     stage["kind"] = "write"
     target.parent.mkdir(parents=True, exist_ok=True)
     stage["writing"] = True
-    rvr.write(target, header, buffer)
+    rvr.write(target, header, arrays)
     stage["writing"] = False
     progress.wrote(target, data["rows"], len(data["cols"]), target.stat().st_size, time.time() - start,
                    failed, [sample for sample in cart.fileset if sample not in samples])

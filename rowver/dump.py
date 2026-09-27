@@ -31,18 +31,19 @@ def print_cart(source):
     print("##### end cart.py #####")
 
 
-def print_columns(header, buffer):
-    """The buffer size, then one line per array."""
+def print_columns(header, section):
+    """The compressed size, then one line per array."""
     data = header["data"]
-    print(f"buffer {len(buffer)} bytes")
-    show("sample", rvr.span(buffer, data["sample_at"], "i4", data["rows"]))
+    print(f"arrays {len(section)} bytes compressed")
+    show("sample", rvr.array(section, data["sample"], "i4", data["rows"]))
+    show("entry", rvr.array(section, data["entry"], "i8", data["rows"]))
     for record in data["cols"]:
-        show(record["name"], rvr.column(header, buffer, record["name"]))
+        show(record["name"], rvr.column(header, section, record["name"]))
 
 
 def main(path, fileset=False, cart=False, columns=False):
     """Print the parts asked for, or everything: header, recipe, arrays."""
-    header, buffer = rvr.read(path)
+    header, section = rvr.read(path)
     source = header["made"]["cart"]["source"]
     if not (fileset or cart or columns):
         header["made"]["cart"]["source"] = "[printed below as cart.py]"
@@ -50,7 +51,7 @@ def main(path, fileset=False, cart=False, columns=False):
         print()
         print_cart(source)
         print()
-        print_columns(header, buffer)
+        print_columns(header, section)
         return
     parts = []
     if fileset:
@@ -58,7 +59,7 @@ def main(path, fileset=False, cart=False, columns=False):
     if cart:
         parts.append(lambda: print_cart(source))
     if columns:
-        parts.append(lambda: print_columns(header, buffer))
+        parts.append(lambda: print_columns(header, section))
     for i, part in enumerate(parts):
         if i:
             print()

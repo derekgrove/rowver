@@ -164,6 +164,102 @@ class ParallelPress(Folder):
         self.assertEqual(list(parallel["made"]["files"]["alpha"]["files"]), [str(path) for path in paths])
 
 
+class Container(Folder):
+    """rowver 12: a plain header, each array compressed on its own, and each row's entry number."""
+
+    def test_entries_are_each_rows_place_in_its_file(self):
+        import numpy as np
+        import uproot
+        folder = study.make(self.root)
+        self.assertEqual(study.rowver("run", folder, "--parallel", "2").returncode, 0)
+        header, section = rvr.read(folder / "tiny.rvr")
+        data = header["data"]
+        entry = rvr.array(section, data["entry"], "i8", data["rows"])
+        self.assertEqual([(f["sample"], Path(f["path"]).name) for f in data["files"]],
+                         [("alpha", "a.root"), ("beta", "b.root")])
+        start = 0
+        for f in data["files"]:
+            muons = uproot.open(f["path"])["Events"]["nMuon"].array(library="np")
+            self.assertEqual(entry[start:start + f["rows"]].tolist(), np.flatnonzero(muons >= 1).tolist())
+            self.assertTrue((rvr.column(header, section, "Nmuon")[start:start + f["rows"]]
+                             == muons[muons >= 1]).all())
+            start += f["rows"]
+        self.assertEqual(start, data["rows"])
+
+    def test_the_header_is_plain_and_the_arrays_follow_it(self):
+        folder = study.make(self.root)
+        self.assertEqual(study.rowver("run", folder).returncode, 0)
+        raw = (folder / "tiny.rvr").read_bytes()
+        self.assertEqual(raw[:8], b"\x89RVR\r\n\x1a\n")
+        length = int.from_bytes(raw[8:12], "little")
+        header = json.loads(raw[12:12 + length])
+        self.assertEqual(header["rowver"], 12)
+        records = [record for record, *_ in rvr.blocks(header["data"])]
+        self.assertEqual(sum(r["size"] for r in records), len(raw) - 12 - length)
+        self.assertEqual(header["data"]["sha256"], rvr.data_checksum(header["data"]))
+
+    def test_validate_names_a_damaged_array_and_bytes_after_the_last(self):
+        folder = study.make(self.root)
+        self.assertEqual(study.rowver("run", folder).returncode, 0)
+        path = folder / "tiny.rvr"
+        good = path.read_bytes()
+        header, _ = rvr.read(path)
+        met = next(c for c in header["data"]["cols"] if c["name"] == "MET")
+        where = len(good) - sum(r["size"] for r, *_ in rvr.blocks(header["data"])) + met["at"] + met["size"] // 2
+        path.write_bytes(good[:where] + bytes([good[where] ^ 0xFF]) + good[where + 1:])
+        result = study.rowver("validate", path)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FAIL MET: decompresses to", result.stdout)
+        path.write_bytes(good + b"\0")
+        result = study.rowver("validate", path)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FAIL arrays fill the file in order, end to end", result.stdout)
+
+    def test_entries_follow_events_that_prepare_selects_and_reorders(self):
+        import numpy as np
+        import uproot
+        extra = ("import awkward as ak\n\n\ndef prep(events):\n"
+                 "    events = events[events.MET > 20]\n"
+                 "    return events[ak.argsort(events.MET)]\n")
+        folder = study.make(self.root, extra=extra)
+        cart = folder / "cart.py"
+        cart.write_text(cart.read_text(encoding="utf-8").replace("keep=keep,", "keep=keep, prepare=prep,"),
+                        encoding="utf-8")
+        result = study.rowver("run", folder)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        header, section = rvr.read(folder / "tiny.rvr")
+        data = header["data"]
+        entry, met = rvr.array(section, data["entry"], "i8", data["rows"]), rvr.column(header, section, "MET")
+        start = 0
+        for f in data["files"]:
+            root = uproot.open(f["path"])["Events"]["MET"].array(library="np")
+            rows = slice(start, start + f["rows"])
+            self.assertTrue((root[entry[rows]] == met[rows]).all())
+            start += f["rows"]
+        self.assertTrue((np.diff(met[:data["files"][0]["rows"]]) >= 0).all(), "prepare's order is kept")
+        self.assertEqual(study.rowver("validate", folder / "tiny.rvr").returncode, 0)
+
+    def test_a_prepare_that_returns_new_events_is_a_recipe_error(self):
+        extra = ("import awkward as ak\n\n\ndef prep(events):\n"
+                 "    return ak.zip({'nMuon': events.nMuon, 'MET': events.MET, 'Muon_pt': events.Muon_pt, 'q': events.q})\n")
+        folder = study.make(self.root, extra=extra)
+        cart = folder / "cart.py"
+        cart.write_text(cart.read_text(encoding="utf-8").replace("keep=keep,", "keep=keep, prepare=prep,"),
+                        encoding="utf-8")
+        result = study.rowver("run", folder, "--progress", "json")
+        self.assertNotEqual(result.returncode, 0)
+        last = lines(result.stdout)[-1]
+        self.assertEqual((last["event"], last["kind"]), ("error", "recipe"), last)
+        self.assertIn("without the fields they were given", last["message"])
+
+    def test_validate_refuses_a_file_that_is_not_rowver_12(self):
+        path = self.root / "old.rvr"
+        path.write_bytes(b"\x1f\x8b" + bytes(64))
+        result = study.rowver("validate", path, path)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.count("FAIL a rowver 12 file"), 2, result.stdout)
+
+
 class RecipeModules(Folder):
     """A recipe that imports modules from its own folder carries them in made.cart.modules."""
 
@@ -313,8 +409,8 @@ import sys
 from pathlib import Path
 from rowver import rvr, run
 
-def half(path, header, buffer):
-    Path(path).write_bytes(b"\\x1f\\x8b" + bytes(4096))
+def half(path, header, arrays):
+    Path(path).write_bytes(rvr.MAGIC + bytes(4096))
     print("on disk", Path(path).stat().st_size, file=sys.stderr)
     raise OSError(28, "No space left on device")
 
@@ -347,7 +443,7 @@ class WriteFailures(Folder):
         folder = study.make(self.root)
         result = subprocess.run([sys.executable, "-c", HALF_WRITE, str(folder)], env=study.environment(),
                                 capture_output=True, text=True, timeout=180)
-        self.assertIn("on disk 4098", result.stderr)
+        self.assertIn("on disk 4104", result.stderr)
         error = self.ends_in_a_write_error(result)
         self.assertIn("No space left on device", error["message"])
         self.assertFalse((folder / "tiny.rvr").exists())

@@ -1,15 +1,25 @@
 # The `.rvr` file
 
-Version 11. `rowver/rvr.py` is the code for everything here.
+Version 12. `rowver/rvr.py` is the code for everything here.
 
 ## Container
 
 ```
-gzip( u32 little-endian header length | UTF-8 JSON header | buffer )
+magic (8 bytes) | u32 little-endian header length | UTF-8 JSON header | arrays
 ```
 
-One gzip member. To read: gunzip, take 4 bytes as the header length, parse
-that many bytes as JSON, and everything after is the buffer.
+- The magic is the 8 bytes `89 52 56 52 0D 0A 1A 0A` (`\x89RVR\r\n\x1a\n`):
+  a high byte, the letters `RVR`, then CR LF, Ctrl-Z and LF, so a transfer that
+  strips the eighth bit or rewrites line ends breaks the file visibly.
+- The header is plain JSON, not compressed. A reader takes the length, parses
+  that many bytes, and has every fact about the file without touching the data.
+- The arrays follow the header with nothing between or after them. Each array
+  is compressed on its own (see Arrays), so a reader decompresses only the
+  arrays it needs, and a program that changes only the header writes the new
+  header and copies the arrays byte for byte.
+
+A reader refuses a file whose first 8 bytes are not the magic, whose `rowver`
+is not 12, or whose arrays do not fill the rest of the file exactly.
 
 ## Header
 
@@ -18,15 +28,12 @@ keys. Nothing else.
 
 ```json
 {
-  "rowver": 11,
+  "rowver": 12,
   "data": { },
   "made": { },
   "viewer": { }
 }
 ```
-
-`rowver: 11`, so a viewer can tell this file from a version 10 one, which
-stored weights, and no old file ever collides with a new number.
 
 ### `data` — written once, never rewritten
 
@@ -38,35 +45,52 @@ stored weights, and no old file ever collides with a new number.
     {"name": "TTJets DiLept",    "rows": 45062},
     {"name": "WJets HT 400-600", "rows": 85}
   ],
-  "sample_at": 0,
+  "files": [
+    {"sample": "TTJets DiLept",    "path": "/data/ttjets_1.root", "rows": 30211},
+    {"sample": "TTJets DiLept",    "path": "/data/ttjets_2.root", "rows": 14851},
+    {"sample": "WJets HT 400-600", "path": "/data/wjets.root",    "rows": 85}
+  ],
+  "sample": {"at": 0,     "size": 212,   "sha256": "…"},
+  "entry":  {"at": 212,   "size": 40115, "sha256": "…"},
   "cols": [
-    {"name": "MET",     "kind": "f4", "at": 541768,
+    {"name": "MET",     "kind": "f4", "at": 40327, "size": 120433, "sha256": "…",
      "lim": [150.1, 1583.2], "nice": [150, 1600]},
-    {"name": "channel", "kind": "u4", "at": 722016,
+    {"name": "channel", "kind": "u4", "at": 160760, "size": 3014, "sha256": "…",
      "lim": [0, 2], "nice": [0, 2], "vals": [0, 1, 2],
      "names": {"0": "hadronic", "1": "one lepton", "2": "two or more leptons"}},
-    {"name": "Jet_pt",  "kind": "jagged", "at": 902608,
-     "content": {"kind": "f4", "at": 1263792, "count": 352738}}
+    {"name": "Jet_pt",  "kind": "jagged",
+     "offsets": {"at": 163774, "size": 51230, "sha256": "…"},
+     "content": {"kind": "f4", "count": 352738, "at": 215004, "size": 1101877, "sha256": "…"}}
   ]
 }
 ```
 
-- `sha256` — SHA-256 of the complete raw buffer, as 64 hexadecimal characters.
-- `rows` — total kept events. One buffer row is one event.
+- `rows` — total kept events. One row is one event.
 - `samples` — in order. Rows of a sample are contiguous and follow this
-  order. Within a sample, rows follow the recipe's file order and each
-  file's entry order, however many files were read at once, so the same
-  recipe on the same inputs always lays out the same buffer.
-- `sample_at` — offset of `i4[rows]`, the index into `samples` for each row.
+  order.
+- `files` — every input file that was read, in row order: its sample, the
+  path or URL it was opened with (a key of that sample's `made.files`), and
+  the rows it gave, zero included. A file's rows are contiguous. Within a
+  sample, files follow the recipe's file order, however many files were read
+  at once, so the same recipe on the same inputs always lays out the same rows.
+- `sample` — the array `i4[rows]`: each row's index into `samples`.
+- `entry` — the array `i8[rows]`: each row's entry number in its file's tree,
+  counted from 0. Within a file each number appears once; the rows follow the
+  order `prepare` and `keep` left the events in, which is the entry order unless
+  a recipe reorders them. With `files`, it says which
+  event every row is, so a later program can read more branches for the same
+  rows without running the selection again.
 - `cols` — one record per column, in the recipe's `columns` order:
-  - `name`, `kind`, `at` always.
-  - flat columns add `lim` and `nice`; integer and boolean columns add
-    `vals` and `names` when the distinct values are few.
-  - jagged columns: `at` is the offsets span, `i8[rows + 1]`, and `content`
-    says where the values are, their kind, and how many. Event `i` owns
-    `content[offsets[i] : offsets[i + 1]]`.
+  - flat columns: `name`, `kind`, the array reference (`at`, `size`,
+    `sha256`) of `kind[rows]`, then the column facts: `lim` and `nice`, and on
+    integer and boolean columns `vals` and `names` when the distinct values
+    are few.
+  - jagged columns: `name`, `kind: "jagged"`, `offsets` (the array
+    `i8[rows + 1]`) and `content` (its `kind`, its `count`, and the array
+    `kind[count]`). Event `i` owns `content[offsets[i] : offsets[i + 1]]`.
+- `sha256` — see Checksums.
 
-There is no percentile ladder. A viewer holding the buffer can measure a
+There is no percentile ladder. A viewer holding a column can measure a
 quantile itself.
 
 ### `made` — the recipe snapshot
@@ -78,7 +102,7 @@ quantile itself.
   "title": "My study",
   "note": "Two local UL18 NanoAOD samples with a generator weight column.",
   "built": "2026-09-12T18:03:11Z",
-  "by": "rowver 11",
+  "by": "rowver 12",
   "cart": {
     "sha256": "…64 hex…",
     "source": "…the whole cart.py…",
@@ -87,7 +111,7 @@ quantile itself.
   "files": {
     "TTJets DiLept": {
       "files": {
-        "/data/ttjets.root": {
+        "/data/ttjets_1.root": {
           "tree": "Events",
           "uuid": "…ROOT file UUID…",
           "entries": 219310
@@ -128,38 +152,55 @@ builds its fileset. Sample metadata and callable objects are not copied.
 
 ### Checksums
 
-`data.sha256` covers every byte of the uncompressed buffer: sample indices,
-flat columns, jagged offsets and content, and zero padding. It
-does not cover the `data` JSON describing those arrays.
+Every array reference carries `sha256`: the SHA-256 of that array's
+uncompressed little-endian bytes (after undoing the shuffle), as 64
+hexadecimal characters.
+
+`data.sha256` is the SHA-256 of the ASCII text made by joining every array's
+`sha256`, with nothing between them, in file order (see Arrays). It
+fingerprints all the data without decompressing any of it. It does not cover
+the `data` JSON describing the arrays.
 
 `made.sha256` covers the complete `made` object, including `files`, except
 its own top-level `sha256` field. Serialize that object with
 `json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`,
 encode it as UTF-8, and take its SHA-256 as 64 hexadecimal characters.
-The existing `made.cart.sha256` still covers the saved recipe text alone,
-and each `made.cart.modules[path].sha256` covers that module's text alone.
+`made.cart.sha256` covers the saved recipe text alone, and each
+`made.cart.modules[path].sha256` covers that module's text alone.
 
-`rowver run` creates both checksums when building the file. Reading and
+`rowver run` creates every checksum when building the file. Reading and
 writing preserve them without recomputing them; `rowver validate` checks them.
-Tool keys are outside both checksums.
+Tool keys are outside every checksum.
 
 ### Tool keys
 
 One top-level object per tool, named for the tool. `rowver run` never writes
 one. Any program that saves an `.rvr` writes back every tool key it found.
 
-## Buffer
+## Arrays
 
-Little-endian arrays at the declared offsets.
+An array reference is `{"at", "size", "sha256"}`. `at` counts bytes from the
+start of the arrays (the byte after the header), so a new header of another
+length leaves every `at` unchanged. `size` is the compressed length. The
+uncompressed length is the number of values times the kind's width: `rows`
+values for `sample`, `entry` and flat columns, `rows + 1` for jagged offsets,
+`count` for jagged content.
 
-Layout: sample index, then each column in `cols` order
-(a jagged column is offsets then content). Every span starts on a multiple of
-8 bytes; the gap before it is zero. That is the whole rule. A reader uses the
-offsets and never the order.
+Each array is stored as:
 
-No end offsets are stored. A span ends at its start plus its number of
-values times the kind's byte width; that end is exclusive. Flat spans have
-`rows` values, jagged offsets have `rows + 1`, and jagged content has `count`.
+1. its values as little-endian bytes;
+2. byte-shuffled, when the kind is wider than one byte: every value's first
+   byte, then every value's second byte, and so on. With `n` values of width
+   `w`, output byte `j * n + i` is input byte `i * w + j`. Shuffling puts the
+   slowly changing bytes of neighbouring values together, which compresses
+   better;
+3. compressed as one zlib stream (RFC 1950: deflate with a 2-byte header and
+   an Adler-32 check), which Python's `zlib`, a browser's
+   `DecompressionStream("deflate")` and Rust's `flate2` all read.
+
+The arrays are written in file order, one after another from `at` 0, with no
+gap between them and nothing after the last: `sample`, `entry`, then each
+column in `cols` order (a jagged column is offsets then content).
 
 Kinds and widths:
 
@@ -169,7 +210,7 @@ Kinds and widths:
 | `i8`, `i4`, `i2`, `i1` | signed integer | 8, 4, 2, 1 |
 | `u8`, `u4`, `u2`, `u1` | unsigned integer | 8, 4, 2, 1 |
 | `b1` | boolean | 1 |
-| `jagged` | offsets `i8[rows + 1]` plus content of any flat kind | two spans |
+| `jagged` | offsets `i8[rows + 1]` plus content of any flat kind | two arrays |
 
 `b1` is one byte per value, 0 or 1, not packed bits.
 
@@ -191,6 +232,18 @@ No promotion rule.
 An empty column gets `lim: [0, 0]`, `nice: [0, 1]`, and `vals: []` where
 `vals` applies.
 
+A reader that loads a column later than the header can check it then: the
+sha256, the facts against the values, finite floats, and 0 or 1 in `b1`.
+
+## Selection
+
+Before `prepare` runs, every event gets a hidden field holding its entry
+number, and after `keep` each surviving event's field becomes its row's `entry`.
+So `prepare` may add fields, select events or reorder them, and `keep` may
+select them any way awkward allows; the entry numbers follow the events. A
+`prepare` that returns new events without the fields it was given stops the
+press with a recipe error.
+
 ## Weights
 
 The file stores no weights. A weight is an ordinary column the recipe
@@ -199,5 +252,6 @@ several factors. A viewer decides which columns weight events and how.
 
 ## Not in the file
 
-Stored weights or a per-sample weighted flag. Checksums of individual
-columns. Per-column provenance. A structured copy of sample metadata or hooks. Percentiles. Reading older versions.
+Stored weights or a per-sample weighted flag. Per-column provenance. A
+structured copy of sample metadata or hooks. Percentiles. Any older version:
+a reader of version 12 reads version 12 only.
