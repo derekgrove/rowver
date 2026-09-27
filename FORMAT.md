@@ -54,7 +54,9 @@ stored weights, and no old file ever collides with a new number.
 - `sha256` — SHA-256 of the complete raw buffer, as 64 hexadecimal characters.
 - `rows` — total kept events. One buffer row is one event.
 - `samples` — in order. Rows of a sample are contiguous and follow this
-  order.
+  order. Within a sample, rows follow the recipe's file order and each
+  file's entry order, however many files were read at once, so the same
+  recipe on the same inputs always lays out the same buffer.
 - `sample_at` — offset of `i4[rows]`, the index into `samples` for each row.
 - `cols` — one record per column, in the recipe's `columns` order:
   - `name`, `kind`, `at` always.
@@ -77,7 +79,11 @@ quantile itself.
   "note": "Two local UL18 NanoAOD samples with a generator weight column.",
   "built": "2026-09-12T18:03:11Z",
   "by": "rowver 11",
-  "cart": {"sha256": "…64 hex…", "source": "…the whole cart.py…"},
+  "cart": {
+    "sha256": "…64 hex…",
+    "source": "…the whole cart.py…",
+    "modules": {"helpers.py": {"sha256": "…64 hex…", "source": "…"}}
+  },
   "files": {
     "TTJets DiLept": {
       "files": {
@@ -95,6 +101,19 @@ quantile itself.
 `title` and `note` are copied out of the cart, because the viewer
 cannot run Python to find them. Present only when the recipe set them.
 Nothing else is reconstructed from the snapshot.
+
+`cart.modules` holds every Python file inside the study folder, other
+than `cart.py`, that was imported when the recipe loaded: a `fileset.py`
+or `helpers.py` beside it, or `util/more.py` below it. Keys are paths
+relative to the study folder with `/` separators, in sorted order; each
+value holds the file's text, decoded as Python decodes source, and the
+SHA-256 of that text as UTF-8. It is present only when there is at least
+one such module. `cart.py` and its modules are read as the recipe loads,
+before any events, so a sequential and a parallel press record the same
+snapshot. Not copied: installed packages (anything under a
+`site-packages`, or a Python environment kept inside the study folder),
+files the recipe opens as data, and modules a hook imports only while
+events are read.
 
 `files` records the inputs actually processed, grouped by their recipe
 sample names. Each sample holds a `files` dict keyed by the full path or
@@ -117,7 +136,8 @@ does not cover the `data` JSON describing those arrays.
 its own top-level `sha256` field. Serialize that object with
 `json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`,
 encode it as UTF-8, and take its SHA-256 as 64 hexadecimal characters.
-The existing `made.cart.sha256` still covers the saved recipe text alone.
+The existing `made.cart.sha256` still covers the saved recipe text alone,
+and each `made.cart.modules[path].sha256` covers that module's text alone.
 
 `rowver run` creates both checksums when building the file. Reading and
 writing preserve them without recomputing them; `rowver validate` checks them.

@@ -96,7 +96,7 @@ the `.rvr` file. When no file at all can be read, nothing is written.
 ## For programs: `--out` and `--progress json`
 
 ```bash
-rowver --version                                             # rowver 11.1.0
+rowver --version                                             # rowver 11.2.0
 python -m rowver run studies/my_study --out /some/where.rvr --parallel 4 --progress json
 ```
 

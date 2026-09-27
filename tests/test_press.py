@@ -146,6 +146,100 @@ class ParallelPress(Folder):
         sequential = study.rowver("run", folder, "--out", self.root / "one.rvr", "--progress", "json")
         self.assertEqual(lines(sequential.stdout)[-1]["rows"], events[-1]["rows"])
 
+    def test_rows_come_in_fileset_order(self):
+        """The first file is the largest, so it finishes last; its rows still come first."""
+        folder = study.make(self.root, files={})
+        paths = [folder / f"a{n}.root" for n in range(4)]
+        for n, path in enumerate(paths):
+            study.tree(path, 200_000 if n == 0 else 100, n)
+        study.point(folder, {"alpha": paths})
+        result = study.rowver("run", folder, "--parallel", "4", "--progress", "json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        done = [event["index"] for event in files(lines(result.stdout), "done")]
+        self.assertEqual(done[-1], 0, "the large file should finish last for this test to mean anything")
+        self.assertEqual(study.rowver("run", folder, "--out", self.root / "one.rvr").returncode, 0)
+        parallel, _ = rvr.read(folder / "tiny.rvr")
+        sequential, _ = rvr.read(self.root / "one.rvr")
+        self.assertEqual(parallel["data"], sequential["data"])
+        self.assertEqual(list(parallel["made"]["files"]["alpha"]["files"]), [str(path) for path in paths])
+
+
+class RecipeModules(Folder):
+    """A recipe that imports modules from its own folder carries them in made.cart.modules."""
+
+    def test_modules_are_snapshotted(self):
+        extra = ("import sys\nfrom pathlib import Path\n"
+                 "sys.path.insert(0, str(Path(__file__).resolve().parent))\n"
+                 "import helper\n")
+        folder = study.make(self.root, extra=extra)
+        (folder / "helper.py").write_text("from util import more\n\nSCALE = more.SCALE\n", encoding="utf-8")
+        (folder / "util").mkdir()
+        (folder / "util" / "more.py").write_text("SCALE = 2  # é\n", encoding="utf-8")
+        (folder / "unused.py").write_text("NOT_IMPORTED = 1\n", encoding="utf-8")
+        result = study.rowver("run", folder)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        header, _ = rvr.read(folder / "tiny.rvr")
+        modules = header["made"]["cart"]["modules"]
+        self.assertEqual(list(modules), ["helper.py", "util/more.py"])
+        for path, module in modules.items():
+            text = (folder / path).read_text(encoding="utf-8")
+            self.assertEqual(module, {"sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "source": text})
+        self.assertEqual(header["made"]["sha256"], rvr.made_checksum(header["made"]))
+        checked = study.rowver("validate", folder / "tiny.rvr")
+        self.assertEqual(checked.returncode, 0, checked.stdout)
+        self.assertIn("module util/more.py: sha256 matches its source", checked.stdout)
+        self.assertEqual(list(folder.rglob("__pycache__")), [])
+
+    def test_installed_code_is_left_out_and_source_decodes_as_python(self):
+        extra = ("import sys\nfrom pathlib import Path\nhere = Path(__file__).resolve().parent\n"
+                 "sys.path[:0] = [str(here), str(here / 'env' / 'lib' / 'site-packages')]\n"
+                 "import latin, installed\n")
+        folder = study.make(self.root, extra=extra)
+        (folder / "latin.py").write_bytes("# -*- coding: latin-1 -*-\nNAME = 'café'\r\n".encode("latin-1"))
+        (folder / "env" / "lib" / "site-packages").mkdir(parents=True)
+        (folder / "env" / "lib" / "site-packages" / "installed.py").write_text("X = 1\n", encoding="utf-8")
+        result = study.rowver("run", folder)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        header, _ = rvr.read(folder / "tiny.rvr")
+        modules = header["made"]["cart"]["modules"]
+        self.assertEqual(list(modules), ["latin.py"])
+        self.assertEqual(modules["latin.py"]["source"], "# -*- coding: latin-1 -*-\nNAME = 'café'\n")
+        self.assertEqual(study.rowver("validate", folder / "tiny.rvr").returncode, 0)
+
+    def test_sequential_and_parallel_record_the_same_snapshot(self):
+        """A module a hook imports only while events are read is in neither."""
+        extra = ("import sys\nfrom pathlib import Path\nsys.path.insert(0, str(Path(__file__).resolve().parent))\n"
+                 "import helper\n\n\ndef prep(events):\n    import lazy\n    return events\n")
+        folder = study.make(self.root, extra=extra)
+        cart = folder / "cart.py"
+        cart.write_text(cart.read_text(encoding="utf-8").replace("keep=keep,", "keep=keep, prepare=prep,"),
+                        encoding="utf-8")
+        (folder / "helper.py").write_text("X = 1\n", encoding="utf-8")
+        (folder / "lazy.py").write_text("Y = 2\n", encoding="utf-8")
+        self.assertEqual(study.rowver("run", folder, "--out", self.root / "one.rvr").returncode, 0)
+        result = study.rowver("run", folder, "--out", self.root / "two.rvr", "--parallel", "2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        one, _ = rvr.read(self.root / "one.rvr")
+        two, _ = rvr.read(self.root / "two.rvr")
+        self.assertEqual(list(one["made"]["cart"]["modules"]), ["helper.py"])
+        self.assertEqual(one["made"]["cart"], two["made"]["cart"])
+
+    def test_a_recipe_without_modules_has_none(self):
+        folder = study.make(self.root)
+        self.assertEqual(study.rowver("run", folder).returncode, 0)
+        header, _ = rvr.read(folder / "tiny.rvr")
+        self.assertNotIn("modules", header["made"]["cart"])
+
+    @unittest.skipUnless(validate_mjs(), "no rowver_web dist/validate.mjs (set ROWVER_WEB) or no node")
+    def test_the_viewer_reads_a_file_with_modules(self):
+        extra = "import sys\nfrom pathlib import Path\nsys.path.insert(0, str(Path(__file__).resolve().parent))\nimport helper\n"
+        folder = study.make(self.root, extra=extra)
+        (folder / "helper.py").write_text("X = 1\n", encoding="utf-8")
+        self.assertEqual(study.rowver("run", folder).returncode, 0)
+        result = subprocess.run(["node", str(validate_mjs()), str(folder / "tiny.rvr")],
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 class HumanTable(Folder):
     def test_table_is_unchanged(self):

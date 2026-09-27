@@ -66,6 +66,9 @@ def validate(path):
                     for sample in made["files"].values() for path, record in sample["files"].items()))
     ok &= check("cart sha256 matches its source",
                 made["cart"]["sha256"] == hashlib.sha256(made["cart"]["source"].encode()).hexdigest())
+    for path, module in made["cart"].get("modules", {}).items():
+        ok &= check(f"module {path}: sha256 matches its source",
+                    module["sha256"] == hashlib.sha256(module["source"].encode()).hexdigest())
     ok &= check("made sha256 matches the complete snapshot", made.get("sha256") == rvr.made_checksum(made))
     print("  valid" if ok else "  INVALID")
     return ok

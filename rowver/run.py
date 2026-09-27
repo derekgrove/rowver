@@ -95,6 +95,23 @@ def load(study):
         raise RecipeError(f"cart.py: {describe(error)}") from error
 
 
+def modules(study):
+    """The recipe's own modules, taken right after it loads: every imported .py file inside the
+    study folder but cart.py and anything installed there (under a site-packages, or a Python
+    prefix inside the folder), as {path relative to the folder: its text as Python decodes it},
+    in path order."""
+    home = Path(study).resolve()
+    prefixes = [p for p in {Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve()} if p.is_relative_to(home)]
+    found = {}
+    for module in list(sys.modules.values()):
+        file = getattr(module, "__file__", None)
+        path = Path(file).resolve() if file else None
+        if (path and path.suffix == ".py" and path.is_relative_to(home) and path != home / "cart.py"
+                and "site-packages" not in path.parts and not any(path.is_relative_to(p) for p in prefixes)):
+            found[path.relative_to(home).as_posix()] = importlib.util.decode_source(path.read_bytes())
+    return dict(sorted(found.items()))
+
+
 def call(hook, events, metadata):
     """Run a hook that takes events, or events and metadata."""
     return hook(events, metadata) if len(inspect.signature(hook).parameters) == 2 else hook(events)
@@ -254,7 +271,8 @@ def stop(pool):
 
 
 def skim_parallel(cart, study, jobs, workers, progress, failed):
-    """Read every file across worker processes; {sample: [(columns, files), ...]}."""
+    """Read every file across worker processes; {sample: [(columns, files), ...]} in fileset order,
+    whichever file finished first, so the rows come out as a sequential press lays them."""
     pieces = {sample: [] for sample in cart.fileset}
     unreadable = probe(cart, jobs, progress)
     for place, reason in unreadable.items():
@@ -262,9 +280,10 @@ def skim_parallel(cart, study, jobs, workers, progress, failed):
     pool = ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"),
                                initializer=worker_setup, initargs=(progress.json,))
     RUNNING["pool"] = pool
+    finished = {}
     try:
-        futures = [pool.submit(read_in_worker, str(study), sample, path, spec, place, progress.json)
-                   for place, (sample, path, spec) in enumerate(jobs) if place not in unreadable]
+        futures = {pool.submit(read_in_worker, str(study), sample, path, spec, place, progress.json): place
+                   for place, (sample, path, spec) in enumerate(jobs) if place not in unreadable}
         for future in as_completed(futures):
             sample, path, result, reason = future.result()
             if result is None:
@@ -272,7 +291,7 @@ def skim_parallel(cart, study, jobs, workers, progress, failed):
                 if not progress.json:
                     progress.failed(path, reason)
             else:
-                pieces[sample].append(result[:2])
+                finished[futures[future]] = (sample, result[:2])
                 if not progress.json:
                     progress.finish(path, *result[2:])
     except BaseException:
@@ -280,6 +299,9 @@ def skim_parallel(cart, study, jobs, workers, progress, failed):
         raise
     pool.shutdown()
     RUNNING["pool"] = None
+    for place in sorted(finished):
+        sample, piece = finished[place]
+        pieces[sample].append(piece)
     return pieces
 
 
@@ -291,8 +313,9 @@ def gather(cart, pieces):
             for sample in cart.fileset if pieces[sample]}
 
 
-def made(study, cart, source, samples):
-    """The recipe snapshot, build details, and files actually processed."""
+def made(study, cart, source, samples, imported):
+    """The recipe snapshot (cart.py and the modules it imports from its folder), build details, and
+    files actually processed."""
     section = {"study": study}
     if cart.title:
         section["title"] = cart.title
@@ -301,6 +324,9 @@ def made(study, cart, source, samples):
     section["built"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     section["by"] = f"rowver {rvr.VERSION}"
     section["cart"] = {"sha256": hashlib.sha256(source.encode()).hexdigest(), "source": source}
+    if imported:
+        section["cart"]["modules"] = {path: {"sha256": hashlib.sha256(text.encode()).hexdigest(), "source": text}
+                                      for path, text in imported.items()}
     section["files"] = {name: {"files": sample["files"]} for name, sample in samples.items()}
     section["sha256"] = rvr.made_checksum(section)
     return section
@@ -310,6 +336,8 @@ def press(study, workers, target, json, stage):
     """Load, skim, pack and write; stage["kind"] names what a failure now would be."""
     start = time.time()
     cart = load(study)
+    # the recipe as it loaded, before any events are read: edits during a long press are not recorded
+    source, imported = (study / "cart.py").read_text(encoding="utf-8"), modules(study)
     jobs = [(sample, path, spec) for sample, entry in cart.fileset.items() for path, spec in entry["files"].items()]
     places = {}
     for place, (_, path, _) in enumerate(jobs):
@@ -330,7 +358,7 @@ def press(study, workers, target, json, stage):
     progress.pack(sum(len(next(iter(s["columns"].values()))) for s in samples.values()))
     data, buffer = rvr.pack(samples, cart.labels)
     header = {"rowver": rvr.VERSION, "data": data,
-              "made": made(study.name, cart, (study / "cart.py").read_text(encoding="utf-8"), samples)}
+              "made": made(study.name, cart, source, samples, imported)}
     stage["kind"] = "write"
     target.parent.mkdir(parents=True, exist_ok=True)
     stage["writing"] = True
