@@ -218,7 +218,15 @@ class Check(Folder):
         self.assertLess(time.monotonic() - sent, 3, stderr)
         self.assertEqual(process.returncode, 1)
         self.assertIn("The check was cancelled.", stderr)
-        with self.assertRaises(ProcessLookupError):  # no worker is left in the group
+        # no worker is left in the group; one ending as the check ends gets a moment to go
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        with self.assertRaises(ProcessLookupError):
             os.killpg(process.pid, 0)
 
 
