@@ -201,9 +201,12 @@ class Check(Folder):
         text = (folder / "cart.py").read_text()
         (folder / "cart.py").write_text(text.replace('    """At least one muon."""\n',
                                                      '    """At least one muon."""\n    time.sleep(3)\n'))
+        # started as a terminal starts it, with Ctrl-C at its default: a CI job's shell may start
+        # its commands with SIGINT ignored, which they inherit, and then no Ctrl-C reaches them
         process = subprocess.Popen([sys.executable, "-m", "rowver", "check", str(folder), "--all", "--parallel", "2"],
                                    env=study.environment(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, process_group=0)
+                                   text=True, process_group=0,
+                                   preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
         time.sleep(4)  # the workers have started and are inside a sample
         sent = time.monotonic()
         os.killpg(process.pid, signal.SIGINT)  # what Ctrl-C does in a terminal
