@@ -109,6 +109,10 @@ def validate(path):
     for path, module in made["cart"].get("modules", {}).items():
         ok &= check(f"module {path}: sha256 matches its source",
                     module["sha256"] == hashlib.sha256(module["source"].encode()).hexdigest())
+    if "hooks" in made["cart"]:
+        ok &= check("cart hooks mark keep and exactly the columns",
+                    "keep" in made["cart"]["hooks"]
+                    and list(made["cart"]["hooks"].get("columns", {})) == [c["name"] for c in data["cols"]])
     ok &= check("made sha256 matches the complete snapshot", made.get("sha256") == rvr.made_checksum(made))
     print("  valid" if ok else "  INVALID")
     return ok

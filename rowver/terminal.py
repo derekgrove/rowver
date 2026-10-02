@@ -109,12 +109,16 @@ class Progress:
     def pack(self, rows):
         """Nothing to show while the columns are packed."""
 
-    def wrote(self, path, rows, columns, size, seconds, failed, left_out):
+    def wrote(self, path, rows, columns, size, seconds, failed, left_out, added=None):
         """Where the file went, how big it is, and any file that was not read."""
         print()
         write(f"Wrote {path}")
+        if added:
+            write(f"Added: {', '.join(added)}")
         write(f"{rows:,} rows | {columns} columns | {size / 1e6:.1f} MB | {timedelta(seconds=round(seconds))}")
-        if failed:
+        if failed and added:
+            write(f"{len(failed):,} files of the recipe are not in the cartridge and were not read.")
+        elif failed:
             write(f"{len(failed):,} of {self.total:,} files could not be read and are not in the file.")
         if left_out:
             write(f"Samples left out, no file read: {', '.join(left_out)}")
@@ -179,12 +183,13 @@ class JsonProgress:
         """The files are read; the columns are being packed and written."""
         emit({"event": "pack", "rows": int(rows)})
 
-    def wrote(self, path, rows, columns, size, seconds, failed, left_out):
-        """The file is written."""
+    def wrote(self, path, rows, columns, size, seconds, failed, left_out, added=None):
+        """The file is written; added names the columns added to a cartridge, when that is what was done."""
         emit({"event": "wrote", "path": str(path), "rows": int(rows), "columns": columns, "bytes": size,
-              "seconds": round(seconds, 3), "failed": failed, "left_out": left_out})
+              "seconds": round(seconds, 3), "failed": failed, "left_out": left_out,
+              **({"added": added} if added else {})})
 
 
 def error(kind, message, trace):
-    """The press stopped: kind is recipe, input, write or cancelled."""
+    """The press stopped: kind is recipe, input, write, differs, nothing or cancelled."""
     emit({"event": "error", "kind": kind, "message": message, "traceback": trace})

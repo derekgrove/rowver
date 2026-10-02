@@ -1,6 +1,6 @@
 """Turn a study's cart.py into one .rvr file beside it.
 
-    rowver run <study directory> [--out PATH] [--parallel [N]] [--progress json]
+    rowver run <study directory> [--out PATH] [--parallel [N]] [--progress json] [--onto FILE [--plan]]
 """
 import hashlib
 import importlib.util
@@ -8,6 +8,7 @@ import inspect
 import multiprocessing
 import os
 import signal
+import struct
 import sys
 import threading
 import time
@@ -19,7 +20,7 @@ from pathlib import Path
 import numpy as np
 import uproot
 
-from . import rvr, terminal
+from . import extend, rvr, terminal
 from .terminal import JsonProgress, Progress
 
 PROBE = 1000
@@ -221,9 +222,16 @@ def attempt(cart, sample, path, spec, progress):
     return result[:5], None
 
 
-def read_in_worker(study, sample, path, spec, place, json):
+def only(cart, names):
+    """The cart making just the columns named, or all of them when none is named."""
+    if names is not None:
+        cart.columns = {name: cart.columns[name] for name in names}
+    return cart
+
+
+def read_in_worker(study, sample, path, spec, place, json, names=None):
     """attempt() inside a worker process, which loads the cart for itself and writes its own JSON lines."""
-    cart = load(study)
+    cart = only(load(study), names)
     progress = JsonProgress({path: place}) if json else Quiet()
     result, reason = attempt(cart, sample, path, spec, progress)
     return sample, path, result, reason
@@ -284,7 +292,7 @@ def stop(pool):
         process.join()
 
 
-def skim_parallel(cart, study, jobs, workers, progress, failed):
+def skim_parallel(cart, study, jobs, workers, progress, failed, names=None):
     """Read every file across worker processes; {sample: [(columns, files), ...]} in fileset order,
     whichever file finished first, so the rows come out as a sequential press lays them."""
     pieces = {sample: [] for sample in cart.fileset}
@@ -296,7 +304,7 @@ def skim_parallel(cart, study, jobs, workers, progress, failed):
     RUNNING["pool"] = pool
     finished = {}
     try:
-        futures = {pool.submit(read_in_worker, str(study), sample, path, spec, place, progress.json): place
+        futures = {pool.submit(read_in_worker, str(study), sample, path, spec, place, progress.json, names): place
                    for place, (sample, path, spec) in enumerate(jobs) if place not in unreadable}
         for future in as_completed(futures):
             sample, path, result, reason = future.result()
@@ -331,9 +339,9 @@ def gather(cart, pieces):
             for sample in cart.fileset if pieces[sample]}
 
 
-def made(study, cart, source, samples, imported):
-    """The recipe snapshot (cart.py and the modules it imports from its folder), build details, and
-    files actually processed."""
+def made(study, cart, source, files, imported, hooks):
+    """The recipe snapshot (cart.py and the modules it imports from its folder, and the mark of each
+    hook and column), build details, and files actually processed."""
     section = {"study": study}
     if cart.title:
         section["title"] = cart.title
@@ -342,48 +350,96 @@ def made(study, cart, source, samples, imported):
     section["built"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     section["by"] = f"rowver {rvr.VERSION}"
     section["cart"] = {"sha256": hashlib.sha256(source.encode()).hexdigest(), "source": source}
+    if hooks:
+        section["cart"]["hooks"] = hooks
     if imported:
         section["cart"]["modules"] = {path: {"sha256": hashlib.sha256(text.encode()).hexdigest(), "source": text}
                                       for path, text in imported.items()}
-    section["files"] = {name: {"files": sample["files"]} for name, sample in samples.items()}
+    section["files"] = files
     section["sha256"] = rvr.made_checksum(section)
     return section
 
 
-def press(study, workers, target, json, stage):
-    """Load, skim, pack and write; stage["kind"] names what a failure now would be."""
+def press(study, workers, target, json, stage, onto=None, plan=False):
+    """Load, skim, pack and write; stage["kind"] names what a failure now would be. With onto, a
+    cartridge already pressed, only the columns it lacks are made, and added to it."""
     start = time.time()
     cart = load(study)
     # the recipe as it loaded, before any events are read: edits during a long press are not recorded
-    source, imported = (study / "cart.py").read_text(encoding="utf-8"), modules(study)
+    source, imported, hooks = (study / "cart.py").read_text(encoding="utf-8"), modules(study), extend.marks(cart)
     jobs = [(sample, path, spec) for sample, entry in cart.fileset.items() for path, spec in entry["files"].items()]
+    order, labels, names, skipped = list(cart.columns), cart.labels, None, []
+    if onto:
+        try:
+            held, section = rvr.read(onto)
+        except (OSError, ValueError, KeyError, struct.error) as error:
+            raise PressError("input", f"The cartridge to add to could not be read: {describe(error)}") from error
+        names, jobs, skipped = differs(extend.plan, cart, held)
+        if plan:
+            said = {"event": "plan", "columns": names, "files": len(jobs), "skipped": [list(s) for s in skipped]}
+            terminal.emit(said) if json else print(f"Would add {', '.join(names)}, reading {len(jobs):,} files.",
+                                                   file=sys.__stdout__)
+            return
+        only(cart, names)
+        if "hooks" not in held["made"]["cart"]:
+            hooks = None  # its columns were never marked, and are not vouched for now
     places = {}
     for place, (_, path, _) in enumerate(jobs):
         places.setdefault(path, place)
     progress = JsonProgress(places) if json else Progress(len(jobs))
-    progress.begin(study.name, len(cart.fileset), len(jobs), workers, target, [job[:2] for job in jobs])
+    progress.begin(study.name, len({job[0] for job in jobs}) if onto else len(cart.fileset), len(jobs), workers,
+                   target, [job[:2] for job in jobs])
     stage["kind"], failed = "input", []
     try:
-        pieces = (skim_parallel(cart, study, jobs, workers, progress, failed) if workers > 1
+        pieces = (skim_parallel(cart, study, jobs, workers, progress, failed, names) if workers > 1
                   else skim(cart, jobs, progress, failed))
     finally:
         progress.clear()
+    if onto and failed:
+        raise PressError("input", f"{failed[0]['path']} could not be read ({failed[0]['message']}), so nothing "
+                                  "was added." if len(failed) == 1 else
+                                  f"{len(failed):,} files could not be read, so nothing was added.")
+    if onto:
+        differs(extend.proven, held, section, pieces)
     samples = gather(cart, pieces)
     if not samples:
         raise PressError("input", f"None of the {len(jobs):,} input files could be read.")
     progress.samples(samples)
     stage["kind"] = "recipe"  # packing fails only on column values the recipe made
-    progress.pack(sum(len(next(iter(s["columns"].values()))) for s in samples.values()))
-    data, arrays = rvr.pack(samples, cart.labels, [i for s in samples.values() for i in s["inputs"]])
-    header = {"rowver": rvr.VERSION, "data": data,
-              "made": made(study.name, cart, source, samples, imported)}
+    progress.pack(sum(len(s["entry"]) for s in samples.values()))
+    data, arrays = rvr.pack(samples, labels, [i for s in samples.values() for i in s["inputs"]])
+    files = {name: {"files": sample["files"]} for name, sample in samples.items()}
+    header = {"rowver": rvr.VERSION}
+    if onto:
+        data, arrays = extend.merge(held, section, order, labels, data, arrays)
+        header, files = dict(held), held["made"]["files"]
+        failed = [{"sample": sample, "path": path,
+                   "message": "Not in the cartridge, so not read. Press again to read it."}
+                  for sample, path in skipped]
+    cart.columns = dict.fromkeys(order)  # made names no column, only the title and the note
+    header.update(data=data, made=made(study.name, cart, source, files, imported, hooks))
     stage["kind"] = "write"
     target.parent.mkdir(parents=True, exist_ok=True)
+    # an add may be written over the cartridge it adds to: the whole file first, beside it, then in its place
+    stage["path"] = target.with_name(target.name + ".adding") if onto else target
     stage["writing"] = True
-    rvr.write(target, header, arrays)
+    rvr.write(stage["path"], header, arrays)
+    os.replace(stage["path"], target)
     stage["writing"] = False
     progress.wrote(target, data["rows"], len(data["cols"]), target.stat().st_size, time.time() - start,
-                   failed, [sample for sample in cart.fileset if sample not in samples])
+                   failed, [] if onto else [sample for sample in cart.fileset if sample not in samples],
+                   names)
+
+
+def differs(function, *args):
+    """Run a step of adding to a cartridge; its refusal is a press that stops, of the kind differs, or
+    nothing when the recipe has no new column."""
+    try:
+        return function(*args)
+    except extend.Differs as error:
+        raise PressError("differs", str(error)) from error
+    except extend.Nothing as error:
+        raise PressError("nothing", str(error)) from error
 
 
 def discard(target):
@@ -413,7 +469,7 @@ def watch(signals, target, stage, json):
         for process in list((pool._processes or {}).values()) if pool else []:
             process.terminate()
         if stage["writing"]:
-            discard(target)
+            discard(stage["path"])
         if json:
             terminal.error("cancelled", "The press was cancelled.", "")
         else:
@@ -422,11 +478,13 @@ def watch(signals, target, stage, json):
     os.close(signals)
 
 
-def main(study, workers, out=None, json=False):
-    """Press the study into out, or <study>/<name>.rvr; the exit status, 0 when the file was written."""
+def main(study, workers, out=None, json=False, onto=None, plan=False):
+    """Press the study into out, or <study>/<name>.rvr; the exit status, 0 when the file was written.
+    With onto, add the columns that cartridge lacks instead of making every column; with plan too,
+    only say which columns those are, reading no file and writing nothing."""
     study = Path(study)
     target = Path(out) if out else study / f"{study.name}.rvr"
-    stage = {"kind": "recipe", "writing": False}
+    stage = {"kind": "recipe", "writing": False, "path": target}
     saved = sys.stdout
     if json:
         sys.stdout = sys.stderr  # a recipe's print() must not land among the JSON lines
@@ -436,11 +494,11 @@ def main(study, workers, out=None, json=False):
     woken = signal.set_wakeup_fd(wake, warn_on_full_buffer=False)
     threading.Thread(target=watch, args=(signals, target, stage, json), daemon=True).start()
     try:
-        press(study, workers, target, json, stage)
+        press(study, workers, target, json, stage, Path(onto) if onto else None, plan)
         return 0
     except (Exception, Cancelled) as error:
         if stage["writing"]:
-            discard(target)
+            discard(stage["path"])
         if isinstance(error, Cancelled):
             kind, message, trace = "cancelled", "The press was cancelled.", ""
         elif isinstance(error, PressError):

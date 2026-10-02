@@ -93,10 +93,27 @@ names it, leaves it out, and carries on with the other files; the summary at the
 says how many were left out. A sample none of whose files could be read is left out of
 the `.rvr` file. When no file at all can be read, nothing is written.
 
+## Adding columns to a file already pressed
+
+```bash
+python -m rowver run studies/my_study --onto studies/my_study/my_study.rvr
+```
+
+`--onto` adds the columns the recipe has and the file lacks, and makes none of the
+others again: the sample files are read once more, `prepare` and `keep` run, and only
+the new columns are computed. Nothing is added unless `keep`, `prepare`, the metadata
+and every column the file holds are what they were when it was pressed, and every
+sample file gives exactly the rows the file holds; the press then stops as `differs`
+and says what changed, or as `nothing` when the recipe has no new column. The file is written beside its target and put in place whole,
+so `--onto` may name the file it writes. `--plan` with `--onto` only says which
+columns would be added. With `--progress json` the `wrote` line carries `added`, the
+names of the new columns, and `--plan` prints one `plan` line with `columns`, `files`
+and `skipped` (recipe files the cartridge was not pressed from, which are not read).
+
 ## For programs: `--out` and `--progress json`
 
 ```bash
-rowver --version                                             # rowver 12.0.0
+rowver --version                                             # rowver 12.1.0
 python -m rowver run studies/my_study --out /some/where.rvr --parallel 4 --progress json
 ```
 

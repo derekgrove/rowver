@@ -35,7 +35,7 @@ keys. Nothing else.
 }
 ```
 
-### `data` — written once, never rewritten
+### `data` — the rows and their columns
 
 ```json
 {
@@ -93,6 +93,15 @@ keys. Nothing else.
 There is no percentile ladder. A viewer holding a column can measure a
 quantile itself.
 
+A viewer never rewrites `data`. The presser writes it once, and may later
+add columns to it (`rowver run --onto`): the rows, `samples`, `files`,
+`sample` and `entry` stay as they are, and an array already held is moved
+as the bytes it is, never made again, so its `sha256` does not change. The
+new columns take their places in the recipe's `columns` order, every `at`
+is counted again, and `data.sha256` changes, because it names every array.
+The file that results has the same `data` as a press of the new recipe,
+as far as the marks of `made.cart.hooks` can tell that nothing else changed.
+
 ### `made` — the recipe snapshot
 
 ```json
@@ -106,7 +115,13 @@ quantile itself.
   "cart": {
     "sha256": "…64 hex…",
     "source": "…the whole cart.py…",
-    "modules": {"helpers.py": {"sha256": "…64 hex…", "source": "…"}}
+    "modules": {"helpers.py": {"sha256": "…64 hex…", "source": "…"}},
+    "hooks": {
+      "keep": "…64 hex…",
+      "prepare": "…64 hex…",
+      "metadata": "…64 hex…",
+      "columns": {"MET": "…64 hex…", "channel": "…64 hex…", "Jet_pt": "…64 hex…"}
+    }
   },
   "files": {
     "TTJets DiLept": {
@@ -138,6 +153,23 @@ snapshot. Not copied: installed packages (anything under a
 `site-packages`, or a Python environment kept inside the study folder),
 files the recipe opens as data, and modules a hook imports only while
 events are read.
+
+`cart.hooks` holds a mark of what chose the rows and made each column:
+`keep`, `prepare` when the recipe has one, `metadata` for the samples'
+metadata (every hook is given it), and under `columns` every column by name.
+A mark is a SHA-256. For a column copied from a branch or field it is of
+`branch <name>`. For a function it is of the function's code as Python
+writes it back from its syntax tree (`ast.unparse`), so a comment, the
+layout, and whatever else shares a lambda's line are not part of it, then of
+every plain value (a number, text, or a list or dict of those) and every
+function of the study that it names or closes over, those functions marked
+the same way. An installed package is not part of a mark, nor is a value
+that is not plain. The presser reads the marks when it adds columns to a
+file (`rowver run --onto`): it adds nothing unless `keep`, `prepare`, the
+metadata and every column the file holds have the marks they had, and unless
+every input file, read again, gives exactly the rows `data.entry` holds for
+it. A file written before the marks existed has no `cart.hooks`; it is
+proven by its rows alone, and stays without marks when columns are added.
 
 `files` records the inputs actually processed, grouped by their recipe
 sample names. Each sample holds a `files` dict keyed by the full path or

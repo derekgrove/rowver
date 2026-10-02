@@ -17,6 +17,10 @@ def main():
     press.add_argument("--parallel", nargs="?", const=os.cpu_count(), default=1, type=int, metavar="N")
     press.add_argument("--progress", choices=("table", "json"), default="table",
                        help="table for people (the default); json for one JSON object per line")
+    press.add_argument("--onto", metavar="FILE", help="add the recipe's new columns to this cartridge, already "
+                       "pressed from the study, instead of making every column again")
+    press.add_argument("--plan", action="store_true", help="with --onto: only say which columns would be "
+                       "added; read no sample file and write nothing")
     trying = commands.add_parser("check", help="try <study>/cart.py on the first 1,000 events of a sample's first file")
     trying.add_argument("study")
     which = trying.add_mutually_exclusive_group()
@@ -39,7 +43,7 @@ def main():
     commands.add_parser("validate", help="check .rvr files").add_argument("files", nargs="+")
     args = parser.parse_args()
     if args.command == "run":
-        sys.exit(run.main(args.study, args.parallel, args.out, args.progress == "json"))
+        sys.exit(run.main(args.study, args.parallel, args.out, args.progress == "json", args.onto, args.plan))
     elif args.command == "check":
         sys.exit(check.main(args.study, args.sample, args.all, args.parallel, args.json))
     elif args.command == "probe":
