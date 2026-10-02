@@ -60,8 +60,8 @@ LABELS = {
 CART = Cart(
     fileset=FILESET,
     columns=COLUMNS,
-    keep=keep,
     prepare=None,
+    keep=keep,
     labels=LABELS,
     title="Say \\"hi\\" to μμ\\\\",
     note=None,
@@ -254,7 +254,7 @@ class HardCases(Folder):
     def test_the_new_study_skeleton(self):
         """WP7's starter cart.py: an empty FILESET and COLUMNS, printed as {}."""
         text = HOOKS + ('# ---- recipe ----\nFILESET = {}\n\nCOLUMNS = {}\n\nCART = Cart(\n    fileset=FILESET,\n'
-                        '    columns=COLUMNS,\n    keep=keep,\n    prepare=None,\n    labels=None,\n'
+                        '    columns=COLUMNS,\n    prepare=None,\n    keep=keep,\n    labels=None,\n'
                         '    title="my_study",\n    note=None,\n)\n')
         found = cli(self.write(text))
         self.assertTrue(found["dialect"], found.get("reason"))

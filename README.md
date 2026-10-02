@@ -113,7 +113,7 @@ and `skipped` (recipe files the cartridge was not pressed from, which are not re
 ## For programs: `--out` and `--progress json`
 
 ```bash
-rowver --version                                             # rowver 12.1.0
+rowver --version                                             # rowver 12.1.1
 python -m rowver run studies/my_study --out /some/where.rvr --parallel 4 --progress json
 ```
 

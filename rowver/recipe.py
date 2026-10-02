@@ -16,7 +16,7 @@ from pathlib import Path
 
 MARKER = "# ---- recipe ----"
 NAMES = ("FILESET", "COLUMNS", "LABELS", "CART")
-KEYWORDS = ("fileset", "columns", "keep", "prepare", "labels", "title", "note")
+KEYWORDS = ("fileset", "columns", "prepare", "keep", "labels", "title", "note")
 
 
 class Outside(Exception):
@@ -352,8 +352,8 @@ def region(found):
     labelled = [f"{quoted(name)}: {{" + ", ".join(f"{value}: {quoted(label)}" for value, label in values) + "}"
                 for name, values in found["labels"]]
     c = found["cart"]
-    keywords = [("fileset", "FILESET"), ("columns", "COLUMNS"), ("keep", c["keep"]),
-                ("prepare", c["prepare"] or "None"), ("labels", "LABELS" if labelled else "None"),
+    keywords = [("fileset", "FILESET"), ("columns", "COLUMNS"), ("prepare", c["prepare"] or "None"),
+                ("keep", c["keep"]), ("labels", "LABELS" if labelled else "None"),
                 ("title", "None" if c["title"] is None else quoted(c["title"])),
                 ("note", "None" if c["note"] is None else quoted(c["note"]))]
     parts = [block("FILESET", fileset), block("COLUMNS", columns)] + ([block("LABELS", labelled)] if labelled else [])

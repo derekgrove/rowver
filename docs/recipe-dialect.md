@@ -60,8 +60,8 @@ LABELS = {
 CART = Cart(
     fileset=FILESET,
     columns=COLUMNS,
-    keep=keep,
     prepare=None,
+    keep=keep,
     labels=LABELS,
     title="CMS Open Data dimuons",
     note=None,
@@ -88,7 +88,7 @@ and `CART` comes last.
 | `FILESET = {...}` | `{sample: {"files": {path: tree}, "metadata": {key: value}}}`. The keys are `"files"` and `"metadata"`, and nothing else. `tree` is a tree name such as `"Events"`, or `{"tree": "Events", "stop": N}` with a whole number `N` of 1 or more (read only the first `N` entries). |
 | `COLUMNS = {...}` | `{column: "branch or field"}` or `{column: hook}`. The string names a branch, or a field that `prepare` made. A bare name is a hook bound in the hooks region. |
 | `LABELS = {...}` | `{column: {value: "label"}}`. `value` is a whole-number literal, and may be negative, such as `-1`. Every labelled column is in `COLUMNS`. |
-| `CART = Cart(...)` | Keywords only: `fileset=FILESET`, `columns=COLUMNS`, `keep=<hook>`, `prepare=<hook or None>`, `labels=<LABELS or None>`, `title=<text or None>`, `note=<text or None>`. `keep` is required. A missing `prepare`, `labels`, `title` or `note` means `None`. If `LABELS` is written, `labels=LABELS` must be passed. |
+| `CART = Cart(...)` | Keywords only: `fileset=FILESET`, `columns=COLUMNS`, `prepare=<hook or None>`, `keep=<hook>`, `labels=<LABELS or None>`, `title=<text or None>`, `note=<text or None>`. `keep` is required. A missing `prepare`, `labels`, `title` or `note` means `None`. If `LABELS` is written, `labels=LABELS` must be passed. |
 
 The values below are allowed in the recipe region:
 
@@ -212,7 +212,7 @@ same bytes. For each shipped recipe, both printers must give back the file exact
 5. **`COLUMNS` entries.** An entry is `"name": hook` or `"name": "branch"`.
 6. **`CART`.** It is printed as `CART = Cart(` followed by all seven keywords, one per line at
    four spaces, each ending in a comma, then `)`. The order is `fileset=FILESET`,
-   `columns=COLUMNS`, `keep=<hook>`, `prepare=<hook or None>`, `labels=<LABELS or None>`,
+   `columns=COLUMNS`, `prepare=<hook or None>`, `keep=<hook>`, `labels=<LABELS or None>`,
    `title=<text or None>`, `note=<text or None>`.
 7. **Text.** Text is written in double quotes. `\` and `"` are escaped with a backslash, and
    newline, carriage return and tab become `\n`, `\r` and `\t`. Any other character below
