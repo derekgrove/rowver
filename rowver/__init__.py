@@ -1,6 +1,6 @@
 """What a recipe imports: `from rowver import Cart`."""
 
-__version__ = "12.1.1"
+__version__ = "13.0.0"
 
 
 class Cart:

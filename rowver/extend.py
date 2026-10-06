@@ -124,6 +124,9 @@ def plan(cart, header):
     """The columns to add, the files to read as (sample, path, spec) in the cartridge's row order, and
     the recipe's files the cartridge was not pressed from; Differs when nothing can be added."""
     data, old = header["data"], header["made"]
+    if "derived" in header:
+        raise Differs("The cartridge holds columns derived from another cartridge, not pressed from a recipe, "
+                      "so nothing can be added to it.")
     held = [c["name"] for c in data["cols"]]
     gone = [name for name in held if name not in cart.columns]
     if gone:

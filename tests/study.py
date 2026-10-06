@@ -38,10 +38,10 @@ CART = Cart(
 '''
 
 
-def tree(path, events, seed):
-    """Write one ROOT file with an Events tree of flat and jagged branches."""
+def tree(path, events, seed, most=3):
+    """Write one ROOT file with an Events tree of flat and jagged branches, of at most `most` muons."""
     rng = np.random.default_rng(seed)
-    counts = rng.integers(0, 4, events).astype(np.int32)
+    counts = rng.integers(0, most + 1, events).astype(np.int32)
     with uproot.recreate(path) as out:
         out["Events"] = {
             "nMuon": counts,

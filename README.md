@@ -82,9 +82,17 @@ rowver dump studies/my_study/my_study.rvr --fileset   # only the files that were
 rowver dump studies/my_study/my_study.rvr --cart      # only the recipe
 rowver dump studies/my_study/my_study.rvr --columns   # only the first values of every column
 rowver validate studies/my_study/my_study.rvr         # check the file agrees with itself
+rowver diff old.rvr new.rvr                           # which column of which sample changed, from the headers alone
 ```
 
 The file format is described in [FORMAT.md](FORMAT.md).
+
+`rowver diff` reads only the two headers: every column carries one checksum per
+sample, so after pressing again it names each column and sample whose values changed,
+the samples and columns only one file has, and the row counts that differ. It exits 0
+when it finds no difference and 1 when it finds one.
+
+A file written by rowver 12 is refused; press its study again.
 
 ## When a file cannot be read
 
@@ -109,11 +117,31 @@ so `--onto` may name the file it writes. `--plan` with `--onto` only says which
 columns would be added. With `--progress json` the `wrote` line carries `added`, the
 names of the new columns, and `--plan` prints one `plan` line with `columns`, `files`
 and `skipped` (recipe files the cartridge was not pressed from, which are not read).
+A derived file (below) is refused, as `differs`.
+
+## Columns derived from a file's columns
+
+```python
+from rowver.derive import derive
+
+def mt2(columns):
+    return columns["MET"] * 2
+
+derive("my_study.rvr", "my_study.mt2.rvr", source, {"mT2": mt2}, by="my program 1.0")
+```
+
+`derive` writes a second `.rvr` file that holds only the new columns, on the same rows
+as its parent, without copying the parent's columns. The file records which parent it
+came from by its checksums, which of the parent's columns were read, and `source`, the
+Python text that computed the columns. Each function gets the parent's own columns by
+name and returns one number, or one list of numbers, per row. There is no command for
+it. Check the pair with `rowver validate my_study.mt2.rvr --parent my_study.rvr`.
+See [FORMAT.md](FORMAT.md).
 
 ## For programs: `--out` and `--progress json`
 
 ```bash
-rowver --version                                             # rowver 12.1.1
+rowver --version                                             # rowver 13.0.0
 python -m rowver run studies/my_study --out /some/where.rvr --parallel 4 --progress json
 ```
 

@@ -24,11 +24,11 @@ def show(name, array):
         print(f"{name:14} jagged[{len(array)}]  {ak.type(array)}  {first(array, 3)}")
 
 
-def print_cart(source):
-    """The recipe as Python text."""
-    print("##### begin cart.py #####")
+def print_cart(source, name="cart.py"):
+    """The recipe, or the text that derived the columns, as Python text."""
+    print(f"##### begin {name} #####")
     print(source, end="" if source.endswith("\n") else "\n")
-    print("##### end cart.py #####")
+    print(f"##### end {name} #####")
 
 
 def print_columns(header, section):
@@ -47,10 +47,16 @@ def main(path, fileset=False, cart=False, columns=False):
     source = header["made"]["cart"]["source"]
     if not (fileset or cart or columns):
         header["made"]["cart"]["source"] = "[printed below as cart.py]"
+        derived = header["derived"]["source"] if "derived" in header else None
+        if derived is not None:
+            header["derived"]["source"] = "[printed below as derived source]"
         print(json.dumps(header, indent=2))
         print()
         print_cart(source)
         print()
+        if derived is not None:
+            print_cart(derived, "derived source")
+            print()
         print_columns(header, section)
         return
     parts = []

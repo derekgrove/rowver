@@ -408,7 +408,8 @@ def press(study, workers, target, json, stage, onto=None, plan=False):
     stage["kind"] = "recipe"  # packing fails only on column values the recipe made
     progress.pack(sum(len(s["entry"]) for s in samples.values()))
     data, arrays = rvr.pack(samples, labels, [i for s in samples.values() for i in s["inputs"]])
-    files = {name: {"files": sample["files"]} for name, sample in samples.items()}
+    files = {name: {"files": sample["files"], **rvr.carried(cart.fileset[name].get("metadata") or {})}
+             for name, sample in samples.items()}
     header = {"rowver": rvr.VERSION}
     if onto:
         data, arrays = extend.merge(held, section, order, labels, data, arrays)

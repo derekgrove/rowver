@@ -54,6 +54,16 @@ def validate_mjs():
     return None
 
 
+def viewer(test, *args):
+    """Run the viewer's validate.mjs; skip the test, saying why, when that viewer reads another rowver."""
+    result = subprocess.run(["node", str(validate_mjs()), *map(str, args)], capture_output=True, text=True, timeout=120)
+    reads = re.search(r"reads rowver (\d+) only", result.stdout + result.stderr)
+    if result.returncode and reads and int(reads.group(1)) != rvr.VERSION:
+        test.skipTest(f"the viewer at {validate_mjs().parent.parent} reads rowver {reads.group(1)} only; "
+                      f"this presser writes rowver {rvr.VERSION}")
+    return result
+
+
 class Folder(unittest.TestCase):
     """A fresh temporary folder per test."""
 
@@ -116,8 +126,7 @@ class JsonPress(unittest.TestCase):
     @unittest.skipUnless(validate_mjs(), "no rowver_web dist/validate.mjs (set ROWVER_WEB) or no node")
     def test_the_viewer_reads_it_and_its_save_validates(self):
         saved = self.root / "saved.rvr"
-        result = subprocess.run(["node", str(validate_mjs()), str(self.out), "--initialize", str(saved)],
-                                capture_output=True, text=True, timeout=120)
+        result = viewer(self, self.out, "--initialize", saved)
         self.assertEqual(result.returncode, 0, result.stderr)
         header, _ = rvr.read(saved)
         self.assertIn("rowver_web", header)
@@ -165,7 +174,7 @@ class ParallelPress(Folder):
 
 
 class Container(Folder):
-    """rowver 12: a plain header, each array compressed on its own, and each row's entry number."""
+    """rowver 13: a plain header, each array compressed on its own, and each row's entry number."""
 
     def test_entries_are_each_rows_place_in_its_file(self):
         import numpy as np
@@ -193,7 +202,7 @@ class Container(Folder):
         self.assertEqual(raw[:8], b"\x89RVR\r\n\x1a\n")
         length = int.from_bytes(raw[8:12], "little")
         header = json.loads(raw[12:12 + length])
-        self.assertEqual(header["rowver"], 12)
+        self.assertEqual(header["rowver"], 13)
         records = [record for record, *_ in rvr.blocks(header["data"])]
         self.assertEqual(sum(r["size"] for r in records), len(raw) - 12 - length)
         self.assertEqual(header["data"]["sha256"], rvr.data_checksum(header["data"]))
@@ -252,12 +261,29 @@ class Container(Folder):
         self.assertEqual((last["event"], last["kind"]), ("error", "recipe"), last)
         self.assertIn("without the fields they were given", last["message"])
 
-    def test_validate_refuses_a_file_that_is_not_rowver_12(self):
+    def test_validate_refuses_a_file_that_is_not_rowver_13(self):
         path = self.root / "old.rvr"
         path.write_bytes(b"\x1f\x8b" + bytes(64))
         result = study.rowver("validate", path, path)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.count("FAIL a rowver 12 file"), 2, result.stdout)
+        self.assertEqual(result.stdout.count("FAIL a rowver 13 file"), 2, result.stdout)
+
+    def test_a_rowver_12_header_is_refused(self):
+        folder = study.make(self.root)
+        self.assertEqual(study.rowver("run", folder).returncode, 0)
+        path = folder / "tiny.rvr"
+        header, section = rvr.read(path)
+        header["rowver"] = 12
+        rvr.write(path, header, [bytes(section)])
+        for reader in (rvr.read, rvr.read_header):
+            with self.assertRaisesRegex(ValueError, "says rowver 12; this reads rowver 13 only"):
+                reader(path)
+        result = study.rowver("validate", path)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("FAIL a rowver 13 file", result.stdout)
+        self.assertIn("says rowver 12", result.stdout)
+        for command in (("dump", path), ("diff", path, path)):
+            self.assertNotEqual(study.rowver(*command).returncode, 0)
 
 
 class RecipeModules(Folder):
@@ -332,8 +358,7 @@ class RecipeModules(Folder):
         folder = study.make(self.root, extra=extra)
         (folder / "helper.py").write_text("X = 1\n", encoding="utf-8")
         self.assertEqual(study.rowver("run", folder).returncode, 0)
-        result = subprocess.run(["node", str(validate_mjs()), str(folder / "tiny.rvr")],
-                                capture_output=True, text=True, timeout=120)
+        result = viewer(self, folder / "tiny.rvr")
         self.assertEqual(result.returncode, 0, result.stderr)
 
 

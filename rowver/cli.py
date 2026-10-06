@@ -1,9 +1,9 @@
-"""The rowver command: run, check, probe, recipe, dump, validate."""
+"""The rowver command: run, check, probe, recipe, dump, validate, diff."""
 import argparse
 import os
 import sys
 
-from . import __version__, check, dump, probe, recipe, run, validate
+from . import __version__, check, diff, dump, probe, recipe, run, validate
 
 
 def main():
@@ -40,7 +40,14 @@ def main():
     dump_parser.add_argument("--fileset", action="store_true", help="only the files that were read")
     dump_parser.add_argument("--cart", action="store_true", help="only the recipe")
     dump_parser.add_argument("--columns", action="store_true", help="only the column values")
-    commands.add_parser("validate", help="check .rvr files").add_argument("files", nargs="+")
+    checking = commands.add_parser("validate", help="check .rvr files")
+    checking.add_argument("files", nargs="+")
+    checking.add_argument("--parent", metavar="FILE", help="for a derived file: the .rvr file its columns were "
+                          "derived from, checked too and compared with what the derived file records of it")
+    comparing = commands.add_parser("diff", help="say which column of which sample differs between two .rvr "
+                                    "files, from their headers alone")
+    comparing.add_argument("a")
+    comparing.add_argument("b")
     args = parser.parse_args()
     if args.command == "run":
         sys.exit(run.main(args.study, args.parallel, args.out, args.progress == "json", args.onto, args.plan))
@@ -52,5 +59,8 @@ def main():
         sys.exit(recipe.main(args.study, args.json))
     elif args.command == "dump":
         dump.main(args.file, args.fileset, args.cart, args.columns)
+    elif args.command == "diff":
+        sys.exit(diff.main(args.a, args.b))
     else:
-        sys.exit(0 if all([validate.validate(path) for path in args.files]) else 1)
+        sys.exit(0 if all([validate.validate(path) for path in ([args.parent] if args.parent else [])]
+                          + [validate.validate(path, args.parent) for path in args.files]) else 1)

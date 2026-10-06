@@ -77,6 +77,11 @@ class Extend(Folder):
                                                                            (old["content"], new["content"])):
                     self.assertEqual(bytes(section[a["at"]:a["at"] + a["size"]]),
                                      bytes(added[b["at"]:b["at"] + b["size"]]))
+                    self.assertEqual((a["sha256"], a["by_sample"]), (b["sha256"], b["by_sample"]))
+            self.assertEqual(header["data"]["entry"]["by_sample"], before["data"]["entry"]["by_sample"])
+            # a column added has its own, one per sample
+            for record, _, _, label in list(rvr.blocks(header["data"]))[1:]:
+                self.assertEqual(len(record["by_sample"]), 2, label)
             self.assertTrue(np.allclose(rvr.column(header, added, "twice"), 2 * rvr.column(header, added, "MET")))
             self.assertEqual(header["made"]["cart"]["source"], (folder / "cart.py").read_text(encoding="utf-8"))
             self.assertEqual(sorted(header["made"]["cart"]["hooks"]["columns"]), sorted(c["name"] for c in header["data"]["cols"]))

@@ -1,6 +1,11 @@
 # The `.rvr` file
 
-Version 12. `rowver/rvr.py` is the code for everything here.
+Version 13. `rowver/rvr.py` is the code for everything here, and
+`rowver/derive.py` writes a derived file.
+
+New in 13: every per-row array carries one checksum per sample (`by_sample`),
+and a file may hold only columns derived from another file's columns, naming
+that parent under its own checksums (`derived`).
 
 ## Container
 
@@ -19,21 +24,26 @@ magic (8 bytes) | u32 little-endian header length | UTF-8 JSON header | arrays
   header and copies the arrays byte for byte.
 
 A reader refuses a file whose first 8 bytes are not the magic, whose `rowver`
-is not 12, or whose arrays do not fill the rest of the file exactly.
+is not 13, or whose arrays do not fill the rest of the file exactly. A
+version 12 file is refused: press its study again.
 
 ## Header
 
-The top level has exactly `rowver`, `data`, `made`, and zero or more tool
-keys. Nothing else.
+The top level has exactly `rowver`, `data`, `made`, an optional `derived`,
+and zero or more tool keys. Nothing else.
 
 ```json
 {
-  "rowver": 12,
+  "rowver": 13,
   "data": { },
   "made": { },
+  "derived": { },
   "viewer": { }
 }
 ```
+
+A file without `derived` is a pure file: `rowver run` pressed it from a
+recipe. A file with `derived` is a derived file (see `derived`).
 
 ### `data` — the rows and their columns
 
@@ -51,16 +61,17 @@ keys. Nothing else.
     {"sample": "WJets HT 400-600", "path": "/data/wjets.root",    "rows": 85}
   ],
   "sample": {"at": 0,     "size": 212,   "sha256": "…"},
-  "entry":  {"at": 212,   "size": 40115, "sha256": "…"},
+  "entry":  {"at": 212,   "size": 40115, "sha256": "…", "by_sample": ["…", "…"]},
   "cols": [
     {"name": "MET",     "kind": "f4", "at": 40327, "size": 120433, "sha256": "…",
-     "lim": [150.1, 1583.2], "nice": [150, 1600]},
+     "by_sample": ["…", "…"], "lim": [150.1, 1583.2], "nice": [150, 1600]},
     {"name": "channel", "kind": "u4", "at": 160760, "size": 3014, "sha256": "…",
-     "lim": [0, 2], "nice": [0, 2], "vals": [0, 1, 2],
+     "by_sample": ["…", "…"], "lim": [0, 2], "nice": [0, 2], "vals": [0, 1, 2],
      "names": {"0": "hadronic", "1": "one lepton", "2": "two or more leptons"}},
     {"name": "Jet_pt",  "kind": "jagged",
-     "offsets": {"at": 163774, "size": 51230, "sha256": "…"},
-     "content": {"kind": "f4", "count": 352738, "at": 215004, "size": 1101877, "sha256": "…"}}
+     "offsets": {"at": 163774, "size": 51230, "sha256": "…", "by_sample": ["…", "…"]},
+     "content": {"kind": "f4", "count": 352738, "at": 215004, "size": 1101877, "sha256": "…",
+                 "by_sample": ["…", "…"]}}
   ]
 }
 ```
@@ -82,7 +93,7 @@ keys. Nothing else.
   rows without running the selection again.
 - `cols` — one record per column, in the recipe's `columns` order:
   - flat columns: `name`, `kind`, the array reference (`at`, `size`,
-    `sha256`) of `kind[rows]`, then the column facts: `lim` and `nice`, and on
+    `sha256`, `by_sample`) of `kind[rows]`, then the column facts: `lim` and `nice`, and on
     integer and boolean columns `vals` and `names` when the distinct values
     are few.
   - jagged columns: `name`, `kind: "jagged"`, `offsets` (the array
@@ -96,7 +107,8 @@ quantile itself.
 A viewer never rewrites `data`. The presser writes it once, and may later
 add columns to it (`rowver run --onto`): the rows, `samples`, `files`,
 `sample` and `entry` stay as they are, and an array already held is moved
-as the bytes it is, never made again, so its `sha256` does not change. The
+as the bytes it is, never made again, so its `sha256` and `by_sample` do
+not change. A derived file is refused: nothing is added to it. The
 new columns take their places in the recipe's `columns` order, every `at`
 is counted again, and `data.sha256` changes, because it names every array.
 The file that results has the same `data` as a press of the new recipe,
@@ -111,7 +123,7 @@ as far as the marks of `made.cart.hooks` can tell that nothing else changed.
   "title": "My study",
   "note": "Two local UL18 NanoAOD samples with a generator weight column.",
   "built": "2026-09-12T18:03:11Z",
-  "by": "rowver 12",
+  "by": "rowver 13",
   "cart": {
     "sha256": "…64 hex…",
     "source": "…the whole cart.py…",
@@ -131,7 +143,8 @@ as far as the marks of `made.cart.hooks` can tell that nothing else changed.
           "uuid": "…ROOT file UUID…",
           "entries": 219310
         }
-      }
+      },
+      "metadata": {"xsec": 87.3, "lumi": 59.8, "kind": "background"}
     }
   }
 }
@@ -180,7 +193,97 @@ When the recipe reads only the first entries of a file, written
 `stop`, the number of entries read.
 These facts come from the already-open input, including files with no kept
 events. They preserve the resolved inputs even when `cart.py` imports or
-builds its fileset. Sample metadata and callable objects are not copied.
+builds its fileset. Callable objects are not copied.
+
+Each sample's `metadata` is the recipe's metadata for that sample, kept so that
+facts such as a cross-section or luminosity travel with the file. It holds every
+value that is plain: text, a whole number, a finite float, `true`, `false`,
+`null`, or a list or object of those with text keys. A value that is not plain
+is left out, and its key is then named in `metadata_omitted`, a list that is
+written only when something was left out. The `file` key the presser adds for a
+hook is not stored. `made.sha256` covers the metadata like the rest of `made`,
+and a derived file carries it unchanged inside its parent's `made`.
+
+### `derived` — columns made from another file's columns
+
+A derived file holds only columns computed from the columns of another
+`.rvr` file, its parent. It does not copy the parent's columns; it names
+the parent by its checksums.
+
+- `data.rows`, `data.samples` and `data.files` are the parent's, and the
+  `sample` and `entry` arrays hold the parent's values. Both arrays are
+  stored in this file too; they are small. Row `i` of this file is row `i`
+  of the parent.
+- `data.cols` holds only the derived columns. No derived column has the
+  name of a column its parent holds. `data.sha256` covers this file's own
+  arrays by the usual rule.
+- `made` is the direct parent's `made`, equal to it as a JSON value, so
+  `made.sha256` is the parent's. It still records the recipe, the marks of
+  `keep` and `prepare`, and the ROOT files that made the rows.
+  `made.cart.hooks.columns` therefore names the pressed file's columns, not
+  this file's.
+
+```json
+{
+  "sha256": "…64 hex…",
+  "built": "2026-10-06T19:12:44Z",
+  "by": "renorm 0.3.0",
+  "parents": [
+    {"data_sha256": "…", "made_sha256": "…", "derived_sha256": null,
+     "rows": 45147, "path": "/data/my_study.rvr",
+     "read": {"MET": "…", "Jet_pt": "…"}}
+  ],
+  "source": "…the exact Python text that computed the columns…",
+  "columns": {"mT2": "…64 hex…", "soft_jets": "…64 hex…"},
+  "parameters": {"cut": 30},
+  "runtime": "Python 3.13.5 / NumPy 2.1.3 / Awkward 2.7.2"
+}
+```
+
+- `sha256` — see Checksums.
+- `built` — when the file was written, UTC, as in `made`.
+- `by` — free text naming the program that wrote the file.
+- `parents` — a list of exactly one parent, a list so that more can be
+  allowed later:
+  - `data_sha256`, `made_sha256` — the parent's `data.sha256` and
+    `made.sha256`.
+  - `derived_sha256` — the parent's `derived.sha256`, or `null` when the
+    parent is a pure file.
+  - `rows` — the parent's `data.rows`.
+  - `path` — the path the parent was opened with. A hint only: the
+    checksums say which file the parent is.
+  - `read` — the parent columns that were read, by name. A flat column's
+    value is its array's `sha256`. A jagged column's is the SHA-256 of the
+    ASCII text of its offsets' `sha256` followed by its content's `sha256`,
+    with nothing between them.
+- `source` — the exact Python text that computed the columns.
+- `columns` — every column of the file by name, in `data.cols` order, each
+  with a mark: the SHA-256 of the function that made it, by the rule of
+  `made.cart.hooks` for a function. A function not written in a file that
+  can be read at the time, such as one compiled from `source`, is marked by
+  the SHA-256 of the whole of `source`, a newline, and the function's name. Any
+  change to `source` therefore changes the mark of every such column.
+- `parameters` — an object of plain JSON values, empty when there are none.
+- `runtime` — free text naming what ran `source`.
+
+A parent may itself be derived. A derive step reads the columns its direct
+parent holds and no others: a column of the parent's own parent is not
+looked up. `made` is then the same object down the whole chain, and each
+file's `derived.parents[0].derived_sha256` names the step before it.
+
+`rowver.derive.derive(parent, target, source, columns, by, parameters=None,
+labels=None, runtime=None, replace=False)` writes a derived file and returns
+its header. `columns` is `{name: function}`; each function is called once
+with a mapping of the parent's own columns, NumPy for flat and Awkward for
+jagged, which decompresses a column, and checks it against its `sha256`,
+only when it is asked for, so `read` names exactly the columns used. A
+result must be one number per row or one list of numbers per row, of a
+kind in the table under Arrays; a flat float column must be finite.
+`labels` is `{column: {value: label}}` as in a recipe. Nothing is written
+when there is no column, when a name is one the parent holds, or when a
+result is not a column. The file is written whole beside its target and
+then put in place, and a target that exists is left alone unless `replace`
+is true.
 
 ### Checksums
 
@@ -193,16 +296,43 @@ hexadecimal characters.
 fingerprints all the data without decompressing any of it. It does not cover
 the `data` JSON describing the arrays.
 
+Every array with one value, or one offset step, per row also carries
+`by_sample`: a list of SHA-256 values, 64 hexadecimal characters each, one
+per entry of `data.samples`, in that order. These are `entry`, every flat
+column, and both arrays of every jagged column. `sample` has none: it is
+constant within a sample. With sample `s` on rows `[r0, r1)`:
+
+- `entry` and a flat column: the SHA-256 of the uncompressed little-endian
+  bytes of `values[r0:r1]`.
+- jagged `offsets`: the SHA-256 of the little-endian `i8` bytes of
+  `offsets[r0 : r1 + 1] - offsets[r0]`, which is `r1 - r0 + 1` values starting
+  at 0. Counting from the sample's own first offset means a change in an
+  earlier sample does not alter a later sample's checksum.
+- jagged `content`: the SHA-256 of the little-endian bytes of
+  `content[offsets[r0] : offsets[r1]]`.
+- a sample with no rows: the SHA-256 of zero bytes for `entry`, a flat column
+  and jagged content, and of the single `i8` value 0 for jagged offsets.
+
+`by_sample` is not part of `data.sha256`: it can be worked out from the
+arrays, and `rowver validate` checks it. Two headers are enough to say which
+column of which sample changed between two presses, with no array
+decompressed; `rowver diff A.rvr B.rvr` does that. It matches samples and
+columns by name, and reports the rows of each file, the samples and columns
+only one file holds, the samples whose row counts differ, the columns whose
+kinds differ, and each (column, sample) whose `by_sample` differs.
+
 `made.sha256` covers the complete `made` object, including `files`, except
 its own top-level `sha256` field. Serialize that object with
 `json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`,
 encode it as UTF-8, and take its SHA-256 as 64 hexadecimal characters.
 `made.cart.sha256` covers the saved recipe text alone, and each
 `made.cart.modules[path].sha256` covers that module's text alone.
+`derived.sha256` covers the complete `derived` object except its own
+top-level `sha256` field, serialized exactly as `made` is.
 
-`rowver run` creates every checksum when building the file. Reading and
-writing preserve them without recomputing them; `rowver validate` checks them.
-Tool keys are outside every checksum.
+`rowver run` and `rowver.derive.derive` create every checksum when building
+a file. Reading and writing preserve them without recomputing them;
+`rowver validate` checks them. Tool keys are outside every checksum.
 
 ### Tool keys
 
@@ -211,7 +341,8 @@ one. Any program that saves an `.rvr` writes back every tool key it found.
 
 ## Arrays
 
-An array reference is `{"at", "size", "sha256"}`. `at` counts bytes from the
+An array reference is `{"at", "size", "sha256"}`, with `by_sample` on every
+array but `sample` (see Checksums). `at` counts bytes from the
 start of the arrays (the byte after the header), so a new header of another
 length leaves every `at` unchanged. `size` is the compressed length. The
 uncompressed length is the number of values times the kind's width: `rows`
@@ -250,6 +381,39 @@ A column's kind is whatever NumPy dtype the skim produced. A copied
 column keeps its branch dtype; a derived column keeps what the hook returned.
 No promotion rule.
 
+## What `rowver validate` checks
+
+One line per check, on any number of files:
+
+- the magic, `rowver: 13`, and `data` and `made` at the top level;
+- the arrays fill the file in file order, end to end, and each decompresses
+  to its declared length and has its `sha256`; `data.sha256` matches;
+- sample rows and file rows sum to `rows`; the sample index runs through the
+  samples in order; each file's rows are its sample's, with distinct entry
+  numbers inside the entries read; `data.files` matches `made.files`;
+- every `by_sample` has one checksum per sample, each matching that sample's
+  values;
+- jagged offsets start at 0, never decrease and end at `count`; flat floats
+  are finite; `lim`, `nice`, `vals` and `names` agree with the values;
+- `made` has its fields, its file records are complete, `made.cart.sha256`
+  and each module's `sha256` match their text, and `made.sha256` matches;
+- in a pure file with `made.cart.hooks`: the hooks mark `keep` and exactly
+  the file's columns, in order;
+- in a derived file instead: `derived` has every field of its kind and
+  exactly one parent; `derived.columns` names exactly the file's columns, in
+  order; `made.sha256` and `data.rows` are the `made_sha256` and `rows`
+  recorded for the parent; `derived.sha256` matches.
+
+A derived file's parent is checked only when it is named:
+`rowver validate DERIVED.rvr --parent PARENT.rvr`. The parent is then
+validated as a file itself, and compared with the derived file from its
+header: its `data.sha256`, `made` and `made.sha256`, and `derived.sha256`
+(absent for `null`) are the ones recorded; its rows, `samples` and `files`
+are the derived file's; its `sample` and `entry` arrays have the derived
+file's `sha256`s; every column in `read` has the checksum recorded; and it
+holds no column of the derived file's names. Without `--parent`, one line
+says the parent was not checked, and the file can still be valid.
+
 ## Column facts
 
 - `lim` — `[min, max]` of the values. For `b1`, the 0 and 1 that occur.
@@ -286,4 +450,5 @@ several factors. A viewer decides which columns weight events and how.
 
 Stored weights or a per-sample weighted flag. Per-column provenance. A
 structured copy of sample metadata or hooks. Percentiles. Any older version:
-a reader of version 12 reads version 12 only.
+a reader of version 13 reads version 13 only. A parent's columns inside a
+derived file.
