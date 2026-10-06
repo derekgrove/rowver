@@ -33,11 +33,13 @@ class Exists(Refused, FileExistsError):
 
 class Columns(Mapping):
     """The parent's own columns by name, each decompressed and checked against its sha256 when
-    first asked for; `read` holds the checksum of every column asked for."""
+    first asked for, and its sample columns, each with its sample's value on every row; `read`
+    holds the checksum of every column asked for."""
 
     def __init__(self, header, section):
-        self.data, self.section, self.read, self.held = header["data"], section, {}, {}
+        self.data, self.section, self.read, self.held, self.sample = header["data"], section, {}, {}, None
         self.records = {c["name"]: c for c in self.data["cols"]}
+        self.shared = {c["name"]: c for c in self.data["sample_cols"] if c["name"] not in self.records}
 
     def array(self, record, kind, count, label):
         """One of the parent's arrays, refused unless its bytes have the sha256 its header says."""
@@ -46,8 +48,26 @@ class Columns(Mapping):
             raise Refused(f"The parent's {label} does not match its sha256; validate the parent.")
         return np.frombuffer(raw, rvr.dtype(kind), count)
 
+    def index(self):
+        """Each row's sample index, read from the parent once."""
+        if self.sample is None:
+            self.sample = self.array(self.data["sample"], "i4", self.data["rows"], "sample")
+        return self.sample
+
+    def spread(self, name):
+        """One sample column on every row, refused unless its values have the sha256 its header says."""
+        record = self.shared[name]
+        if rvr.sample_checksum(record["kind"], record["values"]) != record["sha256"]:
+            raise Refused(f"The parent's sample column {name} does not match its sha256; validate the parent.")
+        return rvr.broadcast(record, self.index())
+
     def __getitem__(self, name):
         """One column, loaded and recorded as read the first time it is asked for."""
+        if name in self.shared:
+            if name not in self.held:
+                self.held[name] = self.spread(name)
+            self.read[name] = self.shared[name]["sha256"]
+            return self.held[name]
         if name not in self.records:
             raise KeyError(f"{name} is not a column the parent itself holds")
         if name not in self.held:
@@ -62,16 +82,16 @@ class Columns(Mapping):
         return self.held[name]
 
     def __contains__(self, name):
-        """Whether the parent holds the column; asking does not read it."""
-        return name in self.records
+        """Whether the parent holds the column or sample column; asking does not read it."""
+        return name in self.records or name in self.shared
 
     def __iter__(self):
-        """The parent's column names, in its order."""
-        return iter(self.records)
+        """The parent's column names, in its order, then its sample columns'."""
+        return iter([*self.records, *self.shared])
 
     def __len__(self):
-        """How many columns the parent holds."""
-        return len(self.records)
+        """How many columns and sample columns the parent holds."""
+        return len(self.records) + len(self.shared)
 
 
 def checked(name, result, rows):
@@ -137,10 +157,18 @@ def derive(parent, target, source, columns, by, parameters=None, labels=None, ru
     if (data.get("sha256") != rvr.data_checksum(data)
             or above["made"].get("sha256") != rvr.made_checksum(above["made"])):
         raise Refused("The parent's header does not match its own checksums. Validate it first.")
+    given = rvr.expected_sample_cols(above)
+    if given is not None and sorted(given, key=repr) != sorted(data.get("sample_cols", []), key=repr):
+        raise Refused("The parent's sample columns are not what its metadata gives. Validate it first.")
+    if not isinstance(data.get("sample_cols"), list):
+        raise Refused("The parent has no sample columns: it was pressed before they existed. Press it again.")
     held = Columns(above, section)
-    clash = [name for name in columns if name in held]
+    clash = [name for name in columns if name in held.records]
     if clash:
         raise Refused(f"The parent already holds {extend.listed(clash)}.")
+    clash = [name for name in columns if name in held.shared]
+    if clash:
+        raise Refused(f"The parent already holds {extend.listed(clash)} as a sample column.")
     if not all(isinstance(name, str) and name and callable(function) for name, function in columns.items()):
         raise Refused("Every column needs a name and a function.")
     try:
@@ -150,8 +178,9 @@ def derive(parent, target, source, columns, by, parameters=None, labels=None, ru
     if not isinstance(parameters, dict):
         raise Refused("The parameters must be a dict.")
     made = {name: checked(name, function(held), data["rows"]) for name, function in columns.items()}
-    own, arrays = rvr.build(data["samples"], data["files"], held.array(data["sample"], "i4", data["rows"], "sample"),
+    own, arrays = rvr.build(data["samples"], data["files"], held.index(),
                             held.array(data["entry"], "i8", data["rows"], "entry"), made, labels or {})
+    own["sample_cols"] = data["sample_cols"]
     derived = {
         "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "by": by,

@@ -65,6 +65,35 @@ def shaped(derived):
             and isinstance(parent.get("read"), dict) and all(sha(v) for v in parent["read"].values()))
 
 
+def sample_checks(header):
+    """The checks of data.sample_cols: each one's shape and sha256, and that together they are
+    exactly what made's metadata gives for the samples of the file."""
+    data, made, cols = header["data"], header["made"], header["data"].get("sample_cols")
+    count, fields = len(data["samples"]), {"name", "kind", "values", "sha256"}
+    if not check("sample_cols: each has a name, a kind of b1, i8, f8 or text, one value of that kind per sample, "
+                 "and a sha256",
+                 isinstance(cols, list) and all(
+                     isinstance(c, dict) and set(c) == fields and isinstance(c["name"], str)
+                     and isinstance(c["values"], list) and len(c["values"]) == count
+                     and c["kind"] in rvr.SAMPLE_KINDS and rvr.sample_kind(c["values"]) == c["kind"] for c in cols)):
+        return False
+    names = [c["name"] for c in cols]
+    ok = check("sample_cols: names are distinct, and none is a column's, sample, entry or file",
+               len(set(names)) == len(names)
+               and not set(names) & ({c["name"] for c in data["cols"]} | set(rvr.RESERVED)))
+    for c in cols:
+        ok &= check(f"sample column {c['name']}: sha256 matches its values",
+                    c["sha256"] == rvr.sample_checksum(c["kind"], c["values"]))
+    try:
+        given = rvr.expected_sample_cols(header)
+    except (KeyError, TypeError, AttributeError):
+        return check("sample_cols are the metadata of made's files that make a sample column", False)
+    named = {c["name"]: c for c in cols}
+    return ok & check("sample_cols are the metadata of made's files that make a sample column",
+                      all(named.get(c["name"]) == c for c in given) and len(given) == len(cols) if given is not None
+                      else True)
+
+
 def derived_checks(header, parent):
     """The checks of a derived file: its derived object, and its parent when one is named."""
     data, made, derived = header["data"], header["made"], header["derived"]
@@ -105,10 +134,13 @@ def compared(above, data, made, derived, recorded):
     ok &= check("parent: sample and entry arrays have this file's sha256s",
                 (theirs["sample"]["sha256"], theirs["entry"]["sha256"])
                 == (data["sample"]["sha256"], data["entry"]["sha256"]))
-    held = {c["name"]: rvr.column_checksum(c) for c in theirs["cols"]}
-    ok &= check("parent: every column read has the sha256 recorded",
+    ok &= check("parent: sample_cols are this file's", theirs["sample_cols"] == data.get("sample_cols"))
+    held = {c["name"]: c["sha256"] for c in theirs["sample_cols"]}
+    held.update({c["name"]: rvr.column_checksum(c) for c in theirs["cols"]})
+    ok &= check("parent: every column and sample column read has the sha256 recorded",
                 all(held.get(name) == mark for name, mark in recorded["read"].items()))
-    ok &= check("parent: holds no column of this file's names", not set(held) & set(derived["columns"]))
+    ok &= check("parent: holds no column or sample column of this file's names",
+                not set(held) & set(derived["columns"]))
     return ok
 
 
@@ -188,6 +220,7 @@ def validate(path, parent=None):
                 all(isinstance(s.get("metadata"), dict) and rvr.plain(s["metadata"])
                     and all(isinstance(k, str) for k in s.get("metadata_omitted", []))
                     for s in made["files"].values()))
+    ok &= sample_checks(header)
     ok &= check("made files have paths, trees, UUIDs, and entry counts",
                 all(path and record["tree"] and record["uuid"] and record["entries"] >= 0
                     for sample in made["files"].values() for path, record in sample["files"].items()))
@@ -198,7 +231,9 @@ def validate(path, parent=None):
                     module["sha256"] == hashlib.sha256(module["source"].encode()).hexdigest())
     if "derived" in header:
         ok &= derived_checks(header, parent)
-    elif "hooks" in made["cart"]:
+    elif parent is not None:
+        print("  --   the parent was not compared: this file is not derived")
+    if "derived" not in header and "hooks" in made["cart"]:
         ok &= check("cart hooks mark keep and exactly the columns",
                     "keep" in made["cart"]["hooks"]
                     and list(made["cart"]["hooks"].get("columns", {})) == [c["name"] for c in data["cols"]])

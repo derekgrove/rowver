@@ -5,6 +5,7 @@
 Every per-row array carries one sha256 per sample (by_sample), so two headers are enough to
 name the column and the sample that changed between one press and the next.
 """
+import json
 import struct
 
 from . import rvr
@@ -22,10 +23,32 @@ def kind(column):
     return column["kind"] if column["kind"] != "jagged" else f"jagged {column['content']['kind']}"
 
 
+def sample_columns(first, second, shared):
+    """What differs between two files' sample columns: the ones only one holds, the kinds that
+    differ, and for each shared sample of a column of one kind, the two values when they differ."""
+    cols = [{c["name"]: c for c in data["sample_cols"]} for data in (first, second)]
+    places = [{s["name"]: i for i, s in enumerate(data["samples"])} for data in (first, second)]
+    both = [name for name in cols[0] if name in cols[1]]
+    changed = []
+    for name in both:
+        if cols[0][name]["kind"] != cols[1][name]["kind"]:
+            continue
+        for sample in shared:
+            values = [cols[i][name]["values"][places[i][sample]] for i in (0, 1)]
+            if values[0] != values[1]:
+                changed.append({"column": name, "sample": sample, "values": values})
+    return {"only_a": [name for name in cols[0] if name not in cols[1]],
+            "only_b": [name for name in cols[1] if name not in cols[0]],
+            "kind": {name: [cols[0][name]["kind"], cols[1][name]["kind"]] for name in both
+                     if cols[0][name]["kind"] != cols[1][name]["kind"]},
+            "changed": changed}
+
+
 def compare(a, b):
     """What differs between the files at two paths, reading only their headers: rows, the samples
-    and columns only one holds, samples whose rows differ, columns whose kind differs, and for the
-    samples and columns both hold, each (column, sample) whose by_sample differs, with the parts."""
+    and columns only one holds, samples whose rows differ, columns whose kind differs, for the
+    samples and columns both hold, each (column, sample) whose by_sample differs, with the parts,
+    and the same for the sample columns."""
     first, second = rvr.read_header(a)["data"], rvr.read_header(b)["data"]
     places = [{s["name"]: (i, s["rows"]) for i, s in enumerate(data["samples"])} for data in (first, second)]
     columns = [{c["name"]: c for c in data["cols"]} for data in (first, second)]
@@ -57,6 +80,7 @@ def compare(a, b):
                              if kind(columns[0][name]) != kind(columns[1][name])}},
         "entry": differing(first["entry"], second["entry"]),
         "changed": changed,
+        "sample_cols": sample_columns(first, second, shared),
     }
 
 
@@ -79,5 +103,13 @@ def main(a, b):
     said += [f"entry: differs in sample {sample}" for sample in found["entry"]]
     said += [f"column {c['column']}: differs in sample {c['sample']}"
              + ("" if c["parts"] == ["values"] else f" ({', '.join(c['parts'])})") for c in found["changed"]]
-    print("\n".join(said) if said else "The headers show no difference in rows, samples, columns or by_sample.")
+    held = found["sample_cols"]
+    said += [f"sample column {name}: only in {a}" for name in held["only_a"]]
+    said += [f"sample column {name}: only in {b}" for name in held["only_b"]]
+    said += [f"sample column {name}: {kinds[0]} in {a}, {kinds[1]} in {b}" for name, kinds in held["kind"].items()]
+    said += [f"sample column {c['column']}: differs in sample {c['sample']}: "
+             f"{json.dumps(c['values'][0], ensure_ascii=False)} in {a}, "
+             f"{json.dumps(c['values'][1], ensure_ascii=False)} in {b}" for c in held["changed"]]
+    print("\n".join(said) if said else "The headers show no difference in rows, samples, columns, by_sample "
+          "or sample columns.")
     return 1 if said else 0

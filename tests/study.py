@@ -51,23 +51,24 @@ def tree(path, events, seed, most=3):
         }
 
 
-def make(root, name="tiny", files=None, extra=""):
-    """A study folder under root; files maps a sample to its paths (default: two files made here)."""
+def make(root, name="tiny", files=None, extra="", metadata=None):
+    """A study folder under root; files maps a sample to its paths (default: two files made here),
+    metadata a sample to its metadata (default: none)."""
     study = Path(root) / name
     study.mkdir(parents=True)
     if files is None:
         tree(study / "a.root", 200, 1)
         tree(study / "b.root", 120, 2)
         files = {"alpha": [str(study / "a.root")], "beta": [str(study / "b.root")]}
-    fileset = {sample: {"files": {path: "Events" for path in paths}, "metadata": {}}
+    fileset = {sample: {"files": {path: "Events" for path in paths}, "metadata": (metadata or {}).get(sample, {})}
                for sample, paths in files.items()}
     (study / "cart.py").write_text(RECIPE.format(fileset=repr(fileset), extra=extra), encoding="utf-8")
     return study
 
 
-def point(folder, files):
-    """Point a study's recipe at other files: {sample: [path, ...]}."""
-    fileset = {sample: {"files": {str(path): "Events" for path in paths}, "metadata": {}}
+def point(folder, files, metadata=None):
+    """Point a study's recipe at other files: {sample: [path, ...]}, with {sample: metadata}."""
+    fileset = {sample: {"files": {str(path): "Events" for path in paths}, "metadata": (metadata or {}).get(sample, {})}
                for sample, paths in files.items()}
     text = (Path(folder) / "cart.py").read_text(encoding="utf-8")
     start = text.index("FILESET = ")

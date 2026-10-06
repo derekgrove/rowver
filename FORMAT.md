@@ -5,7 +5,9 @@ Version 13. `rowver/rvr.py` is the code for everything here, and
 
 New in 13: every per-row array carries one checksum per sample (`by_sample`),
 and a file may hold only columns derived from another file's columns, naming
-that parent under its own checksums (`derived`).
+that parent under its own checksums (`derived`). Each sample's metadata is kept
+in `made`, and the metadata that is one number, one text or one truth value per
+sample is also a sample column (`data.sample_cols`).
 
 ## Container
 
@@ -72,6 +74,10 @@ recipe. A file with `derived` is a derived file (see `derived`).
      "offsets": {"at": 163774, "size": 51230, "sha256": "…", "by_sample": ["…", "…"]},
      "content": {"kind": "f4", "count": 352738, "at": 215004, "size": 1101877, "sha256": "…",
                  "by_sample": ["…", "…"]}}
+  ],
+  "sample_cols": [
+    {"name": "xsec", "kind": "f8",   "values": [87.3, null],            "sha256": "…"},
+    {"name": "kind", "kind": "text", "values": ["background", "background"], "sha256": "…"}
   ]
 }
 ```
@@ -99,16 +105,77 @@ recipe. A file with `derived` is a derived file (see `derived`).
   - jagged columns: `name`, `kind: "jagged"`, `offsets` (the array
     `i8[rows + 1]`) and `content` (its `kind`, its `count`, and the array
     `kind[count]`). Event `i` owns `content[offsets[i] : offsets[i + 1]]`.
+- `sample_cols` — the sample columns, a list that is always there and may be
+  empty (see Sample columns).
 - `sha256` — see Checksums.
 
 There is no percentile ladder. A viewer holding a column can measure a
 quantile itself.
 
+#### Sample columns
+
+A sample column holds one value per sample, not one per row. It is a key of
+the samples' metadata (`made.files[sample].metadata`) written a second time
+as a column, so that a cross-section or a luminosity can be multiplied with a
+per-row weight without being stored on every row.
+
+Each record has exactly `name`, `kind`, `values` and `sha256`:
+
+- `name` — the metadata key.
+- `kind` — `b1`, `i8`, `f8` or `text`.
+- `values` — one JSON value per entry of `data.samples`, in that order. A
+  sample left out of the file is not in `data.samples` and has no value.
+- `sha256` — the SHA-256 of the values as bytes, so that it does not depend on
+  how a program spells a number in JSON. For `b1`, `i8` and `f8`: the values as
+  little-endian bytes of that kind, one after another, with a missing `f8`
+  value as the eight bytes `00 00 00 00 00 00 f8 7f`. For `text`: for each
+  value in turn the byte `00` when it is missing, and otherwise the byte `01`,
+  the text as UTF-8, and the byte `00`. It is not part of `data.sha256`.
+
+The stored `kind` is what a reader uses; it need not work the kind out again.
+The order of `sample_cols` carries no meaning.
+
+The value of a sample column on row `r` is `values[sample[r]]`, with `sample`
+the array of each row's sample index. `rvr.sample_values(header, name)` gives
+the values as stored, and `rvr.sample_column(header, section, name)` gives one
+value per row: a NumPy `f8` array with NaN where the value is `null`, an `i8`
+array, a `bool` array, or for `text` an object array of `str` and `None`.
+
+Which keys are sample columns is decided over the samples in the file. A
+sample has a value for a key when its metadata holds the key and the value
+is not `null`; otherwise it lacks it. With the values the samples have:
+
+| the values | every sample has one | kind |
+|---|---|---|
+| all `true` or `false` | yes | `b1` |
+| all whole numbers that fit in a signed 64-bit integer | yes | `i8` |
+| whole numbers or finite floats, at least one a float | yes or no | `f8` |
+| all whole numbers | no | `f8` |
+| all text | yes or no | `text` |
+
+A sample that lacks the key has `null`, which only `f8` and `text` allow. A
+truth value is not a number. Every other key is not a sample column and stays
+only in `made`: a list or an object, values of more than one of these types,
+truth values that a sample lacks, whole numbers one of which does not fit in
+64 bits when every sample has one, a number too large for an `f8`, a key
+that no sample has a value for, and a key that `metadata_omitted` names in
+any sample. A key with the name of a column in `cols` is not a sample column
+either: the row column has the name. Nor are `sample`, `entry` and `file`.
+
+A value is written as `made` holds it: a whole number in an `f8` column stays
+a whole number (`59`, not `59.0`), and the `sha256` is of that text. The
+columns are in the order their keys first appear, going through the samples'
+metadata in `data.samples` order. `sample_cols` and `made` say the same thing
+twice, and `rowver validate` checks that they agree in both directions.
+
 A viewer never rewrites `data`. The presser writes it once, and may later
 add columns to it (`rowver run --onto`): the rows, `samples`, `files`,
-`sample` and `entry` stay as they are, and an array already held is moved
+`sample`, `entry` and `sample_cols` stay as they are, and an array already held is moved
 as the bytes it is, never made again, so its `sha256` and `by_sample` do
-not change. A derived file is refused: nothing is added to it. The
+not change. A derived file is refused: nothing is added to it. So is a
+new column with the name of a sample column the file holds: a press of that
+recipe gives the name to the row column and writes no such sample column, so
+press again. The
 new columns take their places in the recipe's `columns` order, every `at`
 is counted again, and `data.sha256` changes, because it names every array.
 The file that results has the same `data` as a press of the new recipe,
@@ -198,7 +265,9 @@ builds its fileset. Callable objects are not copied.
 Each sample's `metadata` is the recipe's metadata for that sample, kept so that
 facts such as a cross-section or luminosity travel with the file. It holds every
 value that is plain: text, a whole number, a finite float, `true`, `false`,
-`null`, or a list or object of those with text keys. A value that is not plain
+`null`, or a list or object of those with text keys. The keys that hold one
+number, text or truth value per sample are written again as `data.sample_cols`
+(see Sample columns). A value that is not plain
 is left out, and its key is then named in `metadata_omitted`, a list that is
 written only when something was left out. The `file` key the presser adds for a
 hook is not stored. `made.sha256` covers the metadata like the rest of `made`,
@@ -215,8 +284,9 @@ the parent by its checksums.
   stored in this file too; they are small. Row `i` of this file is row `i`
   of the parent.
 - `data.cols` holds only the derived columns. No derived column has the
-  name of a column its parent holds. `data.sha256` covers this file's own
-  arrays by the usual rule.
+  name of a column or a sample column its parent holds. `data.sha256` covers
+  this file's own arrays by the usual rule.
+- `data.sample_cols` is the parent's, unchanged.
 - `made` is the direct parent's `made`, equal to it as a JSON value, so
   `made.sha256` is the parent's. It still records the recipe, the marks of
   `keep` and `prepare`, and the ROOT files that made the rows.
@@ -252,10 +322,11 @@ the parent by its checksums.
   - `rows` — the parent's `data.rows`.
   - `path` — the path the parent was opened with. A hint only: the
     checksums say which file the parent is.
-  - `read` — the parent columns that were read, by name. A flat column's
-    value is its array's `sha256`. A jagged column's is the SHA-256 of the
-    ASCII text of its offsets' `sha256` followed by its content's `sha256`,
-    with nothing between them.
+  - `read` — the parent columns and sample columns that were read, by name.
+    A flat column's value is its array's `sha256`. A jagged column's is the
+    SHA-256 of the ASCII text of its offsets' `sha256` followed by its
+    content's `sha256`, with nothing between them. A sample column's is its
+    `sha256`.
 - `source` — the exact Python text that computed the columns.
 - `columns` — every column of the file by name, in `data.cols` order, each
   with a mark: the SHA-256 of the function that made it, by the rule of
@@ -276,12 +347,15 @@ labels=None, runtime=None, replace=False)` writes a derived file and returns
 its header. `columns` is `{name: function}`; each function is called once
 with a mapping of the parent's own columns, NumPy for flat and Awkward for
 jagged, which decompresses a column, and checks it against its `sha256`,
-only when it is asked for, so `read` names exactly the columns used. A
+only when it is asked for, so `read` names exactly the columns used. The
+mapping also holds the parent's sample columns by name, each as one value per
+row (as `rvr.sample_column` gives it), checked against its `sha256` and
+recorded in `read` when it is asked for; `name in columns` reads nothing. A
 result must be one number per row or one list of numbers per row, of a
 kind in the table under Arrays; a flat float column must be finite.
 `labels` is `{column: {value: label}}` as in a recipe. Nothing is written
-when there is no column, when a name is one the parent holds, or when a
-result is not a column. The file is written whole beside its target and
+when there is no column, when a name is one the parent holds as a column or
+a sample column, or when a result is not a column. The file is written whole beside its target and
 then put in place, and a target that exists is left alone unless `replace`
 is true.
 
@@ -319,7 +393,9 @@ column of which sample changed between two presses, with no array
 decompressed; `rowver diff A.rvr B.rvr` does that. It matches samples and
 columns by name, and reports the rows of each file, the samples and columns
 only one file holds, the samples whose row counts differ, the columns whose
-kinds differ, and each (column, sample) whose `by_sample` differs.
+kinds differ, and each (column, sample) whose `by_sample` differs. For the
+sample columns it reports the ones only one file holds, the ones whose kinds
+differ, and each sample whose value differs, with both values.
 
 `made.sha256` covers the complete `made` object, including `files`, except
 its own top-level `sha256` field. Serialize that object with
@@ -395,6 +471,13 @@ One line per check, on any number of files:
   values;
 - jagged offsets start at 0, never decrease and end at `count`; flat floats
   are finite; `lim`, `nice`, `vals` and `names` agree with the values;
+- `sample_cols` is a list; each sample column has `name`, `kind`, `values`
+  and `sha256`, a kind of the four, and one value per sample that its kind
+  allows; the names are distinct and none is a column's, `sample`, `entry` or
+  `file`; each `sha256` matches its values; and the list is exactly what the
+  metadata in `made.files` gives by the rules of Sample columns. In
+  a derived file the names left to row columns are the pressed file's, which
+  `made.cart.hooks.columns` holds;
 - `made` has its fields, its file records are complete, `made.cart.sha256`
   and each module's `sha256` match their text, and `made.sha256` matches;
 - in a pure file with `made.cart.hooks`: the hooks mark `keep` and exactly
@@ -410,9 +493,12 @@ validated as a file itself, and compared with the derived file from its
 header: its `data.sha256`, `made` and `made.sha256`, and `derived.sha256`
 (absent for `null`) are the ones recorded; its rows, `samples` and `files`
 are the derived file's; its `sample` and `entry` arrays have the derived
-file's `sha256`s; every column in `read` has the checksum recorded; and it
-holds no column of the derived file's names. Without `--parent`, one line
-says the parent was not checked, and the file can still be valid.
+file's `sha256`s; its `sample_cols` are the derived file's; every column and
+sample column in `read` has the checksum recorded; and it holds no column or
+sample column of the derived file's names. Without `--parent`, one line
+says the parent was not checked, and the file can still be valid. With
+`--parent` on a file that is not derived, one line says the parent was not
+compared, and the file can still be valid.
 
 ## Column facts
 
@@ -444,11 +530,13 @@ press with a recipe error.
 
 The file stores no weights. A weight is an ordinary column the recipe
 declares, such as the ntuple's `weight` branch or a hook that multiplies
-several factors. A viewer decides which columns weight events and how.
+several factors. A factor that is one number per sample, such as a
+cross-section, can stay in the metadata and be read as a sample column. A
+viewer decides which columns weight events and how.
 
 ## Not in the file
 
 Stored weights or a per-sample weighted flag. Per-column provenance. A
-structured copy of sample metadata or hooks. Percentiles. Any older version:
+structured copy of hooks. Sample metadata per row. Percentiles. Any older version:
 a reader of version 13 reads version 13 only. A parent's columns inside a
 derived file.

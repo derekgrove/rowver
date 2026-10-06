@@ -92,6 +92,10 @@ sample, so after pressing again it names each column and sample whose values cha
 the samples and columns only one file has, and the row counts that differ. It exits 0
 when it finds no difference and 1 when it finds one.
 
+A sample's metadata that is one number, text or truth value per sample, such as a
+cross-section, is also written as a sample column: one value per sample, read for a
+row through its sample index (`rvr.sample_column`), and compared by `rowver diff` too.
+
 A file written by rowver 12 is refused; press its study again.
 
 ## When a file cannot be read
@@ -117,7 +121,8 @@ so `--onto` may name the file it writes. `--plan` with `--onto` only says which
 columns would be added. With `--progress json` the `wrote` line carries `added`, the
 names of the new columns, and `--plan` prints one `plan` line with `columns`, `files`
 and `skipped` (recipe files the cartridge was not pressed from, which are not read).
-A derived file (below) is refused, as `differs`.
+A derived file (below) is refused, as `differs`, and so is a new column with the name
+of a sample column the file holds.
 
 ## Columns derived from a file's columns
 
@@ -133,9 +138,9 @@ derive("my_study.rvr", "my_study.mt2.rvr", source, {"mT2": mt2}, by="my program 
 `derive` writes a second `.rvr` file that holds only the new columns, on the same rows
 as its parent, without copying the parent's columns. The file records which parent it
 came from by its checksums, which of the parent's columns were read, and `source`, the
-Python text that computed the columns. Each function gets the parent's own columns by
-name and returns one number, or one list of numbers, per row. There is no command for
-it. Check the pair with `rowver validate my_study.mt2.rvr --parent my_study.rvr`.
+Python text that computed the columns. Each function gets the parent's own columns and
+sample columns by name and returns one number, or one list of numbers, per row. There
+is no command for it. Check the pair with `rowver validate my_study.mt2.rvr --parent my_study.rvr`.
 See [FORMAT.md](FORMAT.md).
 
 ## For programs: `--out` and `--progress json`

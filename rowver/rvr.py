@@ -11,6 +11,8 @@ import numpy as np
 VERSION = 13
 KINDS = ("f8", "f4", "i8", "i4", "i2", "i1", "u8", "u4", "u2", "u1", "b1")
 MAGIC = b"\x89RVR\r\n\x1a\n"
+SAMPLE_KINDS = ("b1", "i8", "f8", "text")
+RESERVED = ("sample", "entry", "file")  # never the name of a sample column
 FEW = 64
 LEVEL = 6
 
@@ -43,6 +45,63 @@ def carried(metadata):
                            if isinstance(key, str) and plain(value)}}
     left = [str(key) for key in metadata if str(key) not in record["metadata"]]
     return {**record, "metadata_omitted": left} if left else record
+
+
+def finite(number):
+    """Whether a whole number or a float is a finite f8."""
+    try:
+        return math.isfinite(number)
+    except OverflowError:
+        return False
+
+
+def sample_kind(values):
+    """The kind of the sample column holding these values, one per sample and None where a sample
+    lacks one: b1, i8, f8 or text, or None when they make no sample column."""
+    present = [value for value in values if value is not None]
+    kinds = {type(value) for value in present}
+    if kinds == {bool}:
+        return "b1" if len(present) == len(values) else None
+    if kinds == {str}:
+        return "text"
+    if not kinds or kinds - {int, float}:
+        return None
+    if kinds == {int} and len(present) == len(values):
+        return "i8" if all(-2 ** 63 <= value < 2 ** 63 for value in present) else None
+    return "f8" if all(finite(value) for value in present) else None
+
+
+def sample_checksum(kind, values):
+    """SHA-256 of a sample column's values as bytes: little-endian numbers with NaN for none, or marked text."""
+    if kind == "text":
+        raw = b"".join(b"\x00" if value is None else b"\x01" + value.encode("utf-8") + b"\x00" for value in values)
+    else:
+        filled = [np.nan if value is None else value for value in values]
+        raw = np.array(filled, dtype={"f8": "<f8", "i8": "<i8", "b1": bool}[kind]).tobytes()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def sample_cols(samples, files, taken):
+    """The sample columns of a file: every metadata key of made's files that makes one over the
+    samples named, in the order the keys first appear, but for a row column's name (taken)."""
+    records = [files.get(name, {}) for name in samples]
+    out = set(taken) | set(RESERVED) | {key for record in records for key in record.get("metadata_omitted", [])}
+    cols = []
+    for key in dict.fromkeys(key for record in records for key in record.get("metadata", {})):
+        values = [record.get("metadata", {}).get(key) for record in records]
+        kind = None if key in out else sample_kind(values)
+        if kind:
+            cols.append({"name": key, "kind": kind, "values": values, "sha256": sample_checksum(kind, values)})
+    return cols
+
+
+def expected_sample_cols(header):
+    """The sample columns made's metadata gives for this file, or None when its pressed columns are not named."""
+    data, hooks = header["data"], header["made"].get("cart", {}).get("hooks")
+    if "derived" in header and hooks is None:
+        return None
+    pressed = list(hooks.get("columns", {})) if "derived" in header else [c["name"] for c in data["cols"]]
+    return sample_cols([s["name"] for s in data["samples"]], header["made"]["files"], pressed)
 
 
 def made_checksum(made):
@@ -246,3 +305,27 @@ def column(header, section, name):
     offsets = array(section, record["offsets"], "i8", data["rows"] + 1)
     content = record["content"]
     return ak.unflatten(array(section, content, content["kind"], content["count"]), np.diff(offsets))
+
+
+def sample_values(header, name):
+    """One sample column's values as stored: one per entry of data.samples, None where a sample has none."""
+    return next(c for c in header["data"]["sample_cols"] if c["name"] == name)["values"]
+
+
+def broadcast(record, sample):
+    """A sample column's value on every row, given each row's sample index: f8 with NaN for a
+    missing value, i8, bool, or for text an object array of str and None."""
+    kinds = {"f8": "<f8", "i8": "<i8", "b1": bool, "text": object}
+    values = [np.nan if value is None else value for value in record["values"]] if record["kind"] == "f8" \
+        else record["values"]
+    sample = np.asarray(sample)
+    if len(sample) and not (0 <= sample.min() and sample.max() < len(values)):
+        raise ValueError("A row names a sample the file does not have.")
+    return np.array(values, dtype=kinds[record["kind"]])[sample]
+
+
+def sample_column(header, section, name):
+    """One sample column on every row: values[sample[r]] for row r."""
+    data = header["data"]
+    record = next(c for c in data["sample_cols"] if c["name"] == name)
+    return broadcast(record, array(section, data["sample"], "i4", data["rows"]))

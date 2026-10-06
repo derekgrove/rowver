@@ -103,10 +103,11 @@ class Diff(Folder):
             "samples": {"only_a": [], "only_b": [], "rows": {}},
             "columns": {"only_a": [], "only_b": [], "kind": {}},
             "entry": [],
-            "changed": [{"column": "scaled", "sample": "beta", "parts": ["content"]}]})
+            "changed": [{"column": "scaled", "sample": "beta", "parts": ["content"]}],
+            "sample_cols": {"only_a": [], "only_b": ["k"], "kind": {}, "changed": []}})
         result = study.rowver("diff", first, second)
         self.assertEqual((result.returncode, result.stdout),
-                         (1, "column scaled: differs in sample beta (content)\n"))
+                         (1, f"column scaled: differs in sample beta (content)\nsample column k: only in {second}\n"))
         same = study.rowver("diff", first, first)
         self.assertEqual((same.returncode, same.stdout.count("\n")), (0, 1))
 

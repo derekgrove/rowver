@@ -32,13 +32,18 @@ def print_cart(source, name="cart.py"):
 
 
 def print_columns(header, section):
-    """The compressed size, then one line per array."""
+    """The compressed size, one line per array, then one line per sample column."""
     data = header["data"]
     print(f"arrays {len(section)} bytes compressed")
     show("sample", rvr.array(section, data["sample"], "i4", data["rows"]))
     show("entry", rvr.array(section, data["entry"], "i8", data["rows"]))
     for record in data["cols"]:
         show(record["name"], rvr.column(header, section, record["name"]))
+    names = [sample["name"] for sample in data["samples"]]
+    for record in data.get("sample_cols", []):
+        print(f"{record['name']:14} {record['kind']} by sample[{len(names)}]  "
+              + ", ".join(f"{name}: {json.dumps(value, ensure_ascii=False)}"
+                          for name, value in zip(names, record["values"])))
 
 
 def main(path, fileset=False, cart=False, columns=False):

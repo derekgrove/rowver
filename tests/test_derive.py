@@ -107,7 +107,7 @@ class Derive(Folder):
         self.assertNotIn("cart hooks mark keep and exactly the columns", alone.stdout)
         both = study.rowver("validate", self.out, "--parent", self.parent)
         self.assertEqual(both.returncode, 0, both.stdout)
-        self.assertEqual(both.stdout.count("  ok   parent: "), 7)
+        self.assertEqual(both.stdout.count("  ok   parent: "), 8)
         self.assertNotIn("was not checked", both.stdout)
         dumped = study.rowver("dump", self.out).stdout
         self.assertIn('"derived": {', dumped)
@@ -121,13 +121,13 @@ class Derive(Folder):
         other = self.folder / "other.rvr"
         self.assertEqual(study.rowver("run", self.folder, "--out", other).returncode, 0)
         self.fails(study.rowver("validate", self.out, "--parent", other), "parent: data sha256", "parent: made is",
-                   "parent: every column read")
+                   "parent: every column and sample column read")
         # the parent with one array's checksum changed in its header: not valid itself, and not what was read
         header, section = rvr.read(self.parent)
         header["data"]["cols"][0]["sha256"] = "0" * 64
         rvr.write(self.parent, header, [bytes(section)])
         self.fails(study.rowver("validate", self.out, "--parent", self.parent),
-                   "MET: decompresses", "data sha256 matches", "parent: every column read")
+                   "MET: decompresses", "data sha256 matches", "parent: every column and sample column read")
         self.fails(study.rowver("validate", self.out, "--parent", self.folder / "missing.rvr"),
                    "a rowver 13 file", "parent")
         with self.assertRaisesRegex(Refused, "The parent's header does not match its own checksums"):
@@ -214,7 +214,7 @@ class Derive(Folder):
         self.assertEqual(study.rowver("validate", again, "--parent", self.out).returncode, 0)
         # its parent's parent is not its parent
         self.fails(study.rowver("validate", again, "--parent", self.parent), "parent: data sha256",
-                   "parent: derived sha256", "parent: every column read")
+                   "parent: derived sha256", "parent: every column and sample column read")
 
     def test_onto_refuses_a_derived_file(self):
         self.derived()

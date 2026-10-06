@@ -134,6 +134,12 @@ def plan(cart, header):
     new = [name for name in cart.columns if name not in held]
     if not new:
         raise Nothing("The cartridge already holds every column of the recipe.")
+    if "sample_cols" not in data:
+        raise Differs(f"The cartridge has no sample columns: it was pressed before they existed. {AGAIN}")
+    clash = [name for name in new if name in {c["name"] for c in data["sample_cols"]}]
+    if clash:
+        raise Differs(f"The cartridge holds {listed(clash)} as a sample column, made from the samples' metadata, "
+                      f"and the recipe now makes a column of that name. {AGAIN}")
     before, now = old["cart"].get("hooks"), marks(cart)
     if before:
         changed = [hook for hook in ("keep", "prepare") if before.get(hook) != now.get(hook)]
