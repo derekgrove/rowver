@@ -143,11 +143,12 @@ def join(pieces):
 
 
 def outward(x, up):
-    """x rounded away from the range to two significant digits."""
+    """x rounded away from the range to two significant digits, or x itself where that falls inside it."""
     if x == 0:
         return 0.0
     step = 10.0 ** (math.floor(math.log10(abs(x))) - 1)
-    return (math.ceil if up else math.floor)(round(x / step, 6)) * step
+    end = (math.ceil if up else math.floor)(round(x / step, 6)) * step
+    return x if (end < x if up else end > x) else end
 
 
 def facts(array, labels):

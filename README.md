@@ -146,7 +146,7 @@ See [FORMAT.md](FORMAT.md).
 ## For programs: `--out` and `--progress json`
 
 ```bash
-rowver --version                                             # rowver 13.0.0
+rowver --version                                             # rowver 13.0.1
 python -m rowver run studies/my_study --out /some/where.rvr --parallel 4 --progress json
 ```
 
