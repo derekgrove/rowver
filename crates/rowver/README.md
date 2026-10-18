@@ -10,8 +10,8 @@ Each module that reproduces Python behaviour names, in its header, the package, 
 functions, and documentation it follows. The tests compare files written here with files the
 Python RowVer 13.0.0 wrote from the same arrays, and they agree.
 
-This crate is now the reference builder of `.rvr` files: from here on the Python RowVer is to
-match what it writes, not the other way round.
+This crate is the reference builder of `.rvr` files. The Python RowVer was retired after 13.0.1
+(tag `v13.0.1`).
 
 ## Compression and speed
 
@@ -28,7 +28,7 @@ column 0.05 s (`rvr_format_study/results/RUST.md`).
 ## Fixtures
 
 The tests read `tests/fixtures/*.hex`, the hexadecimal text of two small files written by
-the Python RowVer 13.0.0 from synthetic values; `tests/generate_core_fixture.py`
-regenerates them.
+the Python RowVer 13.0.0 from synthetic values; `tests/generate_core_fixture.py` regenerates
+them with the Python RowVer of tag `v13.0.1` installed.
 
 MIT licensed.

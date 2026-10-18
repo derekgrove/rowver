@@ -8,10 +8,6 @@ dist/
 *.md
 !README.md
 !FORMAT.md
-!python/docs/recipe-dialect.md
 
-python/studies/*
-!python/studies/simple/
-!python/studies/data_and_mc/
-!python/studies/advanced/
-!python/studies/dimuon_open_data/
+# What the retired Python presser left on this disk (its studies, notes); its code is at tag v13.0.1.
+/python/

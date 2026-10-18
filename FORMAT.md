@@ -1,7 +1,8 @@
 # The `.rvr` file
 
-Version 13. `rowver/rvr.py` is the code for everything here, and
-`rowver/derive.py` writes a derived file.
+Version 13. `crates/rowver` reads and writes everything here and is the reference builder.
+The Python RowVer (`rowver/rvr.py`, `rowver/derive.py` at tag `v13.0.1`, now retired) wrote
+it first, which is why its checksums follow Python's `json.dumps`.
 
 New in 13: every per-row array carries one checksum per sample (`by_sample`),
 and a file may hold only columns derived from another file's columns, naming

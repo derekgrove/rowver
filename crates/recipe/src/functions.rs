@@ -4,7 +4,7 @@
 //! Ported from: awkward 2.12.0 `sum`, `any`, `all`, `min`, `max`, `num`, `firsts`,
 //! `fill_none`, `local_index`, and `where`; NumPy 2.5.1 `abs`, `sqrt`, `minimum`, `maximum`,
 //! `sign`, `isfinite`, `hypot`, and the trigonometric functions; and the recipe helpers
-//! `nearest`, `is_sjet`, and `dimuon` of the Python RowVer's studies (`python/studies`), which
+//! `nearest`, `is_sjet`, and `dimuon` of the Python RowVer's studies (tag `v13.0.1`), which
 //! they generalise.
 //! Documentation: <https://awkward-array.org/doc/main/reference/>;
 //! <https://numpy.org/doc/stable/reference/routines.math.html>

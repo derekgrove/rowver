@@ -4,17 +4,3 @@ rust:
   image: rust:1.91-slim
   script:
     - cargo test --workspace --locked
-
-# The Python presser's tests. The check that the viewer reads a pressed file runs where a
-# rowver_web checkout with dist/validate.mjs is at hand (ROWVER_WEB), and is skipped here.
-python:
-  image: python:3.13-slim
-  variables:
-    PIP_ROOT_USER_ACTION: ignore
-  script:
-    - cd python
-    - apt-get update -qq && apt-get install -y -qq procps > /dev/null  # ps, for the cancel tests
-    - pip install --quiet numpy awkward uproot pytest
-    - pip install --quiet --no-deps .
-    - python -m rowver --version
-    - python -m pytest -q tests

@@ -889,7 +889,7 @@ fn press(
         .iter()
         .find(|s| s.file.iter().any(|f| f.lfn.is_some()))
     {
-        return Err(format!("{} reads a central dataset. Pressing datasets is not built yet: rvr press reads files through a storage's HTTPS door, and choosing a site's door for each dataset file is still to come. Name files on storage instead (files = \"root://…\"), or press the dataset with the Python presser.", dataset.name));
+        return Err(format!("{} reads a central dataset. Pressing datasets is not built yet: rvr press reads files through a storage's HTTPS door, and choosing a site's door for each dataset file is still to come. Name the files on storage instead (files = \"root://…\").", dataset.name));
     }
     for sample in &mut lock.sample {
         let want = wanted(sample, events)?;
