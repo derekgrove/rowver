@@ -1,13 +1,13 @@
 //! `rvr press`: read what a study's samples.lock names through its recipe.toml, keep the events
 //! the recipe's cuts pass, and write one `.rvr` file.
 //!
-//! Ported from: rapidity `engine/src/press.rs` @ 7ed7238 (itself from RowVer 13.0.1
-//! `rowver/run.py` `press`), for a recipe of cuts, copied branches and computed columns.
+//! Ported from: RowVer 13.0.1 `rowver/run.py` `press`, for a recipe of cuts, copied branches and
+//! computed columns.
 //! `made.cart.source` holds the recipe's TOML and `made.cart.hooks` is left out, as `FORMAT.md`
 //! allows for a file without marks.
 //! Documentation: `FORMAT.md` (repository root) ("made", "data"); the README of rvr.
-//! Differences from rapidity's: ROOT is read with hep-root (`RootFile::read_range`); the inputs
-//! are the lock's files, each checked against the lock before it is read (size, adler32, ROOT
+//! Differences from the Python presser: ROOT is read with hep-root (`RootFile::read_range`); the
+//! inputs are the lock's files, each checked against the lock before it is read (size, adler32, ROOT
 //! UUID, entries); `[column]` entries are written after the copies; and each sample's metadata
 //! gains `label`, `events_read` and `events_total`. Rows keep the order of their entries, and
 //! several files are read at once, each a run of entries at a time.
@@ -15,8 +15,8 @@
 use crate::samples::remote::{HttpsFile, Storage};
 use crate::samples::resolve::{self, adler32_file, File, Lock, Locked};
 use crate::samples::spec::Events;
-use definition::{Array, Columns, Constant, Definition, Expression, Kind, Scope, Values};
 use hep_root::{ByteSource, RootFile, Tree};
+use recipe::{Array, Columns, Constant, Expression, Kind, Recipe, Scope, Values};
 use rowver::write::{self, Labels};
 use rowver::NumericBuffer;
 use serde_json::{json, Map, Value};
@@ -140,15 +140,12 @@ fn wanted(sample: &Locked, events: Option<&str>) -> Result<Events, String> {
 }
 
 /// The recipe a press runs, or what stops it.
-fn recipe(source: &str) -> Result<Definition, String> {
-    let definition = Definition::read(source).map_err(|e| format!("recipe.toml: {}", e.0))?;
-    if definition.select.is_some() {
-        return Err("recipe.toml: select marks rows in a file already pressed; a press keeps the rows its [keep] cuts pass. Remove select.".into());
-    }
-    if definition.copy.is_empty() && definition.columns.is_empty() {
+fn read_recipe(source: &str) -> Result<Recipe, String> {
+    let recipe = Recipe::read(source).map_err(|e| format!("recipe.toml: {}", e.0))?;
+    if recipe.copy.is_empty() && recipe.columns.is_empty() {
         return Err("recipe.toml stores nothing: name branches under [copy] or computed columns under [column].".into());
     }
-    Ok(definition)
+    Ok(recipe)
 }
 
 /// An output column: the name written, the expression it comes from, and whether it is a copy.
@@ -163,7 +160,7 @@ struct Input<'a> {
 
 /// What every input of one press shares.
 struct Shared<'a> {
-    definition: &'a Definition,
+    recipe: &'a Recipe,
     outputs: &'a [Output<'a>],
     storage: Option<&'a Storage>,
     offline: &'a str,
@@ -205,14 +202,14 @@ fn kind_of(kind: hep_root::columns::Kind) -> Kind {
 }
 
 impl<S: ByteSource> Columns for Branches<'_, S> {
-    fn column(&self, name: &str) -> definition::Result<Option<Array>> {
+    fn column(&self, name: &str) -> recipe::Result<Option<Array>> {
         if let Some(held) = self.read.borrow().get(name) {
             return Ok(Some(held.clone()));
         }
         let Some(branch) = self.tree.branch(name) else {
             return Ok(None);
         };
-        let fail = |error: String| definition::Error(format!("{name}: {error}"));
+        let fail = |error: String| recipe::Error(format!("{name}: {error}"));
         let values = self
             .file
             .read_range(branch, self.first, self.last)
@@ -293,8 +290,8 @@ fn copied(scope: &Scope, from: &Expression) -> Result<Array, String> {
 }
 
 /// Which events one cut lets through: those it does not apply to, and those that pass it.
-fn lets_through(cut: &definition::Cut, scope: &Scope, entries: usize) -> Result<Vec<bool>, String> {
-    let named = |error: definition::Error| format!("[keep] {}: {}", cut.name, error.0);
+fn lets_through(cut: &recipe::Cut, scope: &Scope, entries: usize) -> Result<Vec<bool>, String> {
+    let named = |error: recipe::Error| format!("[keep] {}: {}", cut.name, error.0);
     let applies = match &cut.when {
         None => None,
         Some(when) => match scope.evaluate(when).map_err(named)? {
@@ -317,13 +314,13 @@ fn lets_through(cut: &definition::Cut, scope: &Scope, entries: usize) -> Result<
 
 /// Apply the cuts to one run of a file's events, counting what each leaves.
 fn kept(
-    definition: &Definition,
+    recipe: &Recipe,
     scope: &Scope,
     entries: usize,
     cutflow: &mut [u64],
 ) -> Result<Vec<bool>, String> {
     let mut keep = vec![true; entries];
-    for (index, cut) in definition.keep.iter().enumerate() {
+    for (index, cut) in recipe.keep.iter().enumerate() {
         for (keep, through) in keep.iter_mut().zip(lets_through(cut, scope, entries)?) {
             *keep &= through;
         }
@@ -333,8 +330,8 @@ fn kept(
 }
 
 /// Give an output column the kind the recipe asks it to be stored as.
-fn stored(definition: &Definition, column: &str, array: Array) -> Array {
-    match (definition.stored.get(column), array) {
+fn stored(recipe: &Recipe, column: &str, array: Array) -> Array {
+    match (recipe.stored.get(column), array) {
         (Some(kind), Array::Event(values)) => Array::Event(values.cast(*kind)),
         (Some(kind), Array::Object { offsets, values }) => Array::Object {
             offsets,
@@ -501,8 +498,7 @@ impl ByteSource for Held {
 }
 
 /// Whether a branch may be asked for: its name, or the name it would have as an attribute or a
-/// count of a collection, appears in the recipe or among the sample's text fields (rapidity's
-/// `mentioned`).
+/// count of a collection, appears in the recipe or among the sample's text fields.
 fn mentioned(
     mentions: &BTreeSet<String>,
     sample: &BTreeMap<String, Constant>,
@@ -606,9 +602,7 @@ fn take(
     input: &Input,
 ) -> Result<Taken, String> {
     let Shared {
-        definition,
-        outputs,
-        ..
+        recipe, outputs, ..
     } = *shared;
     let at = &input.file.at;
     let located = |error: String| format!("{at}: {error}");
@@ -642,7 +636,7 @@ fn take(
         Vec::new()
     };
     let mut gathered: Vec<Option<Gathered>> = outputs.iter().map(|_| None).collect();
-    let mut cutflow = vec![0_u64; definition.keep.len()];
+    let mut cutflow = vec![0_u64; recipe.keep.len()];
     let (mut first, mut entry) = (0_u64, Vec::new());
     while first < entries {
         if shared.failed.load(Ordering::Acquire) {
@@ -669,22 +663,22 @@ fn take(
         let scope = Scope {
             columns: &branches,
             sample: &sample,
-            objects: &definition.objects,
-            collections: &definition.collections,
-            helpers: &definition.helpers,
+            objects: &recipe.objects,
+            collections: &recipe.collections,
+            helpers: &recipe.helpers,
         };
-        let keep = kept(definition, &scope, count, &mut cutflow).map_err(located)?;
+        let keep = kept(recipe, &scope, count, &mut cutflow).map_err(located)?;
         for (index, (column, from, plain)) in outputs.iter().enumerate() {
             let array = if *plain {
                 copied(&scope, from)
             } else {
                 scope
                     .evaluate(from)
-                    .and_then(|value| definition::per_event(value, count))
+                    .and_then(|value| recipe::per_event(value, count))
                     .map_err(|e| e.0)
             };
             let array = stored(
-                definition,
+                recipe,
                 column,
                 array.map_err(|e| located(format!("{column}: {e}")))?,
             );
@@ -889,7 +883,7 @@ fn press(
 ) -> Result<(), String> {
     let started = std::time::Instant::now();
     let (mut lock, source) = inputs(dir)?;
-    let definition = recipe(&source)?;
+    let recipe = read_recipe(&source)?;
     if let Some(dataset) = lock
         .sample
         .iter()
@@ -901,11 +895,11 @@ fn press(
         let want = wanted(sample, events)?;
         resolve::planned(sample, want)?;
     }
-    let outputs: Vec<Output> = definition
+    let outputs: Vec<Output> = recipe
         .copy
         .iter()
         .map(|(n, e)| (n, e, true))
-        .chain(definition.columns.iter().map(|(n, e)| (n, e, false)))
+        .chain(recipe.columns.iter().map(|(n, e)| (n, e, false)))
         .collect();
     let work: Vec<Input> = lock
         .sample
@@ -940,9 +934,9 @@ fn press(
         count(read),
         workers.min(work.len()).max(1)
     );
-    let mentions = definition.mentions();
+    let mentions = recipe.mentions();
     let shared = Shared {
-        definition: &definition,
+        recipe: &recipe,
         outputs: &outputs,
         storage: storage.as_ref(),
         offline: &offline,
@@ -953,7 +947,7 @@ fn press(
     let mut taken = take_all(&shared, &lock, &work, workers)?.into_iter();
     let mut tally = Tally {
         read: 0,
-        cutflow: vec![0; definition.keep.len()],
+        cutflow: vec![0; recipe.keep.len()],
         files: Vec::new(),
     };
     let (mut pieces, mut made_files) = (Vec::new(), Map::new());
@@ -992,7 +986,7 @@ fn press(
         "cart": {"sha256": write::text_checksum(&source), "source": source},
         "files": made_files,
     });
-    if let Some(title) = &definition.title {
+    if let Some(title) = &recipe.title {
         made["title"] = title.as_str().into();
     }
     let names: Vec<&str> = lock.sample.iter().map(|s| s.name.as_str()).collect();
@@ -1016,7 +1010,7 @@ fn press(
     }
     let bytes = std::fs::metadata(target).map_or(0, |m| m.len());
     println!("Read {} entries; kept after each cut:", count(tally.read));
-    for (cut, kept) in definition.keep.iter().zip(&tally.cutflow) {
+    for (cut, kept) in recipe.keep.iter().zip(&tally.cutflow) {
         println!("  {:30} {:>13}", cut.name, count(*kept));
     }
     println!(

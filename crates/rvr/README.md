@@ -77,7 +77,7 @@ run            i4[2248]  [1, 1, 1, 1, 1, ...]
 | file | what it is | written by | commit it? |
 |---|---|---|---|
 | `recipe.toml` | what to keep and store of every event | you | yes |
-| `samples.toml` | what to read, in your words: datasets, folders, patterns, eras | you (or the Fileset Builder) | yes |
+| `samples.toml` | what to read, in your words: datasets, folders, patterns, eras | you, or any tool that writes it | yes |
 | `samples.lock` | every file found: where, bytes, adler32, ROOT UUID, entries, and what a press reads of it | `rvr samples resolve` | yes; review its changes like code |
 | `STUDY.rvr` | the pressed events, with the texts above inside it | `rvr press` | no (`.gitignore` leaves it out) |
 
@@ -161,13 +161,6 @@ waits for rowver 14.
 
 Remote files are read through their storage's HTTPS door, all the baskets the recipe can use of
 each 50,000 entries asked for in one request (`multipart/byteranges`, which EOS answers).
-
-### `rvr samples fileset samples.lock [--events N|all]`
-
-Prints the lock as a fileset JSON, `{sample: {"files": {path: {"tree", "stop"}}, "metadata"}}`,
-for rapidity's `renorm-build`, which pressed studies before `rvr press` existed. Each sample
-appears by its name, with its label in its metadata, and each file read in part gets its `stop`.
-A random choice is refused, since that presser reads the first entries only.
 
 ### `rvr validate FILE... [--parent PARENT]`
 
@@ -259,11 +252,10 @@ A mass point's label becomes part of the name as CMS dataset names write numbers
 ## recipe.toml
 
 The recipe is TOML, with one expression per value, evaluated over whole columns of events (the
-`definition` crate beside this one; the language began as rapidity's Build node's, hence its
-`format` name).
+`recipe` crate beside this one).
 
 ```toml
-format = "renorm-definition"
+format = "rvr-recipe"
 version = 1
 
 [object.good_muon]            # the muons that pass, as a collection of their own
@@ -323,6 +315,5 @@ valid proxy, local files and public storage still resolve, and every other sampl
 - `rvr reproduce FILE`: write a study back out of a `.rvr` and press it again.
 - Writing `samples.toml`, the lock and each sample's label into the `.rvr` (`made.samples`,
   `made.lock`): a change to the file format, proposed for rowver 14.
-- Lists of samples and folders from the Fileset Builder, which will write `samples.toml`.
 
 MIT licensed.

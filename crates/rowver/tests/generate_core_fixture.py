@@ -75,7 +75,7 @@ def main():
     data["sample_cols"] = rvr.sample_cols(list(samples), made["files"], list(columns))
     made["sha256"] = rvr.made_checksum(made)
     header = {"rowver": 13, "data": data, "made": made, "fixture_tool": {"preserved": "μ"}}
-    with tempfile.TemporaryDirectory(prefix="renorm-fixture-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="rowver-fixture-") as temporary:
         path = pathlib.Path(temporary) / "fixture.rvr"
         rvr.write(path, header, arrays)
         save(path, "rowver-v13.hex")
@@ -84,7 +84,7 @@ def main():
         try:
             derive.derive("fixture.rvr", "derived.rvr", DERIVE_SOURCE,
                           {"nlep_twice": nlep_twice, "weighted_met": weighted_met, "Muon_pt_half": muon_pt_half},
-                          by="renorm fixture", runtime="fixture")
+                          by="rowver fixture", runtime="fixture")
             save(pathlib.Path("derived.rvr"), "rowver-v13-derived.hex")
         finally:
             os.chdir(home)

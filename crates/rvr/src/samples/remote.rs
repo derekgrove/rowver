@@ -299,7 +299,7 @@ impl HttpsFile {
 }
 
 /// The most ranges one request asks for, the gap a range is joined across when each request is
-/// one range, and how many requests run at once (rapidity's `rootio`, measured on FNAL EOS).
+/// one range, and how many requests run at once (measured on FNAL EOS, 2026-10-07).
 const SPANS: usize = 256;
 const GAP: u64 = 512 * 1024;
 const FETCHERS: usize = 6;

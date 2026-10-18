@@ -34,7 +34,7 @@ fn pressed(path: &Path, met_b: f32, xsec_b: f64) {
     ];
     let (mut data, arrays) = pack(pieces, Labels::new(), files).unwrap();
     let record = |entries: u64| json!({"tree": "Events", "uuid": "00000000-0000-0000-0000-000000000000", "entries": entries});
-    let source = "format = \"renorm-definition\"\nversion = 1\n";
+    let source = "format = \"rvr-recipe\"\nversion = 1\n";
     let mut made = json!({
         "study": "cli-test", "built": "2026-10-16T00:00:00Z", "by": "rvr test",
         "cart": {"sha256": text_checksum(source), "source": source},

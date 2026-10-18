@@ -1,7 +1,4 @@
-//! Evaluate the expressions of a no-code definition over whole columns of events.
-//!
-//! Lifted from rapidity `definition/` @ 7ed7238 (2026-10-18), with `kernels` replaced by
-//! hep-columns, the same code under its shared name.
+//! The recipe of `rvr press`: TOML whose expressions are evaluated over whole columns of events.
 //!
 //! An expression is read into a tree once (`parse`) and walked for each run of events
 //! (`Scope::evaluate`); nothing is compiled. Values keep the number kinds and the conversions
@@ -16,7 +13,7 @@ mod kind;
 mod parse;
 
 pub use array::{Array, Constant, Operator, Store, Values};
-pub use document::{names, Cut, Definition};
+pub use document::{names, Cut, Recipe};
 pub use evaluate::{per_event, Columns, Helper, Scope};
 pub use kind::Kind;
 pub use parse::{parse, Expression};

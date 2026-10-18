@@ -1,6 +1,6 @@
 //! Read the answer a server gives when asked for several byte ranges of a file at once.
 //!
-//! Lifted from rapidity `engine/src/remote/multipart.rs` @ 7ed7238. Nothing is ported. The layout is that of `multipart/byteranges` in RFC 7233, appendix A:
+//! Nothing is ported. The layout is that of `multipart/byteranges` in RFC 7233, appendix A:
 //! a boundary line, a `Content-Range` header, a blank line, the bytes, and so on, closed by
 //! the boundary followed by two dashes. Fermilab's EOS answered so on 2026-10-07, for up to
 //! 1,024 ranges in one request.

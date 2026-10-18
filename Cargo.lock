@@ -107,16 +107,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "definition"
-version = "0.1.0"
-dependencies = [
- "hep-columns",
- "serde_json",
- "thiserror",
- "toml",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -493,6 +483,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "recipe"
+version = "0.1.0"
+dependencies = [
+ "hep-columns",
+ "serde_json",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -575,12 +575,12 @@ dependencies = [
 name = "rvr"
 version = "0.1.0"
 dependencies = [
- "definition",
  "grid-catalog",
  "grid-doors",
  "grid-proxy",
  "grid-trust",
  "hep-root",
+ "recipe",
  "rowver",
  "serde",
  "serde_json",

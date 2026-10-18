@@ -65,7 +65,7 @@ kind = "test"
 
 #[test]
 fn press_keeps_copies_and_computes() {
-    let recipe = r#"format = "renorm-definition"
+    let recipe = r#"format = "rvr-recipe"
 version = 1
 
 [keep]
@@ -134,7 +134,7 @@ ht = "sum(Jet_pt)"
 
 #[test]
 fn events_reads_the_first_entries_and_records_where_it_stopped() {
-    let recipe = "format = \"renorm-definition\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
     let dir = study("first", FLAT, recipe);
     let header = pressed(&dir, &["--events", "2"]);
     assert_eq!(header["data"]["rows"], 2);
@@ -149,7 +149,7 @@ fn std_vectors_in_a_folder_are_pressed() {
     let samples = FLAT
         .replace("uproot_flat.root", "stl_vectors.root")
         .replace("\"analysis\"", "\"ntuple/Events\"");
-    let recipe = "format = \"renorm-definition\"\nversion = 1\n\n[keep]\ntwo = \"count(jet_pt) >= 2\"\n\n[copy]\nbranches = [\"evt\", \"jet_pt\", \"u16\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[keep]\ntwo = \"count(jet_pt) >= 2\"\n\n[copy]\nbranches = [\"evt\", \"jet_pt\", \"u16\"]\n";
     let dir = study("vectors", &samples, recipe);
     let header = pressed(&dir, &[]);
     assert_eq!(header["data"]["rows"], 2);
@@ -164,7 +164,7 @@ fn std_vectors_in_a_folder_are_pressed() {
 
 #[test]
 fn presses_that_cannot_be_trusted_are_refused() {
-    let recipe = "format = \"renorm-definition\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
     let dir = study("refused", FLAT, recipe);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
 
@@ -176,7 +176,10 @@ fn presses_that_cannot_be_trusted_are_refused() {
     std::fs::write(dir.join("recipe.toml"), select).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1);
-    assert!(said.contains("Remove select"), "{said}");
+    assert!(
+        said.contains("has no setting named select; it takes format, version"),
+        "{said}"
+    );
     std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
 
     let mut file = std::fs::OpenOptions::new()
@@ -229,7 +232,7 @@ tree = "Empty"
 flat = "x"
 listed = "list"
 "#;
-    let recipe = "format = \"renorm-definition\"\nversion = 1\n\n[copy]\nvalue = \"branch(sample.flat)\"\nvalues = \"branch(sample.listed)\"\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nvalue = \"branch(sample.flat)\"\nvalues = \"branch(sample.listed)\"\n";
     let dir = study("empty", samples, recipe);
     let header = pressed(&dir, &[]);
     let rows: Vec<u64> = header["data"]["samples"]

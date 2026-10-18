@@ -1,6 +1,6 @@
 # recipe.toml: what this study keeps and stores of every event it reads. Each value is one
-# expression over the event's branches. The language is the one rapidity's Build node edits.
-format = "renorm-definition"
+# expression over the event's branches; the README of rvr lists every key.
+format = "rvr-recipe"
 version = 1
 title = "{study}"
 

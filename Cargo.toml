@@ -13,7 +13,7 @@ publish = false
 
 [workspace.dependencies]
 rowver = { path = "crates/rowver" }
-definition = { path = "crates/definition" }
+recipe = { path = "crates/recipe" }
 # The shared HEP crates, one copy for every app; fix them in hep-crates, then move this rev.
 hep-columns = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }
 hep-root = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }

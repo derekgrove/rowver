@@ -297,7 +297,7 @@ the parent by its checksums.
 {
   "sha256": "…64 hex…",
   "built": "2026-10-06T19:12:44Z",
-  "by": "renorm 0.3.0",
+  "by": "rowver 13.0.1",
   "parents": [
     {"data_sha256": "…", "made_sha256": "…", "derived_sha256": null,
      "rows": 45147, "path": "/data/my_study.rvr",

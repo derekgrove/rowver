@@ -399,57 +399,6 @@ fn plan_all(path: &Path, flags: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-/// The lock as a fileset JSON (`{sample: {"files": {path: {"tree", "stop"}}, "metadata"}}`), which
-/// rapidity's `renorm-build` presses until `rvr press` exists: each sample by its name, the label
-/// kept in its metadata, and each file read in part given its `stop`. Applies the same --events
-/// overrides as `plan`; a random choice is refused, since that presser reads the first entries only.
-fn fileset(path: &Path, flags: &[&str]) -> Result<(), String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("{} cannot be read: {e}", path.display()))?;
-    let mut lock: Lock = toml::from_str(&text)
-        .map_err(|e| format!("{} is not a samples.lock: {e}", path.display()))?;
-    if flags.contains(&"--random") {
-        return Err("renorm-build reads the first entries of a file only, so a random choice cannot be pressed with it yet; rvr press will.".into());
-    }
-    let events = flags
-        .iter()
-        .position(|f| *f == "--events")
-        .map(|i| flags.get(i + 1).copied().ok_or("--events needs a value"))
-        .transpose()?;
-    let mut out = serde_json::Map::new();
-    for sample in &mut lock.sample {
-        let want = match events {
-            None => resolve::asked(sample),
-            Some("all") => spec::Events::All,
-            Some(n) => spec::Events::First(
-                n.replace('_', "")
-                    .parse()
-                    .map_err(|_| format!("--events is a number of events or all, not {n:?}"))?,
-            ),
-        };
-        if matches!(want, spec::Events::Random { .. }) {
-            return Err(format!("{}: samples.toml chooses its events at random, which renorm-build cannot press; give --events N or --events all", sample.name));
-        }
-        resolve::planned(sample, want)?;
-        let mut files = serde_json::Map::new();
-        for file in sample.file.iter().filter(|f| f.stop != Some(0)) {
-            let entry = match file.stop {
-                Some(stop) => serde_json::json!({"tree": sample.tree, "stop": stop}),
-                None => serde_json::json!(sample.tree),
-            };
-            files.insert(file.at.clone(), entry);
-        }
-        let mut metadata = sample.metadata.clone();
-        metadata.insert("label".into(), sample.label.clone().into());
-        out.insert(
-            sample.name.clone(),
-            serde_json::json!({"files": files, "metadata": metadata}),
-        );
-    }
-    println!("{}", serde_json::to_string_pretty(&out).unwrap());
-    Ok(())
-}
-
 /// `rvr samples …`: the exit status of the command named.
 pub fn main(words: &[&str]) -> u8 {
     let result = match words {
@@ -458,7 +407,6 @@ pub fn main(words: &[&str]) -> u8 {
         ["resolve", file] => resolve_all(Path::new(file)).map(|_| true),
         ["check", file] => check(Path::new(file)),
         ["plan", file, flags @ ..] => plan_all(Path::new(file), flags).map(|_| true),
-        ["fileset", file, flags @ ..] => fileset(Path::new(file), flags).map(|_| true),
         _ => Err(USAGE.into()),
     };
     match result {
@@ -480,6 +428,4 @@ pub const USAGE: &str = "usage:
   rvr samples resolve samples.toml            ask every source; write samples.lock beside it
   rvr samples check   samples.lock            ask again; say what changed since the lock
   rvr samples plan    samples.lock [--events N|all] [--random] [--seed S]
-                                              what a press would read of each sample
-  rvr samples fileset samples.lock [--events N|all]
-                                              the lock as a fileset JSON for renorm-build";
+                                              what a press would read of each sample";

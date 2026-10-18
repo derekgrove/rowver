@@ -1,8 +1,8 @@
 //! Every expression of the fixture against what NumPy 2.5.1, awkward 2.12.0 and coffea 2026.7.0
 //! gave for it.
 
-use definition::{
-    parse, per_event, Array, Columns, Constant, Definition, Helper, Kind, Scope, Store, Values,
+use recipe::{
+    parse, per_event, Array, Columns, Constant, Helper, Kind, Recipe, Scope, Store, Values,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -12,7 +12,7 @@ struct Held(BTreeMap<String, Array>);
 
 impl Columns for Held {
     /// Hand out a copy of a held column.
-    fn column(&self, name: &str) -> definition::Result<Option<Array>> {
+    fn column(&self, name: &str) -> recipe::Result<Option<Array>> {
         Ok(self.0.get(name).cloned())
     }
 
@@ -99,12 +99,9 @@ fn agree(ours: &Array, theirs: &Array, close: bool, scale: f64) -> bool {
     }
 }
 
-/// Load the fixture written by `tests/generate_definition_fixture.py`.
+/// Load the fixture written by `tests/generate_recipe_fixture.py`.
 fn fixture() -> Value {
-    let path = format!(
-        "{}/tests/fixtures/definition.json",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let path = format!("{}/tests/fixtures/recipe.json", env!("CARGO_MANIFEST_DIR"));
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
@@ -532,7 +529,7 @@ fn list_operations_place_nan_as_awkward_does_and_refuse_mistakes() {
 #[test]
 fn a_collection_reads_its_attributes_from_the_columns_it_names() {
     let text = r#"
-format = "renorm-definition"
+format = "rvr-recipe"
 version = 1
 
 [collection.lep]
@@ -544,7 +541,7 @@ charge = "Charge_lep"
 from = "lep"
 where = "pt > 10 and abs(eta) < 2.4"
 "#;
-    let definition = Definition::read(text).unwrap();
+    let recipe = Recipe::read(text).unwrap();
     let lists = |values: Values| Array::object(&[2, 0, 1], values).unwrap();
     let held = Held(BTreeMap::from([
         (
@@ -564,8 +561,8 @@ where = "pt > 10 and abs(eta) < 2.4"
     let scope = Scope {
         columns: &held,
         sample: &sample,
-        objects: &definition.objects,
-        collections: &definition.collections,
+        objects: &recipe.objects,
+        collections: &recipe.collections,
         helpers: &helpers,
     };
     let run = |text: &str| parse(text).and_then(|expression| scope.evaluate(&expression));
@@ -582,9 +579,9 @@ where = "pt > 10 and abs(eta) < 2.4"
         run("(lep where pt > 30).eta").unwrap(),
         Array::object(&[0, 0, 1], Values::float(Kind::F4, vec![-3.0])).unwrap()
     );
-    // The presser is told of the columns behind the attributes the definition uses, and of
+    // The presser is told of the columns behind the attributes the recipe uses, and of
     // the first, which counts the members; `charge` is used by no expression in it.
-    let mentions = definition.mentions();
+    let mentions = recipe.mentions();
     assert!(mentions.contains("PT_lep") && mentions.contains("Eta_lep"));
     assert!(!mentions.contains("Charge_lep"));
     let message = |text: &str| run(text).unwrap_err().0;
@@ -596,7 +593,7 @@ where = "pt > 10 and abs(eta) < 2.4"
         collections: &absent,
         columns: &held,
         sample: &sample,
-        objects: &definition.objects,
+        objects: &recipe.objects,
         helpers: &helpers,
     };
     assert_eq!(
@@ -617,8 +614,8 @@ where = "pt > 10 and abs(eta) < 2.4"
     );
     assert!(message("lep + 1").contains("lep is a collection"));
     let refused = |body: &str| {
-        let head = "format = \"renorm-definition\"\nversion = 1\n";
-        Definition::read(&format!("{head}{body}")).unwrap_err().0
+        let head = "format = \"rvr-recipe\"\nversion = 1\n";
+        Recipe::read(&format!("{head}{body}")).unwrap_err().0
     };
     assert_eq!(
         refused("[collection.lep]\n"),

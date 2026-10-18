@@ -1,5 +1,5 @@
 [package]
-name = "definition"
+name = "recipe"
 description = "The recipe language of rvr press: TOML whose expressions are evaluated over whole columns of events."
 version.workspace = true
 authors.workspace = true
