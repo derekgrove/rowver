@@ -9,6 +9,7 @@ made it. [FORMAT.md](FORMAT.md) is the specification.
 |---|---|
 | [`crates/rvr`](crates/rvr/README.md) | the `rvr` command: start a study, resolve its samples, press them, and validate, dump and diff `.rvr` files |
 | `crates/recipe` | the recipe language of `rvr press`: TOML whose expressions are evaluated over whole columns of events |
+| [`crates/rowver-py`](crates/rowver-py/README.md) | the Python package `rowver`: `.rvr` files as NumPy, Awkward, Arrow, pandas and Parquet, and the `rvr` command (`pip install` from that folder) |
 | [`crates/rowver`](crates/rowver/README.md) | the Rust library that reads, validates and writes `.rvr` files; the reference builder of the format |
 
 ## Install `rvr`

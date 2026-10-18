@@ -1,0 +1,34 @@
+# rowver (Python)
+
+Read `.rvr` files in Python, through the same Rust reader as the `rvr` command, which this
+package also installs.
+
+```python
+import rowver
+
+f = rowver.open("higgs_tautau.rvr")
+f                         # <rowver.File 'higgs_tautau.rvr': 2248 rows, 11 columns, 2 samples>
+f.samples, f.columns      # names, in the file's order
+f["MET_pt"]               # NumPy array, one value per row (no copy)
+f["Muon_pt"]              # Awkward array, a list per row
+f["sample"], f["entry"]   # each row's sample index, and its entry in its file's tree
+f.sample_columns          # per-sample values: label, events_read, events_total, metadata
+f.recipe                  # the recipe that made it
+
+f.arrays()                # every column as one Awkward record array
+f.to_arrow()              # a pyarrow Table (list columns as Arrow lists)
+f.to_pandas()             # a pandas DataFrame
+f.to_parquet("out.parquet")
+```
+
+Every column asked for at once (`f.read([...])`, `arrays`, `to_*`) is read in parallel. Only
+NumPy is required; Awkward, pyarrow and pandas are used when installed
+(`pip install "rowver[all]"`). A file whose header does not check out raises `rowver.Error`;
+`rowver.validate(path)` checks every array, as `rvr validate` does.
+
+## Building
+
+From this folder, with Rust 1.91 or later: `maturin develop --release` installs it into the
+active Python; `maturin build --release` writes a wheel (one for every Python from 3.11).
+
+MIT licensed.

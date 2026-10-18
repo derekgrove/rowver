@@ -3,4 +3,16 @@
 rust:
   image: rust:1.91-slim
   script:
-    - cargo test --workspace --locked
+    - cargo test --workspace --exclude rowver-py --locked
+
+# The Python package: its wheel built with maturin, installed, and its tests run.
+python:
+  image: rust:1.91
+  script:
+    - apt-get update -qq && apt-get install -y -qq python3-pip > /dev/null
+    - export PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore  # the job's container is its own
+    - pip install --quiet maturin==1.15.0 numpy awkward pyarrow pandas
+    - cd crates/rowver-py
+    - maturin build --release --locked --out dist
+    - pip install --quiet dist/*.whl
+    - python3 -m unittest discover tests

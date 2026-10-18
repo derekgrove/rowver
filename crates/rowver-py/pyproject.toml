@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
+
+[project]
+name = "rowver"
+dynamic = ["version"]
+description = "Read .rvr files as NumPy, Awkward, Arrow and pandas, and make them with rvr."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+# Lists as Awkward arrays; tables as Arrow, pandas and Parquet.
+all = ["awkward", "pyarrow", "pandas"]
+
+[project.scripts]
+rvr = "rowver._cli:main"
+
+[tool.maturin]
+python-source = "python"
+module-name = "rowver._rowver"
+features = ["pyo3/extension-module"]

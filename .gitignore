@@ -1,4 +1,8 @@
 target/
+# The Python package's compiled module, as maturin develop leaves it, and built wheels.
+*.so
+*.pyd
+crates/rowver-py/dist/
 __pycache__/
 *.egg-info/
 build/
