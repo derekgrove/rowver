@@ -1,0 +1,56 @@
+# samples.toml: what this study reads. `rvr samples resolve samples.toml` finds every file and
+# writes samples.lock beside this file; commit both. See the README of rvr for every key.
+format = "rvr-samples"
+version = 1
+
+[places]
+# Short names for long locations, used as {name} inside files = "…".
+opendata = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool"
+# lpc    = "root://cmseos.fnal.gov//store/user/username/ntuples"                # LPC EOS: needs a grid proxy
+# eos    = "root://eosuser.cern.ch//eos/user/u/username/ntuples"                # CERN EOS
+# laptop = "~/data/ntuples"                                                     # this computer
+
+[defaults]
+# Every sample has these unless it says otherwise.
+tree = "Events"
+# events = 50_000     # read at most this many entries of every sample (rvr press --events overrides it)
+
+# [eras.UL18]         # a sample that lists eras = ["UL18", …] becomes one sample per era;
+# era = 3             # an era's values become metadata, and {era} is the era's name
+
+# Each [[sample]] needs a name (letters, digits, _ and -) and a source: files = "…" or dataset = "…".
+# label is what plots show. Any other key (kind, xsec, …) is metadata the .rvr carries.
+
+[[sample]]
+name = "GluGluToHToTauTau"
+label = "ggH to tau tau (CMS Open Data 2012)"
+files = "{opendata}/GluGluToHToTauTau.root"
+kind = "signal"
+
+[[sample]]
+name = "VBF_HToTauTau"
+label = "VBF H to tau tau (CMS Open Data 2012)"
+files = "{opendata}/VBF_HToTauTau.root"
+kind = "signal"
+
+# A central CMS dataset, found through DBS and Rucio (needs a grid proxy):
+# [[sample]]
+# name = "WZTo3LNu_UL18"
+# label = "WZ to 3l nu (UL18)"
+# dataset = "/WZTo3LNu_TuneCP5_13TeV-amcatnloFXFX-pythia8/RunIISummer20UL18NanoAODv9-106X_upgrade2018_realistic_v16_L1v1-v2/NANOAODSIM"
+# events = 1_000_000            # the first million; choose = "random" (and seed = 7) to pick them at random
+# kind = "background"
+
+# Skims on EOS, one sample per era, the file named with a pattern (* and ? in the file name):
+# [[sample]]
+# name = "ST_s-channel"
+# label = "ST s-channel"
+# files = "{lpc}/Summer20{era}_106X/ST_s-channel_4f_*_Summer20{era}_106X.root"
+# eras = ["UL17", "UL18"]
+# tree = "KUAnalysis"
+# kind = "background"
+
+# A file on this computer:
+# [[sample]]
+# name = "my_skim"
+# files = "{laptop}/my_skim.root"

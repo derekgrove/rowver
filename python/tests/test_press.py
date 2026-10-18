@@ -48,7 +48,7 @@ def normal(stdout, folder):
 
 def validate_mjs():
     """The viewer's validate.mjs, from ROWVER_WEB or the rowver_web checkout this one sits in; None without one."""
-    for web in (os.environ.get("ROWVER_WEB"), study.REPO.parent):
+    for web in (os.environ.get("ROWVER_WEB"), study.REPO.parent.parent):
         if web and (Path(web) / "dist" / "validate.mjs").is_file() and shutil.which("node"):
             return Path(web) / "dist" / "validate.mjs"
     return None

@@ -1,0 +1,3 @@
+# The pressed files: made again from recipe.toml, samples.toml and samples.lock.
+*.rvr
+*.rvr.partial

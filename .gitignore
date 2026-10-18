@@ -1,3 +1,4 @@
+target/
 __pycache__/
 *.egg-info/
 build/
@@ -7,10 +8,10 @@ dist/
 *.md
 !README.md
 !FORMAT.md
-!docs/recipe-dialect.md
+!python/docs/recipe-dialect.md
 
-studies/*
-!studies/simple/
-!studies/data_and_mc/
-!studies/advanced/
-!studies/dimuon_open_data/
+python/studies/*
+!python/studies/simple/
+!python/studies/data_and_mc/
+!python/studies/advanced/
+!python/studies/dimuon_open_data/

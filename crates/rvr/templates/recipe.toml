@@ -1,0 +1,25 @@
+# recipe.toml: what this study keeps and stores of every event it reads. Each value is one
+# expression over the event's branches. The language is the one rapidity's Build node edits.
+format = "renorm-definition"
+version = 1
+title = "{study}"
+
+# [object.NAME]: the members of a collection that pass a condition on their attributes
+# (Muon_pt is the attribute pt of the collection Muon).
+[object.good_muon]
+from = "Muon"
+where = "tightId and pfRelIso04_all < 0.15 and pt > 20 and abs(eta) < 2.1"
+
+[object.good_tau]
+from = "Tau"
+where = "idDecayMode and idIsoTight and idAntiMuTight and pt > 20 and abs(eta) < 2.3"
+
+# [keep]: an event is kept when it passes every line; each line is one step of the cutflow.
+[keep]
+trigger = "HLT_IsoMu17_eta2p1_LooseIsoPFTau20"
+a_good_muon = "count(good_muon) >= 1"
+a_good_tau = "count(good_tau) >= 1"
+
+# [copy]: branches stored as they are, flat or one list per event.
+[copy]
+branches = ["run", "luminosityBlock", "event", "PV_npvs", "MET_pt", "MET_phi", "Muon_pt", "Muon_eta", "Tau_pt", "Tau_eta", "Jet_pt"]

@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Derek Grove <derek.william.grove@cern.ch>"]
+repository = "https://gitlab.cern.ch/dgrove/rowver"
+edition = "2021"
+rust-version = "1.91"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+rowver = { path = "crates/rowver" }
+# The shared HEP crates, one copy for every app; fix them in hep-crates, then move this rev.
+hep-root = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }
+grid-catalog = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }
+grid-doors = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }
+grid-proxy = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }
+grid-trust = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+ureq = { version = "2", default-features = false, features = ["tls"] }
+toml = { version = "0.8", features = ["preserve_order"] }
+zmij = "1"
+
+[profile.release]
+debug = 1
+
+# Every dependency (the HEP crates included) optimized in dev and test builds; this workspace's crates as usual.
+[profile.dev.package."*"]
+opt-level = 2

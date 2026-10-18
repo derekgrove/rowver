@@ -1,0 +1,23 @@
+[package]
+name = "rvr"
+description = "The rvr command: start a study, resolve its samples, and validate, dump, inspect and diff .rvr files."
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rowver.workspace = true
+hep-root.workspace = true
+grid-catalog.workspace = true
+grid-doors.workspace = true
+grid-proxy.workspace = true
+grid-trust.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ureq.workspace = true
+toml.workspace = true

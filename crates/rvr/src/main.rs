@@ -1,0 +1,120 @@
+//! `rvr`: start a study, resolve what it reads, and validate, dump, inspect and diff `.rvr` files.
+
+mod diff;
+mod dump;
+mod new;
+mod samples;
+
+use std::process::ExitCode;
+
+const USAGE: &str = "usage:
+  rvr new DIR                              start a study: samples.toml, recipe.toml, .gitignore
+  rvr samples COMMAND ...                  what a study reads (rvr samples, alone, lists them)
+  rvr validate FILE... [--parent PARENT]   check files; a derived file against its parent
+  rvr dump FILE [--fileset] [--cart] [--columns]
+                                           the header in full, the recipe, and every column
+  rvr header FILE                          the JSON header only, as the file holds it
+  rvr diff A B                             which column of which sample differs, from the headers";
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (flags, words): (Vec<&str>, Vec<&str>) = args
+        .iter()
+        .map(String::as_str)
+        .partition(|a| a.starts_with("--"));
+    if words.first() == Some(&"samples") {
+        let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+        return ExitCode::from(samples::main(&rest));
+    }
+    let code = match (words.first().copied(), &words[1.min(words.len())..]) {
+        (Some("new"), [dir]) => report(new::main(dir)),
+        (Some("validate"), files) if !files.is_empty() => validate(files, &args),
+        (Some("dump"), [file]) => report(dump::main(file, &flags)),
+        (Some("header"), [file]) => report(header(file)),
+        (Some("diff"), [a, b]) => diff::main(a, b),
+        (Some("--version"), _) | (None, _) if flags == ["--version"] => {
+            println!("rvr {} (rowver 13)", env!("CARGO_PKG_VERSION"));
+            0
+        }
+        (Some("help") | None, _) => {
+            println!("{USAGE}\n\n{}", samples::USAGE);
+            0
+        }
+        _ => {
+            eprintln!("{USAGE}");
+            2
+        }
+    };
+    ExitCode::from(code)
+}
+
+/// Print an error and give the exit status of the command.
+fn report(result: Result<(), String>) -> u8 {
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("rvr: {error}");
+            1
+        }
+    }
+}
+
+fn header(file: &str) -> Result<(), String> {
+    let header = rowver::rvr::read_header(file).map_err(|e| format!("{file}: {e}"))?;
+    println!("{}", serde_json::to_string_pretty(&header).unwrap());
+    Ok(())
+}
+
+/// One line per file: valid, or the first problem found. The parent, when named, is checked
+/// as a file itself and compared with what each derived file records of it.
+fn validate(words: &[&str], args: &[String]) -> u8 {
+    let parent = args
+        .iter()
+        .position(|a| a == "--parent")
+        .and_then(|i| args.get(i + 1));
+    let files: Vec<&&str> = words
+        .iter()
+        .filter(|w| Some(**w) != parent.map(String::as_str))
+        .collect();
+    let mut ok = true;
+    let above = parent.map(|p| {
+        let checked = rowver::rvr::validate_file(p);
+        ok &= said(
+            p,
+            &checked
+                .as_ref()
+                .map(|s| (s.rows, s.columns))
+                .map_err(ToString::to_string),
+        );
+        checked.ok().map(|s| s.header)
+    });
+    for file in files {
+        let checked = rowver::rvr::validate_file(file).map_err(|e| e.to_string());
+        let compared = checked.and_then(|summary| {
+            let derived = summary.header.get("derived").is_some();
+            match (&above, derived) {
+                (Some(Some(parent)), true) => rowver::rvr::confirm_parent(&summary.header, parent)
+                    .map_err(|e| format!("its parent is not the file it records: {e}"))?,
+                (Some(None), true) => return Err("its parent is not a valid file".into()),
+                (None, true) => {
+                    println!("{file}: the parent was not checked (name it with --parent)")
+                }
+                (Some(_), false) => {
+                    println!("{file}: the parent was not compared: this file is not derived")
+                }
+                (None, false) => {}
+            }
+            Ok((summary.rows, summary.columns))
+        });
+        ok &= said(file, &compared);
+    }
+    u8::from(!ok)
+}
+
+fn said(file: &str, verdict: &Result<(usize, usize), String>) -> bool {
+    match verdict {
+        Ok((rows, columns)) => println!("{file}: valid, {rows} rows, {columns} columns"),
+        Err(why) => println!("{file}: INVALID: {why}"),
+    }
+    verdict.is_ok()
+}

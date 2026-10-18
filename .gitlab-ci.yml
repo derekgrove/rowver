@@ -1,11 +1,18 @@
-# The presser's tests on every push. Remote files stay out: the tests press local ROOT files
-# they write themselves. The check that the viewer reads a pressed file runs where a
+# The tests on every push. Remote files stay out: the tests read local files they write
+# themselves, or small fixtures in the repository.
+rust:
+  image: rust:1.91-slim
+  script:
+    - cargo test --workspace --locked
+
+# The Python presser's tests. The check that the viewer reads a pressed file runs where a
 # rowver_web checkout with dist/validate.mjs is at hand (ROWVER_WEB), and is skipped here.
-test:
+python:
   image: python:3.13-slim
   variables:
     PIP_ROOT_USER_ACTION: ignore
   script:
+    - cd python
     - apt-get update -qq && apt-get install -y -qq procps > /dev/null  # ps, for the cancel tests
     - pip install --quiet numpy awkward uproot pytest
     - pip install --quiet --no-deps .
