@@ -107,6 +107,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "definition"
+version = "0.1.0"
+dependencies = [
+ "hep-columns",
+ "serde_json",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -244,6 +254,11 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "hep-columns"
+version = "0.1.0"
+source = "git+https://gitlab.cern.ch/dgrove/hep-crates.git?rev=367aa9204913b5b47bf0b9787b45a91f1b6111a7#367aa9204913b5b47bf0b9787b45a91f1b6111a7"
 
 [[package]]
 name = "hep-root"
@@ -560,6 +575,7 @@ dependencies = [
 name = "rvr"
 version = "0.1.0"
 dependencies = [
+ "definition",
  "grid-catalog",
  "grid-doors",
  "grid-proxy",

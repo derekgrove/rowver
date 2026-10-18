@@ -11,6 +11,7 @@ publish.workspace = true
 
 [dependencies]
 rowver.workspace = true
+definition.workspace = true
 hep-root.workspace = true
 grid-catalog.workspace = true
 grid-doors.workspace = true

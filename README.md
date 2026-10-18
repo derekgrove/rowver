@@ -7,9 +7,10 @@ made it. [FORMAT.md](FORMAT.md) is the specification.
 
 | folder | what it is |
 |---|---|
-| [`crates/rvr`](crates/rvr/README.md) | the `rvr` command: start a study, resolve its samples, and validate, dump and diff `.rvr` files |
+| [`crates/rvr`](crates/rvr/README.md) | the `rvr` command: start a study, resolve its samples, press them, and validate, dump and diff `.rvr` files |
+| `crates/definition` | the recipe language: TOML whose expressions are evaluated over whole columns of events |
 | [`crates/rowver`](crates/rowver/README.md) | the Rust library that reads, validates and writes `.rvr` files; the reference builder of the format |
-| [`python/`](python/README.md) | the Python presser (RowVer 13), used until `rvr press` replaces it |
+| [`python/`](python/README.md) | the Python presser (RowVer 13), kept until `rvr press` replaces it everywhere (the app still uses it) |
 
 ## Install `rvr`
 

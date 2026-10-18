@@ -151,6 +151,26 @@ fn utc(time: std::time::SystemTime) -> String {
     grid_proxy::utc(seconds)
 }
 
+/// How a file differs from what the lock recorded of it, in words, if it does. A size or an
+/// adler32 is compared only when both the lock and the storage give one; an adler32 as a number.
+pub fn differs(file: &File, bytes: Option<u64>, adler32: Option<&str>) -> Option<String> {
+    let number = |hex: Option<&str>| hex.and_then(|h| u32::from_str_radix(h.trim(), 16).ok());
+    let size = bytes.is_some_and(|b| b != file.bytes && file.bytes > 0);
+    let sum =
+        matches!((number(file.adler32.as_deref()), number(adler32)), (Some(a), Some(b)) if a != b);
+    let shown = |b: Option<u64>| b.map_or("? bytes".to_string(), |b| format!("{b} bytes"));
+    (size || sum).then(|| {
+        format!(
+            "{}: it was {}, adler32 {}; it is now {}, adler32 {}",
+            file.at,
+            shown(Some(file.bytes)),
+            file.adler32.as_deref().unwrap_or("?"),
+            shown(bytes),
+            adler32.unwrap_or("?")
+        )
+    })
+}
+
 /// The UUID of a ROOT file and the entries of one of its trees, from its header and the tree's
 /// record alone; the trees it has when the one asked for is not there.
 fn root_identity<S: hep_root::ByteSource>(

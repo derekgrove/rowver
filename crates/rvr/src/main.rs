@@ -3,6 +3,7 @@
 mod diff;
 mod dump;
 mod new;
+mod press;
 mod samples;
 
 use std::process::ExitCode;
@@ -10,6 +11,8 @@ use std::process::ExitCode;
 const USAGE: &str = "usage:
   rvr new DIR                              start a study: samples.toml, recipe.toml, .gitignore
   rvr samples COMMAND ...                  what a study reads (rvr samples, alone, lists them)
+  rvr press [DIR] [--events N|all] [--out FILE] [--workers N]
+                                           press the study in DIR (.) into DIR/<its name>.rvr
   rvr validate FILE... [--parent PARENT]   check files; a derived file against its parent
   rvr dump FILE [--fileset] [--cart] [--columns]
                                            the header in full, the recipe, and every column
@@ -25,6 +28,10 @@ fn main() -> ExitCode {
     if words.first() == Some(&"samples") {
         let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
         return ExitCode::from(samples::main(&rest));
+    }
+    if words.first() == Some(&"press") {
+        let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+        return ExitCode::from(press::main(&rest));
     }
     let code = match (words.first().copied(), &words[1.min(words.len())..]) {
         (Some("new"), [dir]) => report(new::main(dir)),

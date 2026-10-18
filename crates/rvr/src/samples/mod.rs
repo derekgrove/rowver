@@ -1,17 +1,18 @@
 //! `rvr samples`: samples.toml in, samples.lock out, and what a press reads of each sample.
 //! See the crate's README for the files and every command.
 
+mod multipart;
 mod plan;
-mod remote;
-mod resolve;
-mod spec;
+pub(crate) mod remote;
+pub(crate) mod resolve;
+pub(crate) mod spec;
 
 use resolve::{Context, Lock, Locked};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-fn sha256(bytes: &[u8]) -> String {
+pub(crate) fn sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -57,7 +58,7 @@ fn size(bytes: u64) -> String {
 }
 
 /// The grid proxy to present, and a sentence for when there is none that works.
-fn proxy() -> (Option<String>, String, Option<String>) {
+pub(crate) fn proxy() -> (Option<String>, String, Option<String>) {
     let credentials = grid_proxy::Credentials::found(None, None, &grid_proxy::Places::here());
     let status = grid_proxy::status(&credentials);
     // Extra certificate authorities, when a folder of them is named; grid-trust already trusts the
@@ -240,23 +241,19 @@ fn check(path: &Path) -> Result<bool, String> {
         } else if f.lfn.is_some() {
             continue;
         } else {
-            std::fs::metadata(at)
+            // A relative path is relative to the lock's folder.
+            let local = ctx.base.join(at);
+            std::fs::metadata(&local)
                 .map_err(|_| format!("{at} no longer exists"))
                 .and_then(|m| {
                     Ok((
-                        m.len(),
-                        Some(resolve::adler32_file(Path::new(at)).map_err(|e| e.to_string())?),
+                        Some(m.len()),
+                        Some(resolve::adler32_file(&local).map_err(|e| e.to_string())?),
                     ))
                 })
         };
         match now {
-            Ok((bytes, adler)) if bytes == f.bytes && (adler.is_none() || adler == f.adler32) => {}
-            Ok((bytes, adler)) => changed.push(format!(
-                "{at}: was {} bytes, adler32 {}; now {bytes} bytes, adler32 {}",
-                f.bytes,
-                f.adler32.as_deref().unwrap_or("?"),
-                adler.as_deref().unwrap_or("?")
-            )),
+            Ok((bytes, adler)) => changed.extend(resolve::differs(f, bytes, adler.as_deref())),
             Err(why) => changed.push(why),
         }
     }

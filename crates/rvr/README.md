@@ -6,6 +6,7 @@ look inside the `.rvr` files it makes.
 ```sh
 rvr new DIR                 # start a study
 rvr samples resolve …       # find every file the study reads
+rvr press                   # read them through the recipe into one .rvr file
 rvr validate / dump / diff  # check and inspect .rvr files
 ```
 
@@ -49,23 +50,25 @@ What a press would read (--events 50000), planned from the lock in 0.0 ms:
 100,000 of 968,616 events in all.
 ```
 
-Then press it. `rvr press` is not written yet; until it is, rapidity's Rust presser does the
-pressing from the lock (build it once in a rapidity checkout with
-`cargo build --release -p renorm-engine --bin renorm-build`):
+Then press it, here the first 50,000 events of each sample:
 
 ```text
-$ rvr samples fileset samples.lock --events 50000 > fileset.json
-$ renorm-build --fileset fileset.json --definition recipe.toml --out higgs_tautau.rvr
-…
-{"event":"completed","path":"…/higgs_tautau.rvr","rows":2248,"columns":11}
+$ rvr press --events 50000
+Pressing 2 samples, 2 files, 100,000 entries, 2 at a time:
+  1/2       50,000 entries        948 kept   GluGluToHToTauTau.root
+  2/2       50,000 entries      1,300 kept   VBF_HToTauTau.root
+Read 100,000 entries; kept after each cut:
+  trigger                                8,590
+  a_good_muon                            6,650
+  a_good_tau                             2,248
+Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.2 MB) in 3.2 s.
 
 $ rvr validate higgs_tautau.rvr
 higgs_tautau.rvr: valid, 2248 rows, 11 columns
 $ rvr dump higgs_tautau.rvr --columns
 sample         i4[2248]  [0, 0, 0, 0, 0, ...]
 entry          i8[2248]  [29, 45, 140, 157, 162, ...]
-MET_pt         f4[2248]  [31.82324, 85.44, 16.09842, 19.80629, 77.1447, ...]
-Muon_pt        jagged f4[2248]  [[44.166725], [20.321072], [60.48154], ...]
+run            i4[2248]  [1, 1, 1, 1, 1, ...]
 …
 ```
 
@@ -76,7 +79,7 @@ Muon_pt        jagged f4[2248]  [[44.166725], [20.321072], [60.48154], ...]
 | `recipe.toml` | what to keep and store of every event | you | yes |
 | `samples.toml` | what to read, in your words: datasets, folders, patterns, eras | you (or the Fileset Builder) | yes |
 | `samples.lock` | every file found: where, bytes, adler32, ROOT UUID, entries, and what a press reads of it | `rvr samples resolve` | yes; review its changes like code |
-| `STUDY.rvr` | the pressed events, with the texts above inside it | the presser | no (`.gitignore` leaves it out) |
+| `STUDY.rvr` | the pressed events, with the texts above inside it | `rvr press` | no (`.gitignore` leaves it out) |
 
 ## Commands
 
@@ -137,12 +140,34 @@ The first entries come from one file; a random choice is spread over every file 
 which avoids the bias of reading only the start (the earliest runs of data, one batch of MC) but
 reads every file.
 
+### `rvr press [DIR] [--events N|all] [--out FILE] [--workers N]`
+
+Presses the study in `DIR` (the current folder when not given): reads what `samples.lock` names,
+keeps the events that pass every cut of `recipe.toml`, and writes `DIR/<DIR's name>.rvr`, or
+`--out FILE`. `--events` is `plan`'s: the first N of every sample, or every sample whole.
+`--workers` is how many files are read at once (one per core by default).
+
+Before anything is read, every file is checked against the lock: its size and adler32, then its
+ROOT UUID and entries. A file that changed, or a `samples.toml` edited since the lock was written,
+stops the press with what changed; resolve again and review the new lock if the change is wanted.
+So a `.rvr` file always holds exactly what its lock says it read. Nothing is written until every
+file has been read: the file appears whole, or not at all.
+
+The file records the recipe's text, every file read (with its UUID, entries and where reading
+stopped), and each sample's metadata with three more keys: `label`, `events_read` and
+`events_total`, which become sample columns. A random choice of events (`--random`,
+`choose = "random"`) is refused for now: rowver 13 cannot record which entries were chosen, so it
+waits for rowver 14.
+
+Remote files are read through their storage's HTTPS door, all the baskets the recipe can use of
+each 50,000 entries asked for in one request (`multipart/byteranges`, which EOS answers).
+
 ### `rvr samples fileset samples.lock [--events N|all]`
 
 Prints the lock as a fileset JSON, `{sample: {"files": {path: {"tree", "stop"}}, "metadata"}}`,
-for rapidity's `renorm-build` to press until `rvr press` exists. Each sample appears by its name,
-with its label in its metadata, and each file read in part gets its `stop`. A random choice is
-refused, since that presser reads the first entries only.
+for rapidity's `renorm-build`, which pressed studies before `rvr press` existed. Each sample
+appears by its name, with its label in its metadata, and each file read in part gets its `stop`.
+A random choice is refused, since that presser reads the first entries only.
 
 ### `rvr validate FILE... [--parent PARENT]`
 
@@ -233,8 +258,9 @@ A mass point's label becomes part of the name as CMS dataset names write numbers
 
 ## recipe.toml
 
-The recipe is the definition language rapidity's Build node edits: TOML, with one expression per
-value, evaluated over whole columns.
+The recipe is TOML, with one expression per value, evaluated over whole columns of events (the
+`definition` crate beside this one; the language began as rapidity's Build node's, hence its
+`format` name).
 
 ```toml
 format = "renorm-definition"
@@ -252,9 +278,16 @@ one_muon = "count(good_muon) >= 1"
 branches = ["MET_pt", "Muon_pt", "Jet_pt"]
 ```
 
-Also `[helper.NAME]` for named expressions you reuse, and `[column]` for computed columns
-(allowed by rapidity's Derive; its Build presser stores `[copy]` only for now). Every operation
-is listed in rapidity's `knowledge/build-definition.md`.
+Also `[helper.NAME]` for named expressions you reuse, `[collection.NAME]` to group branches as one
+collection's attributes, and `[column]` for computed columns, written after the copies:
+
+```toml
+[column]
+ht = "sum(Jet_pt)"            # one number per event
+```
+
+A cut can apply to some samples only: `hem = { if = "sample.era == 3", apply = "hem_veto()" }`,
+where `sample.NAME` is a sample's metadata.
 
 ## Grid access
 
@@ -281,11 +314,12 @@ valid proxy, local files and public storage still resolve, and every other sampl
 | `a name holds only letters, digits, _ and - …` | use the name it suggests, and put the text in `label` |
 | `1 file differs from the lock: …` (from `check`) | the file changed since the lock: resolve again if that is intended, and review the new lock |
 | `samples.toml has changed since the lock was written` | resolve again |
-| `A Build copies branches; computed columns belong to a Derive` (from `renorm-build`) | that presser stores `[copy]` only; move `[column]` entries to a derive of the pressed file, or wait for `rvr press` |
+| `… has changed since samples.lock was written …` (from `press`) | as for `check`: resolve again if the change is wanted, and review the new lock |
+| `--random: choosing events at random waits for rowver 14 …` | press the first events (`--events N`) or all of them |
 
 ## Not built yet
 
-- `rvr press`: until then, `rvr samples fileset` and rapidity's `renorm-build`, as above.
+- Pressing a random choice of events: it needs rowver 14 to record the choice.
 - `rvr reproduce FILE`: write a study back out of a `.rvr` and press it again.
 - Writing `samples.toml`, the lock and each sample's label into the `.rvr` (`made.samples`,
   `made.lock`): a change to the file format, proposed for rowver 14.
