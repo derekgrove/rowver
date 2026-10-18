@@ -163,7 +163,7 @@ fn root_identity<S: hep_root::ByteSource>(
     let uuid = file.header().uuid_string();
     match file.tree_entries(tree) {
         Ok(entries) => Ok((uuid, entries.max(0) as u64)),
-        Err(_) => {
+        Err(hep_root::Error::KeyNotFound(_)) => {
             let trees: Vec<String> = file
                 .trees_listing()
                 .map(|l| l.trees.into_iter().map(|t| t.path).collect())
@@ -177,6 +177,7 @@ fn root_identity<S: hep_root::ByteSource>(
                 }
             ))
         }
+        Err(e) => Err(format!("{shown}: its tree {tree:?} could not be read: {e}")),
     }
 }
 
