@@ -20,6 +20,20 @@ const USAGE: &str = "usage:
   rvr diff A B                             which column of which sample differs, from the headers";
 
 fn main() -> ExitCode {
+    // `rvr dump … | head` closes the pipe early: that ends the command, quietly, as it would a
+    // C tool. Any other panic is reported as usual.
+    let usual = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let said = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .unwrap_or("");
+        if said.starts_with("failed printing to stdout") && said.contains("Broken pipe") {
+            std::process::exit(0);
+        }
+        usual(info);
+    }));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (flags, words): (Vec<&str>, Vec<&str>) = args
         .iter()
