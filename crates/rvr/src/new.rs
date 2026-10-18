@@ -42,8 +42,9 @@ Next:
   cd {dir}
   rvr samples resolve samples.toml       find every file; writes samples.lock
   rvr samples plan samples.lock          what a press would read
-then press it (see the README of rvr), and check the file:
-  rvr validate {study}.rvr"
+  rvr press --events 50000               a quick first press; rvr press for every event
+  {:38} check the file it wrote",
+        format!("rvr validate {study}.rvr")
     );
     Ok(())
 }
