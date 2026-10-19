@@ -1,7 +1,11 @@
 # The `.rvr` file
 
-Version 14. `crates/rowver` reads and writes everything here and is the reference builder;
-`rvr press` writes pressed files with it.
+Version 14 (rowver 14.1). `crates/rowver` reads and writes everything here and is the reference
+builder; `rvr press` writes pressed files with it.
+
+New in 14.1: a file of a catalog dataset says which storage it was read from
+(`made.files[sample].files[at].served`). The header still says `rowver: 14`; a 14.0 reader refuses
+a file that has `served`.
 
 New in 14:
 
@@ -98,7 +102,7 @@ A file with `derived` is a derived file (see `derived`).
   `label` (what a plot shows, any text) and `rows`. Rows of a sample are
   contiguous and follow this order.
 - `files` — every input file that was read, in row order, each with exactly
-  its sample, the path or URL it was opened with (a key of that sample's
+  its sample, its `at` in the lock (a key of that sample's
   `made.files[sample].files`), and the rows it gave, zero included. A file's
   rows are contiguous. Within a sample, files follow the lock's file order,
   however many files were read at once, so the same study on the same inputs
@@ -241,9 +245,17 @@ A viewer never rewrites `data`. The presser writes it once.
   samples.toml it was resolved from matches `samples`.
 - `files` — every sample of `data.samples`, by name, each with exactly:
   - `events` — which of its events the press read (see The event choice);
-  - `files` — every file of the sample in `data.files`, by the path or URL it
-    was opened with: its `tree`, the `uuid` stored inside that ROOT file, the
-    tree's `entries`, and `stop` or `take` as The event choice says;
+  - `files` — every file of the sample in `data.files`, by its `at` in the
+    lock (the path or URL it was opened with; for a file of a catalog dataset,
+    its global name `root://cms-xrd-global.cern.ch//store/…`, whichever copy
+    was read): its `tree`, the `uuid` stored inside that ROOT file, the tree's
+    `entries`, `stop` or `take` as The event choice says, and `served`, which
+    `rvr press` writes for a file of a catalog dataset: the copy it was read
+    from, as exactly `rse` (the storage element, `T2_US_Purdue`) and `host`
+    (its HTTPS door, `eos.cms.rcac.purdue.edu:9000`), both nonempty. When a
+    read moved to another copy part way, `served` names the copy that served
+    the last read; every copy holds the same bytes, checked against the lock's
+    size (and its adler32, when the storage gives one) before it is read;
   - `metadata` — the sample's metadata, from the lock: text, whole numbers,
     finite floats, `true`, `false`, `null`, and lists and objects of those.
     The keys that hold one number, text or truth value per sample are written

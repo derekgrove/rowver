@@ -241,8 +241,8 @@ The headers show no difference in rows, samples, columns, by_sample or sample co
 ```
 
 To use your own data, edit `samples.toml` and `recipe.toml`, then repeat steps 3 to 5. LPC EOS,
-most CERN EOS areas and central datasets need a grid proxy first
-(`voms-proxy-init -voms cms -valid 192:00`). Run `rvr key new` once to sign every file you press.
+most CERN EOS areas and central datasets need a grid proxy first: `rvr proxy init` makes one
+from your certificate in `~/.globus`. Run `rvr key new` once to sign every file you press.
 The [recipe reference](crates/recipe/README.md) lists everything a recipe can say, each with an
 example and its result, and the [rvr README](crates/rvr/README.md) describes every command and
 every key of `samples.toml`.

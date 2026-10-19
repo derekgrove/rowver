@@ -18,12 +18,12 @@ rowver = { path = "crates/rowver" }
 recipe = { path = "crates/recipe" }
 rvr = { path = "crates/rvr" }
 # The shared HEP crates, one copy for every app; fix them in hep-crates, then move this rev.
-hep-columns = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }
-hep-root = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }
-grid-catalog = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }
-grid-doors = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }
-grid-proxy = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }
-grid-trust = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "367aa9204913b5b47bf0b9787b45a91f1b6111a7" }
+hep-columns = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "35cfa318e8c298975b39a95b8ba20e1e3706ef6e" }
+hep-root = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "35cfa318e8c298975b39a95b8ba20e1e3706ef6e" }
+grid-catalog = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "35cfa318e8c298975b39a95b8ba20e1e3706ef6e" }
+grid-doors = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "35cfa318e8c298975b39a95b8ba20e1e3706ef6e" }
+grid-proxy = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "35cfa318e8c298975b39a95b8ba20e1e3706ef6e" }
+grid-trust = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "35cfa318e8c298975b39a95b8ba20e1e3706ef6e" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

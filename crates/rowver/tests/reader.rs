@@ -6,7 +6,7 @@ mod common;
 use common::{golden, rebuilt, split, written};
 use rowver::rvr::{from_bytes, validate_file, Reader};
 use rowver::write::{made_checksum, to_bytes};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 /// Little-endian values of a kind, each as an f64.
 fn as_f64(kind: &str, bytes: &[u8]) -> Vec<f64> {
@@ -164,6 +164,23 @@ fn the_event_choice_is_made_again_and_checked() {
     let mut fewer = header.clone();
     fewer["made"]["files"]["A"]["events"]["n"] = 24.into();
     assert!(opens(&sealed(fewer)).is_err());
+}
+
+#[test]
+fn a_file_may_say_which_storage_served_it_and_nothing_else() {
+    let (header, _) = rebuilt(10.);
+    fn record(header: &mut Value) -> &mut Value {
+        &mut header["made"]["files"]["B"]["files"]["fixture-b.root"]
+    }
+    let mut served = header.clone();
+    record(&mut served)["served"] = json!({"rse": "T2_US_Nebraska", "host": "xrootd.unl.edu:1094"});
+    assert_eq!(opens(&sealed(served)), Ok(()));
+    let mut unnamed = header.clone();
+    record(&mut unnamed)["served"] = json!({"rse": "", "host": "xrootd.unl.edu:1094"});
+    assert!(opens(&sealed(unnamed)).unwrap_err().contains("served"));
+    let mut more = header.clone();
+    record(&mut more)["served"] = json!({"rse": "T2_US_Nebraska", "host": "h:1", "when": 1});
+    assert!(opens(&sealed(more)).unwrap_err().contains("when"));
 }
 
 #[test]

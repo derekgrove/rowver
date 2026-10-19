@@ -5,6 +5,7 @@ look inside the `.rvr` files it makes.
 
 ```sh
 rvr new DIR                 # start a study
+rvr proxy init              # make a grid proxy from your certificate (for grid storage)
 rvr samples resolve …       # find every file the study reads
 rvr press                   # read them through the recipe into one .rvr file
 rvr validate / dump / diff  # check and inspect .rvr files
@@ -187,6 +188,46 @@ still every basket of every file it reads.
 Remote files are read through their storage's HTTPS door, all the baskets the recipe can use of
 each 50,000 entries asked for in one request (`multipart/byteranges`, which EOS answers).
 
+A file of a central dataset (`dataset = …`) is read from one of its copies. As the press starts,
+Rucio is asked once where every such file can be read over HTTPS. Only copies on disk, available,
+and at a CMS storage door are kept, and Rucio must give the size and adler32 the lock has. Each
+file's first question (its size and adler32) goes at once to the storage that answered fastest so
+far and to two not yet measured. The first to answer with the file the lock names (its size, and
+its adler32 when the storage gives one) is read, so every storage of the dataset gets timed as its
+files open. A storage that failed twice since it last served a whole file is tried last. A read
+that fails is tried at the other copies, since every copy holds the same bytes: the copies it
+failed at are left once another serves it, and a read that every copy fails stops the press. The
+file records which storage served each dataset file (`served`: its Rucio storage element and
+door), and the press says what it read from where:
+
+```text
+$ rvr press --events all
+Rucio said where the 18 dataset files can be read in 4.3 s.
+Pressing 1 samples, 18 files, 9,821,283 entries, 10 at a time:
+  …
+  read from T2_DE_DESY: 1 file, 24.0 MB
+  read from T2_US_Florida: 14 files, 238.3 MB
+  read from T2_US_Purdue: 3 files, 28.6 MB
+  passed over T1_RU_JINR_Disk (se-wbdv.jinr-t1.ru:2880) 2 times: could not be asked: invalid peer certificate: UnknownIssuer
+  passed over T1_US_FNAL_Disk (cmsdcadisk.fnal.gov:2880) 3 times: could not be asked: invalid peer certificate: UnknownIssuer
+  passed over T2_BE_IIHE (maite.iihe.ac.be:2880) 2 times: could not be asked: invalid peer certificate: UnknownIssuer
+  passed over T2_BE_UCL (ingrid-se02.cism.ucl.ac.be:1094) 2 times: could not be asked: invalid peer certificate: UnknownIssuer
+  passed over T2_DE_RWTH (grid-webdav.physik.rwth-aachen.de:2889) 2 times: could not be asked: invalid peer certificate: UnknownIssuer
+  passed over T2_IT_Legnaro (t2-xrdcms.lnl.infn.it:2880) 1 time: could not be asked: invalid peer certificate: UnknownIssuer
+  passed over T3_KR_KISTI (cms-xrdr.sdfarm.kr:2880) 10 times: could not be asked: invalid peer certificate: UnknownIssuer
+  passed over T3_US_NotreDame (skynet013.crc.nd.edu:1094) 2 times: could not be asked: invalid peer certificate: UnknownIssuer
+  a storage whose authority rvr does not know was passed over; set X509_CERT_DIR to a folder of grid authorities (IGTF) to read from it too
+Read 9,821,283 entries; kept after each cut:
+  three_leptons                      1,234,580
+Wrote wz.rvr (1,234,580 rows, 9 columns, 27.8 MB) in 41.4 s.
+```
+
+That is the whole WZTo3LNu UL18 NanoAOD dataset (14.9 GB on storage, of which the recipe's
+branches were 291 MB), read from a laptop in the United States on 2026-10-19. With `--workers 1`
+the same press took 148.8 s. Eight of the dataset's storages were passed over because their
+certificates are signed by grid authorities rvr does not carry (see Grid access); with
+`X509_CERT_DIR` set, FNAL served 7 of the files and the press took 37.5 s.
+
 ### `rvr validate FILE... [--parent PARENT]`
 
 Checks each file completely: every array decompresses to its declared length and checksum, every
@@ -236,6 +277,25 @@ file you press is signed with it, so a reader can tell who pressed it and that i
 changed since. `rvr key show` prints your public key for others, and `rvr key trust KEY NAME` adds
 someone's key to `~/.config/rvr/trusted`, so `rvr validate` names them. `RVR_CONFIG` names another
 folder for both files.
+
+### `rvr proxy`, `rvr proxy init [--hours H] [--vo VO]`
+
+`rvr proxy` shows the grid proxy rvr would use: its file, whose it is, its VO and how long its
+attributes last, the time left, and what to do when it is missing or ending. The exit status is 0
+when it can be used.
+
+`rvr proxy init` makes one with no other grid tool installed. It reads your certificate from
+`~/.globus`: `usercert.pem` and `userkey.pem`, or a `.p12` file as your certificate authority
+gave it (`usercred.p12`, or the only `.p12` there; `X509_USER_CERT` and `X509_USER_KEY` name other
+files). It refuses a key file that other accounts can read, and says the `chmod` that fixes it. It
+asks your passphrase without showing it, then asks the VOMS server for your attributes (`cms`
+unless `--vo` says otherwise). It writes a proxy valid for `--hours` (192 unless told otherwise,
+never past your certificate's end) to `X509_USER_PROXY`, or else `/tmp/x509up_u<your uid>`, readable
+by you alone.
+
+The proxy is what `voms-proxy-init -voms cms` makes (RFC 3820, inheriting all rights, with the
+VOMS attributes): `voms-proxy-info` and OpenSSL read and verify it. A press or resolve that needs
+the grid warns when less than six hours are left.
 
 ## samples.toml
 
@@ -331,13 +391,18 @@ where `sample.NAME` is a sample's metadata.
 Central datasets, LPC EOS and most CERN EOS areas need a grid proxy; CERN Open Data does not.
 
 ```sh
-voms-proxy-init -voms cms -valid 192:00
+rvr proxy init
 ```
 
-`rvr` uses `X509_USER_PROXY` when it is set, otherwise `/tmp/x509up_u<your uid>`. It trusts the
-public certificate authorities and CERN's grid authorities, which FNAL and CERN EOS are signed by,
-with no setup; `X509_CERT_DIR` adds a folder of others for sites signed by someone else. Without a
-valid proxy, local files and public storage still resolve, and every other sample says what to run.
+(`voms-proxy-init -voms cms -valid 192:00` makes the same proxy, where it is installed.) `rvr`
+uses `X509_USER_PROXY` when it is set, otherwise `/tmp/x509up_u<your uid>`. It trusts the public
+certificate authorities and CERN's grid authorities, which LPC EOS and CERN EOS are signed by,
+with no setup; `X509_CERT_DIR` adds a folder of others (the IGTF authorities, as grid tools
+install them in `/etc/grid-security/certificates`) for storage signed by someone else, such as
+FNAL's dCache and KISTI. That matters for central datasets: on 2026-10-19, of the 158 CMS storage
+doors rvr knows, 51 completed a TLS connection with the built-in authorities alone and 111 with
+the IGTF folder as well (40 did not answer at all). Without a valid proxy, local files and public storage still resolve, and
+every other sample says what to run.
 
 ## When something goes wrong
 
@@ -348,6 +413,11 @@ valid proxy, local files and public storage still resolve, and every other sampl
 | `{lcp} is not defined here. Defined: {lpc}.` | a misspelt place, or a place missing from `[places]` |
 | `the dataset … has no valid files in DBS. Did you mean: …?` | the nearest datasets of that name follow; usually the version suffix |
 | `… refused the listing (403). It needs a grid proxy: …` | run the command given |
+| `No usable grid proxy: … Run rvr proxy init to make one.` | run `rvr proxy init` |
+| `… holds your private key, and other accounts on this machine can read it` (from `proxy init`) | run the `chmod` given |
+| `…: the passphrase is wrong` (from `proxy init`) | type it again; it is the one you chose when you saved the certificate |
+| `… has no copy that can be read now (T1_…_Tape: on tape; …)` (from `press`) | the file is only on tape: ask for a Rucio rule that puts the dataset on disk |
+| `passed over … invalid peer certificate: UnknownIssuer` (from `press`) | set `X509_CERT_DIR` to a folder of grid authorities to read from that storage too |
 | `a name holds only letters, digits, _ and - …` | use the name it suggests, and put the text in `label` |
 | `1 file differs from the lock: …` (from `check`) | the file changed since the lock: resolve again if that is intended, and review the new lock |
 | `samples.toml has changed since the lock was written` | resolve again |
@@ -355,9 +425,5 @@ valid proxy, local files and public storage still resolve, and every other sampl
 | `… has a samples.lock but no samples.toml` (from `press`) | put samples.toml back: the file carries both |
 | `This file is rowver 13; this reader reads rowver 14 only.` | press its study again with `rvr press` |
 | `The header changed after it was signed` | the file was edited after it was pressed: press it again |
-
-## Not built yet
-
-- Pressing central datasets (`dataset = …`): choosing a site's HTTPS door for each file.
 
 MIT licensed.

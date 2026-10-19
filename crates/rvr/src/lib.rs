@@ -6,6 +6,7 @@ mod dump;
 mod key;
 mod new;
 mod press;
+mod proxy;
 mod reproduce;
 mod samples;
 
@@ -20,7 +21,8 @@ const USAGE: &str = "usage:
   rvr header FILE                          the JSON header only, as the file holds it
   rvr diff A B                             which column of which sample differs, from the headers
   rvr reproduce FILE [DIR]                 press FILE's own study again and diff the two
-  rvr key new|show|trust ...               the key that signs your files; keys you trust";
+  rvr key new|show|trust ...               the key that signs your files; keys you trust
+  rvr proxy [init]                         your grid proxy's state; make one from ~/.globus";
 
 /// Make a closed output pipe end the process quietly: `rvr dump … | head` closes it early, and
 /// that ends the command as it would a C tool. Any other panic is reported as usual.
@@ -54,6 +56,7 @@ pub fn run(args: &[String]) -> u8 {
         Some(&"press") => return press::main(&rest),
         Some(&"reproduce") => return reproduce::main(&rest),
         Some(&"key") => return key::main(&rest),
+        Some(&"proxy") => return proxy::main(&rest),
         _ => {}
     }
     let code = match (words.first().copied(), &words[1.min(words.len())..]) {

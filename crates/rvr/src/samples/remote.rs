@@ -230,7 +230,7 @@ impl Storage {
                     if self.proxy.is_some() {
                         "The grid proxy may not give access there."
                     } else {
-                        "It needs a grid proxy: run voms-proxy-init -voms cms -valid 192:00."
+                        "It needs a grid proxy: run rvr proxy init."
                     }
                 ))
             }
@@ -241,30 +241,63 @@ impl Storage {
 
     /// A storage file's size and adler32 as its storage reports them, without reading it.
     pub fn digest(&self, url: &str) -> Result<(Option<u64>, Option<String>), String> {
-        let (origin, path) = door(url)?;
-        let (_, reply) = follow(&format!("{origin}{path}"), |at| {
-            self.agent.head(at).set("Want-Digest", "adler32").call()
-        });
-        let reply = reply.map_err(|e| match e {
-            ureq::Error::Status(404, _) => format!("{url} no longer exists"),
-            e => format!("{url} could not be asked: {e}"),
-        })?;
-        if reply.status() / 100 != 2 {
-            return Err(format!(
-                "{url} could not be asked: its storage answered {} {} (redirected too often, or \
-                 not with the file). Try again later; if it persists, the file may have moved.",
-                reply.status(),
-                reply.status_text()
-            ));
-        }
-        let bytes = reply.header("Content-Length").and_then(|s| s.parse().ok());
-        let adler = reply.header("Digest").and_then(|d| {
-            d.split(',')
-                .find_map(|p| p.trim().strip_prefix("adler32="))
-                .map(|s| s.to_ascii_lowercase())
-        });
-        Ok((bytes, adler))
+        digest(&self.agent, url)
     }
+
+    /// The connection pool, for readers that outlive this borrow.
+    pub fn agent(&self) -> ureq::Agent {
+        self.agent.clone()
+    }
+}
+
+/// What went wrong with a request, in a few words and without its URL.
+pub fn why(error: &ureq::Error) -> String {
+    match error {
+        ureq::Error::Status(code, answer) => {
+            format!("its storage answered {code} {}", answer.status_text())
+        }
+        ureq::Error::Transport(failure) => match grid_trust::tls_error(failure) {
+            Some(tls) => tls.to_string(),
+            None if grid_trust::timed_out(failure) => "it did not answer in time".into(),
+            None => {
+                let source = std::error::Error::source(failure).map(|s| format!(": {s}"));
+                let said = failure.message().map(|m| format!(": {m}"));
+                format!(
+                    "{}{}{}",
+                    failure.kind(),
+                    said.unwrap_or_default(),
+                    source.unwrap_or_default()
+                )
+            }
+        },
+    }
+}
+
+/// A storage file's size and adler32 as its storage reports them, asked with one HEAD.
+pub fn digest(agent: &ureq::Agent, url: &str) -> Result<(Option<u64>, Option<String>), String> {
+    let (origin, path) = door(url)?;
+    let (_, reply) = follow(&format!("{origin}{path}"), |at| {
+        agent.head(at).set("Want-Digest", "adler32").call()
+    });
+    let reply = reply.map_err(|e| match e {
+        ureq::Error::Status(404, _) => format!("{url} no longer exists"),
+        e => format!("{url} could not be asked: {}", why(&e)),
+    })?;
+    if reply.status() / 100 != 2 {
+        return Err(format!(
+            "{url} could not be asked: its storage answered {} {} (redirected too often, or \
+             not with the file). Try again later; if it persists, the file may have moved.",
+            reply.status(),
+            reply.status_text()
+        ));
+    }
+    let bytes = reply.header("Content-Length").and_then(|s| s.parse().ok());
+    let adler = reply.header("Digest").and_then(|d| {
+        d.split(',')
+            .find_map(|p| p.trim().strip_prefix("adler32="))
+            .map(|s| s.to_ascii_lowercase())
+    });
+    Ok((bytes, adler))
 }
 
 /// A storage file read in byte ranges over HTTPS, for hep-root: the door's URL first, then the

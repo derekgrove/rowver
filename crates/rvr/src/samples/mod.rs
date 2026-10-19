@@ -1,6 +1,7 @@
 //! `rvr samples`: samples.toml in, samples.lock out, and what a press reads of each sample.
 //! See the crate's README for the files and every command.
 
+pub(crate) mod copies;
 mod multipart;
 mod plan;
 pub(crate) mod remote;
@@ -57,8 +58,19 @@ fn size(bytes: u64) -> String {
     }
 }
 
-/// The grid proxy to present, and a sentence for when there is none that works.
-pub(crate) fn proxy() -> (Option<String>, String, Option<String>) {
+/// The grid proxy to present, and what to say of it.
+pub(crate) struct Proxy {
+    pub path: Option<String>,
+    /// Why there is none that works, and what to run; empty when there is one.
+    pub said: String,
+    /// That it ends soon, when it does: said before remote work.
+    pub short: Option<String>,
+    /// A folder of extra certificate authorities, when one is named.
+    pub ca: Option<String>,
+}
+
+/// Find the grid proxy to present.
+pub(crate) fn proxy() -> Proxy {
     let credentials = grid_proxy::Credentials::found(None, None, &grid_proxy::Places::here());
     let status = grid_proxy::status(&credentials);
     // Extra certificate authorities, when a folder of them is named; grid-trust already trusts the
@@ -66,10 +78,42 @@ pub(crate) fn proxy() -> (Option<String>, String, Option<String>) {
     let ca = std::env::var("X509_CERT_DIR")
         .ok()
         .or(credentials.authorities.clone());
+    let short = crate::proxy::left_of(&status)
+        .filter(|left| status.usable() && (0..crate::proxy::SHORT).contains(left));
+    let short = short.map(|left| {
+        format!(
+            "your grid proxy (or its VOMS attributes) ends in {}; run rvr proxy init for a new one before a long press.",
+            crate::proxy::left(left)
+        )
+    });
+    let ended = (status.usable() && status.renew).then(|| {
+        "your grid proxy's VOMS attributes have ended, and storage that asks for them will refuse \
+         it; run rvr proxy init for a new one."
+            .to_owned()
+    });
+    let short = ended.or(short);
     if status.usable() {
-        (status.path.clone(), String::new(), ca)
+        return Proxy {
+            path: status.path,
+            said: String::new(),
+            short,
+            ca,
+        };
+    }
+    let next = if crate::proxy::renewable(&status) {
+        " Run rvr proxy init to make one."
     } else {
-        (None, format!("No usable grid proxy: {} Remote folders and datasets need one; local files do not.", status.message), ca)
+        ""
+    };
+    let said = format!(
+        "No usable grid proxy: {}. Remote folders and datasets need one; local files do not.{next}",
+        status.message
+    );
+    Proxy {
+        path: None,
+        said,
+        short,
+        ca,
     }
 }
 
@@ -105,9 +149,16 @@ fn resolve_all(path: &Path) -> Result<(), String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("{} cannot be read: {e}", path.display()))?;
     let plans = spec::expand(&text)?;
-    let (proxy, said, ca) = proxy();
+    let proxy = proxy();
+    let remote = plans.iter().any(|p| match &p.source {
+        spec::Source::Files(f) => f.iter().any(|f| f.contains("://")),
+        spec::Source::Dataset(_) => true,
+    });
+    if let Some(short) = proxy.short.as_ref().filter(|_| remote) {
+        eprintln!("rvr: {short}");
+    }
     let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
-    let ctx = Context::new(base, proxy, said, ca);
+    let ctx = Context::new(base, proxy.path, proxy.said, proxy.ca);
     let started = std::time::Instant::now();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results: Vec<std::sync::Mutex<Option<Result<Locked, String>>>> =
@@ -219,12 +270,12 @@ fn check(path: &Path) -> Result<bool, String> {
             same = false;
         }
     }
-    let (proxy, said, ca) = proxy();
+    let proxy = proxy();
     let ctx = Context::new(
         path.parent().map(Path::to_path_buf).unwrap_or_default(),
-        proxy,
-        said,
-        ca,
+        proxy.path,
+        proxy.said,
+        proxy.ca,
     );
     let files: BTreeMap<&str, &resolve::File> = lock
         .sample

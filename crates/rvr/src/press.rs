@@ -7,10 +7,12 @@
 //! and several files are read at once, each a run of entries at a time. A random choice reads
 //! only the runs that hold a chosen entry.
 
+use crate::samples::copies::{Datasets, Reader};
 use crate::samples::remote::{HttpsFile, Storage};
 use crate::samples::resolve::{self, adler32_file, File, Lock, Locked};
 use crate::samples::spec::Events;
 use crate::samples::Choice;
+use grid_catalog::{GridHttps, Rucio};
 use hep_root::{ByteSource, RootFile, Tree};
 use recipe::{Array, Columns, Constant, Expression, Kind, Recipe, Scope, Values};
 use rowver::write::{self, Labels};
@@ -20,7 +22,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// How many entries of a file are read and held at a time.
 const CHUNK: u64 = 50_000;
@@ -185,6 +187,8 @@ struct Shared<'a> {
     recipe: &'a Recipe,
     outputs: &'a [Output<'a>],
     storage: Option<&'a Storage>,
+    /// Where each file of a catalog dataset can be read.
+    datasets: Option<&'a Datasets>,
     offline: &'a str,
     /// Every name the recipe mentions, to choose the branches fetched ahead.
     mentions: &'a BTreeSet<String>,
@@ -564,9 +568,18 @@ fn spans(branches: &[&hep_root::Branch], first: i64, last: i64) -> Vec<(u64, u64
     out
 }
 
-/// Check one input against the lock and open it, local or remote.
-fn open(shared: &Shared, file: &File) -> Result<RootFile<Held>, String> {
+/// Check one input against the lock and open it, local, remote, or from a dataset's copies (with
+/// the reader that says which copy served it).
+fn open(shared: &Shared, file: &File) -> Result<(RootFile<Held>, Option<Reader>), String> {
     let at = &file.at;
+    if file.lfn.is_some() {
+        let (Some(datasets), Some(storage)) = (shared.datasets, shared.storage) else {
+            return Err(format!("{at}: {}", shared.offline));
+        };
+        let reader = datasets.open(storage, file)?;
+        let handle = reader.handle();
+        return opened(file, Box::new(reader)).map(|root| (root, Some(handle)));
+    }
     if !at.contains("://") {
         // A relative path is the lock's own: relative to the study folder.
         let path = shared.dir.join(at);
@@ -582,7 +595,7 @@ fn open(shared: &Shared, file: &File) -> Result<RootFile<Held>, String> {
         };
         changed(file, Some(meta.len()), adler32)?;
         let local = hep_root::LocalFile::open(&path).map_err(|e| format!("{at}: {e}"))?;
-        return opened(file, Box::new(local));
+        return opened(file, Box::new(local)).map(|root| (root, None));
     }
     let storage = shared
         .storage
@@ -597,7 +610,7 @@ fn open(shared: &Shared, file: &File) -> Result<RootFile<Held>, String> {
             .join()
             .map_err(|_| format!("{at}: asking its storage stopped unexpectedly"))??;
         changed(file, bytes, adler32)?;
-        root
+        root.map(|root| (root, None))
     })
 }
 
@@ -628,7 +641,8 @@ fn take(
     } = *shared;
     let at = &input.file.at;
     let located = |error: String| format!("{at}: {error}");
-    // A file a random choice takes nothing from is recorded from the lock, not opened.
+    // A file a random choice takes nothing from is recorded from the lock, not opened, when the
+    // lock has its UUID; a dataset file has none in the lock, so it is opened for it.
     if let (Some(chosen), Some(uuid), Some(total)) =
         (&input.chosen, &input.file.uuid, input.file.entries)
     {
@@ -642,7 +656,7 @@ fn take(
             });
         }
     }
-    let file = open(shared, input.file)?;
+    let (file, served) = open(shared, input.file)?;
     let tree = file
         .tree_at(input.tree)
         .map_err(|e| located(format!("its tree {:?}: {e}", input.tree)))?;
@@ -659,7 +673,7 @@ fn take(
         .collect();
     let mut sample = sample.clone();
     sample.insert("file".into(), Constant::Text(at.clone()));
-    let remote = at.contains("://");
+    let remote = at.contains("://") || input.file.lfn.is_some();
     let wanted: Vec<&hep_root::Branch> = if remote {
         tree.walk()
             .into_iter()
@@ -760,6 +774,12 @@ fn take(
     }
     if let Some(chosen) = chosen {
         record["take"] = chosen.len().into();
+    }
+    if let Some(reader) = &served {
+        reader.finish();
+    }
+    if let Some((rse, host)) = served.and_then(|reader| reader.served()) {
+        record["served"] = json!({"rse": rse, "host": host});
     }
     Ok(Taken {
         gathered: gathered.into_iter().flatten().collect(),
@@ -953,13 +973,6 @@ pub fn press(
         .map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
     let source = &texts.recipe;
     let recipe = read_recipe(source)?;
-    if let Some(dataset) = lock
-        .sample
-        .iter()
-        .find(|s| s.file.iter().any(|f| f.lfn.is_some()))
-    {
-        return Err(format!("{} reads a central dataset. Pressing datasets is not built yet: rvr press reads files through a storage's HTTPS door, and choosing a site's door for each dataset file is still to come. Name the files on storage instead (files = \"root://…\").", dataset.name));
-    }
     let mut asked = Vec::new();
     for sample in &mut lock.sample {
         let want = events(sample)?;
@@ -997,11 +1010,46 @@ pub fn press(
                 })
         })
         .collect();
-    let remote = work.iter().any(|i| i.file.at.contains("://"));
+    let remote = work
+        .iter()
+        .any(|i| i.file.at.contains("://") || i.file.lfn.is_some());
+    let mut datasets = None;
     let (storage, offline) = if remote {
-        let (proxy, said, ca) = crate::samples::proxy();
-        match Storage::new(proxy.as_deref(), ca.as_deref()) {
-            Ok(storage) => (Some(storage), said),
+        let proxy = crate::samples::proxy();
+        if let Some(short) = &proxy.short {
+            eprintln!("rvr: {short}");
+        }
+        let catalog: Vec<(&File, &str)> = work
+            .iter()
+            .filter(|i| i.file.lfn.is_some())
+            .map(|i| {
+                (
+                    i.file,
+                    lock.sample[i.sample]
+                        .asked
+                        .first()
+                        .map_or("", String::as_str),
+                )
+            })
+            .collect();
+        if let Some((file, _)) = catalog.first() {
+            let path = proxy
+                .path
+                .as_ref()
+                .ok_or_else(|| format!("{} is in a central dataset. {}", file.at, proxy.said))?;
+            let ca = proxy.ca.clone().map(std::path::PathBuf::from);
+            let transport: Arc<dyn grid_catalog::Transport> =
+                Arc::new(GridHttps::new(path.into(), ca));
+            let asked = std::time::Instant::now();
+            datasets = Some(Datasets::ask(&Rucio::new(transport), &catalog)?);
+            println!(
+                "Rucio said where the {} dataset files can be read in {:.1} s.",
+                catalog.len(),
+                asked.elapsed().as_secs_f64()
+            );
+        }
+        match Storage::new(proxy.path.as_deref(), proxy.ca.as_deref()) {
+            Ok(storage) => (Some(storage), proxy.said),
             Err(why) => (None, why),
         }
     } else {
@@ -1020,6 +1068,7 @@ pub fn press(
         recipe: &recipe,
         outputs: &outputs,
         storage: storage.as_ref(),
+        datasets: datasets.as_ref(),
         offline: &offline,
         mentions: &mentions,
         dir: base,
@@ -1046,6 +1095,9 @@ pub fn press(
             sample.name.clone(),
             json!({"events": asked[index].record(), "files": records, "metadata": metadata}),
         );
+    }
+    for line in datasets.iter().flat_map(Datasets::summary) {
+        println!("  {line}");
     }
     let pieces = lock
         .sample

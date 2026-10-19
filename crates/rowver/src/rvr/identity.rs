@@ -17,6 +17,7 @@ enum Read {
 fn exactly(value: &Value, keys: &[&str], optional: &[&str], label: &str) -> Result<()> {
     let mut held = value.as_object().map(Map::keys).into_iter().flatten();
     if let Some(key) = held.find(|key| !keys.contains(&key.as_str())) {
+        // A key this reader does not know may be one a newer rowver writes.
         return Err(invalid(format!(
             "{label} has a field {key} it may not have"
         )));
@@ -167,8 +168,16 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
         object(source, "metadata")?;
         for (path, record) in object(source, "files")?.as_object().unwrap() {
             let label = format!("{label}.files[{path:?}]");
-            let fields = ["tree", "uuid", "entries", "stop", "take"];
-            exactly(record, &fields, &["stop", "take"], &label)?;
+            let fields = ["tree", "uuid", "entries", "stop", "take", "served"];
+            exactly(record, &fields, &["stop", "take", "served"], &label)?;
+            if let Some(served) = record.get("served") {
+                exactly(served, &["rse", "host"], &[], &format!("{label}.served"))?;
+                if string(served, "rse")?.is_empty() || string(served, "host")?.is_empty() {
+                    return Err(invalid(format!(
+                        "{label}.served must name its rse and host"
+                    )));
+                }
+            }
             if path.is_empty()
                 || string(record, "uuid")?.is_empty()
                 || string(record, "tree")?.is_empty()
