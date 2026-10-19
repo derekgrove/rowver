@@ -293,9 +293,22 @@ unless `--vo` says otherwise). It writes a proxy valid for `--hours` (192 unless
 never past your certificate's end) to `X509_USER_PROXY`, or else `/tmp/x509up_u<your uid>`, readable
 by you alone.
 
-The proxy is what `voms-proxy-init -voms cms` makes (RFC 3820, inheriting all rights, with the
-VOMS attributes): `voms-proxy-info` and OpenSSL read and verify it. A press or resolve that needs
-the grid warns when less than six hours are left.
+```text
+$ rvr proxy init
+Passphrase for /Users/…/.globus/userkey.pem:
+Asking voms-cms-auth.cern.ch for your cms attributes...
+Wrote /tmp/x509up_u501:
+proxy     /tmp/x509up_u501
+whose     /DC=ch/DC=cern/OU=Organic Units/OU=Users/CN=…
+VO        cms (attributes until 2026-10-27T17:14:08Z)
+left      8 days 0 hours, until 2026-10-27T17:14:08Z
+The grid proxy at /tmp/x509up_u501 is valid for 8 days.
+```
+
+(A real run of 2026-10-19, the user's name and folder left out.) The proxy is what
+`voms-proxy-init -voms cms` makes (RFC 3820, inheriting all rights, with the VOMS attributes):
+`voms-proxy-info` and OpenSSL read and verify it. A press or resolve that needs the grid warns
+when less than six hours are left.
 
 ## samples.toml
 
