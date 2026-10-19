@@ -288,6 +288,76 @@ fn check(path: &Path) -> Result<bool, String> {
     Ok(same)
 }
 
+/// What `--events N|all`, `--random` and `--seed S` ask of every sample, for plan and press.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Choice<'a> {
+    pub events: Option<&'a str>,
+    pub random: bool,
+    pub seed: Option<u64>,
+}
+
+impl Choice<'_> {
+    /// Read `--seed`'s value.
+    pub fn seed(text: &str) -> Result<u64, String> {
+        text.parse()
+            .map_err(|_| format!("--seed is a whole number, not {text:?}"))
+    }
+
+    /// The options in words.
+    pub fn said(&self) -> String {
+        match (self.events, self.random) {
+            (None, false) => "as samples.toml asks".to_string(),
+            (Some("all"), _) => "--events all: every sample whole".to_string(),
+            (Some(n), r) => format!("--events {n}{}", if r { " --random" } else { "" }),
+            (None, true) => "--random: each sample's own number, chosen at random".to_string(),
+        }
+    }
+
+    /// What a sample reads: what samples.toml asked of it, changed as the options say. A
+    /// `--random` that has no number of events to choose is refused, not ignored.
+    pub fn of(&self, sample: &Locked) -> Result<spec::Events, String> {
+        use spec::Events::{All, First, Random};
+        let own = resolve::asked(sample);
+        let seed = |s| self.seed.unwrap_or(s);
+        Ok(match (self.events, self.random) {
+            (Some("all"), true) => {
+                return Err("--random chooses N events at random: give it with --events N, not --events all".into())
+            }
+            (None, true) if own == All => {
+                return Err(format!("{}: --random needs a number of events to choose, and samples.toml reads all of this sample: give --events N", sample.name))
+            }
+            (None, _) => match own {
+                First(n) if self.random => Random { n, seed: seed(1) },
+                Random { n, seed: s } => Random { n, seed: seed(s) },
+                own => own,
+            },
+            (Some("all"), false) => All,
+            (Some(n), random) => {
+                let n: u64 = n
+                    .replace('_', "")
+                    .parse()
+                    .map_err(|_| format!("--events is a number of events or all, not {n:?}"))?;
+                match random {
+                    true => Random { n, seed: seed(1) },
+                    false => First(n),
+                }
+            }
+        })
+    }
+
+    /// Refuse options that would change nothing: a `--seed` when no sample is chosen at random.
+    pub fn check(&self, samples: &[Locked]) -> Result<(), String> {
+        let random = |s| matches!(self.of(s), Ok(spec::Events::Random { .. }));
+        if self.seed.is_some() && !samples.iter().any(random) {
+            return Err(
+                "--seed is for a random choice, and no sample is chosen at random: add --random"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 /// What a press would read of each sample, from the lock alone, with the overrides a press takes:
 /// `--events N` (every sample at most N), `--events all` (every sample whole, whatever
 /// samples.toml says), `--random` (chosen at random rather than the first) and `--seed S`.
@@ -304,15 +374,11 @@ fn plan_all(path: &Path, flags: &[&str]) -> Result<(), String> {
                 .ok_or(format!("{flag} needs a value"))
         })
     };
-    let events = value("--events").transpose()?;
-    let random = flags.contains(&"--random");
-    let seed = value("--seed")
-        .transpose()?
-        .map(|s| {
-            s.parse::<u64>()
-                .map_err(|_| format!("--seed is a whole number, not {s:?}"))
-        })
-        .transpose()?;
+    let choice = Choice {
+        events: value("--events").transpose()?,
+        random: flags.contains(&"--random"),
+        seed: value("--seed").transpose()?.map(Choice::seed).transpose()?,
+    };
     let known = ["--events", "--random", "--seed"];
     for (i, f) in flags.iter().enumerate() {
         let is_value = i > 0 && ["--events", "--seed"].contains(&flags[i - 1]);
@@ -322,44 +388,11 @@ fn plan_all(path: &Path, flags: &[&str]) -> Result<(), String> {
             ));
         }
     }
+    choice.check(&lock.sample)?;
     let started = std::time::Instant::now();
-    let said = match (events, random) {
-        (None, false) => "as samples.toml asks".to_string(),
-        (Some("all"), _) => "--events all: every sample whole".to_string(),
-        (Some(n), r) => format!("--events {n}{}", if r { " --random" } else { "" }),
-        (None, true) => "--random: each sample's own number, chosen at random".to_string(),
-    };
+    let said = choice.said();
     for sample in &mut lock.sample {
-        let own = resolve::asked(sample);
-        let want = match (events, random) {
-            (None, false) => own,
-            (Some("all"), _) => spec::Events::All,
-            (Some(n), r) => {
-                let n: u64 = n
-                    .replace('_', "")
-                    .parse()
-                    .map_err(|_| format!("--events is a number of events or all, not {n:?}"))?;
-                if r {
-                    spec::Events::Random {
-                        n,
-                        seed: seed.unwrap_or(1),
-                    }
-                } else {
-                    spec::Events::First(n)
-                }
-            }
-            (None, true) => match own {
-                spec::Events::First(n) => spec::Events::Random {
-                    n,
-                    seed: seed.unwrap_or(1),
-                },
-                spec::Events::Random { n, seed: s } => spec::Events::Random {
-                    n,
-                    seed: seed.unwrap_or(s),
-                },
-                spec::Events::All => spec::Events::All,
-            },
-        };
+        let want = choice.of(sample)?;
         resolve::planned(sample, want)?;
     }
     println!(

@@ -1,9 +1,12 @@
-//! RowVer v13 in Rust: read, validate, and write `.rvr` files as `FORMAT.md` specifies them.
+//! RowVer 14 in Rust: read, validate, and write `.rvr` files as `FORMAT.md` specifies them.
 
+pub mod choice;
+mod codec;
 mod json;
 mod numeric;
 pub mod parallel;
 pub mod rvr;
+pub mod sign;
 mod table;
 pub mod write;
 
@@ -14,6 +17,9 @@ pub mod source {
     /// `table.rs`: the columns of a file held in memory.
     pub const TABLE: &str = include_str!("table.rs");
 }
+
+/// The `.rvr` version this crate reads and writes; it reads no other.
+pub const VERSION: u64 = 14;
 
 pub use rvr::CheckpointSummary;
 pub use table::{Column, ColumnInfo, EventIdentity, EventView, NumericBuffer, Table};

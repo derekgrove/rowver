@@ -1,13 +1,10 @@
 //! Build a derived file: columns computed from another file's columns, naming that parent.
 //!
-//! Ported from: RowVer 13.0.1 (`2ec3a16`) `rowver/derive.py` `derive` and `column_mark`, for
-//! columns that are already computed.
-//! Documentation: `FORMAT.md` (repository root) ("derived")
-//! Differences: the caller computes the columns and says which parent columns it read; every
-//! column is marked by the whole source, a newline, and its name, the format's rule for a
-//! column that no readable function file made.
+//! Documentation: `FORMAT.md` (repository root) ("derived").
+//! The caller computes the columns and says which parent columns it read; every column is
+//! marked by the whole source, a newline, and its name.
 
-use super::{build_with, Labels, Skim, Values};
+use super::{build_with, Labels, Sample, Skim, Values};
 use crate::rvr::digest;
 use crate::rvr::samples::RESERVED;
 use crate::{invalid, Result};
@@ -87,8 +84,14 @@ pub fn derived_with(
         let rows = record["rows"]
             .as_u64()
             .and_then(|rows| rows.try_into().ok());
-        let name = record["name"].as_str().zip(rows);
-        name.map(|(name, rows)| (name.to_owned(), rows))
+        let named = record["name"].as_str().zip(record["label"].as_str());
+        named
+            .zip(rows)
+            .map(|((name, label), rows)| Sample {
+                name: name.to_owned(),
+                label: label.to_owned(),
+                rows,
+            })
             .ok_or_else(|| invalid("The parent's samples are not readable"))
     });
     let marks = columns.iter().map(|(name, _)| {
@@ -138,6 +141,6 @@ pub fn derived_with(
     let mut lineage = Map::new();
     lineage.insert("sha256".into(), sum.into());
     lineage.append(&mut record);
-    let header = json!({"rowver": 13, "data": data, "made": made, "derived": lineage});
+    let header = json!({"rowver": crate::VERSION, "data": data, "made": made, "derived": lineage});
     Ok((header, arrays))
 }

@@ -1,14 +1,24 @@
 # The `.rvr` file
 
-Version 13. `crates/rowver` reads and writes everything here and is the reference builder.
-The Python RowVer (`rowver/rvr.py`, `rowver/derive.py` at tag `v13.0.1`, now retired) wrote
-it first, which is why its checksums follow Python's `json.dumps`.
+Version 14. `crates/rowver` reads and writes everything here and is the reference builder;
+`rvr press` writes pressed files with it.
 
-New in 13: every per-row array carries one checksum per sample (`by_sample`),
-and a file may hold only columns derived from another file's columns, naming
-that parent under its own checksums (`derived`). Each sample's metadata is kept
-in `made`, and the metadata that is one number, one text or one truth value per
-sample is also a sample column (`data.sample_cols`).
+New in 14:
+
+- Arrays are zstd frames instead of zlib streams (see Arrays).
+- `made` carries the whole study: the text of `recipe.toml`, `samples.toml` and `samples.lock`,
+  each with its SHA-256, so the study can be written back out of the file and pressed again
+  (`rvr reproduce`).
+- Each sample records which of its events were read (`made.files[sample].events`): all of
+  them, the first n, or n chosen at random from a seed, which a reader chooses again to check
+  every row's entry.
+- `made.toolchain` names what built the file.
+- A file may be signed with ed25519 (`signature`).
+- Each sample has a label in `data.samples`.
+- The checksums' canonical JSON is rowver's own rule, stated here.
+- A reader refuses a file whose `made` is missing anything or fails a checksum.
+
+A reader of version 14 reads version 14 only; press an older file's study again.
 
 ## Container
 
@@ -27,41 +37,40 @@ magic (8 bytes) | u32 little-endian header length | UTF-8 JSON header | arrays
   header and copies the arrays byte for byte.
 
 A reader refuses a file whose first 8 bytes are not the magic, whose `rowver`
-is not 13, or whose arrays do not fill the rest of the file exactly. A
-version 12 file is refused: press its study again.
+is not 14, or whose arrays do not fill the rest of the file exactly.
 
 ## Header
 
-The top level has exactly `rowver`, `data`, `made`, an optional `derived`,
-and zero or more tool keys. Nothing else.
+The top level has exactly `rowver`, `data`, `made`, an optional `derived`, an
+optional `signature`, and zero or more tool keys. Nothing else.
 
 ```json
 {
-  "rowver": 13,
+  "rowver": 14,
   "data": { },
   "made": { },
   "derived": { },
+  "signature": { },
   "viewer": { }
 }
 ```
 
-A file without `derived` is a pure file: `rowver run` pressed it from a
-recipe. A file with `derived` is a derived file (see `derived`).
+A file without `derived` is a pure file: `rvr press` pressed it from a study.
+A file with `derived` is a derived file (see `derived`).
 
 ### `data` — the rows and their columns
 
 ```json
 {
-  "sha256": "…64 hex…",
   "rows": 45147,
   "samples": [
-    {"name": "TTJets DiLept",    "rows": 45062},
-    {"name": "WJets HT 400-600", "rows": 85}
+    {"name": "TTJets_DiLept",  "label": "t t̄ → 2ℓ",         "rows": 45062},
+    {"name": "WJets_HT400",    "label": "W + jets, HT 400-600", "rows": 85}
   ],
   "files": [
-    {"sample": "TTJets DiLept",    "path": "/data/ttjets_1.root", "rows": 30211},
-    {"sample": "TTJets DiLept",    "path": "/data/ttjets_2.root", "rows": 14851},
-    {"sample": "WJets HT 400-600", "path": "/data/wjets.root",    "rows": 85}
+    {"sample": "TTJets_DiLept", "path": "/data/ttjets_1.root", "rows": 30211},
+    {"sample": "TTJets_DiLept", "path": "/data/ttjets_2.root", "rows": 14851},
+    {"sample": "WJets_HT400",   "path": "/data/wjets.root",    "rows": 85}
   ],
   "sample": {"at": 0,     "size": 212,   "sha256": "…"},
   "entry":  {"at": 212,   "size": 40115, "sha256": "…", "by_sample": ["…", "…"]},
@@ -76,29 +85,34 @@ recipe. A file with `derived` is a derived file (see `derived`).
      "content": {"kind": "f4", "count": 352738, "at": 215004, "size": 1101877, "sha256": "…",
                  "by_sample": ["…", "…"]}}
   ],
+  "sha256": "…64 hex…",
   "sample_cols": [
-    {"name": "xsec", "kind": "f8",   "values": [87.3, null],            "sha256": "…"},
+    {"name": "xsec", "kind": "f8",   "values": [87.3, null],               "sha256": "…"},
     {"name": "kind", "kind": "text", "values": ["background", "background"], "sha256": "…"}
   ]
 }
 ```
 
 - `rows` — total kept events. One row is one event.
-- `samples` — in order. Rows of a sample are contiguous and follow this
-  order.
-- `files` — every input file that was read, in row order: its sample, the
-  path or URL it was opened with (a key of that sample's `made.files`), and
-  the rows it gave, zero included. A file's rows are contiguous. Within a
-  sample, files follow the recipe's file order, however many files were read
-  at once, so the same recipe on the same inputs always lays out the same rows.
+- `samples` — in order, each with exactly `name` (what every tool calls it),
+  `label` (what a plot shows, any text) and `rows`. Rows of a sample are
+  contiguous and follow this order.
+- `files` — every input file that was read, in row order, each with exactly
+  its sample, the path or URL it was opened with (a key of that sample's
+  `made.files[sample].files`), and the rows it gave, zero included. A file's
+  rows are contiguous. Within a sample, files follow the lock's file order,
+  however many files were read at once, so the same study on the same inputs
+  always lays out the same rows. A file a press read nothing of because the
+  first n events were all in files before it is not listed; a file a random
+  choice took nothing from is.
 - `sample` — the array `i4[rows]`: each row's index into `samples`.
 - `entry` — the array `i8[rows]`: each row's entry number in its file's tree,
-  counted from 0. Within a file each number appears once; the rows follow the
-  order `prepare` and `keep` left the events in, which is the entry order unless
-  a recipe reorders them. With `files`, it says which
+  counted from 0. Within a file each number appears once, and every number is
+  an entry the press read (see The event choice). With `files`, it says which
   event every row is, so a later program can read more branches for the same
   rows without running the selection again.
-- `cols` — one record per column, in the recipe's `columns` order:
+- `cols` — one record per column, in the order `made.recipe.columns` names
+  them:
   - flat columns: `name`, `kind`, the array reference (`at`, `size`,
     `sha256`, `by_sample`) of `kind[rows]`, then the column facts: `lim` and `nice`, and on
     integer and boolean columns `vals` and `names` when the distinct values
@@ -124,8 +138,7 @@ Each record has exactly `name`, `kind`, `values` and `sha256`:
 
 - `name` — the metadata key.
 - `kind` — `b1`, `i8`, `f8` or `text`.
-- `values` — one JSON value per entry of `data.samples`, in that order. A
-  sample left out of the file is not in `data.samples` and has no value.
+- `values` — one JSON value per entry of `data.samples`, in that order.
 - `sha256` — the SHA-256 of the values as bytes, so that it does not depend on
   how a program spells a number in JSON. For `b1`, `i8` and `f8`: the values as
   little-endian bytes of that kind, one after another, with a missing `f8`
@@ -134,13 +147,8 @@ Each record has exactly `name`, `kind`, `values` and `sha256`:
   the text as UTF-8, and the byte `00`. It is not part of `data.sha256`.
 
 The stored `kind` is what a reader uses; it need not work the kind out again.
-The order of `sample_cols` carries no meaning.
-
-The value of a sample column on row `r` is `values[sample[r]]`, with `sample`
-the array of each row's sample index. `rvr.sample_values(header, name)` gives
-the values as stored, and `rvr.sample_column(header, section, name)` gives one
-value per row: a NumPy `f8` array with NaN where the value is `null`, an `i8`
-array, a `bool` array, or for `text` an object array of `str` and `None`.
+The order of `sample_cols` carries no meaning. The value of a sample column on
+row `r` is `values[sample[r]]`.
 
 Which keys are sample columns is decided over the samples in the file. A
 sample has a value for a key when its metadata holds the key and the value
@@ -158,121 +166,128 @@ A sample that lacks the key has `null`, which only `f8` and `text` allow. A
 truth value is not a number. Every other key is not a sample column and stays
 only in `made`: a list or an object, values of more than one of these types,
 truth values that a sample lacks, whole numbers one of which does not fit in
-64 bits when every sample has one, a number too large for an `f8`, a key
-that no sample has a value for, and a key that `metadata_omitted` names in
-any sample. A key with the name of a column in `cols` is not a sample column
-either: the row column has the name. Nor are `sample`, `entry` and `file`.
+64 bits when every sample has one, a number too large for an `f8`, and a key
+that no sample has a value for. A key with the name of a column the recipe
+pressed (`made.recipe.columns`) is not a sample column either: the row column
+has the name. Nor are `sample`, `entry` and `file`.
 
 A value is written as `made` holds it: a whole number in an `f8` column stays
 a whole number (`59`, not `59.0`), and the `sha256` is of that text. The
 columns are in the order their keys first appear, going through the samples'
 metadata in `data.samples` order. `sample_cols` and `made` say the same thing
-twice, and `rowver validate` checks that they agree in both directions.
+twice, and a reader checks that they agree in both directions.
 
-A viewer never rewrites `data`. The presser writes it once, and may later
-add columns to it (`rowver run --onto`): the rows, `samples`, `files`,
-`sample`, `entry` and `sample_cols` stay as they are, and an array already held is moved
-as the bytes it is, never made again, so its `sha256` and `by_sample` do
-not change. A derived file is refused: nothing is added to it. So is a
-new column with the name of a sample column the file holds: a press of that
-recipe gives the name to the row column and writes no such sample column, so
-press again. The
-new columns take their places in the recipe's `columns` order, every `at`
-is counted again, and `data.sha256` changes, because it names every array.
-The file that results has the same `data` as a press of the new recipe,
-as far as the marks of `made.cart.hooks` can tell that nothing else changed.
+`rvr press` adds two keys to every sample's metadata, so that they are sample
+columns: `events_read`, the entries it read of the sample (before any cut),
+and `events_total`, the entries its files hold.
 
-### `made` — the recipe snapshot
+A viewer never rewrites `data`. The presser writes it once.
+
+### `made` — the study that made the file
 
 ```json
 {
   "sha256": "…64 hex…",
   "study": "my_study",
   "title": "My study",
-  "note": "Two local UL18 NanoAOD samples with a generator weight column.",
-  "built": "2026-09-12T18:03:11Z",
-  "by": "rowver 13",
-  "cart": {
-    "sha256": "…64 hex…",
-    "source": "…the whole cart.py…",
-    "modules": {"helpers.py": {"sha256": "…64 hex…", "source": "…"}},
-    "hooks": {
-      "keep": "…64 hex…",
-      "prepare": "…64 hex…",
-      "metadata": "…64 hex…",
-      "columns": {"MET": "…64 hex…", "channel": "…64 hex…", "Jet_pt": "…64 hex…"}
-    }
+  "built": "2026-10-18T18:03:11Z",
+  "by": "rvr 0.1.0",
+  "toolchain": {
+    "rvr": "0.1.0",
+    "rowver": "14",
+    "commit": "1fe5207a…",
+    "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)",
+    "target": "aarch64-apple-darwin"
   },
+  "recipe":  {"sha256": "…", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
+              "columns": ["MET", "channel", "Jet_pt"]},
+  "samples": {"sha256": "…", "text": "…the whole samples.toml…"},
+  "lock":    {"sha256": "…", "text": "…the whole samples.lock…"},
   "files": {
-    "TTJets DiLept": {
+    "TTJets_DiLept": {
+      "events": {"choose": "random", "n": 50000, "seed": 7,
+                 "algorithm": "splitmix64-selection-sampling"},
       "files": {
-        "/data/ttjets_1.root": {
-          "tree": "Events",
-          "uuid": "…ROOT file UUID…",
-          "entries": 219310
-        }
+        "/data/ttjets_1.root": {"tree": "Events", "uuid": "…", "entries": 219310, "take": 33912},
+        "/data/ttjets_2.root": {"tree": "Events", "uuid": "…", "entries": 104077, "take": 16088}
       },
-      "metadata": {"xsec": 87.3, "lumi": 59.8, "kind": "background"}
+      "metadata": {"xsec": 87.3, "kind": "background", "events_read": 50000,
+                   "events_total": 323387}
+    },
+    "WJets_HT400": {
+      "events": {"choose": "all"},
+      "files": {"/data/wjets.root": {"tree": "Events", "uuid": "…", "entries": 4712}},
+      "metadata": {"xsec": 48.9, "kind": "background", "events_read": 4712,
+                   "events_total": 4712}
     }
   }
 }
 ```
 
-`title` and `note` are copied out of the cart, because the viewer
-cannot run Python to find them. Present only when the recipe set them.
-Nothing else is reconstructed from the snapshot.
+- `study` — the study folder's name. `title` — the recipe's title, present only
+  when the recipe sets one.
+- `built` — when the file was written, UTC to the second.
+- `by` — free text naming the program that wrote the file.
+- `toolchain` — what built that program, each as text: `rvr` (its version),
+  `rowver` (the format version it writes), `commit` (the git commit it was
+  built from, with `-dirty` after it when the checkout had changes, or
+  `unknown`), `rustc` (the compiler's `rustc -V`) and `target` (the platform).
+- `recipe`, `samples`, `lock` — the study's three files, each as its whole
+  `text` and the `sha256` of that text as UTF-8. Together they are the study:
+  write them out as `recipe.toml`, `samples.toml` and `samples.lock` and the
+  study can be pressed again. `recipe` also has `format` (the recipe
+  language, `rvr-recipe`) and `columns`: every column the recipe stores, in
+  the file's order, each named once. The lock's own record of the
+  samples.toml it was resolved from matches `samples`.
+- `files` — every sample of `data.samples`, by name, each with exactly:
+  - `events` — which of its events the press read (see The event choice);
+  - `files` — every file of the sample in `data.files`, by the path or URL it
+    was opened with: its `tree`, the `uuid` stored inside that ROOT file, the
+    tree's `entries`, and `stop` or `take` as The event choice says;
+  - `metadata` — the sample's metadata, from the lock: text, whole numbers,
+    finite floats, `true`, `false`, `null`, and lists and objects of those.
+    The keys that hold one number, text or truth value per sample are written
+    again as `data.sample_cols`.
 
-`cart.modules` holds every Python file inside the study folder, other
-than `cart.py`, that was imported when the recipe loaded: a `fileset.py`
-or `helpers.py` beside it, or `util/more.py` below it. Keys are paths
-relative to the study folder with `/` separators, in sorted order; each
-value holds the file's text, decoded as Python decodes source, and the
-SHA-256 of that text as UTF-8. It is present only when there is at least
-one such module. `cart.py` and its modules are read as the recipe loads,
-before any events, so a sequential and a parallel press record the same
-snapshot. Not copied: installed packages (anything under a
-`site-packages`, or a Python environment kept inside the study folder),
-files the recipe opens as data, and modules a hook imports only while
-events are read.
+A derived file carries its parent's `made` unchanged.
 
-`cart.hooks` holds a mark of what chose the rows and made each column:
-`keep`, `prepare` when the recipe has one, `metadata` for the samples'
-metadata (every hook is given it), and under `columns` every column by name.
-A mark is a SHA-256. For a column copied from a branch or field it is of
-`branch <name>`. For a function it is of the function's code as Python
-writes it back from its syntax tree (`ast.unparse`), so a comment, the
-layout, and whatever else shares a lambda's line are not part of it, then of
-every plain value (a number, text, or a list or dict of those) and every
-function of the study that it names or closes over, those functions marked
-the same way. An installed package is not part of a mark, nor is a value
-that is not plain. The presser reads the marks when it adds columns to a
-file (`rowver run --onto`): it adds nothing unless `keep`, `prepare`, the
-metadata and every column the file holds have the marks they had, and unless
-every input file, read again, gives exactly the rows `data.entry` holds for
-it. A file written before the marks existed has no `cart.hooks`; it is
-proven by its rows alone, and stays without marks when columns are added.
+#### The event choice
 
-`files` records the inputs actually processed, grouped by their recipe
-sample names. Each sample holds a `files` dict keyed by the full path or
-URL used to open the ROOT file. Its value contains the tree name, the UUID
-stored inside that ROOT file, and the tree's entry count before selection.
-When the recipe reads only the first entries of a file, written
-`{path: {"tree": "Events", "stop": 1000000}}`, the record also holds
-`stop`, the number of entries read.
-These facts come from the already-open input, including files with no kept
-events. They preserve the resolved inputs even when `cart.py` imports or
-builds its fileset. Callable objects are not copied.
+`events` is one of:
 
-Each sample's `metadata` is the recipe's metadata for that sample, kept so that
-facts such as a cross-section or luminosity travel with the file. It holds every
-value that is plain: text, a whole number, a finite float, `true`, `false`,
-`null`, or a list or object of those with text keys. The keys that hold one
-number, text or truth value per sample are written again as `data.sample_cols`
-(see Sample columns). A value that is not plain
-is left out, and its key is then named in `metadata_omitted`, a list that is
-written only when something was left out. The `file` key the presser adds for a
-hook is not stored. `made.sha256` covers the metadata like the rest of `made`,
-and a derived file carries it unchanged inside its parent's `made`.
+| `events` | the press read | each file records |
+|---|---|---|
+| `{"choose": "all"}` | every entry of every file | neither `stop` nor `take` |
+| `{"choose": "first", "n": N}` | the first N entries, in the files' order | `stop`, the entries read, when it read fewer than the file has |
+| `{"choose": "random", "n": N, "seed": S, "algorithm": "splitmix64-selection-sampling"}` | N entries chosen at random over all the files, or all of them when they hold N or fewer | `take`, how many of the chosen entries are in it |
+
+The choice is what the press did, which is what `samples.toml` asked unless
+`rvr press --events`, `--random` or `--seed` changed it. N and S are whole
+numbers; S may be any value from 0 to 2^64 − 1.
+
+For `first`, the files in `data.files` order read `min(entries, left)` each,
+with `left` starting at N and going down by what each file read. A row's
+entry is below what its file read.
+
+For `random`, the files in `data.files` order are counted as one run of
+`total` entries, file after file. The algorithm `splitmix64-selection-sampling`
+chooses `m = min(N, total)` of them:
+
+1. Start SplitMix64 at the state S. Each draw adds `0x9E3779B97F4A7C15` to
+   the state (mod 2^64), then mixes a copy `z` of it:
+   `z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9`,
+   `z = (z ^ (z >> 27)) * 0x94D049BB133111EB`,
+   `z = z ^ (z >> 31)` (all mod 2^64), and gives `z`.
+2. A uniform number is `(z >> 11) / 2^53`, a double in [0, 1).
+3. Knuth's selection sampling (Algorithm S): with `needed = m`, for
+   `i = 0, 1, 2, …` while `needed > 0`, draw `u`; entry `i` is chosen when the
+   double `(total − i) × u` is less than `needed`, which then goes down by 1.
+
+Entry `i` of the run is entry `i − start` of the file it falls in, where
+`start` is the number of entries in the files before it. Each file's `take`
+is how many chosen entries fall in it, and a row's entry is one of them. A
+reader chooses the entries again from the seed to check every row, so the
+same seed, files and N always give the same choice.
 
 ### `derived` — columns made from another file's columns
 
@@ -289,25 +304,24 @@ the parent by its checksums.
   this file's own arrays by the usual rule.
 - `data.sample_cols` is the parent's, unchanged.
 - `made` is the direct parent's `made`, equal to it as a JSON value, so
-  `made.sha256` is the parent's. It still records the recipe, the marks of
-  `keep` and `prepare`, and the ROOT files that made the rows.
-  `made.cart.hooks.columns` therefore names the pressed file's columns, not
-  this file's.
+  `made.sha256` is the parent's. It still records the study and the ROOT
+  files that made the rows, and `made.recipe.columns` names the pressed
+  file's columns, not this file's.
 
 ```json
 {
   "sha256": "…64 hex…",
   "built": "2026-10-06T19:12:44Z",
-  "by": "rowver 13.0.1",
+  "by": "…",
   "parents": [
     {"data_sha256": "…", "made_sha256": "…", "derived_sha256": null,
      "rows": 45147, "path": "/data/my_study.rvr",
      "read": {"MET": "…", "Jet_pt": "…"}}
   ],
-  "source": "…the exact Python text that computed the columns…",
+  "source": "…the exact text that computed the columns…",
   "columns": {"mT2": "…64 hex…", "soft_jets": "…64 hex…"},
   "parameters": {"cut": 30},
-  "runtime": "Python 3.13.5 / NumPy 2.1.3 / Awkward 2.7.2"
+  "runtime": "…what ran source…"
 }
 ```
 
@@ -328,13 +342,10 @@ the parent by its checksums.
     SHA-256 of the ASCII text of its offsets' `sha256` followed by its
     content's `sha256`, with nothing between them. A sample column's is its
     `sha256`.
-- `source` — the exact Python text that computed the columns.
+- `source` — the exact text that computed the columns.
 - `columns` — every column of the file by name, in `data.cols` order, each
-  with a mark: the SHA-256 of the function that made it, by the rule of
-  `made.cart.hooks` for a function. A function not written in a file that
-  can be read at the time, such as one compiled from `source`, is marked by
-  the SHA-256 of the whole of `source`, a newline, and the function's name. Any
-  change to `source` therefore changes the mark of every such column.
+  with a mark: the SHA-256 of the whole of `source`, a newline, and the
+  column's name. Any change to `source` changes the mark of every column.
 - `parameters` — an object of plain JSON values, empty when there are none.
 - `runtime` — free text naming what ran `source`.
 
@@ -343,28 +354,11 @@ parent holds and no others: a column of the parent's own parent is not
 looked up. `made` is then the same object down the whole chain, and each
 file's `derived.parents[0].derived_sha256` names the step before it.
 
-`rowver.derive.derive(parent, target, source, columns, by, parameters=None,
-labels=None, runtime=None, replace=False)` writes a derived file and returns
-its header. `columns` is `{name: function}`; each function is called once
-with a mapping of the parent's own columns, NumPy for flat and Awkward for
-jagged, which decompresses a column, and checks it against its `sha256`,
-only when it is asked for, so `read` names exactly the columns used. The
-mapping also holds the parent's sample columns by name, each as one value per
-row (as `rvr.sample_column` gives it), checked against its `sha256` and
-recorded in `read` when it is asked for; `name in columns` reads nothing. A
-result must be one number per row or one list of numbers per row, of a
-kind in the table under Arrays; a flat float column must be finite.
-`labels` is `{column: {value: label}}` as in a recipe. Nothing is written
-when there is no column, when a name is one the parent holds as a column or
-a sample column, or when a result is not a column. The file is written whole beside its target and
-then put in place, and a target that exists is left alone unless `replace`
-is true.
-
 ### Checksums
 
 Every array reference carries `sha256`: the SHA-256 of that array's
 uncompressed little-endian bytes (after undoing the shuffle), as 64
-hexadecimal characters.
+lowercase hexadecimal characters.
 
 `data.sha256` is the SHA-256 of the ASCII text made by joining every array's
 `sha256`, with nothing between them, in file order (see Arrays). It
@@ -389,31 +383,77 @@ constant within a sample. With sample `s` on rows `[r0, r1)`:
   and jagged content, and of the single `i8` value 0 for jagged offsets.
 
 `by_sample` is not part of `data.sha256`: it can be worked out from the
-arrays, and `rowver validate` checks it. Two headers are enough to say which
+arrays, and `rvr validate` checks it. Two headers are enough to say which
 column of which sample changed between two presses, with no array
-decompressed; `rowver diff A.rvr B.rvr` does that. It matches samples and
+decompressed; `rvr diff A.rvr B.rvr` does that. It matches samples and
 columns by name, and reports the rows of each file, the samples and columns
 only one file holds, the samples whose row counts differ, the columns whose
 kinds differ, and each (column, sample) whose `by_sample` differs. For the
 sample columns it reports the ones only one file holds, the ones whose kinds
 differ, and each sample whose value differs, with both values.
 
-`made.sha256` covers the complete `made` object, including `files`, except
-its own top-level `sha256` field. Serialize that object with
-`json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`,
-encode it as UTF-8, and take its SHA-256 as 64 hexadecimal characters.
-`made.cart.sha256` covers the saved recipe text alone, and each
-`made.cart.modules[path].sha256` covers that module's text alone.
-`derived.sha256` covers the complete `derived` object except its own
-top-level `sha256` field, serialized exactly as `made` is.
+`made.sha256` is the SHA-256 of the canonical JSON (below) of the complete
+`made` object without its own top-level `sha256`, encoded as UTF-8.
+`derived.sha256` is taken the same way of `derived`. The `sha256` of each of
+`made.recipe`, `made.samples` and `made.lock` covers that text alone.
 
-`rowver run` and `rowver.derive.derive` create every checksum when building
-a file. Reading and writing preserve them without recomputing them;
-`rowver validate` checks them. Tool keys are outside every checksum.
+The canonical JSON of a value is:
+
+- an object: `{`, its members with their keys sorted by Unicode code point,
+  each as the key's canonical string, `:` and the value, with `,` between
+  members, then `}`;
+- an array: `[`, the members in order with `,` between them, then `]`;
+- a string: `"` and the text, with `"` written `\"`, `\` written `\\`, the
+  control characters U+0008, U+0009, U+000A, U+000C and U+000D written `\b`,
+  `\t`, `\n`, `\f` and `\r`, the other characters below U+0020 written
+  `\u00xx` (lowercase hexadecimal), and every other character as itself in
+  UTF-8; then `"`;
+- `true`, `false` and `null` as themselves;
+- a number written without a fraction or an exponent (a whole number): its
+  digits as the header writes them, with a leading `-` when negative and
+  `-0` written `0`, however many digits it has;
+- any other number: the double nearest to it, written with the fewest
+  significant digits that read back as that double. With the decimal
+  exponent `e` of its first significant digit, it is written in decimal when
+  `-4 ≤ e < 16` (`0.0001`, `150.0`, `1234567890123456.0`), always with a `.`
+  and at least one digit after it, and otherwise as one digit, a `.` and the
+  rest of the digits when there are more, `e`, a sign and at least two
+  exponent digits (`1e-05`, `1.5e+16`). Zero is `0.0`, or `-0.0` when
+  negative.
+
+There is no space anywhere outside strings. A whole number is never turned
+into a double, so a 64-bit seed or byte count is checksummed exactly.
+
+`rvr press` creates every checksum when building a file. Reading and
+writing preserve them without recomputing them; readers check them. Tool
+keys are outside every checksum, and outside the signature.
+
+### `signature` — who pressed the file
+
+A press signs the file when the person pressing it has a key (`rvr key new`
+makes one in `~/.config/rvr/key`). A file without a key is unsigned and still
+valid.
+
+```json
+"signature": {"ed25519": "…128 hex…", "key": "…64 hex…", "sha256": "…64 hex…"}
+```
+
+It has exactly these three members:
+
+- `sha256` — the SHA-256 of the canonical JSON of an object holding the
+  header's `rowver`, `data`, `made` and, when there is one, `derived`.
+- `ed25519` — the Ed25519 signature (RFC 8032) of the 32 bytes of that
+  SHA-256, made with the key, as lowercase hexadecimal.
+- `key` — the public key, as lowercase hexadecimal.
+
+A reader refuses a signed file whose `sha256` is not that of its header, or
+whose signature does not hold for `key`: either says the header changed after
+it was signed. Whether `key` belongs to someone the reader trusts is for the
+reader to say; `rvr validate` names the signer from `~/.config/rvr/trusted`.
 
 ### Tool keys
 
-One top-level object per tool, named for the tool. `rowver run` never writes
+One top-level object per tool, named for the tool. `rvr press` never writes
 one. Any program that saves an `.rvr` writes back every tool key it found.
 
 ## Arrays
@@ -434,9 +474,9 @@ Each array is stored as:
    `w`, output byte `j * n + i` is input byte `i * w + j`. Shuffling puts the
    slowly changing bytes of neighbouring values together, which compresses
    better;
-3. compressed as one zlib stream (RFC 1950: deflate with a 2-byte header and
-   an Adler-32 check), which Python's `zlib`, a browser's
-   `DecompressionStream("deflate")` and Rust's `flate2` all read.
+3. compressed as Zstandard data (RFC 8878), which decompresses to exactly the
+   shuffled bytes and fills `size` exactly. `rvr press` writes one frame per
+   array.
 
 The arrays are written in file order, one after another from `at` 0, with no
 gap between them and nothing after the last: `sample`, `entry`, then each
@@ -454,42 +494,52 @@ Kinds and widths:
 
 `b1` is one byte per value, 0 or 1, not packed bits.
 
-A column's kind is whatever NumPy dtype the skim produced. A copied
-column keeps its branch dtype; a derived column keeps what the hook returned.
-No promotion rule.
+A copied column keeps its branch's kind unless the recipe stores it as
+another; a computed column has the kind its expression gives. No promotion
+rule.
 
-## What `rowver validate` checks
+## What a reader checks
 
-One line per check, on any number of files:
+Opening a file checks everything its header says without reading an array,
+and refuses the file on the first problem:
 
-- the magic, `rowver: 13`, and `data` and `made` at the top level;
+- the magic, `rowver: 14`, and the top level;
+- `made`: its fields, the toolchain, each of the three texts against its
+  `sha256`, `recipe.columns`, and `made.sha256`;
+- `data.samples` and `data.files` against `made.files`: the same samples and
+  files, each record's fields, and every sample's `events` against its
+  files' `stop` and `take`;
+- in a pure file, `data.cols` names exactly `made.recipe.columns`, in order;
+  in a derived file, `derived` has every field and exactly one parent,
+  `derived.columns` names exactly the file's columns in order, `made.sha256`
+  and `data.rows` are the ones recorded for the parent, and `derived.sha256`
+  matches;
+- the sample columns: each has `name`, `kind`, `values` and `sha256`, a kind
+  of the four, one value per sample that its kind allows, a name that is no
+  column's, `sample`, `entry` or `file`, and the `sha256` of its values; and
+  the list is exactly what the metadata gives;
+- `data.sha256` matches the arrays' `sha256`s;
+- the signature, when there is one.
+
+A column read later is checked against its `sha256` when it is read.
+
+`rvr validate` (and `validate_file`) checks all of that and every array, one
+line per file:
+
 - the arrays fill the file in file order, end to end, and each decompresses
-  to its declared length and has its `sha256`; `data.sha256` matches;
+  to its declared length and has its `sha256`;
 - sample rows and file rows sum to `rows`; the sample index runs through the
   samples in order; each file's rows are its sample's, with distinct entry
-  numbers inside the entries read; `data.files` matches `made.files`;
+  numbers that the event choice read, a random choice being made again from
+  its seed;
 - every `by_sample` has one checksum per sample, each matching that sample's
   values;
 - jagged offsets start at 0, never decrease and end at `count`; flat floats
   are finite; `lim`, `nice`, `vals` and `names` agree with the values;
-- `sample_cols` is a list; each sample column has `name`, `kind`, `values`
-  and `sha256`, a kind of the four, and one value per sample that its kind
-  allows; the names are distinct and none is a column's, `sample`, `entry` or
-  `file`; each `sha256` matches its values; and the list is exactly what the
-  metadata in `made.files` gives by the rules of Sample columns. In
-  a derived file the names left to row columns are the pressed file's, which
-  `made.cart.hooks.columns` holds;
-- `made` has its fields, its file records are complete, `made.cart.sha256`
-  and each module's `sha256` match their text, and `made.sha256` matches;
-- in a pure file with `made.cart.hooks`: the hooks mark `keep` and exactly
-  the file's columns, in order;
-- in a derived file instead: `derived` has every field of its kind and
-  exactly one parent; `derived.columns` names exactly the file's columns, in
-  order; `made.sha256` and `data.rows` are the `made_sha256` and `rows`
-  recorded for the parent; `derived.sha256` matches.
+- and it says who signed the file.
 
 A derived file's parent is checked only when it is named:
-`rowver validate DERIVED.rvr --parent PARENT.rvr`. The parent is then
+`rvr validate DERIVED.rvr --parent PARENT.rvr`. The parent is then
 validated as a file itself, and compared with the derived file from its
 header: its `data.sha256`, `made` and `made.sha256`, and `derived.sha256`
 (absent for `null`) are the ones recorded; its rows, `samples` and `files`
@@ -500,6 +550,9 @@ sample column of the derived file's names. Without `--parent`, one line
 says the parent was not checked, and the file can still be valid. With
 `--parent` on a file that is not derived, one line says the parent was not
 compared, and the file can still be valid.
+
+`rvr dump` shows a file whose header fails these checks, after a line saying
+what is wrong, so that a damaged file can still be looked into.
 
 ## Column facts
 
@@ -520,24 +573,21 @@ sha256, the facts against the values, finite floats, and 0 or 1 in `b1`.
 
 ## Selection
 
-Before `prepare` runs, every event gets a hidden field holding its entry
-number, and after `keep` each surviving event's field becomes its row's `entry`.
-So `prepare` may add fields, select events or reorder them, and `keep` may
-select them any way awkward allows; the entry numbers follow the events. A
-`prepare` that returns new events without the fields it was given stops the
-press with a recipe error.
+`rvr press` keeps each event's entry number with it through every cut, and a
+row's `entry` is the entry its event came from. Rows keep the order of their
+entries within each file.
 
 ## Weights
 
 The file stores no weights. A weight is an ordinary column the recipe
-declares, such as the ntuple's `weight` branch or a hook that multiplies
-several factors. A factor that is one number per sample, such as a
-cross-section, can stay in the metadata and be read as a sample column. A
+declares, such as the ntuple's `weight` branch or an expression that
+multiplies several factors. A factor that is one number per sample, such as
+a cross-section, can stay in the metadata and be read as a sample column. A
 viewer decides which columns weight events and how.
 
 ## Not in the file
 
-Stored weights or a per-sample weighted flag. Per-column provenance. A
-structured copy of hooks. Sample metadata per row. Percentiles. Any older version:
-a reader of version 13 reads version 13 only. A parent's columns inside a
+Stored weights or a per-sample weighted flag. Per-column provenance beyond
+the recipe's text. Sample metadata per row. Percentiles. Any older version:
+a reader of version 14 reads version 14 only. A parent's columns inside a
 derived file.

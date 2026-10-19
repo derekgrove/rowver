@@ -1,36 +1,12 @@
-//! The column reader against a file the Python RowVer 13.0.0 wrote, and against a damaged header.
+//! Reading the committed fixture, and what readers refuse: a damaged header, another version,
+//! a broken `made`, an entry the event choice did not read, and a header changed after signing.
 
-use rowver::rvr::{from_bytes, Reader};
+mod common;
+
+use common::{golden, rebuilt, split, written};
+use rowver::rvr::{from_bytes, validate_file, Reader};
+use rowver::write::{made_checksum, to_bytes};
 use serde_json::Value;
-
-/// Decode a committed hexadecimal fixture.
-fn fixture(name: &str) -> Vec<u8> {
-    let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
-    let text: String = std::fs::read_to_string(path)
-        .unwrap()
-        .split_whitespace()
-        .collect();
-    (0..text.len() / 2)
-        .map(|index| u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).unwrap())
-        .collect()
-}
-
-/// A file's header and the bytes of its arrays.
-fn split(bytes: &[u8]) -> (Value, Vec<u8>) {
-    let start = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    (
-        serde_json::from_slice(&bytes[12..start]).unwrap(),
-        bytes[start..].to_vec(),
-    )
-}
-
-/// Write bytes to a fresh file in the temporary directory; the caller removes it.
-fn written(bytes: &[u8], name: &str) -> std::path::PathBuf {
-    let path =
-        std::env::temp_dir().join(format!("rowver-reader-{}-{name}.rvr", std::process::id()));
-    std::fs::write(&path, bytes).unwrap();
-    path
-}
 
 /// Little-endian values of a kind, each as an f64.
 fn as_f64(kind: &str, bytes: &[u8]) -> Vec<f64> {
@@ -67,10 +43,10 @@ fn names(header: &Value) -> Vec<String> {
 }
 
 #[test]
-fn reader_gives_the_columns_python_wrote() {
-    let bytes = fixture("rowver-v13.hex");
+fn reader_gives_the_columns_the_fixture_holds() {
+    let bytes = golden();
     let table = from_bytes(&bytes).unwrap();
-    let path = written(&bytes, "python");
+    let path = written(&bytes, "fixture");
     let reader = Reader::open(&path).unwrap();
     for name in names(table.header()) {
         let held = reader.column(&name).unwrap().unwrap();
@@ -108,7 +84,7 @@ fn reader_gives_the_columns_python_wrote() {
 
 #[test]
 fn a_header_declaring_more_rows_than_its_arrays_hold_is_refused_not_allocated() {
-    let (mut header, arrays) = split(&fixture("rowver-v13.hex"));
+    let (mut header, arrays) = split(&golden());
     header["data"]["rows"] = (1_u64 << 40).into();
     let bytes = rowver::write::to_bytes(&header, &[arrays]).unwrap();
     let path = written(&bytes, "rows");
@@ -120,4 +96,85 @@ fn a_header_declaring_more_rows_than_its_arrays_hold_is_refused_not_allocated() 
         }
     }
     std::fs::remove_file(path).unwrap();
+}
+
+/// Whether a header, written with the fixture's arrays, opens and validates; the first error.
+fn opens(header: &Value) -> Result<(), String> {
+    let (_, arrays) = rebuilt(10.);
+    let path = written(&to_bytes(header, &arrays).unwrap(), "changed");
+    let opened = Reader::open(&path)
+        .map(drop)
+        .and_then(|()| validate_file(&path).map(drop));
+    std::fs::remove_file(path).unwrap();
+    opened.map_err(|e| e.to_string())
+}
+
+/// Seal a changed `made` with its new checksum, so only the change itself is wrong.
+fn sealed(mut header: Value) -> Value {
+    header["made"]["sha256"] = made_checksum(&header["made"]).unwrap().into();
+    header
+}
+
+#[test]
+fn another_version_is_refused_with_what_to_do() {
+    let (mut header, _) = rebuilt(10.);
+    header["rowver"] = 13.into();
+    let why = opens(&header).unwrap_err();
+    assert!(
+        why.contains("rowver 13") && why.contains("rvr press"),
+        "{why}"
+    );
+}
+
+#[test]
+fn a_made_without_its_study_is_refused_but_can_be_inspected() {
+    let (header, arrays) = rebuilt(10.);
+    assert_eq!(opens(&header), Ok(()));
+    let mut changed = header.clone();
+    changed["made"]["lock"]["text"] = "# another lock\n".into();
+    assert!(opens(&sealed(changed))
+        .unwrap_err()
+        .contains("made.lock.sha256"));
+    let mut gone = header.clone();
+    gone["made"]
+        .as_object_mut()
+        .unwrap()
+        .shift_remove("samples");
+    let gone = sealed(gone);
+    assert!(opens(&gone).unwrap_err().contains("samples"));
+    let path = written(&to_bytes(&gone, &[arrays.concat()]).unwrap(), "inspect");
+    let (reader, checked) = Reader::inspect(&path).unwrap();
+    assert!(checked.is_err() && reader.column("MET").unwrap().is_some());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn the_event_choice_is_made_again_and_checked() {
+    let (header, _) = rebuilt(10.);
+    let mut seed = header.clone();
+    seed["made"]["files"]["B"]["events"]["seed"] = 8.into();
+    let why = opens(&sealed(seed)).unwrap_err();
+    assert!(why.contains("did not read"), "{why}");
+    let mut take = header.clone();
+    take["made"]["files"]["B"]["files"]["fixture-b.root"]["take"] = 3.into();
+    assert!(opens(&sealed(take)).unwrap_err().contains("take"));
+    let mut stop = header.clone();
+    stop["made"]["files"]["A"]["files"]["fixture-a2.root"]["stop"] = 6.into();
+    assert!(opens(&sealed(stop)).unwrap_err().contains("stop"));
+    let mut fewer = header.clone();
+    fewer["made"]["files"]["A"]["events"]["n"] = 24.into();
+    assert!(opens(&sealed(fewer)).is_err());
+}
+
+#[test]
+fn a_signed_header_that_changed_is_refused() {
+    let (mut header, _) = rebuilt(10.);
+    rowver::sign::sign(&mut header, &[3; 32]).unwrap();
+    assert_eq!(opens(&header), Ok(()));
+    let mut changed = header.clone();
+    changed["made"]["study"] = "another".into();
+    let why = opens(&sealed(changed)).unwrap_err();
+    assert!(why.contains("after it was signed"), "{why}");
+    header["fixture_tool"]["more"] = 1.into();
+    assert_eq!(opens(&header), Ok(()));
 }

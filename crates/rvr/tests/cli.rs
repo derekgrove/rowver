@@ -12,6 +12,7 @@ use std::process::Command;
 fn pressed(path: &Path, met_b: f32, xsec_b: f64) {
     let piece = |name: &str, met: Vec<f32>, counts: Vec<usize>, pt: Vec<f32>| Piece {
         name: name.into(),
+        label: format!("Sample {name}"),
         columns: vec![
             ("MET".into(), Values::Flat(array(&met))),
             (
@@ -34,13 +35,18 @@ fn pressed(path: &Path, met_b: f32, xsec_b: f64) {
     ];
     let (mut data, arrays) = pack(pieces, Labels::new(), files).unwrap();
     let record = |entries: u64| json!({"tree": "Events", "uuid": "00000000-0000-0000-0000-000000000000", "entries": entries});
-    let source = "format = \"rvr-recipe\"\nversion = 1\n";
+    let text = |text: &str| json!({"sha256": text_checksum(text), "text": text});
+    let mut recipe = text("format = \"rvr-recipe\"\nversion = 1\n");
+    recipe["format"] = "rvr-recipe".into();
+    recipe["columns"] = json!(["MET", "Jet_pt"]);
+    let all = json!({"choose": "all"});
     let mut made = json!({
         "study": "cli-test", "built": "2026-10-16T00:00:00Z", "by": "rvr test",
-        "cart": {"sha256": text_checksum(source), "source": source},
+        "toolchain": {"rvr": "test", "rowver": "14", "commit": "test", "rustc": "test", "target": "test"},
+        "recipe": recipe, "samples": text("# samples\n"), "lock": text("# lock\n"),
         "files": {
-            "A": {"files": {"a.root": record(10)}, "metadata": {"xsec": 1.5}},
-            "B": {"files": {"b.root": record(10)}, "metadata": {"xsec": xsec_b}},
+            "A": {"events": all, "files": {"a.root": record(3)}, "metadata": {"xsec": 1.5}},
+            "B": {"events": all, "files": {"b.root": record(2)}, "metadata": {"xsec": xsec_b}},
         },
     });
     made["sha256"] = made_checksum(&made).unwrap().into();
@@ -49,7 +55,7 @@ fn pressed(path: &Path, met_b: f32, xsec_b: f64) {
         .into();
     write(
         path,
-        &json!({"rowver": 13, "data": data, "made": made}),
+        &json!({"rowver": 14, "data": data, "made": made}),
         &arrays,
     )
     .unwrap();
@@ -76,6 +82,7 @@ impl Drop for Scratch {
 fn rvr(args: &[&str]) -> (i32, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
         .args(args)
+        .env("RVR_CONFIG", std::env::temp_dir().join("rvr-cli-no-config"))
         .output()
         .unwrap();
     (
@@ -109,7 +116,7 @@ fn validate_header_and_dump_read_a_pressed_file() {
     let (code, said) = rvr(&["validate", file]);
     assert_eq!(
         (code, said),
-        (0, format!("{file}: valid, 5 rows, 2 columns\n"))
+        (0, format!("{file}: valid, 5 rows, 2 columns, not signed\n"))
     );
     let (code, said) = rvr(&["header", file]);
     let header: Value = serde_json::from_str(&said).unwrap();
@@ -126,6 +133,20 @@ fn validate_header_and_dump_read_a_pressed_file() {
     );
     assert!(
         said.contains("xsec           f8 by sample[2]  A: 1.5, B: 2.5"),
+        "{said}"
+    );
+    // A damaged header is still shown, after a line saying what is wrong.
+    let bytes = std::fs::read(&path).unwrap();
+    let start = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let mut header: Value = serde_json::from_slice(&bytes[12..start]).unwrap();
+    header["derived"] = 5.into();
+    header["made"]["recipe"] = "not a record".into();
+    let damaged = dir.0.join("damaged.rvr");
+    write(&damaged, &header, &[bytes[start..].to_vec()]).unwrap();
+    let (code, said) = rvr(&["dump", damaged.to_str().unwrap()]);
+    assert_eq!(code, 0, "{said}");
+    assert!(
+        said.contains("is not valid") && said.contains("\"derived\": 5"),
         "{said}"
     );
     std::fs::write(&path, b"not an rvr file").unwrap();

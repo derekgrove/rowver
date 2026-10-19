@@ -1,7 +1,7 @@
 [package]
 name = "rowver-py"
 # The package's major version is the .rvr format version it reads, as the rowver crate's is.
-version = "13.1.0"
+version = "14.0.0"
 description = "The Python package rowver: .rvr files as NumPy, Awkward, Arrow and pandas, and the rvr command."
 authors.workspace = true
 repository.workspace = true

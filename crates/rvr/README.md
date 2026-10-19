@@ -8,6 +8,7 @@ rvr new DIR                 # start a study
 rvr samples resolve …       # find every file the study reads
 rvr press                   # read them through the recipe into one .rvr file
 rvr validate / dump / diff  # check and inspect .rvr files
+rvr reproduce FILE          # press a file's own study again and compare
 ```
 
 ## Install
@@ -19,7 +20,8 @@ cargo install --git https://gitlab.cern.ch/dgrove/rowver rvr
 ```
 
 or, from a checkout of rowver, `cargo install --path crates/rvr`. Either puts `rvr` in
-`~/.cargo/bin`. `rvr --version` says which `.rvr` version it reads and writes.
+`~/.cargo/bin`. `rvr --version` says which `.rvr` version it reads and writes, and the commit it
+was built from.
 
 ## Five minutes, no grid proxy
 
@@ -55,21 +57,39 @@ Then press it, here the first 50,000 events of each sample:
 ```text
 $ rvr press --events 50000
 Pressing 2 samples, 2 files, 100,000 entries, 2 at a time:
-  1/2       50,000 entries        948 kept   GluGluToHToTauTau.root
-  2/2       50,000 entries      1,300 kept   VBF_HToTauTau.root
+  1/2       50,000 entries      1,300 kept   VBF_HToTauTau.root
+  2/2       50,000 entries        948 kept   GluGluToHToTauTau.root
 Read 100,000 entries; kept after each cut:
   trigger                                8,590
   a_good_muon                            6,650
   a_good_tau                             2,248
-Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.2 MB) in 3.2 s.
+Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 2.6 s.
 
 $ rvr validate higgs_tautau.rvr
-higgs_tautau.rvr: valid, 2248 rows, 11 columns
+higgs_tautau.rvr: valid, 2248 rows, 11 columns, not signed
 $ rvr dump higgs_tautau.rvr --columns
 sample         i4[2248]  [0, 0, 0, 0, 0, ...]
 entry          i8[2248]  [29, 45, 140, 157, 162, ...]
 run            i4[2248]  [1, 1, 1, 1, 1, ...]
 …
+```
+
+The file carries the study: `rvr reproduce` writes its recipe.toml, samples.toml and
+samples.lock back out, presses them again and compares the two files.
+
+```text
+$ rvr reproduce higgs_tautau.rvr
+Wrote higgs_tautau.reproduced/ with the recipe.toml, samples.toml and samples.lock higgs_tautau.rvr holds.
+Pressing 2 samples, 2 files, 100,000 entries, 2 at a time:
+  1/2       50,000 entries      1,300 kept   VBF_HToTauTau.root
+  2/2       50,000 entries        948 kept   GluGluToHToTauTau.root
+Read 100,000 entries; kept after each cut:
+  trigger                                8,590
+  a_good_muon                            6,650
+  a_good_tau                             2,248
+Wrote higgs_tautau.reproduced/higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 2.4 s.
+Comparing the two with rvr diff:
+The headers show no difference in rows, samples, columns, by_sample or sample columns.
 ```
 
 ## A study folder
@@ -79,7 +99,7 @@ run            i4[2248]  [1, 1, 1, 1, 1, ...]
 | `recipe.toml` | what to keep and store of every event | you | yes |
 | `samples.toml` | what to read, in your words: datasets, folders, patterns, eras | you, or any tool that writes it | yes |
 | `samples.lock` | every file found: where, bytes, adler32, ROOT UUID, entries, and what a press reads of it | `rvr samples resolve` | yes; review its changes like code |
-| `STUDY.rvr` | the pressed events, with the texts above inside it | `rvr press` | no (`.gitignore` leaves it out) |
+| `STUDY.rvr` | the pressed events, with the three texts above inside it | `rvr press` | no (`.gitignore` leaves it out) |
 
 ## Commands
 
@@ -140,12 +160,13 @@ The first entries come from one file; a random choice is spread over every file 
 which avoids the bias of reading only the start (the earliest runs of data, one batch of MC) but
 reads every file.
 
-### `rvr press [DIR] [--events N|all] [--out FILE] [--workers N]`
+### `rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N]`
 
 Presses the study in `DIR` (the current folder when not given): reads what `samples.lock` names,
 keeps the events that pass every cut of `recipe.toml`, and writes `DIR/<DIR's name>.rvr`, or
-`--out FILE`. `--events` is `plan`'s: the first N of every sample, or every sample whole.
-`--workers` is how many files are read at once (one per core by default).
+`--out FILE`. `--events`, `--random` and `--seed` are `plan`'s: the first N of every sample, every
+sample whole, or N chosen at random. `--workers` is how many files are read at once (one per core
+by default). `samples.toml` must be beside the lock, since the file carries both.
 
 Before anything is read, every file is checked against the lock: its size and adler32, then its
 ROOT UUID and entries. A file that changed, or a `samples.toml` edited since the lock was written,
@@ -153,11 +174,15 @@ stops the press with what changed; resolve again and review the new lock if the 
 So a `.rvr` file always holds exactly what its lock says it read. Nothing is written until every
 file has been read: the file appears whole, or not at all.
 
-The file records the recipe's text, every file read (with its UUID, entries and where reading
-stopped), and each sample's metadata with three more keys: `label`, `events_read` and
-`events_total`, which become sample columns. A random choice of events (`--random`,
-`choose = "random"`) is refused for now: rowver 13 cannot record which entries were chosen, so it
-waits for rowver 14.
+The file carries the whole study: the text of `recipe.toml`, `samples.toml` and `samples.lock`,
+every file read (with its UUID and entries), which events of each sample were read (all, the first
+N with where each file stopped, or N at random with the seed, so `rvr validate` can choose them
+again), each sample's label, and its metadata with two more keys, `events_read` and
+`events_total`, which become sample columns. It also records what built `rvr` (its version, git
+commit, compiler and platform), and is signed when you have a key (see `rvr key`). A random choice
+reads only around its chosen entries: a stretch of 50,000 entries with none chosen is skipped
+(in a local file, any 2,000), and a file with none chosen is not opened. For most choices that is
+still every basket of every file it reads.
 
 Remote files are read through their storage's HTTPS door, all the baskets the recipe can use of
 each 50,000 entries asked for in one request (`multipart/byteranges`, which EOS answers).
@@ -165,16 +190,20 @@ each 50,000 entries asked for in one request (`multipart/byteranges`, which EOS 
 ### `rvr validate FILE... [--parent PARENT]`
 
 Checks each file completely: every array decompresses to its declared length and checksum, every
-per-sample checksum, the column facts, the recipe snapshot and its checksums, and that the rows
-belong to the files recorded. One line per file: `valid`, or the first problem found. A derived
-file (columns computed from another file) is compared with its parent when you name it with
-`--parent`.
+per-sample checksum, the column facts, the study's texts and their checksums, that the rows belong
+to the files recorded, and that every row's entry was read (a random choice is made again from its
+seed). One line per file: `valid` and who signed it, or the first problem found. A derived file
+(columns computed from another file) is compared with its parent when you name it with `--parent`.
 
-### `rvr dump FILE [--fileset] [--cart] [--columns]`
+Every reader (rvr, the Python package) refuses a file whose header fails these checks, or whose
+signature no longer holds; `rvr dump` still shows it.
 
-Prints the inside of a file: the header in full, the recipe text, and every column with its kind,
-length and first values. `--fileset` prints only the files that were read, `--cart` only the
-recipe, `--columns` only the columns.
+### `rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns]`
+
+Prints the inside of a file: the header in full, the texts of recipe.toml, samples.toml and
+samples.lock, and every column with its kind, length and first values. Each flag prints only that
+part: `--files` the files read and each sample's event choice and metadata, `--recipe`,
+`--samples` and `--lock` one text each, `--columns` the columns.
 
 ### `rvr header FILE`
 
@@ -192,6 +221,21 @@ $ rvr diff before.rvr after.rvr
 column MET: differs in sample B
 sample column xsec: differs in sample B: 2.5 in before.rvr, 3.5 in after.rvr
 ```
+
+### `rvr reproduce FILE [DIR] [--workers N]`
+
+Writes the recipe.toml, samples.toml and samples.lock that FILE holds into DIR (FILE's name with
+`.reproduced` when not given), presses them again with the same event choice, and runs
+`rvr diff` on the two files: exit status 0 when they hold the same data. A relative path in the
+lock is read from FILE's folder, where `rvr press` writes it.
+
+### `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME`
+
+`rvr key new` makes your ed25519 key in `~/.config/rvr/key` (keep it private); from then on every
+file you press is signed with it, so a reader can tell who pressed it and that its header has not
+changed since. `rvr key show` prints your public key for others, and `rvr key trust KEY NAME` adds
+someone's key to `~/.config/rvr/trusted`, so `rvr validate` names them. `RVR_CONFIG` names another
+folder for both files.
 
 ## samples.toml
 
@@ -307,13 +351,12 @@ valid proxy, local files and public storage still resolve, and every other sampl
 | `1 file differs from the lock: …` (from `check`) | the file changed since the lock: resolve again if that is intended, and review the new lock |
 | `samples.toml has changed since the lock was written` | resolve again |
 | `… has changed since samples.lock was written …` (from `press`) | as for `check`: resolve again if the change is wanted, and review the new lock |
-| `--random: choosing events at random waits for rowver 14 …` | press the first events (`--events N`) or all of them |
+| `… has a samples.lock but no samples.toml` (from `press`) | put samples.toml back: the file carries both |
+| `This file is rowver 13; this reader reads rowver 14 only.` | press its study again with `rvr press` |
+| `The header changed after it was signed` | the file was edited after it was pressed: press it again |
 
 ## Not built yet
 
-- Pressing a random choice of events: it needs rowver 14 to record the choice.
-- `rvr reproduce FILE`: write a study back out of a `.rvr` and press it again.
-- Writing `samples.toml`, the lock and each sample's label into the `.rvr` (`made.samples`,
-  `made.lock`): a change to the file format, proposed for rowver 14.
+- Pressing central datasets (`dataset = …`): choosing a site's HTTPS door for each file.
 
 MIT licensed.

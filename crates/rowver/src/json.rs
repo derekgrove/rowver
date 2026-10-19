@@ -1,58 +1,46 @@
-//! Python's `json.dumps` text, reproduced so headers and checksums match the Python RowVer.
-//!
-//! Ported from: CPython 3.13 `json.dumps` (`json.encoder`) and `float.__repr__`.
-//! Behaviours: the default style (`", "` and `": "`, insertion order, non-ASCII escaped) and the
-//! checksum style (`sort_keys=True, separators=(",", ":"), ensure_ascii=False`).
-//! Documentation: <https://docs.python.org/3/library/json.html#json.dumps>
+//! rowver's canonical JSON, which `made.sha256`, `derived.sha256` and a signature are taken of:
+//! keys sorted, no spaces, UTF-8, whole numbers as written, floats in their shortest digits.
+//! (The rule is the bytes Python's `json.dumps(sort_keys=True, separators=(",", ":"),
+//! ensure_ascii=False)` gives, which is where it came from; FORMAT.md states it on its own.)
 
 use crate::{invalid, Result};
 use serde_json::Value;
 
-/// Reproduce `json.dumps(value)` with Python's defaults.
-pub(crate) fn dumps(value: &Value) -> Result<String> {
-    let mut out = String::new();
-    write(value, false, &mut out)?;
-    Ok(out)
-}
-
-/// Reproduce Python's sorted compact JSON, including its float exponent spelling.
+/// The canonical text of a value.
 pub(crate) fn canonical(value: &Value) -> Result<String> {
     let mut out = String::new();
-    write(value, true, &mut out)?;
+    write(value, &mut out)?;
     Ok(out)
 }
 
-/// Append one value in the checksum style (sorted, compact, UTF-8) or Python's default style.
-fn write(value: &Value, checksum: bool, out: &mut String) -> Result<()> {
-    let (comma, colon) = if checksum { (",", ":") } else { (", ", ": ") };
+/// Append one value: objects with their keys sorted, nothing between the parts.
+fn write(value: &Value, out: &mut String) -> Result<()> {
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
-        Value::String(value) => text(value, checksum, out)?,
+        Value::String(value) => out.push_str(&serde_json::to_string(value)?),
         Value::Number(number) => out.push_str(&self::number(number)?),
         Value::Array(values) => {
             out.push('[');
             for (index, member) in values.iter().enumerate() {
                 if index > 0 {
-                    out.push_str(comma);
+                    out.push(',');
                 }
-                write(member, checksum, out)?;
+                write(member, out)?;
             }
             out.push(']');
         }
         Value::Object(values) => {
             let mut keys: Vec<_> = values.keys().collect();
-            if checksum {
-                keys.sort();
-            }
+            keys.sort();
             out.push('{');
             for (index, key) in keys.into_iter().enumerate() {
                 if index > 0 {
-                    out.push_str(comma);
+                    out.push(',');
                 }
-                text(key, checksum, out)?;
-                out.push_str(colon);
-                write(&values[key], checksum, out)?;
+                out.push_str(&serde_json::to_string(key)?);
+                out.push(':');
+                write(&values[key], out)?;
             }
             out.push('}');
         }
@@ -60,7 +48,7 @@ fn write(value: &Value, checksum: bool, out: &mut String) -> Result<()> {
     Ok(())
 }
 
-/// Spell a number as Python does: whole numbers as written, floats as `repr` gives them.
+/// Spell a number: a whole number as written, a float in its shortest digits.
 fn number(number: &serde_json::Number) -> Result<String> {
     let text = number.to_string();
     if text.contains(['.', 'e', 'E']) {
@@ -68,33 +56,14 @@ fn number(number: &serde_json::Number) -> Result<String> {
             .as_f64()
             .filter(|value| value.is_finite())
             .ok_or_else(|| invalid("Nonfinite recipe JSON number"))?;
-        return Ok(python_float(value));
+        return Ok(float(value));
     }
     Ok(if text == "-0" { "0".into() } else { text })
 }
 
-/// Quote a string, escaping every non-ASCII character unless the checksum style keeps UTF-8.
-fn text(value: &str, utf8: bool, out: &mut String) -> Result<()> {
-    let quoted = serde_json::to_string(value)?;
-    if utf8 {
-        out.push_str(&quoted);
-        return Ok(());
-    }
-    let mut units = [0; 2];
-    for character in quoted.chars() {
-        if (' '..='~').contains(&character) {
-            out.push(character);
-        } else {
-            for unit in character.encode_utf16(&mut units) {
-                out.push_str(&format!("\\u{unit:04x}"));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Apply Python's decimal/scientific cutoffs to shortest round-to-even digits.
-pub(crate) fn python_float(value: f64) -> String {
+/// A float's shortest round-trip digits: in decimal from 1e-4 up to 1e16, and otherwise as
+/// `d.ddde±XX`, with `.0` on a whole number and `0.0` for zero.
+pub(crate) fn float(value: f64) -> String {
     let sign = if value.is_sign_negative() { "-" } else { "" };
     if value == 0.0 {
         return format!("{sign}0.0");

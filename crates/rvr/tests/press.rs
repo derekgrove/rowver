@@ -26,6 +26,7 @@ fn rvr(dir: &Path, args: &[&str]) -> (i32, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
         .args(args)
         .current_dir(dir)
+        .env("RVR_CONFIG", dir.join(".rvr-config"))
         .output()
         .unwrap();
     let text =
@@ -109,11 +110,20 @@ ht = "sum(Jet_pt)"
     assert_eq!(ht["kind"], "f4");
     let made = &header["made"];
     assert_eq!(made["by"], concat!("rvr ", env!("CARGO_PKG_VERSION")));
-    assert_eq!(made["cart"]["source"], recipe);
+    assert_eq!(made["recipe"]["text"], recipe);
+    assert_eq!(
+        made["recipe"]["columns"],
+        serde_json::json!(["weight", "nJet", "Jet_pt", "Muon_charge", "ht"])
+    );
+    assert_eq!(made["samples"]["text"], FLAT);
+    let lock = std::fs::read_to_string(dir.join("samples.lock")).unwrap();
+    assert_eq!(made["lock"]["text"], lock);
+    assert_eq!(made["toolchain"]["rvr"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(data["samples"][0]["label"], "Flat ntuple");
     let sample = &made["files"]["flat"];
+    assert_eq!(sample["events"], serde_json::json!({"choose": "all"}));
     assert_eq!(sample["files"]["./uproot_flat.root"]["entries"], 5);
     assert!(sample["files"]["./uproot_flat.root"].get("stop").is_none());
-    assert_eq!(sample["metadata"]["label"], "Flat ntuple");
     assert_eq!(sample["metadata"]["kind"], "test");
     assert_eq!(
         (
@@ -128,7 +138,7 @@ ht = "sum(Jet_pt)"
         .iter()
         .map(|c| c["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["kind", "label", "events_read", "events_total"]);
+    assert_eq!(names, ["kind", "events_read", "events_total"]);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -141,6 +151,79 @@ fn events_reads_the_first_entries_and_records_where_it_stopped() {
     let sample = &header["made"]["files"]["flat"];
     assert_eq!(sample["files"]["./uproot_flat.root"]["stop"], 2);
     assert_eq!(sample["metadata"]["events_read"], 2);
+    assert_eq!(
+        sample["events"],
+        serde_json::json!({"choose": "first", "n": 2})
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_random_choice_is_recorded_checked_and_reproduced() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let dir = study("random", FLAT, recipe);
+    let header = pressed(&dir, &["--events", "3", "--random", "--seed", "5"]);
+    let sample = &header["made"]["files"]["flat"];
+    let algorithm = rowver::choice::ALGORITHM;
+    assert_eq!(
+        sample["events"],
+        serde_json::json!({"choose": "random", "n": 3, "seed": 5, "algorithm": algorithm})
+    );
+    assert_eq!(sample["files"]["./uproot_flat.root"]["take"], 3);
+    let chosen = rowver::choice::per_file(&[5], 3, 5).remove(0);
+    let dump = columns(&dir);
+    let entries = format!("entry          i8[3]  {chosen:?}");
+    assert!(dump.contains(&entries), "{dump}");
+
+    let name = dir.file_name().unwrap().to_str().unwrap();
+    let (code, said) = rvr(&dir, &["reproduce", &format!("{name}.rvr")]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("The headers show no difference"), "{said}");
+    let again = dir.join(format!("{name}.reproduced"));
+    for name in ["recipe.toml", "samples.toml", "samples.lock"] {
+        let (old, new) = (dir.join(name), again.join(name));
+        assert_eq!(
+            std::fs::read(old).unwrap(),
+            std::fs::read(new).unwrap(),
+            "{name}"
+        );
+    }
+
+    // Moved away from its study, it says where to find the inputs, and finds them when told.
+    let moved = dir.join("elsewhere");
+    std::fs::create_dir(&moved).unwrap();
+    std::fs::rename(dir.join(format!("{name}.rvr")), moved.join("moved.rvr")).unwrap();
+    let (code, said) = rvr(&moved, &["reproduce", "moved.rvr"]);
+    assert_eq!(code, 1);
+    assert!(said.contains("name it with --study FOLDER"), "{said}");
+    let (code, said) = rvr(&moved, &["reproduce", "moved.rvr", "--study", ".."]);
+    assert_eq!(code, 0, "{said}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_file_is_signed_once_there_is_a_key() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let dir = study("signed", FLAT, recipe);
+    let (code, said) = rvr(&dir, &["key", "new", "Tester"]);
+    assert_eq!(code, 0, "{said}");
+    let header = pressed(&dir, &[]);
+    let (_, key) = rvr(&dir, &["key", "show"]);
+    assert_eq!(header["signature"]["key"], key.trim());
+    let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let (code, said) = rvr(&dir, &["validate", &file]);
+    assert_eq!(code, 0);
+    assert!(said.ends_with("signed by you\n"), "{said}");
+    let (code, said) = rvr(&dir, &["key", "new"]);
+    assert_eq!(code, 1);
+    assert!(said.contains("You already have a key"), "{said}");
+    std::fs::remove_dir_all(dir.join(".rvr-config")).unwrap();
+    let (_, said) = rvr(&dir, &["validate", &file]);
+    assert!(said.contains("which you do not trust yet"), "{said}");
+    let (code, said) = rvr(&dir, &["key", "trust", key.trim(), "Tester"]);
+    assert_eq!(code, 0, "{said}");
+    let (_, said) = rvr(&dir, &["validate", &file]);
+    assert!(said.ends_with("signed by Tester (trusted)\n"), "{said}");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -170,7 +253,19 @@ fn presses_that_cannot_be_trusted_are_refused() {
 
     let (code, said) = rvr(&dir, &["press", "--random"]);
     assert_eq!(code, 1);
-    assert!(said.contains("waits for rowver 14"), "{said}");
+    assert!(said.contains("--random needs a number of events"), "{said}");
+    let (code, said) = rvr(&dir, &["press", "--seed", "3"]);
+    assert_eq!(code, 1);
+    assert!(said.contains("--seed is for a random choice"), "{said}");
+    let (code, said) = rvr(&dir, &["press", "--events", "all", "--random"]);
+    assert_eq!(code, 1);
+    assert!(said.contains("not --events all"), "{said}");
+
+    std::fs::rename(dir.join("samples.toml"), dir.join("aside.toml")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 1);
+    assert!(said.contains("no samples.toml"), "{said}");
+    std::fs::rename(dir.join("aside.toml"), dir.join("samples.toml")).unwrap();
 
     let select = recipe.replace("version = 1\n", "version = 1\nselect = \"kept\"\n");
     std::fs::write(dir.join("recipe.toml"), select).unwrap();

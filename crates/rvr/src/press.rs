@@ -1,20 +1,16 @@
 //! `rvr press`: read what a study's samples.lock names through its recipe.toml, keep the events
-//! the recipe's cuts pass, and write one `.rvr` file.
+//! the recipe's cuts pass, and write one `.rvr` file that carries all three texts.
 //!
-//! Ported from: RowVer 13.0.1 `rowver/run.py` `press`, for a recipe of cuts, copied branches and
-//! computed columns.
-//! `made.cart.source` holds the recipe's TOML and `made.cart.hooks` is left out, as `FORMAT.md`
-//! allows for a file without marks.
 //! Documentation: `FORMAT.md` (repository root) ("made", "data"); the README of rvr.
-//! Differences from the Python presser: ROOT is read with hep-root (`RootFile::read_range`); the
-//! inputs are the lock's files, each checked against the lock before it is read (size, adler32, ROOT
-//! UUID, entries); `[column]` entries are written after the copies; and each sample's metadata
-//! gains `label`, `events_read` and `events_total`. Rows keep the order of their entries, and
-//! several files are read at once, each a run of entries at a time.
+//! ROOT is read with hep-root (`RootFile::read_range`). Every input is checked against the lock
+//! before it is read (size, adler32, ROOT UUID, entries). Rows keep the order of their entries,
+//! and several files are read at once, each a run of entries at a time. A random choice reads
+//! only the runs that hold a chosen entry.
 
 use crate::samples::remote::{HttpsFile, Storage};
 use crate::samples::resolve::{self, adler32_file, File, Lock, Locked};
 use crate::samples::spec::Events;
+use crate::samples::Choice;
 use hep_root::{ByteSource, RootFile, Tree};
 use recipe::{Array, Columns, Constant, Expression, Kind, Recipe, Scope, Values};
 use rowver::write::{self, Labels};
@@ -29,11 +25,36 @@ use std::sync::Mutex;
 /// How many entries of a file are read and held at a time.
 const CHUNK: u64 = 50_000;
 
+/// In a local file, chosen entries further apart than this are read as runs of their own, so a
+/// sparse random choice reads the baskets near its entries rather than every basket. A remote
+/// file is cut only at a gap of a whole `CHUNK`: one more request costs about what 10 MB of
+/// baskets do (measured on CMS Open Data, 2026-10-18).
+const GAP: u64 = 2_000;
+
+/// The runs of entries a press reads of a file, as [first, last): every `CHUNK` entries, or for
+/// a random choice runs around its chosen entries, cut where two are `gap` or more apart.
+fn runs(entries: u64, chosen: Option<&[u64]>, gap: u64) -> Vec<(u64, u64)> {
+    let Some(chosen) = chosen else {
+        let starts = (0..entries).step_by(CHUNK as usize);
+        return starts
+            .map(|first| (first, entries.min(first + CHUNK)))
+            .collect();
+    };
+    let mut runs: Vec<(u64, u64)> = Vec::new();
+    for &e in chosen {
+        match runs.last_mut() {
+            Some((first, last)) if e - *last < gap && e + 1 - *first <= CHUNK => *last = e + 1,
+            _ => runs.push((e, e + 1)),
+        }
+    }
+    runs
+}
+
 /// What an input answers when it stops because another one failed.
 const STOPPED: &str = "Another input failed";
 
 pub const USAGE: &str = "usage:
-  rvr press [DIR] [--events N|all] [--out FILE] [--workers N]
+  rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N]
                                            press DIR/samples.lock through DIR/recipe.toml into
                                            DIR/<DIR's name>.rvr (DIR is . when not given)";
 
@@ -49,7 +70,8 @@ pub fn main(args: &[&str]) -> u8 {
 }
 
 fn run(args: &[&str]) -> Result<(), String> {
-    let (mut dir, mut events, mut out, mut workers) = (None, None, None, None);
+    let (mut dir, mut out, mut workers) = (None, None, None);
+    let mut choice = Choice::default();
     let mut words = args.iter();
     while let Some(&word) = words.next() {
         let mut given = || {
@@ -60,14 +82,19 @@ fn run(args: &[&str]) -> Result<(), String> {
                 .ok_or(format!("{word} needs a value"))
         };
         match word {
-            "--events" => events = Some(given()?),
+            "--events" => choice.events = Some(given()?),
+            "--random" => choice.random = true,
+            "--seed" => choice.seed = Some(Choice::seed(given()?)?),
             "--out" => out = Some(PathBuf::from(given()?)),
             "--workers" => {
                 let n = given()?;
-                workers = Some(n.parse::<usize>().ok().filter(|n| *n > 0).ok_or(format!("--workers is how many files are read at once, not {n:?}"))?);
+                workers = Some(n.parse::<usize>().ok().filter(|n| *n > 0).ok_or(format!(
+                    "--workers is how many files are read at once, not {n:?}"
+                ))?);
             }
-            "--random" | "--seed" => return Err(format!("{word}: choosing events at random waits for rowver 14, which can record the choice in the file. Press the first events (--events N) or all of them (--events all).")),
-            flag if flag.starts_with("--") => return Err(format!("press does not know {flag}.\n{USAGE}")),
+            flag if flag.starts_with("--") => {
+                return Err(format!("press does not know {flag}.\n{USAGE}"))
+            }
             folder if dir.is_none() => dir = Some(PathBuf::from(folder)),
             _ => return Err(format!("press takes one study folder.\n{USAGE}")),
         }
@@ -89,54 +116,47 @@ fn run(args: &[&str]) -> Result<(), String> {
     });
     let workers =
         workers.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
-    press(&dir, &name, &target, events, workers)
+    let texts = inputs(&dir)?;
+    let lock: Lock = toml::from_str(&texts.lock)
+        .map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
+    choice.check(&lock.sample)?;
+    press(&texts, &dir, &name, &target, &|s| choice.of(s), workers)
 }
 
-/// Read a study's two files and refuse a lock that no longer matches its samples.toml.
-fn inputs(dir: &Path) -> Result<(Lock, String), String> {
+/// The three texts of a study, which the file carries.
+pub struct Texts {
+    pub recipe: String,
+    pub samples: String,
+    pub lock: String,
+}
+
+/// Read a study's three files and refuse a lock that no longer matches its samples.toml.
+pub fn inputs(dir: &Path) -> Result<Texts, String> {
     let read = |file: &str| {
         std::fs::read_to_string(dir.join(file)).map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound if file == "samples.lock" => format!(
                 "{} has no samples.lock: run rvr samples resolve samples.toml there first.",
                 dir.display()
             ),
+            std::io::ErrorKind::NotFound if file == "samples.toml" => format!(
+                "{} has a samples.lock but no samples.toml. A .rvr file carries both, so press needs both: put samples.toml back (git checkout samples.toml).",
+                dir.display()
+            ),
             _ => format!("{}: {e}", dir.join(file).display()),
         })
     };
-    let lock: Lock = toml::from_str(&read("samples.lock")?)
-        .map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
-    match std::fs::read(dir.join("samples.toml")) {
-        Ok(now) if crate::samples::sha256(&now) != lock.samples_toml_sha256 => {
-            return Err(format!("samples.toml has changed since samples.lock was written ({}). Run rvr samples resolve samples.toml, review the new lock, then press.", lock.resolved));
-        }
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            println!("There is no samples.toml beside samples.lock: pressing the lock as it is.")
-        }
-        Err(e) => {
-            return Err(format!(
-                "samples.toml cannot be read to check the lock against it: {e}"
-            ))
-        }
+    let lock = read("samples.lock")?;
+    let parsed: Lock =
+        toml::from_str(&lock).map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
+    let samples = read("samples.toml")?;
+    if crate::samples::sha256(samples.as_bytes()) != parsed.samples_toml_sha256 {
+        return Err(format!("samples.toml has changed since samples.lock was written ({}). Run rvr samples resolve samples.toml, review the new lock, then press.", parsed.resolved));
     }
-    Ok((lock, read("recipe.toml")?))
-}
-
-/// What `--events` asks of a sample, or what samples.toml asked when it is not given.
-fn wanted(sample: &Locked, events: Option<&str>) -> Result<Events, String> {
-    let want = match events {
-        None => resolve::asked(sample),
-        Some("all") => Events::All,
-        Some(n) => Events::First(
-            n.replace('_', "")
-                .parse()
-                .map_err(|_| format!("--events is a number of events or all, not {n:?}"))?,
-        ),
-    };
-    if matches!(want, Events::Random { .. }) {
-        return Err(format!("{}: samples.toml chooses its events at random, which waits for rowver 14 (the file must be able to record the choice). Give --events N or --events all, or set choose = \"first\".", sample.name));
-    }
-    Ok(want)
+    Ok(Texts {
+        recipe: read("recipe.toml")?,
+        samples,
+        lock,
+    })
 }
 
 /// The recipe a press runs, or what stops it.
@@ -156,6 +176,8 @@ struct Input<'a> {
     sample: usize,
     tree: &'a str,
     file: &'a File,
+    /// For a random choice, the entries chosen in this file, ascending.
+    chosen: Option<Vec<u64>>,
 }
 
 /// What every input of one press shares.
@@ -316,10 +338,10 @@ fn lets_through(cut: &recipe::Cut, scope: &Scope, entries: usize) -> Result<Vec<
 fn kept(
     recipe: &Recipe,
     scope: &Scope,
-    entries: usize,
+    mut keep: Vec<bool>,
     cutflow: &mut [u64],
 ) -> Result<Vec<bool>, String> {
-    let mut keep = vec![true; entries];
+    let entries = keep.len();
     for (index, cut) in recipe.keep.iter().enumerate() {
         for (keep, through) in keep.iter_mut().zip(lets_through(cut, scope, entries)?) {
             *keep &= through;
@@ -606,6 +628,20 @@ fn take(
     } = *shared;
     let at = &input.file.at;
     let located = |error: String| format!("{at}: {error}");
+    // A file a random choice takes nothing from is recorded from the lock, not opened.
+    if let (Some(chosen), Some(uuid), Some(total)) =
+        (&input.chosen, &input.file.uuid, input.file.entries)
+    {
+        if chosen.is_empty() {
+            return Ok(Taken {
+                gathered: Vec::new(),
+                entry: Vec::new(),
+                record: json!({"tree": input.tree, "uuid": uuid, "entries": total, "take": 0}),
+                entries: 0,
+                cutflow: vec![0; recipe.keep.len()],
+            });
+        }
+    }
     let file = open(shared, input.file)?;
     let tree = file
         .tree_at(input.tree)
@@ -615,6 +651,7 @@ fn take(
         return Err(located(format!("its tree {} has {total} entries, not the {} samples.lock recorded. Run rvr samples resolve samples.toml and review the new lock.", input.tree, input.file.entries.unwrap())));
     }
     let entries = input.file.stop.map_or(total, |stop| stop.min(total));
+    let chosen = input.chosen.as_deref();
     let names: Vec<String> = tree
         .walk()
         .into_iter()
@@ -637,13 +674,26 @@ fn take(
     };
     let mut gathered: Vec<Option<Gathered>> = outputs.iter().map(|_| None).collect();
     let mut cutflow = vec![0_u64; recipe.keep.len()];
-    let (mut first, mut entry) = (0_u64, Vec::new());
-    while first < entries {
+    let mut entry = Vec::new();
+    let gap = if remote { CHUNK } else { GAP };
+    for (first, last) in runs(entries, chosen, gap) {
         if shared.failed.load(Ordering::Acquire) {
             return Err(STOPPED.into());
         }
-        let last = entries.min(first + CHUNK);
         let count = (last - first) as usize;
+        // A random choice starts each run with only its chosen entries.
+        let start = match chosen {
+            Some(chosen) => {
+                let from = chosen.partition_point(|e| *e < first);
+                let to = chosen.partition_point(|e| *e < last);
+                let mut start = vec![false; count];
+                for e in &chosen[from..to] {
+                    start[(e - first) as usize] = true;
+                }
+                start
+            }
+            None => vec![true; count],
+        };
         if remote {
             // Fetching ahead only saves round trips; a branch that cannot be fetched is reported
             // when an expression asks for it.
@@ -667,7 +717,7 @@ fn take(
             collections: &recipe.collections,
             helpers: &recipe.helpers,
         };
-        let keep = kept(recipe, &scope, count, &mut cutflow).map_err(located)?;
+        let keep = kept(recipe, &scope, start, &mut cutflow).map_err(located)?;
         for (index, (column, from, plain)) in outputs.iter().enumerate() {
             let array = if *plain {
                 copied(&scope, from)
@@ -702,18 +752,20 @@ fn take(
                 .filter(|event| keep[(event - first) as usize])
                 .map(|event| event as i64),
         );
-        first = last;
     }
     let mut record =
         json!({"tree": input.tree, "uuid": file.header().uuid_string(), "entries": total});
     if let Some(stop) = input.file.stop {
         record["stop"] = stop.into();
     }
+    if let Some(chosen) = chosen {
+        record["take"] = chosen.len().into();
+    }
     Ok(Taken {
         gathered: gathered.into_iter().flatten().collect(),
         entry,
         record,
-        entries,
+        entries: chosen.map_or(entries, |chosen| chosen.len() as u64),
         cutflow,
     })
 }
@@ -835,7 +887,7 @@ type Joined = (Vec<Option<Gathered>>, Vec<i64>);
 /// A sample's piece of the file. A column it gathered nothing of (a sample of empty files, or
 /// one read not at all) is empty, of the kind the other samples gave it.
 fn piece(
-    name: &str,
+    (name, label): (&str, &str),
     (gathered, entry): Joined,
     outputs: &[Output],
     kinds: &[Option<(Kind, bool)>],
@@ -855,6 +907,7 @@ fn piece(
     });
     Ok(write::Piece {
         name: name.to_owned(),
+        label: label.to_owned(),
         columns: columns.collect::<Result<_, String>>()?,
         entry,
     })
@@ -873,17 +926,33 @@ fn count(n: u64) -> String {
     out
 }
 
-/// Press a study: check, read, keep, write `target` (through a temporary file beside it).
-fn press(
-    dir: &Path,
+/// What built this rvr, as `made.toolchain` records it.
+fn toolchain() -> Value {
+    json!({
+        "rvr": env!("CARGO_PKG_VERSION"),
+        "rowver": rowver::VERSION.to_string(),
+        "commit": env!("RVR_COMMIT"),
+        "rustc": env!("RVR_RUSTC"),
+        "target": env!("RVR_TARGET"),
+    })
+}
+
+/// Press a study's texts: check, read, keep, write `target` (through a temporary file beside
+/// it). Relative local paths in the lock are read from `base`; `events` says what each sample
+/// reads.
+pub fn press(
+    texts: &Texts,
+    base: &Path,
     study: &str,
     target: &Path,
-    events: Option<&str>,
+    events: &dyn Fn(&Locked) -> Result<Events, String>,
     workers: usize,
 ) -> Result<(), String> {
     let started = std::time::Instant::now();
-    let (mut lock, source) = inputs(dir)?;
-    let recipe = read_recipe(&source)?;
+    let mut lock: Lock = toml::from_str(&texts.lock)
+        .map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
+    let source = &texts.recipe;
+    let recipe = read_recipe(source)?;
     if let Some(dataset) = lock
         .sample
         .iter()
@@ -891,9 +960,11 @@ fn press(
     {
         return Err(format!("{} reads a central dataset. Pressing datasets is not built yet: rvr press reads files through a storage's HTTPS door, and choosing a site's door for each dataset file is still to come. Name the files on storage instead (files = \"root://…\").", dataset.name));
     }
+    let mut asked = Vec::new();
     for sample in &mut lock.sample {
-        let want = wanted(sample, events)?;
+        let want = events(sample)?;
         resolve::planned(sample, want)?;
+        asked.push(want);
     }
     let outputs: Vec<Output> = recipe
         .copy
@@ -906,13 +977,23 @@ fn press(
         .iter()
         .enumerate()
         .flat_map(|(sample, s)| {
+            let entries: Vec<u64> = s.file.iter().map(|f| f.entries.unwrap_or(0)).collect();
+            let chosen: Vec<Option<Vec<u64>>> = match asked[sample] {
+                Events::Random { n, seed } => rowver::choice::per_file(&entries, n, seed)
+                    .into_iter()
+                    .map(Some)
+                    .collect(),
+                _ => vec![None; entries.len()],
+            };
             s.file
                 .iter()
-                .filter(|f| f.stop != Some(0))
-                .map(move |file| Input {
+                .zip(chosen)
+                .filter(|(f, _)| f.stop != Some(0))
+                .map(move |(file, chosen)| Input {
                     sample,
                     tree: &s.tree,
                     file,
+                    chosen,
                 })
         })
         .collect();
@@ -941,7 +1022,7 @@ fn press(
         storage: storage.as_ref(),
         offline: &offline,
         mentions: &mentions,
-        dir,
+        dir: base,
         failed: AtomicBool::new(false),
     };
     let mut taken = take_all(&shared, &lock, &work, workers)?.into_iter();
@@ -959,19 +1040,18 @@ fn press(
         )?;
         pieces.push(joined);
         let mut metadata = sample.metadata.clone();
-        metadata.insert("label".into(), sample.label.clone().into());
         metadata.insert("events_read".into(), sample.events_read.into());
         metadata.insert("events_total".into(), sample.events_total.into());
         made_files.insert(
             sample.name.clone(),
-            json!({"files": records, "metadata": metadata}),
+            json!({"events": asked[index].record(), "files": records, "metadata": metadata}),
         );
     }
     let pieces = lock
         .sample
         .iter()
         .zip(pieces)
-        .map(|(sample, joined)| piece(&sample.name, joined, &outputs, &kinds))
+        .map(|(sample, joined)| piece((&sample.name, &sample.label), joined, &outputs, &kinds))
         .collect::<Result<Vec<_>, String>>()?;
     let failed = |e: rowver::Error| e.to_string();
     let (mut data, arrays) =
@@ -979,16 +1059,26 @@ fn press(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
-    let mut made = json!({
-        "study": study,
-        "built": grid_proxy::utc(now),
-        "by": concat!("rvr ", env!("CARGO_PKG_VERSION")),
-        "cart": {"sha256": write::text_checksum(&source), "source": source},
-        "files": made_files,
-    });
+    let text = |text: &str| json!({"sha256": write::text_checksum(text), "text": text});
+    let mut made = Map::new();
+    made.insert("study".into(), study.into());
     if let Some(title) = &recipe.title {
-        made["title"] = title.as_str().into();
+        made.insert("title".into(), title.as_str().into());
     }
+    made.insert("built".into(), grid_proxy::utc(now).into());
+    made.insert(
+        "by".into(),
+        concat!("rvr ", env!("CARGO_PKG_VERSION")).into(),
+    );
+    made.insert("toolchain".into(), toolchain());
+    let mut pressed = text(source);
+    pressed["format"] = "rvr-recipe".into();
+    pressed["columns"] = outputs.iter().map(|(n, _, _)| n.as_str()).collect();
+    made.insert("recipe".into(), pressed);
+    made.insert("samples".into(), text(&texts.samples));
+    made.insert("lock".into(), text(&texts.lock));
+    made.insert("files".into(), Value::Object(made_files));
+    let mut made = Value::Object(made);
     let names: Vec<&str> = lock.sample.iter().map(|s| s.name.as_str()).collect();
     let written: Vec<&str> = outputs.iter().map(|(n, _, _)| n.as_str()).collect();
     data["sample_cols"] = write::sample_cols(&names, &made["files"], &written)
@@ -996,14 +1086,15 @@ fn press(
         .into();
     made["sha256"] = write::made_checksum(&made).map_err(failed)?.into();
     let rows = data["rows"].as_u64().unwrap_or(0);
+    let mut header = json!({"rowver": rowver::VERSION, "data": data, "made": made});
+    let signer = crate::key::secret()?;
+    if let Some(secret) = &signer {
+        rowver::sign::sign(&mut header, secret).map_err(failed)?;
+    }
     let staged = target.with_extension("rvr.partial");
-    let written = write::write(
-        &staged,
-        &json!({"rowver": 13, "data": data, "made": made}),
-        &arrays,
-    )
-    .map_err(|e| e.to_string())
-    .and_then(|()| std::fs::rename(&staged, target).map_err(|e| e.to_string()));
+    let written = write::write(&staged, &header, &arrays)
+        .map_err(|e| e.to_string())
+        .and_then(|()| std::fs::rename(&staged, target).map_err(|e| e.to_string()));
     if let Err(e) = written {
         let _ = std::fs::remove_file(&staged);
         return Err(format!("{} could not be written: {e}", target.display()));
@@ -1012,6 +1103,10 @@ fn press(
     println!("Read {} entries; kept after each cut:", count(tally.read));
     for (cut, kept) in recipe.keep.iter().zip(&tally.cutflow) {
         println!("  {:30} {:>13}", cut.name, count(*kept));
+    }
+    if let Some(secret) = &signer {
+        let key = rowver::sign::public_key(secret);
+        println!("Signed with your key {}", crate::key::short(&key));
     }
     println!(
         "Wrote {} ({} rows, {} columns, {:.1} MB) in {:.1} s.",
@@ -1075,6 +1170,29 @@ mod tests {
         held.read_at(100_000, &mut buf).unwrap();
         assert_eq!(buf, bytes[100_000..100_150]);
         assert_eq!(log.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn runs_are_every_chunk_or_the_chosen_entries_cut_at_gaps() {
+        assert_eq!(
+            runs(120_000, None, GAP),
+            [(0, 50_000), (50_000, 100_000), (100_000, 120_000)]
+        );
+        assert_eq!(runs(0, None, GAP), []);
+        let chosen = [3, 10, 5_000, 5_001, 60_000];
+        assert_eq!(
+            runs(70_000, Some(&chosen), GAP),
+            [(3, 11), (5_000, 5_002), (60_000, 60_001)]
+        );
+        assert_eq!(
+            runs(70_000, Some(&chosen), CHUNK),
+            [(3, 5_002), (60_000, 60_001)]
+        );
+        let dense: Vec<u64> = (0..120_000).step_by(10).collect();
+        assert_eq!(
+            runs(120_000, Some(&dense), GAP),
+            [(0, 49_991), (50_000, 99_991), (100_000, 119_991)]
+        );
     }
 
     #[test]

@@ -28,7 +28,10 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+# Arrays are zstd frames (pure Rust; the same version hep-root reads ROOT baskets with).
+ruzstd = "0.8"
+# Signed files.
+ed25519-dalek = "3"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 toml = { version = "0.8", features = ["preserve_order"] }
 zmij = "1"

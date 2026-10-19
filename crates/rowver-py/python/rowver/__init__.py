@@ -85,9 +85,27 @@ class File:
         return {c["name"]: c["values"] for c in self.header["data"].get("sample_cols", [])}
 
     @property
+    def labels(self):
+        """The samples' labels, what a plot shows, in the order of `samples`."""
+        return [s["label"] for s in self.header["data"]["samples"]]
+
+    @property
     def recipe(self):
-        """The text of the recipe that made the file."""
-        return self.header["made"]["cart"]["source"]
+        """The text of the recipe.toml that made the file."""
+        return self.header["made"]["recipe"]["text"]
+
+    @property
+    def study(self):
+        """The study the file was pressed from, as the texts of its three files, by file name:
+        recipe.toml, samples.toml and samples.lock."""
+        made = self.header["made"]
+        return {"recipe.toml": made["recipe"]["text"], "samples.toml": made["samples"]["text"],
+                "samples.lock": made["lock"]["text"]}
+
+    @property
+    def signed_by(self):
+        """The public key that signed the file (checked when it opened), or None."""
+        return self.header.get("signature", {}).get("key")
 
     @property
     def files(self):

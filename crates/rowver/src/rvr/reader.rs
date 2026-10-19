@@ -1,17 +1,13 @@
 //! Read chosen columns of an `.rvr` file, leaving every other array compressed on disk.
 //!
-//! Ported from: RowVer 13.0.1 `rowver/derive.py` `Columns`, which decompresses a column and
-//! checks it against its `sha256` only when it is asked for.
-//! Documentation: `FORMAT.md` (repository root) ("Arrays", "Checksums")
-//! Differences: the header's own checksums (`data.sha256`, `made.sha256`, `derived.sha256`)
-//! and the sample-column values are checked when the file is opened. Per-sample array
-//! checksums and column facts are not checked here; `validate_file` checks those.
+//! Documentation: `FORMAT.md` (repository root) ("Arrays", "Checksums").
+//! Every fact of the header is checked when the file is opened (`checked_header`), and each
+//! array against its `sha256` when it is read. Per-sample array checksums, column facts and
+//! the event choice need every array; `validate_file` checks those.
 
-use super::{checksum, count, digest, header_end, list, object, required, string, MAGIC};
+use super::{checked_header, checksum, count, digest, header_end, object, required, string};
 use crate::numeric::width;
-use crate::write::{data_checksum, made_checksum};
 use crate::{invalid, Result};
-use flate2::{Decompress, FlushDecompress, Status};
 use serde_json::Value;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -36,21 +32,6 @@ pub struct Held {
     pub offsets: Option<Vec<usize>>,
 }
 
-/// Undo the byte shuffle: the file holds every value's first byte, then every second byte.
-fn unshuffle(shuffled: Vec<u8>, w: usize) -> Vec<u8> {
-    let values = shuffled.len() / w;
-    if w == 1 || values == 0 {
-        return shuffled;
-    }
-    let mut bytes = vec![0; shuffled.len()];
-    for (lane, source) in shuffled.chunks_exact(values).enumerate() {
-        for (value, byte) in bytes.chunks_exact_mut(w).zip(source) {
-            value[lane] = *byte;
-        }
-    }
-    bytes
-}
-
 /// The one checksum lineage records for a column: its array's, or for a list column the
 /// SHA-256 of its offsets' checksum followed by its content's.
 pub fn column_checksum(record: &Value) -> Result<String> {
@@ -63,45 +44,33 @@ pub fn column_checksum(record: &Value) -> Result<String> {
 }
 
 impl Reader {
-    /// Check the header's checksums and sample columns without reading event arrays.
+    /// Open a file and check every fact its header holds, without reading event arrays.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let (reader, checked) = Self::inspect(path)?;
+        checked.map(|()| reader)
+    }
+
+    /// Open a file to look inside it, even one whose header fails its checks: the reader, and
+    /// what checking the header found.
+    pub fn inspect(path: impl AsRef<Path>) -> Result<(Self, Result<()>)> {
         let path = path.as_ref().to_path_buf();
         let mut file = std::fs::File::open(&path)?;
         let size = file.metadata()?.len();
         let mut prefix = [0; 12];
         file.read_exact(&mut prefix)
-            .map_err(|_| invalid("Input is not a RowVer v13 .rvr container"))?;
-        if &prefix[..8] != MAGIC {
-            return Err(invalid("Input is not a RowVer v13 .rvr container"));
-        }
+            .map_err(|_| invalid(super::NOT_RVR))?;
         let start = header_end(&prefix, usize::try_from(size).unwrap_or(usize::MAX))?;
         let mut text = vec![0; start - 12];
         file.read_exact(&mut text)?;
         let header: Value = serde_json::from_slice(&text)?;
-        if header.get("rowver").and_then(Value::as_u64) != Some(13) {
-            return Err(invalid("This reader accepts only RowVer version 13"));
-        }
-        let (data, made) = (object(&header, "data")?, object(&header, "made")?);
-        let sound = checksum(data)? == data_checksum(data)?
-            && checksum(made)? == made_checksum(made)?
-            && match header.get("derived") {
-                Some(lineage) => checksum(lineage)? == made_checksum(lineage)?,
-                None => true,
-            };
-        if !sound {
-            return Err(invalid(format!(
-                "{}: the header does not match its own checksums",
-                path.display()
-            )));
-        }
-        list(data, "cols")?;
-        super::samples::columns(&header, data, made)?;
-        Ok(Self {
+        let checked = checked_header(&text).map(drop);
+        let reader = Self {
             path,
             header,
             start: start as u64,
             length: size - start as u64,
-        })
+        };
+        Ok((reader, checked))
     }
 
     /// Where the file is.
@@ -150,31 +119,9 @@ impl Reader {
         }
         let mut file = std::fs::File::open(&self.path)?;
         file.seek(SeekFrom::Start(self.start + at))?;
-        // Deflate expands at most 1032 to 1, so a longer declared array is refused before any of
-        // it is allocated: a damaged header cannot ask for more memory than its span could fill.
-        if expected > (size as usize).saturating_mul(1032).saturating_add(64) {
-            return Err(invalid(format!(
-                "{label}: declares more bytes than its compressed span can hold"
-            )));
-        }
         let mut packed = vec![0; size as usize];
         file.read_exact(&mut packed)?;
-        // One byte of room past the declared length, so a stream that holds more is caught.
-        let mut shuffled = Vec::with_capacity(expected + 1);
-        let status = Decompress::new(true)
-            .decompress_vec(&packed, &mut shuffled, FlushDecompress::Finish)
-            .map_err(|error| invalid(format!("{label}: invalid zlib stream: {error}")))?;
-        if status != Status::StreamEnd && shuffled.len() < expected {
-            return Err(invalid(format!(
-                "{label}: invalid zlib stream: it ends early"
-            )));
-        }
-        if status != Status::StreamEnd || shuffled.len() != expected {
-            return Err(invalid(format!(
-                "{label}: decoded length differs from the declared array"
-            )));
-        }
-        let bytes = unshuffle(shuffled, w);
+        let bytes = crate::codec::unpack(packed, w, expected, label)?;
         if digest(&bytes) != checksum(record)? {
             return Err(invalid(format!(
                 "{label} does not match its sha256; validate the file"

@@ -2,6 +2,7 @@
 read back, their types, and the Arrow, pandas and Parquet forms. Run from this crate's folder,
 after `maturin develop`: `python -m unittest discover tests`."""
 
+import os
 import pathlib
 import shutil
 import tempfile
@@ -55,6 +56,7 @@ class Pressed(unittest.TestCase):
     def setUpClass(cls):
         cls.dir = pathlib.Path(tempfile.mkdtemp(prefix="rowver-py-")) / "flat"
         cls.dir.mkdir()
+        os.environ["RVR_CONFIG"] = str(cls.dir.parent / "config")
         shutil.copy(FIXTURES / "uproot_flat.root", cls.dir)
         (cls.dir / "samples.toml").write_text(SAMPLES)
         (cls.dir / "recipe.toml").write_text(RECIPE)
@@ -72,8 +74,12 @@ class Pressed(unittest.TestCase):
         self.assertEqual((f.rows, len(f), f.samples), (4, 4, ["flat"]))
         self.assertEqual(f.columns, ["weight", "nJet", "Jet_pt", "isGood", "ht"])
         self.assertEqual(f.sample_columns["xsec"], [1.5])
-        self.assertEqual(f.sample_columns["label"], ["Flat ntuple"])
+        self.assertNotIn("label", f.sample_columns)
+        self.assertEqual(f.labels, ["Flat ntuple"])
         self.assertEqual(f.recipe, RECIPE)
+        self.assertEqual(f.study["samples.toml"], SAMPLES)
+        self.assertEqual(f.study["samples.lock"], (self.dir / "samples.lock").read_text())
+        self.assertIsNone(f.signed_by)
         self.assertEqual(rowver.validate(self.path), (4, 5))
 
     def test_flat_columns_are_numpy_arrays_of_their_kind(self):
@@ -121,7 +127,7 @@ class Pressed(unittest.TestCase):
     def test_mistakes_are_said_plainly(self):
         with self.assertRaisesRegex(KeyError, "not a column of .*; it has weight"):
             self.file["MET"]
-        with self.assertRaisesRegex(rowver.Error, "samples.toml: .*not a RowVer v13"):
+        with self.assertRaisesRegex(rowver.Error, "samples.toml: .*not an .rvr file"):
             rowver.open(self.dir / "samples.toml")
         with self.assertRaises(FileNotFoundError):
             rowver.open(self.dir / "missing.rvr")

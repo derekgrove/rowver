@@ -2,8 +2,8 @@
 
 RowVer turns ROOT ntuples into one `.rvr` file: the events a recipe keeps, the columns it
 stores, and everything needed to say how the file was made.
-A `.rvr` file is a JSON header followed by compressed arrays, and it carries the recipe that
-made it. [FORMAT.md](FORMAT.md) is the specification.
+A `.rvr` file is a JSON header followed by compressed arrays, and it carries the whole study
+that made it (recipe, samples and lock), so it can be pressed again from itself. [FORMAT.md](FORMAT.md) is the specification.
 
 | folder | what it is |
 |---|---|

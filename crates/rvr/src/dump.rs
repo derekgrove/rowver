@@ -1,4 +1,4 @@
-//! `rvr dump`: the inside of a file, the header in full, the recipe, then every array as text.
+//! `rvr dump`: the inside of a file, the header in full, the study's texts, then every array as text.
 
 use rowver::rvr::{Held, Reader};
 use serde_json::Value;
@@ -66,7 +66,7 @@ fn width(kind: &str) -> usize {
     }
 }
 
-/// A recipe or a derived file's source, between two marker lines.
+/// One of the study's texts, or a derived file's source, between two marker lines.
 fn print_source(source: &str, name: &str) {
     println!("##### begin {name} #####");
     print!("{source}");
@@ -116,29 +116,60 @@ fn print_columns(reader: &Reader) -> Result<(), String> {
     Ok(())
 }
 
-/// Print the parts the flags ask for (`--fileset`, `--cart`, `--columns`), or everything.
+/// The study's texts a file holds, by the flag that prints one alone: (flag, `made` key, title).
+const TEXTS: [(&str, &str, &str); 3] = [
+    ("--recipe", "recipe", "recipe.toml"),
+    ("--samples", "samples", "samples.toml"),
+    ("--lock", "lock", "samples.lock"),
+];
+
+/// Print the parts the flags ask for (`--files`, `--recipe`, `--samples`, `--lock`,
+/// `--columns`), or everything: the header with the texts printed after it, then every column.
+/// A file whose header fails its checks is still shown, after one line saying what is wrong.
 pub fn main(file: &str, flags: &[&str]) -> Result<(), String> {
-    let reader = Reader::open(file).map_err(|e| format!("{file}: {e}"))?;
+    let (reader, checked) = Reader::inspect(file).map_err(|e| format!("{file}: {e}"))?;
+    if let Err(why) = &checked {
+        println!("{file} is not valid: {why}\n");
+    }
     let mut header = reader.header().clone();
-    let source = header["made"]["cart"]["source"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let parts = ["--fileset", "--cart", "--columns"];
+    let text = |key: &str| {
+        header["made"][key]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+    let texts: Vec<String> = TEXTS.iter().map(|(_, key, _)| text(key)).collect();
+    let mut parts = vec!["--files", "--columns"];
+    parts.extend(TEXTS.iter().map(|(flag, _, _)| *flag));
     if let Some(bad) = flags.iter().find(|f| !parts.contains(f)) {
         return Err(format!("dump does not know {bad}"));
     }
     if flags.is_empty() {
-        header["made"]["cart"]["source"] = Value::from("[printed below as the recipe]");
+        // A damaged header may hold anything where an object belongs: change only real texts.
+        let placed = |at: Option<&mut Value>, said: String| {
+            if let Some(text @ Value::String(_)) = at {
+                *text = Value::from(said);
+            }
+        };
+        for (_, key, title) in TEXTS {
+            let at = header
+                .get_mut("made")
+                .and_then(|m| m.get_mut(key))
+                .and_then(|r| r.get_mut("text"));
+            placed(at, format!("[printed below as {title}]"));
+        }
         let derived = header
             .get("derived")
-            .map(|d| d["source"].as_str().unwrap_or_default().to_string());
-        if derived.is_some() {
-            header["derived"]["source"] = Value::from("[printed below as derived source]");
-        }
+            .and_then(|d| d.get("source"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let at = header.get_mut("derived").and_then(|d| d.get_mut("source"));
+        placed(at, "[printed below as derived source]".into());
         println!("{}\n", serde_json::to_string_pretty(&header).unwrap());
-        print_source(&source, "recipe");
-        println!();
+        for ((_, _, title), text) in TEXTS.iter().zip(&texts) {
+            print_source(text, title);
+            println!();
+        }
         if let Some(derived) = derived {
             print_source(&derived, "derived source");
             println!();
@@ -150,12 +181,15 @@ pub fn main(file: &str, flags: &[&str]) -> Result<(), String> {
             println!();
         }
         match *flag {
-            "--fileset" => println!(
+            "--files" => println!(
                 "{}",
                 serde_json::to_string_pretty(&header["made"]["files"]).unwrap()
             ),
-            "--cart" => print_source(&source, "recipe"),
-            _ => print_columns(&reader)?,
+            "--columns" => print_columns(&reader)?,
+            flag => {
+                let at = TEXTS.iter().position(|(f, _, _)| *f == flag).unwrap();
+                print_source(&texts[at], TEXTS[at].2);
+            }
         }
     }
     Ok(())

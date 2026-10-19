@@ -181,27 +181,10 @@ pub(crate) fn value_checksum(kind: &str, values: &[&Value], name: &str) -> Resul
 }
 
 /// Check every sample column and that the list is exactly what the samples' metadata gives.
-pub(super) fn columns(header: &Value, data: &Value, made: &Value) -> Result<()> {
+/// The names a row column takes are the pressed file's, which `made.recipe.columns` holds.
+pub(super) fn columns(data: &Value, made: &Value) -> Result<()> {
     let samples = list(data, "samples")?;
-    let hooks = made.get("cart").and_then(|cart| cart.get("hooks"));
-    let derived = header.get("derived").is_some();
-    let pressed: Option<Vec<&str>> = match (derived, hooks) {
-        (true, None) => None,
-        (true, Some(hooks)) => Some(
-            object(hooks, "columns")?
-                .as_object()
-                .unwrap()
-                .keys()
-                .map(String::as_str)
-                .collect(),
-        ),
-        (false, _) => Some(
-            list(data, "cols")?
-                .iter()
-                .map(|column| string(column, "name"))
-                .collect::<Result<_>>()?,
-        ),
-    };
+    let pressed = super::snapshot::pressed(made)?;
     let own: HashSet<&str> = list(data, "cols")?
         .iter()
         .map(|column| string(column, "name"))
@@ -233,19 +216,12 @@ pub(super) fn columns(header: &Value, data: &Value, made: &Value) -> Result<()> 
         }
         held.insert(name, (kind, values));
     }
-    let Some(pressed) = pressed else {
-        return Ok(());
-    };
     let files = object(made, "files")?;
     let records: Vec<&Value> = samples
         .iter()
         .map(|sample| Ok(&files[string(sample, "name")?]))
         .collect::<Result<_>>()?;
-    let mut out: HashSet<&str> = pressed.into_iter().chain(RESERVED).collect();
-    for record in &records {
-        let omitted = record.get("metadata_omitted").and_then(Value::as_array);
-        out.extend(omitted.into_iter().flatten().filter_map(Value::as_str));
-    }
+    let out: HashSet<&str> = pressed.into_iter().chain(RESERVED).collect();
     let mut expected = 0;
     let keys = records
         .iter()

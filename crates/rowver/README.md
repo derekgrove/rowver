@@ -1,34 +1,35 @@
 # rowver (Rust)
 
-Read, validate, and write RowVer v13 `.rvr` files in Rust. The format is specified by
-`FORMAT.md` at the root of this repository, which this crate implements and does not change.
+Read, validate, and write RowVer 14 `.rvr` files in Rust. The format is specified by
+`FORMAT.md` at the root of this repository, which this crate implements; the crate's major
+version is the format version.
 
-- `rowver::rvr` reads and validates pressed and derived files.
+- `rowver::rvr` reads and validates pressed and derived files: `Reader` opens a file and checks
+  its whole header, then reads the columns asked for; `validate_file` checks every array too.
 - `rowver::write` builds the data section and writes a file.
+- `rowver::choice` is the random event choice a file names (`splitmix64-selection-sampling`).
+- `rowver::sign` signs a header with ed25519 and checks a signature.
 
-Each module that reproduces Python behaviour names, in its header, the package, version,
-functions, and documentation it follows. The tests compare files written here with files the
-Python RowVer 13.0.0 wrote from the same arrays, and they agree.
-
-This crate is the reference builder of `.rvr` files. The Python RowVer was retired after 13.0.1
-(tag `v13.0.1`).
+This crate is the reference builder of `.rvr` files.
 
 ## Compression and speed
 
-Arrays are zlib streams at level 6, compressed in pure Rust (flate2's `zlib-rs` backend). Such
-files hold the same arrays and checksums as the Python RowVer's, but their compressed bytes, and
-so each array's `at` and `size`, differ.
+Arrays are byte-shuffled, then one Zstandard frame each, compressed and read in pure Rust
+(`ruzstd`, the same crate hep-root reads ROOT's zstd baskets with). `ruzstd` has only its
+fastest level.
 
 `build_with` compresses, checksums (`sha256` and `by_sample`) and measures the facts of every
 array on its workers; the bytes do not depend on how many. `Reader` reads each array it is asked
-for with one read of its compressed span and one inflate into a buffer of its declared length.
-On 2,104,806 rows × 27 columns (231 MB of arrays, Apple M5, 10 cores): build 0.37 s, read every
-column 0.05 s (`rvr_format_study/results/RUST.md`).
+for with one read of its compressed span and one decode into a buffer of its declared length.
+On 2,104,806 rows × 27 columns (227 MB of arrays, Apple M5, 10 threads), against rowver 13's
+zlib 6: build 0.32–0.38 s (13: 0.37 s), open and read every column 0.054–0.059 s
+(13: 0.051–0.057 s), 143.0 MB of arrays (13: 131.0 MB) (`rvr_format_study/results/RUST.md`).
 
 ## Fixtures
 
-The tests read `tests/fixtures/*.hex`, the hexadecimal text of two small files written by
-the Python RowVer 13.0.0 from synthetic values; `tests/generate_core_fixture.py` regenerates
-them with the Python RowVer of tag `v13.0.1` installed.
+`tests/fixtures/rowver-v14.hex` is the hexadecimal text of a small file this crate's writer
+made (`tests/common/mod.rs`); the reader tests read it as committed, so a change that stops a
+reader from reading files already written fails them. `ROWVER_BLESS=1 cargo test -p rowver`
+writes it again, for a change to the format that is meant.
 
 MIT licensed.

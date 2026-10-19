@@ -12,8 +12,11 @@ f.samples, f.columns      # names, in the file's order
 f["MET_pt"]               # NumPy array, one value per row (no copy)
 f["Muon_pt"]              # Awkward array, a list per row
 f["sample"], f["entry"]   # each row's sample index, and its entry in its file's tree
-f.sample_columns          # per-sample values: label, events_read, events_total, metadata
-f.recipe                  # the recipe that made it
+f.labels                  # each sample's label, what a plot shows
+f.sample_columns          # per-sample values: events_read, events_total, metadata
+f.recipe                  # the recipe.toml that made it
+f.study                   # {"recipe.toml": …, "samples.toml": …, "samples.lock": …}
+f.signed_by               # the public key that signed it, or None
 
 f.arrays()                # every column as one Awkward record array
 f.to_arrow()              # a pyarrow Table (list columns as Arrow lists)

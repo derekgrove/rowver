@@ -27,16 +27,7 @@ pub const SOURCE_KEYS: [&str; 10] = [
     "name", "label", "files", "dataset", "tree", "trees", "eras", "events", "choose", "seed",
 ];
 
-/// How many of a sample's entries to read, and which.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Events {
-    /// Every entry of every file.
-    All,
-    /// The first n entries, in the files' order.
-    First(u64),
-    /// n entries chosen at random, the same n for the same seed.
-    Random { n: u64, seed: u64 },
-}
+pub use rowver::choice::Events;
 
 /// The `events`, `choose` and `seed` of a sample (or of [defaults]).
 pub fn events_of(table: &toml::Table, place: &str) -> Result<Events, String> {

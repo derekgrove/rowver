@@ -3,20 +3,24 @@
 
 mod diff;
 mod dump;
+mod key;
 mod new;
 mod press;
+mod reproduce;
 mod samples;
 
 const USAGE: &str = "usage:
   rvr new DIR                              start a study: samples.toml, recipe.toml, .gitignore
   rvr samples COMMAND ...                  what a study reads (rvr samples, alone, lists them)
-  rvr press [DIR] [--events N|all] [--out FILE] [--workers N]
+  rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N]
                                            press the study in DIR (.) into DIR/<its name>.rvr
   rvr validate FILE... [--parent PARENT]   check files; a derived file against its parent
-  rvr dump FILE [--fileset] [--cart] [--columns]
-                                           the header in full, the recipe, and every column
+  rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns]
+                                           the header in full, the study's texts, every column
   rvr header FILE                          the JSON header only, as the file holds it
-  rvr diff A B                             which column of which sample differs, from the headers";
+  rvr diff A B                             which column of which sample differs, from the headers
+  rvr reproduce FILE [DIR]                 press FILE's own study again and diff the two
+  rvr key new|show|trust ...               the key that signs your files; keys you trust";
 
 /// Make a closed output pipe end the process quietly: `rvr dump … | head` closes it early, and
 /// that ends the command as it would a C tool. Any other panic is reported as usual.
@@ -45,9 +49,12 @@ pub fn run(args: &[String]) -> u8 {
         let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
         return samples::main(&rest);
     }
-    if words.first() == Some(&"press") {
-        let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
-        return press::main(&rest);
+    let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+    match words.first() {
+        Some(&"press") => return press::main(&rest),
+        Some(&"reproduce") => return reproduce::main(&rest),
+        Some(&"key") => return key::main(&rest),
+        _ => {}
     }
     let code = match (words.first().copied(), &words[1.min(words.len())..]) {
         (Some("new"), [dir]) => report(new::main(dir)),
@@ -56,7 +63,12 @@ pub fn run(args: &[String]) -> u8 {
         (Some("header"), [file]) => report(header(file)),
         (Some("diff"), [a, b]) => diff::main(a, b),
         (None, _) if flags == ["--version"] => {
-            println!("rvr {} (rowver 13)", env!("CARGO_PKG_VERSION"));
+            println!(
+                "rvr {} (reads and writes rowver {}; commit {})",
+                env!("CARGO_PKG_VERSION"),
+                rowver::VERSION,
+                env!("RVR_COMMIT")
+            );
             0
         }
         (Some("help") | None, _) => {
@@ -106,7 +118,7 @@ fn validate(words: &[&str], args: &[String]) -> u8 {
             p,
             &checked
                 .as_ref()
-                .map(|s| (s.rows, s.columns))
+                .map(|s| (s.rows, s.columns, String::from("checked as the parent")))
                 .map_err(ToString::to_string),
         );
         checked.ok().map(|s| s.header)
@@ -127,16 +139,22 @@ fn validate(words: &[&str], args: &[String]) -> u8 {
                 }
                 (None, false) => {}
             }
-            Ok((summary.rows, summary.columns))
+            let signed = match summary.header.get("signature") {
+                Some(signature) => key::signer(signature["key"].as_str().unwrap_or_default()),
+                None => "not signed".into(),
+            };
+            Ok((summary.rows, summary.columns, signed))
         });
         ok &= said(file, &compared);
     }
     u8::from(!ok)
 }
 
-fn said(file: &str, verdict: &Result<(usize, usize), String>) -> bool {
+fn said(file: &str, verdict: &Result<(usize, usize, String), String>) -> bool {
     match verdict {
-        Ok((rows, columns)) => println!("{file}: valid, {rows} rows, {columns} columns"),
+        Ok((rows, columns, signed)) => {
+            println!("{file}: valid, {rows} rows, {columns} columns, {signed}")
+        }
         Err(why) => println!("{file}: INVALID: {why}"),
     }
     verdict.is_ok()

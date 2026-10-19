@@ -1,22 +1,15 @@
 //! Build and write an `.rvr` file: a plain JSON header, then each array compressed on its own.
 //!
-//! Ported from: RowVer 13.0.0 (`4b5c589`) `rowver/rvr.py`: `kind`, `little`, `edges`,
-//! `by_sample`, `shuffle`, `blocks`, `data_checksum`, `pack`, `join`, `build`, `write`,
-//! `sample_cols`, `made_checksum`, `LEVEL`.
-//! Underlying behaviours: NumPy 2.5.1 `tobytes`, `concatenate`, `cumsum`, `repeat`; awkward
-//! 2.12.0 `num`, `flatten`, `concatenate` on one-level jagged arrays; CPython 3.13
-//! `zlib.compress(raw, 6)`, `hashlib.sha256`, `struct.pack("<I", n)`, `json.dumps`.
-//! Documentation: `FORMAT.md` (repository root); <https://docs.python.org/3/library/zlib.html>
-//! Differences: a column is refused, not converted, when its pieces differ in kind; a piece
-//! whose column does not have one value per row is refused before joining.
+//! Documentation: `FORMAT.md` (repository root).
+//! A column is refused, not converted, when its pieces differ in kind; a piece whose column
+//! does not have one value per row is refused before joining.
 
-use crate::json::{canonical, dumps};
+use crate::codec;
+use crate::json::canonical;
 use crate::numeric::{width, NumericArray};
 use crate::rvr::digest;
 use crate::rvr::samples::{kind_of, value_checksum, RESERVED};
 use crate::{invalid, NumericBuffer, Result};
-use flate2::write::ZlibEncoder;
-use flate2::Compression;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
@@ -29,8 +22,6 @@ pub use derived::{derived, derived_with, Lineage};
 
 /// The first eight bytes of every `.rvr` file.
 const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
-/// The zlib level every array is compressed at.
-const LEVEL: u32 = 6;
 
 /// The text of each labelled value of an integer column, by column name.
 pub type Labels = BTreeMap<String, BTreeMap<i128, String>>;
@@ -90,8 +81,8 @@ pub fn array<T: Scalar>(values: &[T]) -> NumericBuffer {
 /// Whole arrays ready to be recorded: who the rows belong to, and every column over them.
 #[derive(Debug)]
 pub struct Skim {
-    /// Each sample's name and number of rows, in row order.
-    pub samples: Vec<(String, usize)>,
+    /// Each sample, in row order.
+    pub samples: Vec<Sample>,
     /// The files read, in row order, as `{"sample", "path", "rows"}`.
     pub files: Vec<Value>,
     /// Each row's index into `samples`.
@@ -102,10 +93,22 @@ pub struct Skim {
     pub labels: Labels,
 }
 
+/// A sample as `data.samples` records it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sample {
+    /// What every tool calls it.
+    pub name: String,
+    /// What a plot shows.
+    pub label: String,
+    /// How many rows it has.
+    pub rows: usize,
+}
+
 /// One sample's rows before they are joined with the other samples'.
 #[derive(Debug)]
 pub struct Piece {
     pub name: String,
+    pub label: String,
     pub columns: Vec<(String, Values)>,
     pub entry: Vec<i64>,
 }
@@ -133,8 +136,7 @@ enum Measure<'a> {
 /// Shuffle, compress, and checksum one array, and measure what its record holds after `sha256`.
 fn packed(array: &NumericArray, measure: &Measure, edges: &[usize]) -> Result<Packed> {
     let w = width(&array.kind)?;
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(LEVEL));
-    encoder.write_all(&shuffle(&array.bytes, w))?;
+    let bytes = codec::pack(&array.bytes, w);
     let mut after = Map::new();
     match measure {
         Measure::Nothing => {}
@@ -153,7 +155,7 @@ fn packed(array: &NumericArray, measure: &Measure, edges: &[usize]) -> Result<Pa
         }
     }
     Ok(Packed {
-        bytes: encoder.finish()?,
+        bytes,
         sha256: digest(&array.bytes),
         after,
     })
@@ -194,21 +196,6 @@ impl Packer {
         self.arrays.push(bytes);
         Ok(record)
     }
-}
-
-/// Byte-shuffle: every value's first byte, then every value's second byte, and so on.
-fn shuffle(raw: &[u8], w: usize) -> Vec<u8> {
-    let count = raw.len() / w;
-    if w == 1 || count == 0 {
-        return raw.to_vec();
-    }
-    let mut out = vec![0; raw.len()];
-    for (lane, target) in out.chunks_exact_mut(count).enumerate() {
-        for (byte, value) in target.iter_mut().zip(raw.chunks_exact(w)) {
-            *byte = value[lane];
-        }
-    }
-    out
 }
 
 /// Require a buffer whose bytes are exactly `count` values of a supported kind.
@@ -266,14 +253,14 @@ pub fn build(skim: Skim) -> Result<(Value, Vec<Vec<u8>>)> {
 pub fn build_with(skim: Skim, workers: usize) -> Result<(Value, Vec<Vec<u8>>)> {
     let rows = skim.entry.len();
     let mut edges = vec![0_usize];
-    for (_, count) in &skim.samples {
-        edges.push(edges[edges.len() - 1] + count);
+    for sample in &skim.samples {
+        edges.push(edges[edges.len() - 1] + sample.rows);
     }
     if edges[edges.len() - 1] != rows || skim.sample.len() != rows {
         return Err(invalid("Sample row counts do not sum to rows"));
     }
     let mut seen = HashSet::new();
-    for (index, (name, _)) in skim.samples.iter().enumerate() {
+    for (index, Sample { name, .. }) in skim.samples.iter().enumerate() {
         if name.is_empty() || !seen.insert(name) {
             return Err(invalid("Sample names must be nonempty and unique"));
         }
@@ -348,7 +335,7 @@ pub fn build_with(skim: Skim, workers: usize) -> Result<(Value, Vec<Vec<u8>>)> {
     data.insert(
         "samples".into(),
         samples
-            .map(|(name, rows)| json!({"name": name, "rows": rows}))
+            .map(|s| json!({"name": s.name, "label": s.label, "rows": s.rows}))
             .collect(),
     );
     data.insert("files".into(), Value::Array(skim.files));
@@ -447,14 +434,18 @@ pub fn pack_with(
     files: Vec<Value>,
     workers: usize,
 ) -> Result<(Value, Vec<Vec<u8>>)> {
-    let samples: Vec<(String, usize)> = pieces
+    let samples: Vec<Sample> = pieces
         .iter()
-        .map(|piece| (piece.name.clone(), piece.entry.len()))
+        .map(|piece| Sample {
+            name: piece.name.clone(),
+            label: piece.label.clone(),
+            rows: piece.entry.len(),
+        })
         .collect();
     let mut sample = Vec::new();
-    for (index, (_, rows)) in samples.iter().enumerate() {
+    for (index, record) in samples.iter().enumerate() {
         let index = i32::try_from(index).map_err(|_| invalid("Too many samples"))?;
-        sample.extend(std::iter::repeat_n(index, *rows));
+        sample.extend(std::iter::repeat_n(index, record.rows));
     }
     let mut entry = Vec::new();
     let mut parts: Vec<(String, Vec<Values>)> = Vec::new();
@@ -510,11 +501,9 @@ pub fn sample_cols(samples: &[&str], files: &Value, taken: &[&str]) -> Result<Ve
         .iter()
         .map(|name| files.get(name).unwrap_or(&Value::Null))
         .collect();
-    let mut out: HashSet<&str> = taken.iter().copied().chain(RESERVED).collect();
+    let out: HashSet<&str> = taken.iter().copied().chain(RESERVED).collect();
     let mut keys: Vec<&String> = Vec::new();
     for record in &records {
-        let omitted = record.get("metadata_omitted").and_then(Value::as_array);
-        out.extend(omitted.into_iter().flatten().filter_map(Value::as_str));
         let metadata = record.get("metadata").and_then(Value::as_object);
         for key in metadata.into_iter().flat_map(Map::keys) {
             if !keys.contains(&key) {
@@ -540,7 +529,7 @@ pub fn sample_cols(samples: &[&str], files: &Value, taken: &[&str]) -> Result<Ve
     Ok(cols)
 }
 
-/// SHA-256 of a recipe's text as UTF-8, as `made.cart.sha256` records it.
+/// SHA-256 of a text as UTF-8, as `made.recipe`, `made.samples` and `made.lock` record it.
 pub fn text_checksum(text: &str) -> String {
     digest(text.as_bytes())
 }
@@ -556,7 +545,7 @@ pub fn made_checksum(made: &Value) -> Result<String> {
 
 /// Send the magic, the header's length and text, then the arrays.
 fn frame(mut out: impl Write, header: &Value, arrays: &[Vec<u8>]) -> Result<()> {
-    let text = dumps(header)?;
+    let text = serde_json::to_string(header)?;
     let length = u32::try_from(text.len()).map_err(|_| invalid("The header is too long"))?;
     out.write_all(MAGIC)?;
     out.write_all(&length.to_le_bytes())?;
@@ -574,7 +563,7 @@ pub fn to_bytes(header: &Value, arrays: &[Vec<u8>]) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Write one `.rvr` file in place, as the Python writer does; publish through a staged path.
+/// Write one `.rvr` file in place; publish it through a staged path.
 pub fn write(path: impl AsRef<Path>, header: &Value, arrays: &[Vec<u8>]) -> Result<()> {
     let file = std::fs::File::create(path)?;
     frame(std::io::BufWriter::new(file), header, arrays)

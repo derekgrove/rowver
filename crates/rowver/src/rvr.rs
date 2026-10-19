@@ -1,6 +1,7 @@
 use crate::numeric::NumericArray;
 use crate::table::Source;
-use crate::{invalid, Column, Result, Table};
+use crate::write::data_checksum;
+use crate::{invalid, Column, Result, Table, VERSION};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -57,7 +58,7 @@ fn validate_stream(path: &Path, cancellation: Cancellation<'_>) -> Result<Checkp
     let size = usize::try_from(file.metadata()?.len())
         .map_err(|_| invalid("Checkpoint length exceeds the current platform"))?;
     if size < 12 {
-        return Err(invalid("Input is not a RowVer v13 .rvr container"));
+        return Err(invalid(NOT_RVR));
     }
     let mut file = CancelReader {
         reader: file,
@@ -68,14 +69,8 @@ fn validate_stream(path: &Path, cancellation: Cancellation<'_>) -> Result<Checkp
     let start = header_end(&prefix, size)?;
     let mut text = vec![0; start - 12];
     file.read_exact(&mut text)?;
-    let header: Value = serde_json::from_slice(&text)?;
-    let order = derived::column_order(&text)?;
-    read_body(
-        &header,
-        order.as_deref(),
-        Arrays::new(file, size - start, cancellation),
-        drop,
-    )?;
+    let header = checked_header(&text)?;
+    read_body(&header, Arrays::new(file, size - start, cancellation), drop)?;
     Ok(CheckpointSummary {
         rows: count(object(&header, "data")?, "rows")?,
         columns: list(object(&header, "data")?, "cols")?.len(),
@@ -89,8 +84,7 @@ fn header_text(path: impl AsRef<Path>) -> Result<Vec<u8>> {
     let size = usize::try_from(file.metadata()?.len())
         .map_err(|_| invalid("Checkpoint length exceeds the current platform"))?;
     let mut prefix = [0; 12];
-    file.read_exact(&mut prefix)
-        .map_err(|_| invalid("Input is not a RowVer v13 .rvr container"))?;
+    file.read_exact(&mut prefix).map_err(|_| invalid(NOT_RVR))?;
     let mut text = vec![0; header_end(&prefix, size)? - 12];
     file.read_exact(&mut text)?;
     Ok(text)
@@ -101,13 +95,59 @@ pub fn header_digest(path: impl AsRef<Path>) -> Result<String> {
     Ok(digest(&header_text(path)?))
 }
 
-/// Read only a checkpoint's header, without decoding or checking any array.
+/// Read only a file's header, as it is, without checking it or any array.
 pub fn read_header(path: impl AsRef<Path>) -> Result<Value> {
-    let text = header_text(path)?;
-    let header: Value = serde_json::from_slice(&text)?;
-    if header.get("rowver").and_then(Value::as_u64) != Some(13) {
-        return Err(invalid("This reader accepts only RowVer version 13"));
+    let header: Value = serde_json::from_slice(&header_text(path)?)?;
+    version(&header)?;
+    Ok(header)
+}
+
+/// What a file that is not an `.rvr` file is told.
+const NOT_RVR: &str = "Input is not an .rvr file (its first bytes are not the .rvr magic)";
+
+/// Refuse a header of another version, saying what to do.
+fn version(header: &Value) -> Result<()> {
+    match header.get("rowver").and_then(Value::as_u64) {
+        Some(VERSION) => Ok(()),
+        Some(other) => Err(invalid(format!(
+            "This file is rowver {other}; this reader reads rowver {VERSION} only. Press its study again with rvr press."
+        ))),
+        None => Err(invalid("The header has no rowver version")),
     }
+}
+
+/// Parse a header's text and check every fact it holds that needs no array: its version, its
+/// `made` (the recipe, samples and lock texts and their checksums), the sample records, the
+/// sample columns, `data.sha256`, a derived file's lineage, and the signature, when it has one.
+pub fn checked_header(text: &[u8]) -> Result<Value> {
+    let header: Value = serde_json::from_slice(text)?;
+    version(&header)?;
+    let root = header
+        .as_object()
+        .ok_or_else(|| invalid("Header must be an object"))?;
+    for (key, value) in root {
+        if key != "rowver" && !value.is_object() {
+            return Err(invalid(format!("Header section {key} must be an object")));
+        }
+    }
+    let data = object(&header, "data")?;
+    let made = object(&header, "made")?;
+    snapshot::validate(made)?;
+    match header.get("derived") {
+        Some(lineage) => {
+            let order = derived::column_order(text)?;
+            derived::validate(lineage, data, made, order.as_deref())?
+        }
+        None => snapshot::columns(made, list(data, "cols")?)?,
+    }
+    samples::columns(data, made)?;
+    identity::records(data, made)?;
+    if data_checksum(data)? != checksum(data)? {
+        return Err(invalid(
+            "data.sha256 does not match the checksums of the arrays its records name",
+        ));
+    }
+    crate::sign::verify(&header)?;
     Ok(header)
 }
 
@@ -116,7 +156,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Arc<Table>> {
     from_bytes(&std::fs::read(path)?)
 }
 
-/// Decode and validate a complete pressed RowVer v13 container.
+/// Decode and validate a complete pressed file.
 pub fn from_bytes(bytes: &[u8]) -> Result<Arc<Table>> {
     let table = decode(bytes)?;
     if table.header.get("derived").is_some() {
@@ -137,12 +177,10 @@ pub fn load_derived(path: impl AsRef<Path>, parent: impl AsRef<Path>) -> Result<
 /// Decode and validate one complete container, pressed or derived.
 fn decode(bytes: &[u8]) -> Result<Arc<Table>> {
     let start = header_end(bytes, bytes.len())?;
-    let header: Value = serde_json::from_slice(&bytes[12..start])?;
-    let order = derived::column_order(&bytes[12..start])?;
+    let header = checked_header(&bytes[12..start])?;
     let mut columns = Vec::new();
     let (sources, entry) = read_body(
         &header,
-        order.as_deref(),
         Arrays::new(
             &bytes[start..],
             bytes.len() - start,
@@ -161,7 +199,7 @@ fn decode(bytes: &[u8]) -> Result<Arc<Table>> {
 /// Validate the shared magic and JSON framing before allocating header storage.
 fn header_end(prefix: &[u8], size: usize) -> Result<usize> {
     if prefix.len() < 12 || &prefix[..8] != MAGIC {
-        return Err(invalid("Input is not a RowVer v13 .rvr container"));
+        return Err(invalid(NOT_RVR));
     }
     let length = u32::from_le_bytes(prefix[8..12].try_into().unwrap()) as usize;
     12_usize
@@ -170,34 +208,17 @@ fn header_end(prefix: &[u8], size: usize) -> Result<usize> {
         .ok_or_else(|| invalid("JSON header length exceeds the file"))
 }
 
-/// Validate every fact through the same decoder, retaining columns only for a table load.
+/// Validate every array of a checked header through the same decoder, retaining columns only
+/// for a table load.
 fn read_body(
     header: &Value,
-    order: Option<&[String]>,
     mut decoder: Arrays<'_, impl Read>,
     mut keep: impl FnMut(Column),
 ) -> Result<(Vec<Source>, NumericArray)> {
     let cancellation = decoder.cancellation;
     cancellation.check()?;
-    if header.get("rowver").and_then(Value::as_u64) != Some(13) {
-        return Err(invalid("This reader accepts only RowVer version 13"));
-    }
-    let root = header
-        .as_object()
-        .ok_or_else(|| invalid("Header must be an object"))?;
-    for (key, value) in root {
-        if key != "rowver" && !value.is_object() {
-            return Err(invalid(format!("Header section {key} must be an object")));
-        }
-    }
     let data = object(header, "data")?;
     let made = object(header, "made")?;
-    snapshot::validate(made)?;
-    match header.get("derived") {
-        Some(lineage) => derived::validate(lineage, data, made, order)?,
-        None => snapshot::columns(made, list(data, "cols")?)?,
-    }
-    samples::columns(header, data, made)?;
     let rows = count(data, "rows")?;
     let sample = decoder.read(required(data, "sample")?, "i4", rows, "sample")?;
     let entry = decoder.read(required(data, "entry")?, "i8", rows, "entry")?;
@@ -345,7 +366,7 @@ pub(crate) fn digest(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
-/// Encode a digest without adding another dependency.
-fn hex(bytes: &[u8]) -> String {
+/// Encode bytes as lowercase hexadecimal.
+pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
