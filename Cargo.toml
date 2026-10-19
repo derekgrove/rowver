@@ -2,28 +2,29 @@
 resolver = "2"
 members = ["crates/*"]
 # The Python package builds with maturin (it needs a Python); cargo test leaves it out.
-default-members = ["crates/rowver", "crates/rvr", "crates/recipe"]
+default-members = ["crates/rowver", "crates/rvr", "crates/rvr-recipe"]
 
+# Each crate has its own version and is published on its own; these are shared.
 [workspace.package]
-version = "0.1.0"
 authors = ["Derek Grove <derek.william.grove@cern.ch>"]
 repository = "https://gitlab.cern.ch/dgrove/rowver"
 edition = "2021"
 rust-version = "1.91"
 license = "MIT"
-publish = false
 
 [workspace.dependencies]
-rowver = { path = "crates/rowver" }
-recipe = { path = "crates/recipe" }
-rvr = { path = "crates/rvr" }
-# The shared HEP crates, one copy for every app; fix them in hep-crates, then move this rev.
-hep-columns = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "35cfa318e8c298975b39a95b8ba20e1e3706ef6e" }
-hep-root = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "35cfa318e8c298975b39a95b8ba20e1e3706ef6e" }
-grid-catalog = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "35cfa318e8c298975b39a95b8ba20e1e3706ef6e" }
-grid-doors = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "35cfa318e8c298975b39a95b8ba20e1e3706ef6e" }
-grid-proxy = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "35cfa318e8c298975b39a95b8ba20e1e3706ef6e" }
-grid-trust = { git = "https://gitlab.cern.ch/dgrove/hep-crates.git", rev = "35cfa318e8c298975b39a95b8ba20e1e3706ef6e" }
+rowver = { path = "crates/rowver", version = "14.1.0" }
+rvr-recipe = { path = "crates/rvr-recipe", version = "0.1.0" }
+rvr = { path = "crates/rvr", version = "0.1.0" }
+# The shared HEP crates, from crates.io (built in gitlab.cern.ch/dgrove/hep-crates).
+hep-columns = "0.1.0"
+hep-root = "0.1.0"
+grid-catalog = "0.1.0"
+grid-trust = "0.1.0"
+voms-proxy = "0.1.0"
+wlcg-doors = "0.1.0"
+rucio-client = "0.1.0"
+cms-dbs = "0.1.0"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

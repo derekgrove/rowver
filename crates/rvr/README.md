@@ -17,10 +17,11 @@ rvr reproduce FILE          # press a file's own study again and compare
 You need Rust 1.91 or later (`rustup update`).
 
 ```sh
-cargo install --git https://gitlab.cern.ch/dgrove/rowver rvr
+cargo install --locked rvr
 ```
 
-or, from a checkout of rowver, `cargo install --path crates/rvr`. Either puts `rvr` in
+or the newest commit with `cargo install --locked --git https://gitlab.cern.ch/dgrove/rowver rvr`, or,
+from a checkout of rowver, `cargo install --path crates/rvr`. Each puts `rvr` in
 `~/.cargo/bin`. `rvr --version` says which `.rvr` version it reads and writes, and the commit it
 was built from.
 
@@ -369,7 +370,7 @@ A mass point's label becomes part of the name as CMS dataset names write numbers
 ## recipe.toml
 
 The recipe is TOML, with one expression per value, evaluated over whole columns of events. The
-[recipe reference](../recipe/README.md) lists every table, operator and function, each with an
+[recipe reference](https://crates.io/crates/rvr-recipe/0.1.0) lists every table, operator and function, each with an
 example and its result.
 
 ```toml

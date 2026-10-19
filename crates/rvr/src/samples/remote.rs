@@ -1,5 +1,5 @@
 //! Storage over HTTPS: any `root://`, `davs://` or `https://` location, through the WebDAV door
-//! the WLCG registry (grid-doors) lists for its host. Folders are listed with one PROPFIND, and a
+//! the WLCG registry (wlcg-doors) lists for its host. Folders are listed with one PROPFIND, and a
 //! file's adler32 is asked with one HEAD (`Want-Digest`); nothing is read from any file.
 
 use hep_root::ByteSource;
@@ -35,9 +35,9 @@ pub fn door(url: &str) -> Result<(String, String), String> {
             .unwrap_or_default();
         return Ok((format!("https://{host}{port}"), path));
     }
-    let doors = grid_doors::serving(&grid_doors::snapshot().doors, &host);
+    let doors = wlcg_doors::serving(&wlcg_doors::snapshot().doors, &host);
     let door = doors.first().ok_or_else(|| {
-        format!("{host} has no WebDAV door in the WLCG registry ({}), so its folders cannot be listed from here. Name its files one by one, or copy them somewhere listable.", grid_doors::snapshot().taken)
+        format!("{host} has no WebDAV door in the WLCG registry ({}), so its folders cannot be listed from here. Name its files one by one, or copy them somewhere listable.", wlcg_doors::snapshot().taken)
     })?;
     Ok((format!("https://{}:{}", door.host, door.port), path))
 }
@@ -172,7 +172,7 @@ impl Storage {
     pub fn new(proxy: Option<&str>, ca: Option<&str>) -> Result<Self, String> {
         let loaded = match proxy {
             Some(p) => Some(
-                grid_proxy::load(p)
+                voms_proxy::load(p)
                     .map_err(|(_, why)| format!("the grid proxy {p} could not be read: {why}"))?,
             ),
             None => None,

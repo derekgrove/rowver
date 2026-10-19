@@ -5,9 +5,9 @@
 use super::plan::plan;
 use super::remote::{HttpsFile, Storage};
 use super::spec::{Events, Plan, Source};
-use grid_catalog::{
-    Catalog, CatalogFile, DbsCatalog, DbsInstance, Did, GridHttps, Replicas, Resolver, Rucio,
-};
+use cms_dbs::{DbsCatalog, DbsInstance};
+use grid_catalog::{Catalog, CatalogFile, Did, GridHttps, Replicas, Resolver};
+use rucio_client::{Rucio, Server};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -148,7 +148,7 @@ fn utc(time: std::time::SystemTime) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    grid_proxy::utc(seconds)
+    voms_proxy::utc(seconds)
 }
 
 /// How a file differs from what the lock recorded of it, in words, if it does. A size or an
@@ -223,7 +223,7 @@ impl Context {
                 Arc::new(GridHttps::new(p.into(), ca.clone().map(PathBuf::from)));
             (
                 DbsCatalog::new(DbsInstance::Global, transport.clone()),
-                Rucio::new(transport),
+                Rucio::new(Server::cms(), transport),
             )
         });
         let offline = match &storage {
@@ -415,7 +415,7 @@ fn dataset_files(ctx: &Context, dataset: &str) -> Result<Vec<File>, String> {
             }
         ));
     }
-    let urls = grid_catalog::CmsResolver::new("root://cms-xrd-global.cern.ch/")
+    let urls = cms_dbs::CmsResolver::new("root://cms-xrd-global.cern.ch/")
         .and_then(|r| r.urls(&files))
         .map_err(|e| e.to_string())?;
     let replicas = rucio

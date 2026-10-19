@@ -3,9 +3,9 @@
 //! tool installed: it asks the VOMS server for your attributes and writes the proxy where grid
 //! tools look (`$X509_USER_PROXY`, else `/tmp/x509up_u<uid>`).
 
-use grid_proxy::user::Source;
-use grid_proxy::{make, Credentials, Places};
 use std::path::PathBuf;
+use voms_proxy::user::Source;
+use voms_proxy::{make, Credentials, Places};
 
 /// What `rvr proxy` takes.
 pub const USAGE: &str = "usage:
@@ -70,7 +70,7 @@ fn options<'a>(mut words: &[&'a str]) -> Result<(u32, &'a str), String> {
 }
 
 /// The seconds until the proxy or its VOMS attributes end, whichever is first.
-pub fn left_of(status: &grid_proxy::Status) -> Option<i64> {
+pub fn left_of(status: &voms_proxy::Status) -> Option<i64> {
     match (status.seconds_left, status.attributes_left) {
         (Some(proxy), Some(attributes)) => Some(proxy.min(attributes)),
         (proxy, attributes) => proxy.or(attributes),
@@ -79,14 +79,14 @@ pub fn left_of(status: &grid_proxy::Status) -> Option<i64> {
 
 /// Whether `rvr proxy init` is what an unusable proxy needs: there is none, it ended, or its
 /// file holds no proxy that can be used.
-pub fn renewable(status: &grid_proxy::Status) -> bool {
+pub fn renewable(status: &voms_proxy::Status) -> bool {
     status.renew || ["noCertificate", "noKey", "unreadable"].contains(&status.state)
 }
 
 /// Print the proxy's state; true when it can be used.
 fn show() -> Result<bool, String> {
     let credentials = Credentials::found(None, None, &Places::here());
-    let status = grid_proxy::status(&credentials);
+    let status = voms_proxy::status(&credentials);
     if let Some(path) = &status.path {
         println!("proxy     {path}");
     }
@@ -125,17 +125,17 @@ fn init(hours: u32, vo: &str) -> Result<bool, String> {
     source.private()?;
     let passphrase = match source.encrypted()? {
         true => {
-            grid_proxy::user::passphrase(&format!("Passphrase for {}: ", source.key().display()))
+            voms_proxy::user::passphrase(&format!("Passphrase for {}: ", source.key().display()))
                 .map_err(|e| format!("the passphrase could not be read: {e}"))?
         }
         false => String::new(),
     };
     let user = source.read(&passphrase);
-    grid_proxy::wipe(&mut passphrase.into_bytes());
+    voms_proxy::wipe(&mut passphrase.into_bytes());
     let user = user?;
     let seconds = i64::from(hours) * 3600;
     let ca = crate::samples::proxy().ca;
-    let server = grid_catalog::voms::SERVERS
+    let server = voms_proxy::server::SERVERS
         .iter()
         .find(|(name, _)| *name == vo);
     println!(
@@ -143,8 +143,8 @@ fn init(hours: u32, vo: &str) -> Result<bool, String> {
         server.map_or("the VOMS server", |s| s.1)
     );
     let attributes =
-        grid_catalog::voms::attributes(vo, seconds as u64, user.loaded(), ca.as_deref())?;
-    let now = grid_proxy::now();
+        voms_proxy::server::attributes(vo, seconds as u64, user.loaded(), ca.as_deref())?;
+    let now = voms_proxy::now();
     let made = make::proxy(&user, Some(&attributes), now, seconds)?;
     let places = Places::here();
     let path = places
@@ -156,7 +156,7 @@ fn init(hours: u32, vo: &str) -> Result<bool, String> {
     if made.not_after < now + seconds {
         println!(
             "Your certificate ends at {}, so the proxy ends then too. Renew your certificate with your certificate authority.",
-            grid_proxy::utc(made.not_after)
+            voms_proxy::utc(made.not_after)
         );
     }
     println!("Wrote {path}:");

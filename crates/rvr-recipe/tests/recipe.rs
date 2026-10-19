@@ -1,7 +1,7 @@
 //! Every expression of the fixture against what NumPy 2.5.1, awkward 2.12.0 and coffea 2026.7.0
 //! gave for it.
 
-use recipe::{
+use rvr_recipe::{
     parse, per_event, Array, Columns, Constant, Helper, Kind, Recipe, Scope, Store, Values,
 };
 use serde_json::Value;
@@ -12,7 +12,7 @@ struct Held(BTreeMap<String, Array>);
 
 impl Columns for Held {
     /// Hand out a copy of a held column.
-    fn column(&self, name: &str) -> recipe::Result<Option<Array>> {
+    fn column(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
         Ok(self.0.get(name).cloned())
     }
 

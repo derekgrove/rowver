@@ -15,7 +15,7 @@ it again.
   since.
 - **A small selection language.** Cuts and computed columns are short expressions in
   `recipe.toml`, such as `count(good_muon) >= 1` or `sum(Jet_pt)`, evaluated over whole columns at
-  once. The [recipe reference](crates/recipe/README.md) lists every operator and function, each
+  once. The [recipe reference](crates/rvr-recipe/README.md) lists every operator and function, each
   with an example and its result.
 - **Readable in Python** as NumPy, Awkward, pandas, Arrow or Parquet.
 
@@ -114,7 +114,7 @@ proxy. Every output below is from a real run.
 **1. Install `rvr`.** You need Rust 1.91 or later (`rustup update`).
 
 ```sh
-cargo install --git https://gitlab.cern.ch/dgrove/rowver rvr
+cargo install --locked rvr
 rvr --version
 ```
 
@@ -165,7 +165,7 @@ branches = ["run", "luminosityBlock", "event", "PV_npvs", "MET_pt", "MET_phi", "
 Each value in quotes is an expression. `[object.good_muon]` names the muons that pass its `where`
 condition, and the `[keep]` cuts count them. What is stored is only what `[copy]` (and `[column]`)
 name, so `Muon_pt` holds every muon of each kept event. The
-[recipe reference](crates/recipe/README.md) explains every part, with examples.
+[recipe reference](crates/rvr-recipe/README.md) explains every part, with examples.
 
 **3. Find the inputs.** No event is read yet. This writes `samples.lock`, which pins every file.
 
@@ -243,7 +243,7 @@ The headers show no difference in rows, samples, columns, by_sample or sample co
 To use your own data, edit `samples.toml` and `recipe.toml`, then repeat steps 3 to 5. LPC EOS,
 most CERN EOS areas and central datasets need a grid proxy first: `rvr proxy init` makes one
 from your certificate in `~/.globus`. Run `rvr key new` once to sign every file you press.
-The [recipe reference](crates/recipe/README.md) lists everything a recipe can say, each with an
+The [recipe reference](crates/rvr-recipe/README.md) lists everything a recipe can say, each with an
 example and its result, and the [rvr README](crates/rvr/README.md) describes every command and
 every key of `samples.toml`.
 
@@ -252,7 +252,7 @@ every key of `samples.toml`.
 | folder | what it is |
 |---|---|
 | [`crates/rvr`](crates/rvr/README.md) | the `rvr` command: start a study, resolve its samples, press them, and validate, dump, diff and reproduce `.rvr` files |
-| [`crates/recipe`](crates/recipe/README.md) | the recipe language of `rvr press`: every table, operator and function, each with an example |
+| [`crates/rvr-recipe`](crates/rvr-recipe/README.md) | the recipe language of `rvr press`: every table, operator and function, each with an example |
 | [`crates/rowver-py`](crates/rowver-py/README.md) | the Python package `rowver`: `.rvr` files as NumPy, Awkward, Arrow, pandas and Parquet, and the `rvr` command |
 | [`crates/rowver`](crates/rowver/README.md) | the Rust library that reads, validates and writes `.rvr` files; the reference builder of the format |
 | [`FORMAT.md`](FORMAT.md) | the `.rvr` specification |

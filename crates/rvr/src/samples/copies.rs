@@ -1,5 +1,5 @@
 //! Read a file of a catalog dataset from whichever of its copies answers. Rucio is asked once,
-//! as a press starts, where every dataset file can be read; `grid-catalog` keeps only copies at
+//! as a press starts, where every dataset file can be read; `rucio-client` keeps only copies at
 //! CMS storage doors. Rucio's order is not a ranking by speed (CMS's runs by host name), so speed
 //! is measured: a file's first question (a HEAD for its size and adler32) goes at once to the
 //! storage that answered fastest so far and to up to two never measured, and the first to answer
@@ -11,9 +11,9 @@
 
 use super::remote::{digest, HttpsFile, Storage};
 use super::resolve::{self, File};
-use grid_catalog::copies::Location;
-use grid_catalog::request::Did;
+use grid_catalog::Did;
 use hep_root::ByteSource;
+use rucio_client::Location;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
@@ -89,7 +89,7 @@ pub struct Datasets {
 impl Datasets {
     /// Ask Rucio once where each file (with the dataset it is of) can be read, and check what it
     /// says against the lock: the same size and adler32, and at least one copy on disk.
-    pub fn ask(rucio: &grid_catalog::Rucio, files: &[(&File, &str)]) -> Result<Self, String> {
+    pub fn ask(rucio: &rucio_client::Rucio, files: &[(&File, &str)]) -> Result<Self, String> {
         let mut dids: Vec<Did> = files
             .iter()
             .filter_map(|(file, _)| file.lfn.clone())

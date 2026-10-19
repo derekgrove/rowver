@@ -100,6 +100,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cms-dbs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e4c290186b9d50018f55314bc51ae9ec3e1cfc3518c9eab73d9aae4acdf4ac3"
+dependencies = [
+ "grid-catalog",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -324,10 +336,9 @@ dependencies = [
 [[package]]
 name = "grid-catalog"
 version = "0.1.0"
-source = "git+https://gitlab.cern.ch/dgrove/hep-crates.git?rev=35cfa318e8c298975b39a95b8ba20e1e3706ef6e#35cfa318e8c298975b39a95b8ba20e1e3706ef6e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e51e8baaaad70dd21d8bdcaefa6fb8ebe0ea6b53fbc1fa4eaeb54c1ee6157bdb"
 dependencies = [
- "grid-doors",
- "grid-proxy",
  "grid-trust",
  "quick-xml",
  "rustls",
@@ -336,40 +347,15 @@ dependencies = [
  "thiserror",
  "ureq",
  "url",
-]
-
-[[package]]
-name = "grid-doors"
-version = "0.1.0"
-source = "git+https://gitlab.cern.ch/dgrove/hep-crates.git?rev=35cfa318e8c298975b39a95b8ba20e1e3706ef6e#35cfa318e8c298975b39a95b8ba20e1e3706ef6e"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "grid-proxy"
-version = "0.1.0"
-source = "git+https://gitlab.cern.ch/dgrove/hep-crates.git?rev=35cfa318e8c298975b39a95b8ba20e1e3706ef6e#35cfa318e8c298975b39a95b8ba20e1e3706ef6e"
-dependencies = [
- "aes",
- "cbc",
- "des",
- "libc",
- "rand_core",
- "ring",
- "rsa",
- "rustls",
- "rustls-pemfile",
- "serde",
+ "voms-proxy",
 ]
 
 [[package]]
 name = "grid-trust"
 version = "0.1.0"
-source = "git+https://gitlab.cern.ch/dgrove/hep-crates.git?rev=35cfa318e8c298975b39a95b8ba20e1e3706ef6e#35cfa318e8c298975b39a95b8ba20e1e3706ef6e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d73bd5ad2ac14839eb3fa8117a3a8e1c342dde4dad92f02419c7ffa4c2122548"
 dependencies = [
- "grid-proxy",
  "rustls",
  "rustls-pemfile",
  "serde",
@@ -393,12 +379,14 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "hep-columns"
 version = "0.1.0"
-source = "git+https://gitlab.cern.ch/dgrove/hep-crates.git?rev=35cfa318e8c298975b39a95b8ba20e1e3706ef6e#35cfa318e8c298975b39a95b8ba20e1e3706ef6e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "820091ef37602f81e2a5175fddb485585ac861182854bedb41e2c7b9660d7fad"
 
 [[package]]
 name = "hep-root"
 version = "0.1.0"
-source = "git+https://gitlab.cern.ch/dgrove/hep-crates.git?rev=35cfa318e8c298975b39a95b8ba20e1e3706ef6e#35cfa318e8c298975b39a95b8ba20e1e3706ef6e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c13bb0c006ce56d3d7d27b20c0c473b6288e1a483252e75aa3e0e5a0707916dc"
 dependencies = [
  "flate2",
  "lz4_flex",
@@ -885,16 +873,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
 
 [[package]]
-name = "recipe"
-version = "0.1.0"
-dependencies = [
- "hep-columns",
- "serde_json",
- "thiserror",
- "toml",
-]
-
-[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -950,6 +928,19 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rucio-client"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3aba919a4552f604f3f62b43c38b4046ec2fb71f87a6034aac353cce460154d"
+dependencies = [
+ "grid-catalog",
+ "serde",
+ "serde_json",
+ "url",
+ "wlcg-doors",
 ]
 
 [[package]]
@@ -1024,18 +1015,30 @@ dependencies = [
 name = "rvr"
 version = "0.1.0"
 dependencies = [
+ "cms-dbs",
  "grid-catalog",
- "grid-doors",
- "grid-proxy",
  "grid-trust",
  "hep-root",
- "recipe",
  "rowver",
+ "rucio-client",
+ "rvr-recipe",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "toml",
  "ureq",
+ "voms-proxy",
+ "wlcg-doors",
+]
+
+[[package]]
+name = "rvr-recipe"
+version = "0.1.0"
+dependencies = [
+ "hep-columns",
+ "serde_json",
+ "thiserror",
+ "toml",
 ]
 
 [[package]]
@@ -1350,6 +1353,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "voms-proxy"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2419ecba66f649cbcb9432b8b0bfd6b10af67c3ab65326ced6c2b43d546c181"
+dependencies = [
+ "aes",
+ "cbc",
+ "des",
+ "grid-trust",
+ "libc",
+ "rand_core",
+ "ring",
+ "rsa",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "ureq",
+]
+
+[[package]]
 name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1453,6 +1476,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "wlcg-doors"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e969f408ba142d3d80bd232a8e4462a09a620d732b330070c5bb3b8381a45a2"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

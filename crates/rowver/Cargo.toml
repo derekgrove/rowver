@@ -2,13 +2,15 @@
 name = "rowver"
 # The crate's major version is the .rvr format version it reads and writes.
 version = "14.1.0"
-description = "Read, validate, and write RowVer 14 .rvr files."
+description = "Read, validate and write RowVer .rvr files: event columns as zstd arrays behind a JSON header that carries the recipe, the samples and who signed it"
+keywords = ["hep", "physics", "columnar", "rvr", "file-format"]
+categories = ["science", "encoding", "parser-implementations"]
+readme = "README.md"
 authors.workspace = true
 repository.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish.workspace = true
 
 [dependencies]
 serde.workspace = true

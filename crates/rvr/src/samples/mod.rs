@@ -71,8 +71,8 @@ pub(crate) struct Proxy {
 
 /// Find the grid proxy to present.
 pub(crate) fn proxy() -> Proxy {
-    let credentials = grid_proxy::Credentials::found(None, None, &grid_proxy::Places::here());
-    let status = grid_proxy::status(&credentials);
+    let credentials = voms_proxy::Credentials::found(None, None, &voms_proxy::Places::here());
+    let status = voms_proxy::status(&credentials);
     // Extra certificate authorities, when a folder of them is named; grid-trust already trusts the
     // public roots and CERN's grid authorities, which FNAL and CERN EOS are signed by.
     let ca = std::env::var("X509_CERT_DIR")
@@ -240,7 +240,7 @@ fn resolve_all(path: &Path) -> Result<(), String> {
     let lock = Lock {
         format: "rvr-samples-lock".into(),
         version: 1,
-        resolved: grid_proxy::utc(grid_proxy::now()),
+        resolved: voms_proxy::utc(voms_proxy::now()),
         samples_toml_sha256: sha256(text.as_bytes()),
         sample: locked,
     };

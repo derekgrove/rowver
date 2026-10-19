@@ -12,11 +12,12 @@ use crate::samples::remote::{HttpsFile, Storage};
 use crate::samples::resolve::{self, adler32_file, File, Lock, Locked};
 use crate::samples::spec::Events;
 use crate::samples::Choice;
-use grid_catalog::{GridHttps, Rucio};
+use grid_catalog::GridHttps;
 use hep_root::{ByteSource, RootFile, Tree};
-use recipe::{Array, Columns, Constant, Expression, Kind, Recipe, Scope, Values};
 use rowver::write::{self, Labels};
 use rowver::NumericBuffer;
+use rucio_client::{Rucio, Server};
+use rvr_recipe::{Array, Columns, Constant, Expression, Kind, Recipe, Scope, Values};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -228,14 +229,14 @@ fn kind_of(kind: hep_root::columns::Kind) -> Kind {
 }
 
 impl<S: ByteSource> Columns for Branches<'_, S> {
-    fn column(&self, name: &str) -> recipe::Result<Option<Array>> {
+    fn column(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
         if let Some(held) = self.read.borrow().get(name) {
             return Ok(Some(held.clone()));
         }
         let Some(branch) = self.tree.branch(name) else {
             return Ok(None);
         };
-        let fail = |error: String| recipe::Error(format!("{name}: {error}"));
+        let fail = |error: String| rvr_recipe::Error(format!("{name}: {error}"));
         let values = self
             .file
             .read_range(branch, self.first, self.last)
@@ -316,8 +317,8 @@ fn copied(scope: &Scope, from: &Expression) -> Result<Array, String> {
 }
 
 /// Which events one cut lets through: those it does not apply to, and those that pass it.
-fn lets_through(cut: &recipe::Cut, scope: &Scope, entries: usize) -> Result<Vec<bool>, String> {
-    let named = |error: recipe::Error| format!("[keep] {}: {}", cut.name, error.0);
+fn lets_through(cut: &rvr_recipe::Cut, scope: &Scope, entries: usize) -> Result<Vec<bool>, String> {
+    let named = |error: rvr_recipe::Error| format!("[keep] {}: {}", cut.name, error.0);
     let applies = match &cut.when {
         None => None,
         Some(when) => match scope.evaluate(when).map_err(named)? {
@@ -738,7 +739,7 @@ fn take(
             } else {
                 scope
                     .evaluate(from)
-                    .and_then(|value| recipe::per_event(value, count))
+                    .and_then(|value| rvr_recipe::per_event(value, count))
                     .map_err(|e| e.0)
             };
             let array = stored(
@@ -1041,7 +1042,10 @@ pub fn press(
             let transport: Arc<dyn grid_catalog::Transport> =
                 Arc::new(GridHttps::new(path.into(), ca));
             let asked = std::time::Instant::now();
-            datasets = Some(Datasets::ask(&Rucio::new(transport), &catalog)?);
+            datasets = Some(Datasets::ask(
+                &Rucio::new(Server::cms(), transport),
+                &catalog,
+            )?);
             println!(
                 "Rucio said where the {} dataset files can be read in {:.1} s.",
                 catalog.len(),
@@ -1117,7 +1121,7 @@ pub fn press(
     if let Some(title) = &recipe.title {
         made.insert("title".into(), title.as_str().into());
     }
-    made.insert("built".into(), grid_proxy::utc(now).into());
+    made.insert("built".into(), voms_proxy::utc(now).into());
     made.insert(
         "by".into(),
         concat!("rvr ", env!("CARGO_PKG_VERSION")).into(),
