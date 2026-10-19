@@ -63,6 +63,11 @@ struct Frame {
 /// How deeply objects and helpers may refer to one another before it is taken for a loop.
 const DEEPEST: usize = 40;
 
+/// How many values, in words: `1 value`, `2 values`.
+fn how_many(count: usize) -> String {
+    format!("{count} value{}", if count == 1 { "" } else { "s" })
+}
+
 /// What a name that is no column is refused with.
 fn unknown(name: &str) -> crate::Error {
     problem(format!("There is no column named {name}"))
@@ -349,8 +354,8 @@ impl Scope<'_> {
         if let Some(helper) = self.helpers.get(name) {
             if helper.takes.len() != arguments.len() {
                 return Err(problem(format!(
-                    "{name} takes {} values, not {}",
-                    helper.takes.len(),
+                    "{name} takes {}, not {}",
+                    how_many(helper.takes.len()),
                     arguments.len()
                 )));
             }
@@ -376,7 +381,8 @@ impl Scope<'_> {
                 Ok(())
             } else {
                 Err(problem(format!(
-                    "{name} takes {count} values, not {}",
+                    "{name} takes {}, not {}",
+                    how_many(count),
                     values.len()
                 )))
             }
@@ -397,7 +403,8 @@ impl Scope<'_> {
                 Ok(())
             } else {
                 Err(problem(format!(
-                    "{name} takes {count} values, not {}",
+                    "{name} takes {}, not {}",
+                    how_many(count),
                     arrays.len()
                 )))
             }

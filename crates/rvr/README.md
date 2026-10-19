@@ -295,8 +295,9 @@ A mass point's label becomes part of the name as CMS dataset names write numbers
 
 ## recipe.toml
 
-The recipe is TOML, with one expression per value, evaluated over whole columns of events (the
-`recipe` crate beside this one).
+The recipe is TOML, with one expression per value, evaluated over whole columns of events. The
+[recipe reference](../recipe/README.md) lists every table, operator and function, each with an
+example and its result.
 
 ```toml
 format = "rvr-recipe"

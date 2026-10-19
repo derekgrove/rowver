@@ -249,7 +249,7 @@ fn mistakes_are_refused_with_a_reason() {
     assert_eq!(message("MET > 30"), "There is no column named MET");
     assert_eq!(message("Jet.pt"), "There is no column named Jet");
     assert!(message("nothing(3)").contains("no operation or helper named nothing"));
-    assert!(message("sqrt(1, 2)").contains("takes 1 values"));
+    assert!(message("sqrt(1, 2)").contains("takes 1 value, not 2"));
     assert!(message("'a' + 1").contains("Text"));
     assert!(message("sample.absent + 1").contains("missing"));
     assert!(message(&"(".repeat(500)).contains("Too many nested brackets"));
