@@ -257,5 +257,6 @@ every key of `samples.toml`.
 | [`crates/rowver`](crates/rowver/README.md) | the Rust library that reads, validates and writes `.rvr` files; the reference builder of the format |
 | [`FORMAT.md`](FORMAT.md) | the `.rvr` specification |
 
-The shared HEP crates (the ROOT reader and the grid tools) come from
-[hep-crates](https://gitlab.cern.ch/dgrove/hep-crates). MIT licensed.
+It reads ROOT with [hep-root](https://crates.io/crates/hep-root) and reaches the grid with
+[voms-proxy](https://crates.io/crates/voms-proxy), [rucio-client](https://crates.io/crates/rucio-client)
+and [cms-dbs](https://crates.io/crates/cms-dbs). MIT licensed.
