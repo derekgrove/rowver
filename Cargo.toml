@@ -13,9 +13,9 @@ rust-version = "1.91"
 license = "MIT"
 
 [workspace.dependencies]
-rowver = { path = "crates/rowver", version = "14.1.1" }
+rowver = { path = "crates/rowver", version = "14.2.0" }
 rvr-recipe = { path = "crates/rvr-recipe", version = "0.1.0" }
-rvr = { path = "crates/rvr", version = "0.1.0" }
+rvr = { path = "crates/rvr", version = "0.2.0" }
 # The shared HEP crates, from crates.io (each in its own repository, gitlab.cern.ch/dgrove/<crate>).
 hep-columns = "0.1.0"
 hep-root = "0.1.0"
