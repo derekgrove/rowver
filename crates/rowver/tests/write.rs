@@ -178,3 +178,139 @@ fn a_derived_file_names_its_parent_and_is_checked_against_it() {
         std::fs::remove_file(path).unwrap();
     }
 }
+
+#[test]
+fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
+    use rowver::write::{stream, write_laid, Rows, Source, Spool};
+    let dir = std::env::temp_dir().join(format!("rowver-stream-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // The committed fixture, built whole.
+    let (header, arrays) = rebuilt(10.);
+    let whole = header["data"].clone();
+    let samples = vec![
+        Sample {
+            name: "A".into(),
+            label: "Sample A, π⁰".into(),
+            rows: 3,
+        },
+        Sample {
+            name: "B".into(),
+            label: "B".into(),
+            rows: 2,
+        },
+    ];
+    let files = whole["files"].as_array().unwrap().clone();
+    let mut labels = Labels::new();
+    labels.insert("flag".into(), [(0, "off".into()), (1, "on".into())].into());
+    let entry = [2_i64, 0, 4, 17, 1];
+    let file = |name: &str| dir.join(name);
+    let streamed = |columns: Vec<(String, Source)>, entry: Source, name: &str| {
+        let rows = Rows {
+            samples: samples.clone(),
+            files: files.clone(),
+            entry,
+            labels: labels.clone(),
+        };
+        let (mut data, laid) = stream(rows, columns, 3, &file(name)).unwrap();
+        data["sample_cols"] = whole["sample_cols"].clone();
+        let mut written = header.clone();
+        written["data"] = data;
+        write_laid(file(name), &written, laid).unwrap();
+        assert_eq!(
+            std::fs::read(file(name)).unwrap(),
+            to_bytes(&header, &arrays).unwrap(),
+            "{name}"
+        );
+    };
+    // Every column and the entries in uneven pieces, added out of order, one of them empty.
+    let spool = Spool::beside(&file("spooled.rvr")).unwrap();
+    let cuts = [
+        (3, 5, (1, 0)),
+        (1, 3, (0, 1)),
+        (0, 1, (0, 0)),
+        (3, 3, (0, 2)),
+    ];
+    for (from, to, order) in cuts {
+        let entries = Values::Flat(array(&entry[from..to]));
+        let columns = common::columns(from, to, 10.);
+        spool.add(columns.len(), order, entries).unwrap();
+        for (index, (_, values)) in columns.into_iter().enumerate() {
+            spool.add(index, order, values).unwrap();
+        }
+    }
+    let names: Vec<String> = common::columns(0, 5, 10.)
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    let columns = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            (
+                name.clone(),
+                Source::Spooled(spool.take(index).unwrap().unwrap()),
+            )
+        })
+        .collect();
+    let entries = Source::Spooled(spool.take(names.len()).unwrap().unwrap());
+    streamed(columns, entries, "spooled.rvr");
+    // Every column copied from that file as it lies.
+    let reader = rowver::rvr::Reader::open(file("spooled.rvr")).unwrap();
+    let copied = names
+        .iter()
+        .map(|name| (name.clone(), Source::Copied(&reader, name.clone())))
+        .collect();
+    streamed(
+        copied,
+        Source::Values(Values::Flat(array(&entry))),
+        "copied.rvr",
+    );
+    // A damaged array is refused, not copied: the file's last byte lies in its last column.
+    let mut bytes = std::fs::read(file("spooled.rvr")).unwrap();
+    *bytes.last_mut().unwrap() ^= 0xff;
+    std::fs::write(file("damaged.rvr"), bytes).unwrap();
+    let damaged = rowver::rvr::Reader::open(file("damaged.rvr")).unwrap();
+    let last = names.last().unwrap().clone();
+    let rows = Rows {
+        samples: samples.clone(),
+        files: files.clone(),
+        entry: Source::Values(Values::Flat(array(&entry))),
+        labels: labels.clone(),
+    };
+    let refused = stream(
+        rows,
+        vec![(last.clone(), Source::Copied(&damaged, last))],
+        1,
+        &file("x.rvr"),
+    );
+    assert!(refused.unwrap_err().to_string().contains("is damaged"));
+    std::fs::remove_file(file("damaged.rvr")).unwrap();
+    // A record that does not match its array is refused, though the file opens: MET's by_sample
+    // is not under the data checksum.
+    let mut lying = header.clone();
+    lying["data"]["cols"][1]["by_sample"][0] = "0".repeat(64).into();
+    std::fs::write(file("lying.rvr"), to_bytes(&lying, &arrays).unwrap()).unwrap();
+    let lying = rowver::rvr::Reader::open(file("lying.rvr")).unwrap();
+    let rows = Rows {
+        samples: samples.clone(),
+        files: files.clone(),
+        entry: Source::Values(Values::Flat(array(&entry))),
+        labels: labels.clone(),
+    };
+    let met = vec![("MET".to_owned(), Source::Copied(&lying, "MET".into()))];
+    let refused = stream(rows, met, 1, &file("x.rvr"));
+    assert!(refused
+        .unwrap_err()
+        .to_string()
+        .contains("does not hold what its record says"));
+    std::fs::remove_file(file("lying.rvr")).unwrap();
+    // Nothing is left beside the files.
+    drop(spool);
+    let mut left: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["copied.rvr", "spooled.rvr"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

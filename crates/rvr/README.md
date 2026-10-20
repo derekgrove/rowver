@@ -198,6 +198,16 @@ stops the press with what changed; resolve again and review the new lock if the 
 So a `.rvr` file always holds exactly what its lock says it read. Nothing is written until every
 file has been read: the file appears whole, or not at all.
 
+What a press holds in memory does not grow with the events it keeps (building on an earlier
+file, it holds the entry number of each event that file kept, 8 bytes each). Each file's kept values go
+to a temporary `FILE.partial.spool` beside the output as they are read, compressed where that
+pays, and each column is then packed from there a piece at a time into `FILE.partial.arrays/`.
+Both are deleted once the file is written, or when the press fails; a press that is killed
+leaves them, and the next one replaces them. While the columns are packed both exist, so a press
+needs free disk of about twice the file it writes. Pressing 12 million rows of 31 columns
+(a 1.5 GB file, 4 workers) peaks at 0.3 GB of memory, where holding every row took 4.9 GB
+(2026-10-20).
+
 The file carries the whole study: the text of `recipe.toml`, `samples.toml` and `samples.lock`,
 every file read (with its UUID and entries), which events of each sample were read (all, the first
 N with where each file stopped, or N at random with the seed, so `rvr validate` can choose them

@@ -105,20 +105,26 @@ impl Reader {
         columns.iter().find(|column| column["name"] == name)
     }
 
-    /// Decompress one array and refuse it unless its bytes have the checksum its record states.
-    fn array(&self, record: &Value, kind: &str, values: usize, label: &str) -> Result<Vec<u8>> {
-        let w = width(kind)?;
-        let expected = values
-            .checked_mul(w)
-            .ok_or_else(|| invalid(format!("{label}: byte count overflows")))?;
+    /// Where one array's compressed bytes lie: their offset in the file, and their size.
+    pub(crate) fn span(&self, record: &Value, label: &str) -> Result<(u64, u64)> {
         let (at, size) = (count(record, "at")? as u64, count(record, "size")? as u64);
         if at.checked_add(size).is_none_or(|end| end > self.length) {
             return Err(invalid(format!(
                 "{label}: compressed span exceeds the file"
             )));
         }
+        Ok((self.start + at, size))
+    }
+
+    /// Decompress one array and refuse it unless its bytes have the checksum its record states.
+    fn array(&self, record: &Value, kind: &str, values: usize, label: &str) -> Result<Vec<u8>> {
+        let w = width(kind)?;
+        let expected = values
+            .checked_mul(w)
+            .ok_or_else(|| invalid(format!("{label}: byte count overflows")))?;
+        let (at, size) = self.span(record, label)?;
         let mut file = std::fs::File::open(&self.path)?;
-        file.seek(SeekFrom::Start(self.start + at))?;
+        file.seek(SeekFrom::Start(at))?;
         let mut packed = vec![0; size as usize];
         file.read_exact(&mut packed)?;
         let bytes = crate::codec::unpack(packed, w, expected, label)?;

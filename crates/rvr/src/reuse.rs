@@ -2,26 +2,23 @@
 //! says which events its cuts kept (`data.files` and `entry`), so when the study, its cuts, its
 //! event choice and the build of rvr are the same, only the columns that are new or whose
 //! definition changed are computed, over the entries a full press reads, keeping the events the
-//! earlier file kept; every other column is copied from it. The file written is the one a full
-//! press of the recipe writes.
+//! earlier file kept; every other column is copied from it as it lies, compressed. The file
+//! written is the one a full press of the recipe writes.
 
 use crate::samples::resolve::Lock;
 use crate::samples::spec::Events;
-use rowver::rvr::{Held, Reader};
-use rowver::write;
-use rowver::NumericBuffer;
-use rvr_recipe::{names, Expression, Kind, Recipe};
+use rowver::rvr::Reader;
+use rvr_recipe::{names, Expression, Recipe};
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 /// What an earlier press gives a new one.
 pub struct Earlier {
-    /// Per output column, in the recipe's order: its values in each sample, when copied.
-    pub reused: Vec<Option<Vec<write::Values>>>,
+    file: Reader,
+    /// Per output column, in the recipe's order: whether it is copied from the earlier file.
+    pub reused: Vec<bool>,
     /// The kept entries of each file read, by sample and the file's `at`.
     pub kept: HashMap<(String, String), Vec<u64>>,
-    /// Each sample's `entry` values, which the new reads must give again.
-    pub entry: Vec<Vec<i64>>,
 }
 
 /// Every name an expression uses, the names of the functions and helpers it calls included.
@@ -121,33 +118,11 @@ fn cuts(recipe: &Recipe) -> Recipe {
     }
 }
 
-/// One column's values in each sample, cut from the whole column by the samples' rows.
-fn by_sample(held: Held, rows: &[usize]) -> Result<Vec<write::Values>, String> {
-    let width = Kind::named(&held.kind)
-        .map_err(|_| format!("its column kind {} is unknown", held.kind))?
-        .width();
-    let mut out = Vec::new();
-    let mut first = 0;
-    for &n in rows {
-        let last = first + n;
-        let buffer = |from: usize, to: usize| NumericBuffer {
-            kind: held.kind.clone(),
-            count: to - from,
-            bytes: held.bytes[from * width..to * width].to_vec(),
-        };
-        out.push(match &held.offsets {
-            None => write::Values::Flat(buffer(first, last)),
-            Some(offsets) => write::Values::Jagged {
-                counts: offsets[first..=last]
-                    .windows(2)
-                    .map(|w| w[1] - w[0])
-                    .collect(),
-                content: buffer(offsets[first], offsets[last]),
-            },
-        });
-        first = last;
+impl Earlier {
+    /// The earlier file, which the columns it gives are copied from.
+    pub fn file(&self) -> &Reader {
+        &self.file
     }
-    Ok(out)
 }
 
 /// What the file at `path` gives this press: nothing when there is none, or why it cannot.
@@ -218,10 +193,6 @@ fn read(
     {
         return Err("its samples are not the lock's".into());
     }
-    let rows: Vec<usize> = samples
-        .iter()
-        .map(|s| s["rows"].as_u64().unwrap_or(0) as usize)
-        .collect();
     let failed = |e: rowver::Error| format!("it could not be read ({e})");
     let entries = file.entry().map_err(failed)?;
     let mut kept = HashMap::new();
@@ -238,37 +209,22 @@ fn read(
         let (Some(sample), Some(path)) = key else {
             return Err("it lists a file without its sample or path".into());
         };
-        kept.insert(
-            (sample.to_owned(), path.to_owned()),
-            span.iter().map(|&e| e as u64).collect(),
-        );
+        let entries = span.iter().map(|&e| e as u64).collect();
+        if kept
+            .insert((sample.to_owned(), path.to_owned()), entries)
+            .is_some()
+        {
+            return Err(format!("it read {path} twice for {sample}"));
+        }
         at += n;
     }
-    let mut entry = Vec::new();
-    let mut first = 0;
-    for &n in &rows {
-        entry.push(
-            entries
-                .get(first..first + n)
-                .ok_or("its samples hold more rows than it has")?
-                .to_vec(),
-        );
-        first += n;
-    }
-    let mut reused = Vec::new();
-    for &(name, _, _) in outputs {
-        let same = only(&old, &[name]) == only(recipe, &[name]);
-        let held = match same {
-            true => file.column(name).map_err(failed)?,
-            false => None,
-        };
-        reused.push(held.map(|held| by_sample(held, &rows)).transpose()?);
-    }
-    Ok(Earlier {
-        reused,
-        kept,
-        entry,
-    })
+    let reused = outputs
+        .iter()
+        .map(|&(name, _, _)| {
+            file.record(name).is_some() && only(&old, &[name]) == only(recipe, &[name])
+        })
+        .collect();
+    Ok(Earlier { file, reused, kept })
 }
 
 #[cfg(test)]

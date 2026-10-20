@@ -1,3 +1,4 @@
 # The pressed files: made again from recipe.toml, samples.toml and samples.lock.
 *.rvr
-*.rvr.partial
+# What a press holds while it runs, and leaves behind if it is stopped.
+*.rvr.partial*

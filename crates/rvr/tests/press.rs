@@ -402,7 +402,10 @@ branches = ["weight", "nJet"]
     std::fs::write(&input, [&bytes[..], b"x"].concat()).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
-    assert!(said.contains("changed since samples.lock was written"), "{said}");
+    assert!(
+        said.contains("changed since samples.lock was written"),
+        "{said}"
+    );
     std::fs::write(&input, &bytes).unwrap();
     std::fs::write(
         dir.join("recipe.toml"),

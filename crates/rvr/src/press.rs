@@ -28,6 +28,9 @@ use std::sync::{Arc, Mutex};
 /// How many entries of a file are read and held at a time.
 const CHUNK: u64 = 50_000;
 
+/// How many bytes of kept values a file gathers before they go to the spool on disk.
+const SPOOLED: usize = 16 << 20;
+
 /// In a local file, chosen entries further apart than this are read as runs of their own, so a
 /// sparse random choice reads the baskets near its entries rather than every basket. A remote
 /// file is cut only at a gap of a whole `CHUNK`: one more request costs about what 10 MB of
@@ -210,6 +213,8 @@ struct Shared<'a> {
     dir: &'a Path,
     /// Set once any input has failed, so the others stop reading.
     failed: AtomicBool,
+    /// Where each input's kept values go as they are gathered, by output and input.
+    spool: &'a write::Spool,
 }
 
 /// The branches of one open tree over the entries in hand, read when an expression first names them.
@@ -279,11 +284,12 @@ struct Gathered {
     counts: Option<Vec<usize>>,
 }
 
-/// What one input contributed.
+/// What one input contributed; its values are in the spool.
 struct Taken {
-    gathered: Vec<Gathered>,
-    /// The entry number of each kept event.
-    entry: Vec<i64>,
+    /// Each output's kind and whether it is a list, unless no entry was read.
+    kinds: Vec<(Kind, bool)>,
+    /// How many events it kept.
+    rows: usize,
     record: Value,
     /// Entries read, before any cut.
     entries: u64,
@@ -405,6 +411,41 @@ fn gather(held: &mut Gathered, column: Array, keep: &[bool], at: &str) -> Result
         if let Some(counts) = &mut held.counts {
             counts.push(to - from);
         }
+    }
+    Ok(())
+}
+
+/// Send what a file has gathered since it last did to the spool, keeping each column's kind:
+/// its columns, then its entry numbers.
+fn spooled(
+    spool: &write::Spool,
+    gathered: &mut [Option<Gathered>],
+    entry: &mut Vec<i64>,
+    order: write::Order,
+) -> Result<(), String> {
+    let failed = |e: rowver::Error| format!("its kept values could not be held on disk ({e})");
+    let entries = write::array(&std::mem::take(entry));
+    spool
+        .add(gathered.len(), order, write::Values::Flat(entries))
+        .map_err(failed)?;
+    for (index, held) in gathered
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(i, h)| Some((i, h.as_mut()?)))
+    {
+        let buffer = NumericBuffer {
+            kind: held.kind.name().into(),
+            count: held.bytes.len() / held.kind.width(),
+            bytes: std::mem::take(&mut held.bytes),
+        };
+        let values = match &mut held.counts {
+            Some(counts) => write::Values::Jagged {
+                counts: std::mem::take(counts),
+                content: buffer,
+            },
+            None => write::Values::Flat(buffer),
+        };
+        spool.add(index, order, values).map_err(failed)?;
     }
     Ok(())
 }
@@ -649,6 +690,7 @@ fn take(
     shared: &Shared,
     sample: &BTreeMap<String, Constant>,
     input: &Input,
+    order: usize,
 ) -> Result<Taken, String> {
     let Shared {
         recipe, outputs, ..
@@ -661,9 +703,12 @@ fn take(
         (&input.chosen, &input.file.uuid, input.file.entries)
     {
         if chosen.is_empty() {
+            if input.kept.as_ref().is_some_and(|kept| !kept.is_empty()) {
+                return Err(located("none of the events the earlier file kept were chosen (a bug in rvr: press with --full, and please report it)".into()));
+            }
             return Ok(Taken {
-                gathered: Vec::new(),
-                entry: Vec::new(),
+                kinds: Vec::new(),
+                rows: 0,
                 record: json!({"tree": input.tree, "uuid": uuid, "entries": total, "take": 0}),
                 entries: 0,
                 cutflow: vec![0; recipe.keep.len()],
@@ -702,7 +747,14 @@ fn take(
     };
     let mut gathered: Vec<Option<Gathered>> = outputs.iter().map(|_| None).collect();
     let mut cutflow = vec![0_u64; recipe.keep.len()];
-    let mut entry = Vec::new();
+    let (mut entry, mut piece, mut rows) = (Vec::new(), 0, 0);
+    // Building on an earlier file, the events kept must be the ones it kept.
+    let again = |entry: &[i64], from: usize| {
+        match &input.kept {
+        Some(kept) if kept.get(from..from + entry.len()).is_none_or(|kept| kept.iter().zip(entry).any(|(k, e)| *k as i64 != *e)) => Err(located("the events read again are not the ones the earlier file kept (a bug in rvr: press with --full, and please report it)".into())),
+        _ => Ok(()),
+    }
+    };
     let gap = if remote { CHUNK } else { GAP };
     for (first, last) in runs(entries, chosen, gap) {
         if shared.failed.load(Ordering::Acquire) {
@@ -792,6 +844,25 @@ fn take(
                 .filter(|event| keep[(event - first) as usize])
                 .map(|event| event as i64),
         );
+        let held: usize = gathered
+            .iter()
+            .flatten()
+            .map(|g| g.bytes.len() + g.counts.as_ref().map_or(0, |c| c.len() * 8))
+            .sum();
+        if held + entry.len() * 8 >= SPOOLED {
+            again(&entry, rows)?;
+            rows += entry.len();
+            spooled(shared.spool, &mut gathered, &mut entry, (order, piece)).map_err(located)?;
+            piece += 1;
+        }
+    }
+    if !entry.is_empty() {
+        again(&entry, rows)?;
+        rows += entry.len();
+        spooled(shared.spool, &mut gathered, &mut entry, (order, piece)).map_err(located)?;
+    }
+    if input.kept.as_ref().is_some_and(|kept| kept.len() != rows) {
+        return Err(located("fewer events were read again than the earlier file kept (a bug in rvr: press with --full, and please report it)".into()));
     }
     let mut record =
         json!({"tree": input.tree, "uuid": file.header().uuid_string(), "entries": total});
@@ -808,8 +879,12 @@ fn take(
         record["served"] = json!({"rse": rse, "host": host});
     }
     Ok(Taken {
-        gathered: gathered.into_iter().flatten().collect(),
-        entry,
+        kinds: gathered
+            .into_iter()
+            .flatten()
+            .map(|g| (g.kind, g.counts.is_some()))
+            .collect(),
+        rows,
         record,
         entries: chosen.map_or(entries, |chosen| chosen.len() as u64),
         cutflow,
@@ -838,7 +913,7 @@ fn take_all(
                         break;
                     }
                     let input = &work[at];
-                    let taken = take(shared, &fields[input.sample], input);
+                    let taken = take(shared, &fields[input.sample], input, at);
                     match &taken {
                         Ok(taken) => {
                             let n = finished.fetch_add(1, Ordering::Relaxed) + 1;
@@ -846,7 +921,7 @@ fn take_all(
                                 "  {n:>w$}/{}  {:>11} entries  {:>9} kept   {}",
                                 work.len(),
                                 count(taken.entries),
-                                count(taken.entry.len() as u64),
+                                count(taken.rows as u64),
                                 input.file.at.rsplit('/').next().unwrap_or(&input.file.at),
                                 w = work.len().to_string().len()
                             );
@@ -883,7 +958,7 @@ struct Tally {
     files: Vec<Value>,
 }
 
-/// Join one sample's inputs into its piece of the file, checking each column keeps one kind.
+/// How many events one sample kept, and its file records, checking each column keeps one kind.
 fn joined(
     sample: &Locked,
     inputs: &[&Input],
@@ -891,27 +966,16 @@ fn joined(
     outputs: &[Output],
     kinds: &mut [Option<(Kind, bool)>],
     tally: &mut Tally,
-) -> Result<(Joined, Map<String, Value>), String> {
-    let mut gathered: Vec<Option<Gathered>> = outputs.iter().map(|_| None).collect();
-    let (mut entry, mut records) = (Vec::new(), Map::new());
+) -> Result<(usize, Map<String, Value>), String> {
+    let (mut rows, mut records) = (0, Map::new());
     for input in inputs {
         let taken = taken.next().ok_or("a file was left unread")?;
-        for (index, piece) in taken.gathered.into_iter().enumerate() {
-            let found = (piece.kind, piece.counts.is_some());
+        for ((index, found), (name, _, _)) in taken.kinds.into_iter().enumerate().zip(outputs) {
             if *kinds[index].get_or_insert(found) != found {
                 return Err(format!(
-                    "{} is not the same kind of column in {} as in the files before it",
-                    piece.name, input.file.at
+                    "{name} is not the same kind of column in {} as in the files before it",
+                    input.file.at
                 ));
-            }
-            match &mut gathered[index] {
-                Some(held) => {
-                    held.bytes.extend(piece.bytes);
-                    if let (Some(counts), Some(more)) = (&mut held.counts, piece.counts) {
-                        counts.extend(more);
-                    }
-                }
-                empty => *empty = Some(piece),
             }
         }
         for (total, kept) in tally.cutflow.iter_mut().zip(&taken.cutflow) {
@@ -920,43 +984,11 @@ fn joined(
         tally.read += taken.entries;
         tally
             .files
-            .push(json!({"sample": sample.name, "path": input.file.at, "rows": taken.entry.len()}));
+            .push(json!({"sample": sample.name, "path": input.file.at, "rows": taken.rows}));
         records.insert(input.file.at.clone(), taken.record);
-        entry.extend(taken.entry);
+        rows += taken.rows;
     }
-    Ok(((gathered, entry), records))
-}
-
-/// One sample's gathered columns (none where it kept no event of any file read) and entries.
-type Joined = (Vec<Option<Gathered>>, Vec<i64>);
-
-/// A sample's piece of the file. A column it gathered nothing of (a sample of empty files, or
-/// one read not at all) is empty, of the kind the other samples gave it.
-fn piece(
-    (name, label): (&str, &str),
-    (gathered, entry): Joined,
-    outputs: &[Output],
-    kinds: &[Option<(Kind, bool)>],
-) -> Result<write::Piece, String> {
-    let columns = gathered.into_iter().zip(outputs).zip(kinds).map(|((held, (column, _, _)), kind)| {
-        let held = match (held, kind) {
-            (Some(held), _) => held,
-            (None, Some((kind, listed))) => Gathered { name: (*column).clone(), kind: *kind, bytes: Vec::new(), counts: listed.then(Vec::new) },
-            (None, None) => return Err(format!("no sample has an event to take {column} from, so its kind is unknown: press more events")),
-        };
-        let buffer = NumericBuffer { kind: held.kind.name().into(), count: held.bytes.len() / held.kind.width(), bytes: held.bytes };
-        let values = match held.counts {
-            Some(counts) => write::Values::Jagged { counts, content: buffer },
-            None => write::Values::Flat(buffer),
-        };
-        Ok((held.name, values))
-    });
-    Ok(write::Piece {
-        name: name.to_owned(),
-        label: label.to_owned(),
-        columns: columns.collect::<Result<_, String>>()?,
-        entry,
-    })
+    Ok((rows, records))
 }
 
 /// A whole number with thousands separated, as rvr prints them.
@@ -1013,7 +1045,7 @@ pub fn press(
         .map(|(n, e)| (n, e, true))
         .chain(recipe.columns.iter().map(|(n, e)| (n, e, false)))
         .collect();
-    let earlier = match reuse
+    let mut earlier = match reuse
         .then(|| crate::reuse::earlier(target, texts, &recipe, &lock, &asked, &outputs))
         .flatten()
     {
@@ -1033,7 +1065,7 @@ pub fn press(
         Some(earlier) => outputs
             .iter()
             .zip(&earlier.reused)
-            .filter(|(_, reused)| reused.is_none())
+            .filter(|(_, reused)| !**reused)
             .map(|(output, _)| *output)
             .collect(),
         None => outputs.clone(),
@@ -1043,7 +1075,7 @@ pub fn press(
         crate::reuse::only(&recipe, &names)
     });
     let reader = uncut.as_ref().unwrap_or(&recipe);
-    let work: Vec<Input> = lock
+    let mut work: Vec<Input> = lock
         .sample
         .iter()
         .enumerate()
@@ -1068,17 +1100,21 @@ pub fn press(
                     kept: None,
                 })
         })
-        .map(|mut input| {
-            if let Some(earlier) = &earlier {
-                let key = (
-                    lock.sample[input.sample].name.clone(),
-                    input.file.at.clone(),
-                );
-                input.kept = Some(earlier.kept.get(&key).cloned().unwrap_or_default());
-            }
-            input
-        })
         .collect();
+    let kept: usize = earlier
+        .iter()
+        .flat_map(|e| e.kept.values())
+        .map(Vec::len)
+        .sum();
+    for input in &mut work {
+        if let Some(earlier) = &mut earlier {
+            let key = (
+                lock.sample[input.sample].name.clone(),
+                input.file.at.clone(),
+            );
+            input.kept = Some(earlier.kept.remove(&key).unwrap_or_default());
+        }
+    }
     let remote = work
         .iter()
         .any(|i| i.file.at.contains("://") || i.file.lfn.is_some());
@@ -1129,8 +1165,7 @@ pub fn press(
     };
     let read: u64 = lock.sample.iter().map(|s| s.events_read).sum();
     match &earlier {
-        Some(earlier) => {
-            let kept: usize = earlier.entry.iter().map(Vec::len).sum();
+        Some(_) => {
             let names: Vec<&str> = reading.iter().map(|(n, _, _)| n.as_str()).collect();
             println!(
                 "{} has the events this recipe keeps ({}) and {} of its {} columns.",
@@ -1158,6 +1193,9 @@ pub fn press(
         ),
     }
     let mentions = reader.mentions();
+    let staged = target.with_extension("rvr.partial");
+    let held = |e: rowver::Error| format!("{} could not be written: {e}", target.display());
+    let spool = write::Spool::beside(&staged).map_err(held)?;
     let shared = Shared {
         recipe: reader,
         outputs: &reading,
@@ -1167,6 +1205,7 @@ pub fn press(
         mentions: &mentions,
         dir: base,
         failed: AtomicBool::new(false),
+        spool: &spool,
     };
     let mut taken = take_all(&shared, &lock, &work, workers)?.into_iter();
     let mut tally = Tally {
@@ -1174,20 +1213,18 @@ pub fn press(
         cutflow: vec![0; recipe.keep.len()],
         files: Vec::new(),
     };
-    let (mut pieces, mut made_files) = (Vec::new(), Map::new());
+    let (mut samples, mut made_files) = (Vec::new(), Map::new());
     let mut kinds: Vec<Option<(Kind, bool)>> = vec![None; reading.len()];
     for (index, sample) in lock.sample.iter().enumerate() {
         let inputs: Vec<&Input> = work.iter().filter(|i| i.sample == index).collect();
-        let ((gathered, entry), records) = joined(
+        let (rows, records) = joined(
             sample, &inputs, &mut taken, &reading, &mut kinds, &mut tally,
         )?;
-        if earlier
-            .as_ref()
-            .is_some_and(|earlier| entry != earlier.entry[index])
-        {
-            return Err(format!("the events read again of {} are not the ones {} kept (a bug in rvr: press with --full, and please report it)", sample.name, target.display()));
-        }
-        pieces.push((gathered, entry));
+        samples.push(write::Sample {
+            name: sample.name.clone(),
+            label: sample.label.clone(),
+            rows,
+        });
         let mut metadata = sample.metadata.clone();
         metadata.insert("events_read".into(), sample.events_read.into());
         metadata.insert("events_total".into(), sample.events_total.into());
@@ -1199,35 +1236,60 @@ pub fn press(
     for line in datasets.iter().flat_map(Datasets::summary) {
         println!("  {line}");
     }
-    let mut pieces = lock
-        .sample
-        .iter()
-        .zip(pieces)
-        .map(|(sample, joined)| piece((&sample.name, &sample.label), joined, &reading, &kinds))
-        .collect::<Result<Vec<_>, String>>()?;
-    let built_on = earlier.is_some();
-    if let Some(earlier) = earlier {
-        let mut copied: Vec<_> = earlier
-            .reused
-            .into_iter()
-            .map(|r| r.map(Vec::into_iter))
-            .collect();
-        for piece in &mut pieces {
-            let mut fresh = std::mem::take(&mut piece.columns).into_iter();
-            for ((name, _, _), copied) in outputs.iter().zip(&mut copied) {
-                let column = match copied {
-                    Some(samples) => samples.next().map(|values| ((*name).clone(), values)),
-                    None => fresh.next(),
-                };
-                piece
-                    .columns
-                    .push(column.ok_or("a column was left unbuilt")?);
-            }
+    for ((column, _, _), kind) in reading.iter().zip(&kinds) {
+        if kind.is_none() {
+            return Err(format!("no sample has an event to take {column} from, so its kind is unknown: press more events"));
         }
     }
     let failed = |e: rowver::Error| e.to_string();
-    let (mut data, arrays) =
-        write::pack_with(pieces, Labels::new(), tally.files, workers).map_err(failed)?;
+    let entry = match spool.take(reading.len()).map_err(failed)? {
+        Some(spooled) => write::Source::Spooled(spooled),
+        None => write::Source::Values(write::Values::Flat(write::array::<i64>(&[]))),
+    };
+    let rows = write::Rows {
+        samples,
+        files: tally.files,
+        entry,
+        labels: Labels::new(),
+    };
+    // Each column is copied from the earlier file, or packed from what the spool holds of it,
+    // which is nothing when no sample kept an event of it.
+    let mut fresh = reading
+        .iter()
+        .map(|(name, _, _)| *name)
+        .zip(&kinds)
+        .enumerate();
+    let mut columns = Vec::new();
+    for (index, (name, _, _)) in outputs.iter().enumerate() {
+        if let Some(earlier) = earlier.as_ref().filter(|e| e.reused[index]) {
+            let copied = write::Source::Copied(earlier.file(), (*name).clone());
+            columns.push(((*name).clone(), copied));
+            continue;
+        }
+        let (at, (_, kind)) = fresh.next().ok_or("a column was left unread")?;
+        let source = match spool.take(at).map_err(failed)? {
+            Some(spooled) => write::Source::Spooled(spooled),
+            None => {
+                let (kind, listed) = kind.expect("every kind was found");
+                let buffer = NumericBuffer {
+                    kind: kind.name().into(),
+                    count: 0,
+                    bytes: Vec::new(),
+                };
+                write::Source::Values(match listed {
+                    true => write::Values::Jagged {
+                        counts: Vec::new(),
+                        content: buffer,
+                    },
+                    false => write::Values::Flat(buffer),
+                })
+            }
+        };
+        columns.push(((*name).clone(), source));
+    }
+    let (mut data, laid) = write::stream(rows, columns, workers, &staged).map_err(failed)?;
+    drop(spool);
+    let built_on = earlier.is_some();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
@@ -1263,8 +1325,7 @@ pub fn press(
     if let Some(secret) = &signer {
         rowver::sign::sign(&mut header, secret).map_err(failed)?;
     }
-    let staged = target.with_extension("rvr.partial");
-    let written = write::write(&staged, &header, &arrays)
+    let written = write::write_laid(&staged, &header, laid)
         .map_err(|e| e.to_string())
         .and_then(|()| std::fs::rename(&staged, target).map_err(|e| e.to_string()));
     if let Err(e) = written {

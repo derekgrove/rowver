@@ -6,12 +6,12 @@ use ruzstd::encoding::{compress_to_vec, CompressionLevel};
 
 /// The most bytes a zstd frame of `size` bytes is let to declare: a 128 KiB block can be one
 /// byte repeated, so a damaged header cannot ask for more memory than its span could fill.
-fn most(size: usize) -> usize {
+pub(crate) fn most(size: usize) -> usize {
     size.saturating_mul(1 << 15).saturating_add(1 << 17)
 }
 
 /// Every value's first byte, then every value's second byte, and so on.
-fn shuffle(raw: &[u8], w: usize) -> Vec<u8> {
+pub(crate) fn shuffle(raw: &[u8], w: usize) -> Vec<u8> {
     let count = raw.len() / w;
     if w == 1 || count == 0 {
         return raw.to_vec();

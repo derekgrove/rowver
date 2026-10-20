@@ -64,54 +64,6 @@ impl NumericArray {
         })
     }
 
-    /// Call `each` on every value in order, as `value` reads it, choosing the kind once.
-    pub fn each_value(&self, mut each: impl FnMut(f64)) -> Result<()> {
-        macro_rules! scan {
-            ($t:ty) => {
-                for b in self.bytes.chunks_exact(std::mem::size_of::<$t>()) {
-                    each(<$t>::from_le_bytes(b.try_into().unwrap()) as f64)
-                }
-            };
-        }
-        match self.kind.as_str() {
-            "f8" => scan!(f64),
-            "f4" => scan!(f32),
-            "i8" => scan!(i64),
-            "i4" => scan!(i32),
-            "i2" => scan!(i16),
-            "i1" => scan!(i8),
-            "u8" => scan!(u64),
-            "u4" => scan!(u32),
-            "u2" => scan!(u16),
-            "u1" | "b1" => scan!(u8),
-            kind => return Err(invalid(format!("Unsupported numeric kind {kind}"))),
-        }
-        Ok(())
-    }
-
-    /// Call `each` on every value in order, exactly, as `integer` reads it, choosing the kind once.
-    pub fn each_integer(&self, mut each: impl FnMut(i128)) -> Result<()> {
-        macro_rules! scan {
-            ($t:ty) => {
-                for b in self.bytes.chunks_exact(std::mem::size_of::<$t>()) {
-                    each(<$t>::from_le_bytes(b.try_into().unwrap()) as i128)
-                }
-            };
-        }
-        match self.kind.as_str() {
-            "i8" => scan!(i64),
-            "i4" => scan!(i32),
-            "i2" => scan!(i16),
-            "i1" => scan!(i8),
-            "u8" => scan!(u64),
-            "u4" => scan!(u32),
-            "u2" => scan!(u16),
-            "u1" | "b1" => scan!(u8),
-            _ => return Err(invalid("Floating arrays have no exact integer values")),
-        }
-        Ok(())
-    }
-
     /// Read signed integer identity and offset arrays exactly.
     pub fn signed(&self, index: usize) -> Result<i64> {
         if index >= self.count {
@@ -138,4 +90,52 @@ impl From<crate::NumericBuffer> for NumericArray {
             bytes: buffer.bytes,
         }
     }
+}
+
+/// Call `each` on every value of `bytes` in order, as `NumericArray::value` reads it.
+pub(crate) fn each_value(kind: &str, bytes: &[u8], mut each: impl FnMut(f64)) -> Result<()> {
+    macro_rules! scan {
+        ($t:ty) => {
+            for b in bytes.chunks_exact(std::mem::size_of::<$t>()) {
+                each(<$t>::from_le_bytes(b.try_into().unwrap()) as f64)
+            }
+        };
+    }
+    match kind {
+        "f8" => scan!(f64),
+        "f4" => scan!(f32),
+        "i8" => scan!(i64),
+        "i4" => scan!(i32),
+        "i2" => scan!(i16),
+        "i1" => scan!(i8),
+        "u8" => scan!(u64),
+        "u4" => scan!(u32),
+        "u2" => scan!(u16),
+        "u1" | "b1" => scan!(u8),
+        kind => return Err(invalid(format!("Unsupported numeric kind {kind}"))),
+    }
+    Ok(())
+}
+
+/// Call `each` on every value of `bytes` in order, exactly, as `NumericArray::integer` reads it.
+pub(crate) fn each_integer(kind: &str, bytes: &[u8], mut each: impl FnMut(i128)) -> Result<()> {
+    macro_rules! scan {
+        ($t:ty) => {
+            for b in bytes.chunks_exact(std::mem::size_of::<$t>()) {
+                each(<$t>::from_le_bytes(b.try_into().unwrap()) as i128)
+            }
+        };
+    }
+    match kind {
+        "i8" => scan!(i64),
+        "i4" => scan!(i32),
+        "i2" => scan!(i16),
+        "i1" => scan!(i8),
+        "u8" => scan!(u64),
+        "u4" => scan!(u32),
+        "u2" => scan!(u16),
+        "u1" | "b1" => scan!(u8),
+        _ => return Err(invalid("Floating arrays have no exact integer values")),
+    }
+    Ok(())
 }

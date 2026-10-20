@@ -25,7 +25,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 - `rowver::rvr`: open, read and validate files (`Reader`, `validate_file`).
-- `rowver::write`: build the arrays and write a file.
+- `rowver::write`: build the arrays and write a file, whole in memory or a piece at a time
+  through a spool on disk (`stream`).
 - `rowver::sign`: sign a header with ed25519 and check a signature.
 - `rowver::choice`: the random event choice a file can record.
 

@@ -9,7 +9,7 @@
 //! Difference: a flat column holding a NaN or an infinity is refused with a message; the Python
 //! writer stops on the same column with an arithmetic error. Jagged content has no facts.
 
-use crate::numeric::NumericArray;
+use crate::numeric::{each_integer, each_value};
 use crate::{invalid, Result};
 use serde_json::{Map, Number, Value};
 use std::cmp::Ordering;
@@ -52,82 +52,131 @@ fn whole(value: i128) -> Value {
     Value::Number(Number::from_i128(value).expect("arbitrary precision holds every i128"))
 }
 
-/// Work out the facts of one flat column, in the order the Python writer records them.
-pub(super) fn facts(
-    array: &NumericArray,
-    labels: Option<&BTreeMap<i128, String>>,
-    name: &str,
-) -> Result<Map<String, Value>> {
-    let integer = !array.kind.starts_with('f');
-    let mut out = Map::new();
-    if array.count == 0 {
-        out.insert("lim".into(), Value::Array(vec![whole(0), whole(0)]));
-        out.insert("nice".into(), Value::Array(vec![whole(0), whole(1)]));
-        if integer {
-            out.insert("vals".into(), Value::Array(Vec::new()));
+/// The facts of one flat column, gathered a piece at a time in row order.
+pub(super) struct Facts {
+    kind: String,
+    seen: usize,
+    finite: bool,
+    low: f64,
+    high: f64,
+    lo: i128,
+    hi: i128,
+    distinct: BTreeSet<i128>,
+    last: Option<i128>,
+}
+
+impl Facts {
+    /// Nothing seen yet of a column of `kind`.
+    pub(super) fn new(kind: &str) -> Self {
+        Self {
+            kind: kind.to_owned(),
+            seen: 0,
+            finite: true,
+            low: f64::INFINITY,
+            high: f64::NEG_INFINITY,
+            lo: i128::MAX,
+            hi: i128::MIN,
+            distinct: BTreeSet::new(),
+            last: None,
         }
-        return Ok(out);
     }
-    if !integer {
-        let (mut lo, mut hi, mut finite) = (f64::INFINITY, f64::NEG_INFINITY, true);
-        array.each_value(|value| {
-            finite &= value.is_finite();
-            lo = if value < lo { value } else { lo };
-            hi = if value > hi { value } else { hi };
-        })?;
-        if !finite {
-            return Err(invalid(format!("{name}: floating values must be finite")));
+
+    fn integer(&self) -> bool {
+        !self.kind.starts_with('f')
+    }
+
+    /// See the next values, as little-endian bytes.
+    pub(super) fn add(&mut self, bytes: &[u8]) -> Result<()> {
+        self.seen += bytes.len();
+        if !self.integer() {
+            let (low, high, finite) = (&mut self.low, &mut self.high, &mut self.finite);
+            return each_value(&self.kind, bytes, |value| {
+                *finite &= value.is_finite();
+                *low = if value < *low { value } else { *low };
+                *high = if value > *high { value } else { *high };
+            });
         }
-        let mut nice = [outward(lo, false).min(lo), outward(hi, true).max(hi)];
+        let (lo, hi, distinct, last) = (
+            &mut self.lo,
+            &mut self.hi,
+            &mut self.distinct,
+            &mut self.last,
+        );
+        // Rows of a sample often repeat a value; only a change can add to the set.
+        each_integer(&self.kind, bytes, |value| {
+            *lo = (*lo).min(value);
+            *hi = (*hi).max(value);
+            if *last != Some(value) && distinct.len() <= FEW {
+                distinct.insert(value);
+            }
+            *last = Some(value);
+        })
+    }
+
+    /// The facts, in the order the Python writer records them.
+    pub(super) fn finish(
+        self,
+        labels: Option<&BTreeMap<i128, String>>,
+        name: &str,
+    ) -> Result<Map<String, Value>> {
+        let integer = self.integer();
+        let mut out = Map::new();
+        if self.seen == 0 {
+            out.insert("lim".into(), Value::Array(vec![whole(0), whole(0)]));
+            out.insert("nice".into(), Value::Array(vec![whole(0), whole(1)]));
+            if integer {
+                out.insert("vals".into(), Value::Array(Vec::new()));
+            }
+            return Ok(out);
+        }
+        if !integer {
+            let (lo, hi) = (self.low, self.high);
+            if !self.finite {
+                return Err(invalid(format!("{name}: floating values must be finite")));
+            }
+            let mut nice = [outward(lo, false).min(lo), outward(hi, true).max(hi)];
+            if nice[0] == nice[1] {
+                nice[1] += 1.0;
+            }
+            out.insert("lim".into(), Value::Array(vec![float(lo)?, float(hi)?]));
+            out.insert(
+                "nice".into(),
+                Value::Array(vec![float(nice[0])?, float(nice[1])?]),
+            );
+            return Ok(out);
+        }
+        let (lo, hi, distinct) = (self.lo, self.hi, self.distinct);
+        let mut nice = [
+            Some(outward(lo as f64, false))
+                .filter(|end| against(*end, lo).is_le())
+                .map_or(lo, |end| end.floor() as i128),
+            Some(outward(hi as f64, true))
+                .filter(|end| against(*end, hi).is_ge())
+                .map_or(hi, |end| end.ceil() as i128),
+        ];
         if nice[0] == nice[1] {
-            nice[1] += 1.0;
+            nice[1] += 1;
         }
-        out.insert("lim".into(), Value::Array(vec![float(lo)?, float(hi)?]));
+        out.insert("lim".into(), Value::Array(vec![whole(lo), whole(hi)]));
         out.insert(
             "nice".into(),
-            Value::Array(vec![float(nice[0])?, float(nice[1])?]),
+            Value::Array(vec![whole(nice[0]), whole(nice[1])]),
         );
-        return Ok(out);
-    }
-    let (mut lo, mut hi, mut distinct) = (i128::MAX, i128::MIN, BTreeSet::new());
-    // Rows of a sample often repeat a value; only a change can add to the set.
-    let mut last = None;
-    array.each_integer(|value| {
-        lo = lo.min(value);
-        hi = hi.max(value);
-        if last != Some(value) && distinct.len() <= FEW {
-            distinct.insert(value);
+        if distinct.len() <= FEW {
+            out.insert(
+                "vals".into(),
+                Value::Array(distinct.iter().copied().map(whole).collect()),
+            );
+            if let Some(labels) = labels.filter(|labels| !labels.is_empty()) {
+                let names = distinct
+                    .iter()
+                    .filter_map(|value| {
+                        Some((value.to_string(), labels.get(value)?.clone().into()))
+                    })
+                    .collect();
+                out.insert("names".into(), Value::Object(names));
+            }
         }
-        last = Some(value);
-    })?;
-    let mut nice = [
-        Some(outward(lo as f64, false))
-            .filter(|end| against(*end, lo).is_le())
-            .map_or(lo, |end| end.floor() as i128),
-        Some(outward(hi as f64, true))
-            .filter(|end| against(*end, hi).is_ge())
-            .map_or(hi, |end| end.ceil() as i128),
-    ];
-    if nice[0] == nice[1] {
-        nice[1] += 1;
+        Ok(out)
     }
-    out.insert("lim".into(), Value::Array(vec![whole(lo), whole(hi)]));
-    out.insert(
-        "nice".into(),
-        Value::Array(vec![whole(nice[0]), whole(nice[1])]),
-    );
-    if distinct.len() <= FEW {
-        out.insert(
-            "vals".into(),
-            Value::Array(distinct.iter().copied().map(whole).collect()),
-        );
-        if let Some(labels) = labels.filter(|labels| !labels.is_empty()) {
-            let names = distinct
-                .iter()
-                .filter_map(|value| Some((value.to_string(), labels.get(value)?.clone().into())))
-                .collect();
-            out.insert("names".into(), Value::Object(names));
-        }
-    }
-    Ok(out)
 }
