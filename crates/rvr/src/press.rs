@@ -57,9 +57,11 @@ fn runs(entries: u64, chosen: Option<&[u64]>, gap: u64) -> Vec<(u64, u64)> {
 const STOPPED: &str = "Another input failed";
 
 pub const USAGE: &str = "usage:
-  rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N]
+  rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N] [--full]
                                            press DIR/samples.lock through DIR/recipe.toml into
-                                           DIR/<DIR's name>.rvr (DIR is . when not given)";
+                                           DIR/<DIR's name>.rvr (DIR is . when not given); when
+                                           only stored columns changed since that file was
+                                           pressed, read just those (--full reads everything)";
 
 /// `rvr press …` with the words after `press`: the exit status.
 pub fn main(args: &[&str]) -> u8 {
@@ -73,7 +75,7 @@ pub fn main(args: &[&str]) -> u8 {
 }
 
 fn run(args: &[&str]) -> Result<(), String> {
-    let (mut dir, mut out, mut workers) = (None, None, None);
+    let (mut dir, mut out, mut workers, mut full) = (None, None, None, false);
     let mut choice = Choice::default();
     let mut words = args.iter();
     while let Some(&word) = words.next() {
@@ -89,6 +91,7 @@ fn run(args: &[&str]) -> Result<(), String> {
             "--random" => choice.random = true,
             "--seed" => choice.seed = Some(Choice::seed(given()?)?),
             "--out" => out = Some(PathBuf::from(given()?)),
+            "--full" => full = true,
             "--workers" => {
                 let n = given()?;
                 workers = Some(n.parse::<usize>().ok().filter(|n| *n > 0).ok_or(format!(
@@ -123,7 +126,15 @@ fn run(args: &[&str]) -> Result<(), String> {
     let lock: Lock = toml::from_str(&texts.lock)
         .map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
     choice.check(&lock.sample)?;
-    press(&texts, &dir, &name, &target, &|s| choice.of(s), workers)
+    press(
+        &texts,
+        &dir,
+        &name,
+        &target,
+        &|s| choice.of(s),
+        workers,
+        !full,
+    )
 }
 
 /// The three texts of a study, which the file carries.
@@ -181,6 +192,8 @@ struct Input<'a> {
     file: &'a File,
     /// For a random choice, the entries chosen in this file, ascending.
     chosen: Option<Vec<u64>>,
+    /// When building on an earlier file, the entries it kept of this file, ascending.
+    kept: Option<Vec<u64>>,
 }
 
 /// What every input of one press shares.
@@ -709,6 +722,18 @@ fn take(
             }
             None => vec![true; count],
         };
+        // Building on an earlier file: its kept events and no others, without running the cuts.
+        let start = match &input.kept {
+            Some(kept) => {
+                let mut only = vec![false; count];
+                let from = kept.partition_point(|e| *e < first);
+                for &e in kept[from..].iter().take_while(|e| **e < last) {
+                    only[(e - first) as usize] = start[(e - first) as usize];
+                }
+                only
+            }
+            None => start,
+        };
         if remote {
             // Fetching ahead only saves round trips; a branch that cannot be fetched is reported
             // when an expression asks for it.
@@ -948,7 +973,7 @@ fn count(n: u64) -> String {
 }
 
 /// What built this rvr, as `made.toolchain` records it.
-fn toolchain() -> Value {
+pub fn toolchain() -> Value {
     json!({
         "rvr": env!("CARGO_PKG_VERSION"),
         "rowver": rowver::VERSION.to_string(),
@@ -960,7 +985,8 @@ fn toolchain() -> Value {
 
 /// Press a study's texts: check, read, keep, write `target` (through a temporary file beside
 /// it). Relative local paths in the lock are read from `base`; `events` says what each sample
-/// reads.
+/// reads. With `reuse`, a file already at `target` that the same study, cuts and event choice
+/// pressed gives its kept events and every column whose definition is unchanged.
 pub fn press(
     texts: &Texts,
     base: &Path,
@@ -968,6 +994,7 @@ pub fn press(
     target: &Path,
     events: &dyn Fn(&Locked) -> Result<Events, String>,
     workers: usize,
+    reuse: bool,
 ) -> Result<(), String> {
     let started = std::time::Instant::now();
     let mut lock: Lock = toml::from_str(&texts.lock)
@@ -986,6 +1013,36 @@ pub fn press(
         .map(|(n, e)| (n, e, true))
         .chain(recipe.columns.iter().map(|(n, e)| (n, e, false)))
         .collect();
+    let earlier = match reuse
+        .then(|| crate::reuse::earlier(target, texts, &recipe, &lock, &asked, &outputs))
+        .flatten()
+    {
+        Some(Ok(earlier)) => Some(earlier),
+        Some(Err(why)) => {
+            println!(
+                "Pressing every column: {} cannot be built on, as {why}.",
+                target.display()
+            );
+            None
+        }
+        None => None,
+    };
+    // With an earlier file, only the columns it cannot give are read, for the events it kept:
+    // the cuts are not run again.
+    let reading: Vec<Output> = match &earlier {
+        Some(earlier) => outputs
+            .iter()
+            .zip(&earlier.reused)
+            .filter(|(_, reused)| reused.is_none())
+            .map(|(output, _)| *output)
+            .collect(),
+        None => outputs.clone(),
+    };
+    let uncut = earlier.as_ref().map(|_| {
+        let names: Vec<&String> = reading.iter().map(|(n, _, _)| *n).collect();
+        crate::reuse::only(&recipe, &names)
+    });
+    let reader = uncut.as_ref().unwrap_or(&recipe);
     let work: Vec<Input> = lock
         .sample
         .iter()
@@ -1008,7 +1065,18 @@ pub fn press(
                     tree: &s.tree,
                     file,
                     chosen,
+                    kept: None,
                 })
+        })
+        .map(|mut input| {
+            if let Some(earlier) = &earlier {
+                let key = (
+                    lock.sample[input.sample].name.clone(),
+                    input.file.at.clone(),
+                );
+                input.kept = Some(earlier.kept.get(&key).cloned().unwrap_or_default());
+            }
+            input
         })
         .collect();
     let remote = work
@@ -1060,17 +1128,39 @@ pub fn press(
         (None, String::new())
     };
     let read: u64 = lock.sample.iter().map(|s| s.events_read).sum();
-    println!(
-        "Pressing {} samples, {} files, {} entries, {} at a time:",
-        lock.sample.len(),
-        work.len(),
-        count(read),
-        workers.min(work.len()).max(1)
-    );
-    let mentions = recipe.mentions();
+    match &earlier {
+        Some(earlier) => {
+            let kept: usize = earlier.entry.iter().map(Vec::len).sum();
+            let names: Vec<&str> = reading.iter().map(|(n, _, _)| n.as_str()).collect();
+            println!(
+                "{} has the events this recipe keeps ({}) and {} of its {} columns.",
+                target.display(),
+                count(kept as u64),
+                outputs.len() - reading.len(),
+                outputs.len()
+            );
+            match names.is_empty() {
+                true => println!("Nothing to read: every column is copied from it."),
+                false => println!(
+                    "Reading only {} for those events, {} files {} at a time:",
+                    names.join(", "),
+                    work.len(),
+                    workers.min(work.len()).max(1)
+                ),
+            }
+        }
+        None => println!(
+            "Pressing {} samples, {} files, {} entries, {} at a time:",
+            lock.sample.len(),
+            work.len(),
+            count(read),
+            workers.min(work.len()).max(1)
+        ),
+    }
+    let mentions = reader.mentions();
     let shared = Shared {
-        recipe: &recipe,
-        outputs: &outputs,
+        recipe: reader,
+        outputs: &reading,
         storage: storage.as_ref(),
         datasets: datasets.as_ref(),
         offline: &offline,
@@ -1085,13 +1175,19 @@ pub fn press(
         files: Vec::new(),
     };
     let (mut pieces, mut made_files) = (Vec::new(), Map::new());
-    let mut kinds: Vec<Option<(Kind, bool)>> = vec![None; outputs.len()];
+    let mut kinds: Vec<Option<(Kind, bool)>> = vec![None; reading.len()];
     for (index, sample) in lock.sample.iter().enumerate() {
         let inputs: Vec<&Input> = work.iter().filter(|i| i.sample == index).collect();
-        let (joined, records) = joined(
-            sample, &inputs, &mut taken, &outputs, &mut kinds, &mut tally,
+        let ((gathered, entry), records) = joined(
+            sample, &inputs, &mut taken, &reading, &mut kinds, &mut tally,
         )?;
-        pieces.push(joined);
+        if earlier
+            .as_ref()
+            .is_some_and(|earlier| entry != earlier.entry[index])
+        {
+            return Err(format!("the events read again of {} are not the ones {} kept (a bug in rvr: press with --full, and please report it)", sample.name, target.display()));
+        }
+        pieces.push((gathered, entry));
         let mut metadata = sample.metadata.clone();
         metadata.insert("events_read".into(), sample.events_read.into());
         metadata.insert("events_total".into(), sample.events_total.into());
@@ -1103,12 +1199,32 @@ pub fn press(
     for line in datasets.iter().flat_map(Datasets::summary) {
         println!("  {line}");
     }
-    let pieces = lock
+    let mut pieces = lock
         .sample
         .iter()
         .zip(pieces)
-        .map(|(sample, joined)| piece((&sample.name, &sample.label), joined, &outputs, &kinds))
+        .map(|(sample, joined)| piece((&sample.name, &sample.label), joined, &reading, &kinds))
         .collect::<Result<Vec<_>, String>>()?;
+    let built_on = earlier.is_some();
+    if let Some(earlier) = earlier {
+        let mut copied: Vec<_> = earlier
+            .reused
+            .into_iter()
+            .map(|r| r.map(Vec::into_iter))
+            .collect();
+        for piece in &mut pieces {
+            let mut fresh = std::mem::take(&mut piece.columns).into_iter();
+            for ((name, _, _), copied) in outputs.iter().zip(&mut copied) {
+                let column = match copied {
+                    Some(samples) => samples.next().map(|values| ((*name).clone(), values)),
+                    None => fresh.next(),
+                };
+                piece
+                    .columns
+                    .push(column.ok_or("a column was left unbuilt")?);
+            }
+        }
+    }
     let failed = |e: rowver::Error| e.to_string();
     let (mut data, arrays) =
         write::pack_with(pieces, Labels::new(), tally.files, workers).map_err(failed)?;
@@ -1156,9 +1272,11 @@ pub fn press(
         return Err(format!("{} could not be written: {e}", target.display()));
     }
     let bytes = std::fs::metadata(target).map_or(0, |m| m.len());
-    println!("Read {} entries; kept after each cut:", count(tally.read));
-    for (cut, kept) in recipe.keep.iter().zip(&tally.cutflow) {
-        println!("  {:30} {:>13}", cut.name, count(*kept));
+    if !built_on {
+        println!("Read {} entries; kept after each cut:", count(tally.read));
+        for (cut, kept) in recipe.keep.iter().zip(&tally.cutflow) {
+            println!("  {:30} {:>13}", cut.name, count(*kept));
+        }
     }
     if let Some(secret) = &signer {
         let key = rowver::sign::public_key(secret);

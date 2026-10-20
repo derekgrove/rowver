@@ -8,6 +8,7 @@ mod new;
 mod press;
 mod proxy;
 mod reproduce;
+mod reuse;
 mod samples;
 
 const USAGE: &str = "usage:

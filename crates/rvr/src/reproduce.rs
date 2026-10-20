@@ -80,7 +80,15 @@ fn run(
     let asked = |sample: &Locked| {
         Events::read(&files[&sample.name]["events"]).map_err(|e| format!("{}: {e}", sample.name))
     };
-    press::press(&press::inputs(&dir)?, &base, name, &target, &asked, workers)?;
+    press::press(
+        &press::inputs(&dir)?,
+        &base,
+        name,
+        &target,
+        &asked,
+        workers,
+        false,
+    )?;
     println!("Comparing the two with rvr diff:");
     Ok(crate::diff::main(
         &file.to_string_lossy(),

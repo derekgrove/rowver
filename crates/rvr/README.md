@@ -162,13 +162,35 @@ The first entries come from one file; a random choice is spread over every file 
 which avoids the bias of reading only the start (the earliest runs of data, one batch of MC) but
 reads every file.
 
-### `rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N]`
+### `rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N] [--full]`
 
 Presses the study in `DIR` (the current folder when not given): reads what `samples.lock` names,
 keeps the events that pass every cut of `recipe.toml`, and writes `DIR/<DIR's name>.rvr`, or
 `--out FILE`. `--events`, `--random` and `--seed` are `plan`'s: the first N of every sample, every
 sample whole, or N chosen at random. `--workers` is how many files are read at once (one per core
 by default). `samples.toml` must be beside the lock, since the file carries both.
+
+**Adding a column you forgot.** Add it to `recipe.toml` and run `rvr press` again. When the
+file is already there and was pressed from the same `samples.toml` and `samples.lock`, with the
+same cuts and the same choice of events, by the same build of rvr, only the columns that are new
+or whose definition changed are read, and only the events the file already kept are stored; every
+other column is copied from it, and the cuts are not run again. The file written is the one a full
+press of the recipe writes, and `rvr diff` against one shows no difference:
+
+```text
+$ rvr press
+local.rvr has the events this recipe keeps (22,325) and 10 of its 11 columns.
+Reading only Jet_pt for those events, 2 files 2 at a time:
+  1/2      476,963 entries      9,362 kept   GluGluToHToTauTau.root
+  2/2      491,653 entries     12,963 kept   VBF_HToTauTau.root
+Wrote local.rvr (22,325 rows, 11 columns, 2.4 MB) in 0.2 s.
+```
+
+Here that reads at most 26.3 MB of baskets (`Jet_pt` and `nJet`) where a full press reads
+108.0 MB; on local copies of the two files it takes 0.2 s instead of 0.6 s (2026-10-19).
+A column counts as changed when its expression, its stored kind, or any object, helper or
+collection it uses changed. When the file cannot be built on, `rvr press` says why and presses
+every column; `--full` always does.
 
 Before anything is read, every file is checked against the lock: its size and adler32, then its
 ROOT UUID and entries. A file that changed, or a `samples.toml` edited since the lock was written,

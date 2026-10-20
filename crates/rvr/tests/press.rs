@@ -350,3 +350,71 @@ listed = "list"
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_column_added_to_the_recipe_is_read_alone_and_the_file_is_a_full_press() {
+    let recipe = r#"format = "rvr-recipe"
+version = 1
+
+[keep]
+jets = "nJet >= 1"
+
+[copy]
+branches = ["weight", "nJet"]
+"#;
+    let dir = study("add", FLAT, recipe);
+    let first = pressed(&dir, &[]);
+    let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let added = recipe.replace(
+        r#"branches = ["weight", "nJet"]"#,
+        "branches = [\"weight\", \"nJet\", \"Jet_pt\"]\n\n[column]\nht = \"sum(Jet_pt)\"",
+    );
+    std::fs::write(dir.join("recipe.toml"), &added).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("and 2 of its 4 columns"), "{said}");
+    assert!(
+        said.contains("Reading only Jet_pt, ht for those events"),
+        "{said}"
+    );
+    let (code, said) = rvr(&dir, &["validate", &file]);
+    assert_eq!(code, 0, "{said}");
+    let built_on: Value = serde_json::from_str(&rvr(&dir, &["header", &file]).1).unwrap();
+    // A full press of the same recipe writes the same rows, columns and records.
+    let (code, said) = rvr(&dir, &["press", "--full", "--out", "full.rvr"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("kept after each cut"), "{said}");
+    let full: Value = serde_json::from_str(&rvr(&dir, &["header", "full.rvr"]).1).unwrap();
+    assert_eq!(built_on["data"], full["data"]);
+    assert_eq!(built_on["made"]["files"], full["made"]["files"]);
+    assert_eq!(built_on["made"]["recipe"], full["made"]["recipe"]);
+    assert_eq!(built_on["data"]["rows"], first["data"]["rows"]);
+    let (code, said) = rvr(&dir, &["diff", &file, "full.rvr"]);
+    assert_eq!(code, 0, "{said}");
+
+    // Nothing new: nothing is read. Another cut: every column is pressed again.
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("Nothing to read"), "{said}");
+    // Even with nothing to read, every input is checked against the lock.
+    let input = dir.join("uproot_flat.root");
+    let bytes = std::fs::read(&input).unwrap();
+    std::fs::write(&input, [&bytes[..], b"x"].concat()).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("changed since samples.lock was written"), "{said}");
+    std::fs::write(&input, &bytes).unwrap();
+    std::fs::write(
+        dir.join("recipe.toml"),
+        added.replace("nJet >= 1", "nJet >= 2"),
+    )
+    .unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(
+        said.contains("the cuts under [keep], or what they use, have changed"),
+        "{said}"
+    );
+    assert!(said.contains("kept after each cut"), "{said}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
