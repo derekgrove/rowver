@@ -234,8 +234,10 @@ A viewer never rewrites `data`. The presser writes it once.
 - `by` — free text naming the program that wrote the file.
 - `toolchain` — what built that program, each as text: `rvr` (its version),
   `rowver` (the format version it writes), `commit` (the git commit it was
-  built from, with `-dirty` after it when the checkout had changes, or
-  `unknown`), `rustc` (the compiler's `rustc -V`) and `target` (the platform).
+  built from, or `unknown`; when its code had changes not yet committed,
+  `-dirty-` follows, then 12 hex digits of git's hash of those changes, or
+  `-dirty` alone when they could not be read), `rustc` (the compiler's
+  `rustc -V`) and `target` (the platform).
 - `recipe`, `samples`, `lock` — the study's three files, each as its whole
   `text` and the `sha256` of that text as UTF-8. Together they are the study:
   write them out as `recipe.toml`, `samples.toml` and `samples.lock` and the

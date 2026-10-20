@@ -166,6 +166,16 @@ fn read(
             made["toolchain"]["commit"].as_str().unwrap_or("?")
         ));
     }
+    // A build of unknown or changed code whose changes could not be hashed names no one build.
+    if made["toolchain"]["commit"]
+        .as_str()
+        .is_none_or(|commit| commit == "unknown" || commit.ends_with("-dirty"))
+    {
+        return Err(
+            "it was made by an rvr built from changed code that left no record of the changes"
+                .into(),
+        );
+    }
     let old = Recipe::read(text("recipe").unwrap_or_default())
         .map_err(|e| format!("its recipe cannot be read ({})", e.0))?;
     if cuts(&old) != cuts(recipe) {
