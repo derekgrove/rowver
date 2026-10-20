@@ -1,35 +1,39 @@
-# rowver (Rust)
+# rowver
 
-Read, validate, and write RowVer 14 `.rvr` files in Rust. The format is specified by
-`FORMAT.md` at the root of this repository, which this crate implements; the crate's major
-version is the format version.
+Read, validate and write `.rvr` files: event columns from a physics analysis, stored as
+compressed arrays behind a JSON header you can read. Every file carries what made it (the
+recipe, the samples it read and exactly which files, the tool and its commit), checksums of
+every array, and optionally an ed25519 signature, so a file says on its own where its numbers
+came from and that they have not changed. The crate's major version is the format version it
+reads and writes (14).
 
-- `rowver::rvr` reads and validates pressed and derived files: `Reader` opens a file and checks
-  its whole header, then reads the columns asked for; `validate_file` checks every array too.
-- `rowver::write` builds the data section and writes a file.
-- `rowver::choice` is the random event choice a file names (`splitmix64-selection-sampling`).
-- `rowver::sign` signs a header with ed25519 and checks a signature.
+```rust,no_run
+use rowver::rvr::Reader;
 
-This crate is the reference builder of `.rvr` files.
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Opening checks the whole header; a file without a valid record of what made it is refused.
+    let file = Reader::open("study.rvr")?;
+    println!("{} events", file.rows()?);
+    if let Some(met) = file.column("MET_pt")? {
+        println!("MET_pt is {} ({} bytes)", met.kind, met.bytes.len());
+    }
+    // Check every array against its checksum.
+    let summary = rowver::rvr::validate_file("study.rvr")?;
+    println!("{} columns valid", summary.columns);
+    Ok(())
+}
+```
 
-## Compression and speed
+- `rowver::rvr`: open, read and validate files (`Reader`, `validate_file`).
+- `rowver::write`: build the arrays and write a file.
+- `rowver::sign`: sign a header with ed25519 and check a signature.
+- `rowver::choice`: the random event choice a file can record.
 
-Arrays are byte-shuffled, then one Zstandard frame each, compressed and read in pure Rust
-(`ruzstd`, the same crate hep-root reads ROOT's zstd baskets with). `ruzstd` has only its
-fastest level.
+Arrays are byte-shuffled and compressed with Zstandard in pure Rust; reading a column is one read
+and one decode. The format is specified in
+[FORMAT.md](https://gitlab.cern.ch/dgrove/rowver/-/blob/rowver-v14.1.0/FORMAT.md).
 
-`build_with` compresses, checksums (`sha256` and `by_sample`) and measures the facts of every
-array on its workers; the bytes do not depend on how many. `Reader` reads each array it is asked
-for with one read of its compressed span and one decode into a buffer of its declared length.
-On 2,104,806 rows × 27 columns (227 MB of arrays, Apple M5, 10 threads), against rowver 13's
-zlib 6: build 0.32–0.38 s (13: 0.37 s), open and read every column 0.054–0.059 s
-(13: 0.051–0.057 s), 143.0 MB of arrays (13: 131.0 MB) (`rvr_format_study/results/RUST.md`).
+The [`rvr`](https://crates.io/crates/rvr) command makes `.rvr` files from ROOT files and
+inspects them; the Python package `rowver` reads them as NumPy and Awkward arrays.
 
-## Fixtures
-
-`tests/fixtures/rowver-v14.hex` is the hexadecimal text of a small file this crate's writer
-made (`tests/common/mod.rs`); the reader tests read it as committed, so a change that stops a
-reader from reading files already written fails them. `ROWVER_BLESS=1 cargo test -p rowver`
-writes it again, for a change to the format that is meant.
-
-MIT licensed.
+Part of [RowVer](https://gitlab.cern.ch/dgrove/rowver). Licensed under the MIT license.

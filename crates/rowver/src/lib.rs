@@ -50,3 +50,8 @@ impl From<&'static str> for Error {
 pub(crate) fn invalid(message: impl Into<String>) -> Error {
     Error::Invalid(message.into())
 }
+
+/// The README's examples, compiled as tests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
