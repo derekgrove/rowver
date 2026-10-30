@@ -390,9 +390,9 @@ zmumu.rvr: pressed 2026-10-29T19:47:38Z by rvr 14.3.0
   samples.toml  edited since
   samples.lock  resolved again since
   events        as the file holds it
-rvr press would press every column, as samples.toml or samples.lock has changed since.
+rvr press would press every column, as samples.toml has changed since.
 $ rvr press
-Pressing every column: zmumu.rvr cannot be built on, as samples.toml or samples.lock has changed since.
+Pressing every column: zmumu.rvr cannot be built on, as samples.toml has changed since.
 Rucio said where the 4 dataset files can be read in 1.4 s.
 Pressing 3 samples, 4 files, 300,000 entries, 4 at a time:
   …
@@ -589,6 +589,58 @@ $ rvr samples resolve samples.toml
 ```
 
 A storage that is busy is waited for (each wait printed), and the press carries on where it was.
+
+A file that cannot be read (gone, changed since the lock, damaged, on tape only, or at a storage
+that kept failing) does not stop the press: the file is written without its events, records the
+**hole** with why, and the press exits with status 3. (Building on an earlier file to add a
+column, it does stop; `rvr press --full` makes holes of it.) `rvr status` shows what each sample is
+missing, and `rvr press --fill` reads only the holes once they can be read. Here a study of local
+files (90 copies of one skim, in three samples) lost one file, which was then put back:
+
+```text
+$ rvr press
+Pressing 3 samples, 90 files, 636,390 entries, 10 at a time:
+…
+    hole (gone): files/f45.root no longer exists: put it back and run rvr press --fill (if it moved, run rvr samples resolve samples.toml again, then rvr press).
+Read 629,319 of 636,390 entries; kept after each cut:
+  met                                  313,547
+  leptons                              313,547
+Wrote three.rvr (313,547 rows, 7 columns, 0.8 MB) in 1.2 s, with 1 hole:
+  gone        late_and_long_named_sample  files/f45.root no longer exists: put it back and run rvr press --fill (if it moved, run rvr samples resolve samples.toml again, then rvr press).
+rvr press --fill reads them again once they can be read.
+$ rvr status
+three.rvr: pressed 2026-10-30T14:44:43Z by rvr 14.3.0
+  recipe.toml   as the file holds it
+  samples.toml  as the file holds it
+  samples.lock  as the file holds it
+  events        as the file holds it
+It holds the study as it is, but for its holes: rvr press --fill reads them.
+
+  early                       ████████████████████████ 100%   9 files
+  middle                      ████████████████████████ 100%   30 files
+  late_and_long_named_sample  ███████████████████████░  98%   51 files, 1 hole
+
+Holes, by why:
+  gone         1 file, 7,071 entries   late_and_long_named_sample
+      files/f45.root no longer exists: put it back and run rvr press --fill (if it moved, run rvr samples resolve samples.toml again, then rvr press).
+(rvr status --holes lists every hole.)
+rvr press --fill would read 7,071 entries of 1 file.
+$ rvr press --fill
+Filling three.rvr: reading 1 hole of 1 file, 7,071 entries, 1 at a time; every other row is the file's own:
+  1/1        7,071 entries      3,523 kept   f45.root
+Read 7,071 entries in the holes; kept after each cut:
+  met                                    3,523
+  leptons                                3,523
+Wrote three.rvr (317,070 rows, 7 columns, 0.8 MB) in 0.3 s.
+$ rvr validate three.rvr --complete
+three.rvr: valid, 317070 rows, 7 columns, read all 636390 entries, not signed
+```
+
+The filled file is the one a press of all 90 files writes. A press that stops part way (Ctrl-C, a
+laptop asleep, the network gone, a disk not mounted) keeps what it read beside its file (in
+`three.rvr.partial/` for `three.rvr`), and the next `rvr press` carries on from there;
+`rvr status` says how far it got ([Stopped part way](../crates/rvr/README.md#stopped-part-way)).
+
 The [rvr README](../crates/rvr/README.md#when-something-goes-wrong) lists every message, and
 describes every command and every key of `samples.toml`; the
 [recipe reference](../crates/rvr-recipe/README.md) lists everything a recipe can say.
