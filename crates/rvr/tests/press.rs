@@ -823,6 +823,34 @@ fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
 }
 
 #[test]
+fn a_flag_some_samples_lack_is_compared_or_given_to_all_in_defaults() {
+    let samples = |defaults: &str| format!("format = \"rvr-samples\"\nversion = 1\n\n[defaults]\ntree = \"analysis\"\n{defaults}\n[[sample]]\nname = \"data\"\nfiles = \"data.root\"\nisData = true\n\n[[sample]]\nname = \"mc\"\nfiles = \"mc.root\"\nxsec = 88.29\n");
+    let recipe = |condition: &str| format!("format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n\n[column]\nw = \"if({condition}, 0 * weight + 1, weight * sample.xsec)\"\n");
+    let dir = study("flag", &samples(""), &recipe("sample.isData"));
+    for name in ["data.root", "mc.root"] {
+        std::fs::copy(dir.join("uproot_flat.root"), dir.join(name)).unwrap();
+    }
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    // A flag on the data sample alone is missing for mc: a condition it cannot be.
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("mc.root, tree analysis, ") && said.contains(": w: if needs a true-or-false condition"), "{said}");
+    // Compared, a sample without it is not data; it is in the metadata, but no sample column.
+    std::fs::write(dir.join("recipe.toml"), recipe("sample.isData == true")).unwrap();
+    assert_eq!(rvr(&dir, &["press"]).0, 0);
+    let dump = columns(&dir);
+    assert!(dump.contains("xsec           f8 by sample[2]  data: null, mc: 88.29") && !dump.contains("isData"), "{dump}");
+    // Given to every sample in [defaults], it is a sample column, and a condition for every sample.
+    std::fs::write(dir.join("samples.toml"), samples("isData = false\n")).unwrap();
+    std::fs::write(dir.join("recipe.toml"), recipe("sample.isData")).unwrap();
+    let header = pressed(&dir, &[]);
+    assert_eq!(header["made"]["files"]["mc"]["metadata"]["isData"], false);
+    let dump = columns(&dir);
+    assert!(dump.contains("isData         b1 by sample[2]  data: true, mc: false"), "{dump}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn a_mistake_in_the_recipe_stops_the_press_with_no_file_and_no_holes() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[column]\nht = \"sum(Jet_ptt)\"\n";
     let dir = twice("mistake", recipe);

@@ -105,7 +105,10 @@ A sample that has no `era` at all isn't cut either. (`pass` works in place of `a
 | `sample.missing` | a field this sample's metadata does not have | missing |
 
 A comparison with a field the sample doesn't have is always false (even `!=`), and doing
-arithmetic with one is an error.
+arithmetic with one is an error, as is giving one alone to the function `if`: `if(sample.isData, …)`
+needs every sample to have `isData` (give it to all of them in `[defaults]` of `samples.toml`),
+while `if(sample.isData == true, …)` takes a sample without it as false. (A cut's own `if`, above,
+lets a sample without the field through.)
 
 You can write numbers (`30`, `2.5`, `1e3`, `1_000`), text in single or double quotes
 (`'signal'`), and `true` or `false` straight into an expression.

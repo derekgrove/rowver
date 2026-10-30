@@ -704,6 +704,40 @@ events = 1_000_000
 A mass point's label becomes part of the name as CMS dataset names write numbers: `.` becomes
 `p`, anything else a name cannot hold becomes `_` (`300/292.5` → `300_292p5`).
 
+**Metadata is each sample's own.** A key one sample has, another need not have. A recipe reads it
+as `sample.KEY`; for a sample without the key it is missing, and no comparison with it is true. A
+number or text that some samples lack is still a sample column, `null` for those samples (a whole
+number then as `f8`, a float, since only `f8` has a `null`):
+
+```text
+xsec           f8 by sample[2]  data: null, mc: 88.29
+```
+
+A true-or-false value has no `null`. Give a flag to every sample in `[defaults]`, and set it only
+where it differs:
+
+```toml
+[defaults]
+tree = "Events"
+isData = false
+
+[[sample]]
+name = "data"
+dataset = "/SingleMuon/Run2018D-UL2018_MiniAODv2_NanoAODv9-v1/NANOAOD"
+isData = true                 # every other sample keeps the default, false
+```
+
+It is then a sample column, and `if(sample.isData, …)` works for every sample:
+
+```text
+isData         b1 by sample[2]  data: true, mc: false
+```
+
+Set on the data samples alone, the flag stays in the file's metadata but is not a sample column,
+and `if(sample.isData, …)` stops the press at a sample without it (`if needs a true-or-false
+condition`); `if(sample.isData == true, …)` works, taking a sample without it as false. A text field (`kind = "data"` on the data samples,
+read as `sample.kind == 'data'`) needs no default.
+
 ## recipe.toml
 
 The recipe is TOML, with one expression per value, evaluated over whole columns of events. The
