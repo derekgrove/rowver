@@ -288,6 +288,16 @@ holds its journal, and another press of the same output, or a `--restart`, is re
 goes once the file is in place, and when the press fails for a reason pressing again would not
 mend (a mistake in the recipe).
 
+A press that loses the network stops and keeps what it read, instead of making a hole of every
+file it could not reach. While a read waits for a storage, once no storage has answered for 2
+minutes, rvr tries for 5 seconds to connect to the hosts that answered earlier in the press and
+are not failing now (another storage, or Rucio), or, when every one fails, to all of them if they
+are at two sites or more. One that connects shows the network works: only the failing storage is down, and
+its files become `unreachable` holes after their waits. If none connects, twice 15 seconds apart,
+the network is gone: the press stops and says so, and pressing again once it is back carries on.
+A name that does not resolve is waited on the same way. A press that reads one site and no
+dataset has nothing to tell the two apart by, and a file that keeps failing is a hole.
+
 ```text
 $ rvr press --workers 1
 Pressing 1 sample, 90 files, 636,390 entries, 1 at a time:
@@ -310,9 +320,9 @@ Read 636,390 entries; kept after each cut:
 Wrote tchiwz.rvr (317,070 rows, 7 columns, 0.8 MB) in 3.7 s.
 ```
 
-The file picked up is the one an uninterrupted press writes. Keeping the journal costs under 1%:
-on the TChiWZ skim, 0.392 s against 0.391 s without it (30 files, default workers), 5.625 s
-against 5.611 s (90 files, `--workers 1`, three checkpoints), and 3.804 s against 3.808 s for a
+The file picked up is the one an uninterrupted press writes. Keeping the journal costs at most
+1.5%: on the TChiWZ skim, 0.395 s against 0.397 s without it (30 files, default workers), 5.655 s
+against 5.609 s (90 files, `--workers 1`, three checkpoints), and 3.827 s against 3.770 s for a
 50.7 MB file of 22 columns, synced before it is put in place; Apple M5, 2026-10-30.
 
 What a press holds in memory does not grow with the events it keeps (building on an earlier
@@ -736,6 +746,7 @@ what to run.
 | `…: the passphrase is wrong` (from `proxy init`) | type it again; it is the one you chose when you saved the certificate |
 | `… has no copy that can be read now (T1_…_Tape: on tape; …)` (a `tape` hole, from `press`) | the file is only on tape: ask for a Rucio rule that puts the dataset on disk, then `rvr press --fill` |
 | `passed over … invalid peer certificate: UnknownIssuer` (from `press`) | an authority newer than rvr's: set `X509_CERT_DIR` to the grid authorities folder (`/etc/grid-security/certificates` where grid tools are installed) |
+| `… no storage has answered, and none that answered earlier in this press takes a connection now (…): the network seems to be gone` (from `press`) | the network went: press again once it is back, which carries on from the files done |
 | `waiting 30 s to ask again for … its storage answered 403 Forbidden` (from `press`) | nothing: the storage is busy and the read is asked again; if all eight tries fail it is a hole (`refused` for a `403` that stays, `unreachable` otherwise): `rvr press --fill` later |
 | `Wrote … with 2 holes:` (exit status 3, from `press`) | each hole says why; `rvr press --fill` reads them again once they can be read |
 | `… refused the listing (403, 4 tries over 50 s). Either the grid proxy does not give access there, or the storage is refusing requests while it is busy …` | `rvr proxy` shows whether the proxy is valid; if it is, try again later |

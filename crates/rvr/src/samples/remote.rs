@@ -3,10 +3,11 @@
 //! file's adler32 is asked with one HEAD (`Want-Digest`); nothing is read from any file.
 
 use hep_root::ByteSource;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use crate::holes::{Failed, Fault, Seen};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// One file in a listed folder.
 #[derive(Debug, Clone)]
@@ -173,10 +174,240 @@ pub const ASKING: &[u64] = &[5, 15, 30];
 /// What a read answers when it stops waiting because another input failed.
 pub const STOPPED: &str = "Another input failed";
 
+/// How long a press waits with no answer from any storage before it asks about the network.
+pub const QUIET: Duration = Duration::from_secs(120);
+/// How long after a first probe that found no door the network is asked again.
+pub const AGAIN: Duration = Duration::from_secs(15);
+/// How long the doors asked are given to take a connection.
+const REACH: Duration = Duration::from_secs(5);
+
 /// What the reads of one press share while they wait: `stop` ends every wait.
 #[derive(Default)]
 pub struct Watch {
     pub stop: AtomicBool,
+    /// For a press, what tells the network gone from one storage down.
+    heard: Option<Heard>,
+}
+
+/// What a press heard: when it began and, in milliseconds after that, when a storage last
+/// answered, and how many answers there were; the doors (see `Last`); the one read asking about
+/// the network; and why the network was taken to be gone.
+struct Heard {
+    quiet: Duration,
+    again: Duration,
+    began: Instant,
+    answer: std::sync::atomic::AtomicU64,
+    answers: std::sync::atomic::AtomicU64,
+    last: Mutex<Last>,
+    asking: AtomicBool,
+    gone: std::sync::OnceLock<String>,
+}
+
+/// Each door by whether its own last reply was an answer, with its addresses (looked up once, when
+/// it first answers); and when (in milliseconds after the press began) a probe last found no door
+/// that takes a connection, with how many answers there were.
+#[derive(Default)]
+struct Last {
+    doors: std::collections::BTreeMap<String, (bool, Option<Vec<std::net::SocketAddr>>)>,
+    doubt: Option<(u64, u64)>,
+}
+
+impl Watch {
+    /// A press's watch: the network asked about after `quiet` with no answer, and again after `again`.
+    pub fn press(quiet: Duration, again: Duration) -> Self {
+        let heard = Heard {
+            quiet,
+            again,
+            began: Instant::now(),
+            answer: Default::default(),
+            answers: Default::default(),
+            last: Default::default(),
+            asking: AtomicBool::new(false),
+            gone: Default::default(),
+        };
+        Watch { stop: AtomicBool::new(false), heard: Some(heard) }
+    }
+
+    /// A request came back as `reply`, from the door `door` (`host:port`) itself when it is named.
+    pub fn note(&self, door: Option<&str>, reply: &Result<ureq::Response, ureq::Error>) {
+        self.answered(door, matches!(reply, Ok(_) | Err(ureq::Error::Status(..))));
+    }
+
+    /// A server at `host` (`host:port`) answered.
+    pub fn heard_from(&self, host: &str) {
+        self.answered(Some(host), true);
+    }
+
+    fn answered(&self, door: Option<&str>, answered: bool) {
+        let Some(heard) = &self.heard else {
+            return;
+        };
+        if answered {
+            heard.answer.fetch_max(heard.began.elapsed().as_millis() as u64, Ordering::Relaxed);
+            heard.answers.fetch_add(1, Ordering::Relaxed);
+        }
+        let Some(door) = door else {
+            return;
+        };
+        let lock = || heard.last.lock().unwrap_or_else(|e| e.into_inner());
+        let look_up = {
+            let mut last = lock();
+            if !last.doors.contains_key(door) {
+                last.doors.insert(door.to_owned(), Default::default());
+            }
+            let (was, addresses) = last.doors.get_mut(door).expect("just put there");
+            *was = answered;
+            let first = answered && addresses.is_none();
+            if first {
+                *addresses = Some(Vec::new());
+            }
+            first
+        };
+        // Looked up once it has answered (its name resolves then), outside the lock.
+        if look_up {
+            use std::net::ToSocketAddrs;
+            let found: Vec<_> = door.to_socket_addrs().map(Iterator::collect).unwrap_or_default();
+            if let Some((_, addresses)) = lock().doors.get_mut(door) {
+                *addresses = Some(found);
+            }
+        }
+    }
+
+    /// Whether the network is gone, asked by a read that waits; when it is, every wait stops.
+    pub fn lost(&self) -> bool {
+        let Some(heard) = &self.heard else {
+            return false;
+        };
+        if heard.gone.get().is_some() {
+            return true;
+        }
+        if heard.asking.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        // Let go however `ask` ends.
+        struct Asking<'a>(&'a AtomicBool);
+        impl Drop for Asking<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let _asking = Asking(&heard.asking);
+        self.ask(heard)
+    }
+
+    /// Once no storage has answered for `quiet`, the doors that answered are asked: those whose
+    /// last reply was an answer or, when every one fails, all of them if they are in two domains
+    /// or more (one site down cannot be told from the network gone). The network is gone when
+    /// none takes a connection twice, `again` apart, with no answer meanwhile.
+    fn ask(&self, heard: &Heard) -> bool {
+        let now = || heard.began.elapsed().as_millis() as u64;
+        let answers = heard.answers.load(Ordering::Relaxed);
+        if now().saturating_sub(heard.answer.load(Ordering::Relaxed)) < heard.quiet.as_millis() as u64 {
+            return false;
+        }
+        let (names, addresses): (Vec<String>, Vec<std::net::SocketAddr>) = {
+            let last = heard.last.lock().unwrap_or_else(|e| e.into_inner());
+            // A doubt stands only while nothing has answered since.
+            let doubt = last.doubt.filter(|(_, then)| *then == answers);
+            if doubt.is_some_and(|(at, _)| now().saturating_sub(at) < heard.again.as_millis() as u64) {
+                return false;
+            }
+            let known: Vec<_> = last.doors.iter().filter(|(_, (_, addresses))| addresses.is_some()).collect();
+            let up: Vec<_> = known.iter().copied().filter(|(_, (up, _))| *up).collect();
+            let sites: BTreeSet<&str> = known.iter().map(|(door, _)| domain(door)).collect();
+            let asked = match (up.is_empty(), sites.len()) {
+                (false, _) => up,
+                (true, 2..) => known,
+                (true, _) => return false,
+            };
+            let names = asked.iter().map(|(door, _)| (*door).clone()).collect();
+            (names, asked.iter().flat_map(|(_, (_, addresses))| addresses.iter().flatten().copied()).collect())
+        };
+        let found = reachable(&names, &addresses, REACH);
+        let mut last = heard.last.lock().unwrap_or_else(|e| e.into_inner());
+        // A door that connects, or an answer while it was asked, says the network works.
+        if found || heard.answers.load(Ordering::Relaxed) > answers {
+            last.doubt = None;
+            heard.answer.fetch_max(now(), Ordering::Relaxed);
+            return false;
+        }
+        if last.doubt.filter(|(_, then)| *then == answers).is_none() {
+            last.doubt = Some((now(), answers));
+            return false;
+        }
+        let _ = heard.gone.set(format!(
+            "no storage has answered, and none that answered earlier in this press takes a connection now ({}): the network seems to be gone",
+            names.join(", ")
+        ));
+        self.stop.store(true, Ordering::Release);
+        true
+    }
+
+    /// Why the network was taken to be gone, if it was.
+    pub fn gone(&self) -> Option<String> {
+        self.heard.as_ref().and_then(|heard| heard.gone.get().cloned())
+    }
+
+    /// Whether a failed request may pass when asked again (see `passing`); in a press, a name that
+    /// does not resolve may too, as it does while the network is gone.
+    fn passing(&self, error: &ureq::Error, proxied: bool) -> Option<String> {
+        let unresolved = matches!(error, ureq::Error::Transport(failure) if failure.kind() == ureq::ErrorKind::Dns);
+        passing(error, proxied).or_else(|| (self.heard.is_some() && unresolved).then(|| why(error)))
+    }
+}
+
+/// The `host:port` of an `https://` URL as `door` gives it.
+pub fn host_port(url: &str) -> Option<String> {
+    let authority = url.strip_prefix("https://")?.split('/').next()?.to_ascii_lowercase();
+    match authority.contains(':') {
+        true => Some(authority),
+        false => Some(format!("{authority}:443")),
+    }
+}
+
+/// The site a door (`host:port`) is at: the last two labels of its name (`fnal.gov`), or its address.
+fn domain(door: &str) -> &str {
+    let host = door.rsplit_once(':').map_or(door, |(host, _)| host);
+    let numeric = host.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '[' || c == ']' || c == ':');
+    match host.rmatch_indices('.').nth(1) {
+        Some((at, _)) if !numeric => &host[at + 1..],
+        _ => host,
+    }
+}
+
+/// Whether any of `addresses`, or of the addresses `names` (`host:port`) have now, takes a TCP
+/// connection within `within`, every one asked at once.
+fn reachable(names: &[String], addresses: &[std::net::SocketAddr], within: Duration) -> bool {
+    use std::net::ToSocketAddrs;
+    let (said, answers) = std::sync::mpsc::channel();
+    let connect = move |address: std::net::SocketAddr, said: std::sync::mpsc::Sender<bool>| {
+        std::thread::spawn(move || {
+            let _ = said.send(std::net::TcpStream::connect_timeout(&address, within).is_ok());
+        });
+    };
+    for &address in addresses {
+        connect(address, said.clone());
+    }
+    // A name looked up again, in case its addresses moved; one slow to resolve is left to finish.
+    for name in names {
+        let (name, said) = (name.clone(), said.clone());
+        std::thread::spawn(move || {
+            let fresh = name.to_socket_addrs().into_iter().flatten();
+            for address in fresh {
+                connect(address, said.clone());
+            }
+        });
+    }
+    drop(said);
+    let until = Instant::now() + within;
+    while let Some(left) = until.checked_duration_since(Instant::now()) {
+        match answers.recv_timeout(left) {
+            Ok(true) => return true,
+            Ok(false) => continue,
+            Err(_) => return false,
+        }
+    }
+    false
 }
 
 /// Why a failed request may succeed when asked again (refused or failed at a busy storage, or
@@ -224,7 +455,7 @@ pub fn patiently<T, E>(
             waits.len() + 1
         );
         for _ in 0..*wait {
-            if watch.stop.load(Ordering::Acquire) {
+            if watch.stop.load(Ordering::Acquire) || watch.lost() {
                 return Err(error);
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -319,19 +550,22 @@ impl Storage {
         let path = format!("{}/", path.trim_end_matches('/'));
         let body = r#"<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getcontentlength/><D:getlastmodified/></D:prop></D:propfind>"#;
         let at = format!("{origin}{path}");
-        let proxied = self.proxy.is_some();
+        let (proxied, door) = (self.proxy.is_some(), host_port(&origin));
         let reply = patiently(
             self.waits,
             &self.watch,
             folder,
-            |e| passing(e, proxied),
+            |e| self.watch.passing(e, proxied),
             || {
                 follow(&at, |url| {
-                    self.agent
+                    let reply = self
+                        .agent
                         .request("PROPFIND", url)
                         .set("Depth", "1")
                         .set("Content-Type", "application/xml")
-                        .send_string(body)
+                        .send_string(body);
+                    self.watch.note(door.as_deref().filter(|_| url == at), &reply);
+                    reply
                 })
                 .1
             },
@@ -430,7 +664,7 @@ pub fn digest_seen(
 ) -> Result<Digest, Failed> {
     let (origin, path) = door(url).map_err(Failed::from)?;
     let at = format!("{origin}{path}");
-    let reply = patiently(waits, watch, url, |e| passing(e, proxied), || head(agent, &at));
+    let reply = patiently(waits, watch, url, |e| watch.passing(e, proxied), || head(agent, &at, watch));
     if reply.is_err() && watch.stop.load(Ordering::Acquire) {
         return Err(Failed::new(Fault::Stopped, format!("{url}: {STOPPED}")));
     }
@@ -457,11 +691,12 @@ impl Refusal {
 }
 
 /// `digest` asked once with a proxy; a failure says what it means for the file.
-pub fn digest_once(agent: &ureq::Agent, url: &str) -> Result<Digest, Refusal> {
+pub fn digest_once(agent: &ureq::Agent, url: &str, watch: &Watch) -> Result<Digest, Refusal> {
     let (origin, path) = door(url).map_err(|why| Refusal::lasting(Fault::Mistake, why))?;
-    let reply = head(agent, &format!("{origin}{path}"));
+    let at = format!("{origin}{path}");
+    let reply = head(agent, &at, watch);
     let fault = reply.as_ref().err().map_or(Fault::Unreachable, |e| fault(e, true));
-    let busy = reply.as_ref().is_err_and(|e| passing(e, true).is_some());
+    let busy = reply.as_ref().is_err_and(|e| watch.passing(e, true).is_some());
     digested(url, reply).map_err(|why| Refusal { why, fault, busy })
 }
 
@@ -482,9 +717,12 @@ pub fn fault(error: &ureq::Error, proxied: bool) -> Fault {
 
 /// One HEAD asking for the adler32, redirects followed.
 #[allow(clippy::result_large_err)] // ureq's own error, as `follow` returns it
-fn head(agent: &ureq::Agent, at: &str) -> Result<ureq::Response, ureq::Error> {
-    follow(at, |at| {
-        agent.head(at).set("Want-Digest", "adler32").call()
+fn head(agent: &ureq::Agent, at: &str, watch: &Watch) -> Result<ureq::Response, ureq::Error> {
+    let door = host_port(at);
+    follow(at, |hop| {
+        let reply = agent.head(hop).set("Want-Digest", "adler32").call();
+        watch.note(door.as_deref().filter(|_| hop == at), &reply);
+        reply
     })
     .1
 }
@@ -532,6 +770,9 @@ pub struct HttpsFile {
     pub bytes: std::sync::atomic::AtomicUsize,
     /// What its last failed request said, shared with whoever reads through it.
     pub seen: Arc<Seen>,
+    /// The press's, which hears each answer, and the door's `host:port` it is noted under.
+    watch: Arc<Watch>,
+    host: Option<String>,
 }
 
 impl HttpsFile {
@@ -548,6 +789,8 @@ impl HttpsFile {
             requests: Default::default(),
             bytes: Default::default(),
             seen: Default::default(),
+            watch: storage.watch.clone(),
+            host: host_port(&origin),
         })
     }
 
@@ -615,7 +858,7 @@ impl HttpsFile {
             ureq::Error::Status(404 | 410, _) => {
                 hep_root::Error::SourceChanged(format!("{} no longer exists", self.shown))
             }
-            _ if passing(error, self.proxied).is_some() => {
+            _ if self.watch.passing(error, self.proxied).is_some() => {
                 hep_root::Error::Remote(format!("{}: {}", self.shown, why(error)))
             }
             _ => self.lasting(why(error)),
@@ -685,7 +928,9 @@ impl HttpsFile {
             follow(url, |url| {
                 self.requests
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                self.agent.get(url).set("Range", &header).call()
+                let reply = self.agent.get(url).set("Range", &header).call();
+                self.watch.note(self.host.as_deref().filter(|_| url == self.door), &reply);
+                reply
             })
         };
         let start = self.url.lock().unwrap().clone();
@@ -774,7 +1019,9 @@ impl ByteSource for HttpsFile {
             follow(url, |url| {
                 self.requests
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                self.agent.get(url).set("Range", &range).call()
+                let reply = self.agent.get(url).set("Range", &range).call();
+                self.watch.note(self.host.as_deref().filter(|_| url == self.door), &reply);
+                reply
             })
         };
         let start = self.url.lock().unwrap().clone();
@@ -959,6 +1206,79 @@ mod tests {
         // A URL that cannot be asked fails before any request is made.
         let unaskable = ureq::get("https://exa mple/").call().unwrap_err();
         assert!(passing(&unaskable, true).is_none(), "{unaskable}");
+    }
+
+    #[test]
+    fn the_network_is_gone_only_when_no_host_that_answered_can_be_reached() {
+        assert_eq!(host_port("https://eos.example:9000/store/f.root").as_deref(), Some("eos.example:9000"));
+        assert_eq!(host_port("https://Rucio.Example").as_deref(), Some("rucio.example:443"));
+        assert_eq!((domain("cmseos.fnal.gov:443"), domain("eos.cms.rcac.purdue.edu:9000")), ("fnal.gov", "purdue.edu"));
+        assert_eq!((domain("127.0.0.1:0"), domain("[::1]:0")), ("127.0.0.1", "[::1]"));
+        // A door that takes connections, and two that never do (port 0).
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let door = listener.local_addr().unwrap().to_string();
+        let (closed, shut) = ("127.0.0.1:0", "[::1]:0");
+        let unanswered = ureq::get("https://exa mple/").call();
+        let busy = || hep_root::Error::Remote("https://door.example/f.root: its storage answered 503".into());
+        let shown = "https://door.example/f.root";
+        let watch = |quiet| Watch::press(quiet, Duration::ZERO);
+        // Something answered moments ago: the network is not asked about.
+        let recent = watch(Duration::from_secs(60));
+        recent.heard_from(&door);
+        assert!(!recent.lost());
+        // No door that answered, or only the one that fails: no telling the network from one
+        // storage down, and the files become holes after their waits.
+        let (silent, tries) = (watch(Duration::ZERO), std::cell::Cell::new(0));
+        assert!(read_again(&[0, 0], &silent, shown, flaky(9, busy, &tries)).is_err());
+        assert!(!silent.lost() && silent.gone().is_none() && tries.get() == 3);
+        let alone = watch(Duration::ZERO);
+        alone.heard_from(closed);
+        alone.note(Some(closed), &unanswered);
+        assert!(!alone.lost() && !alone.lost() && alone.gone().is_none());
+        // Doors that never answered have no addresses to ask: no telling either.
+        let never = watch(Duration::ZERO);
+        never.note(Some(closed), &unanswered);
+        never.note(Some(shut), &unanswered);
+        assert!(!never.lost() && !never.lost() && never.gone().is_none());
+        // A door that answered and takes a connection says the network works.
+        let works = watch(Duration::ZERO);
+        works.heard_from(&door);
+        works.note(Some(closed), &unanswered);
+        assert!(!works.lost() && !works.stop.load(Ordering::Acquire));
+        // Two doors of one site, both failing: no telling the site down from the network gone.
+        let site = watch(Duration::ZERO);
+        for door in ["a.site.example:0", "b.site.example:0"] {
+            site.heard_from(door);
+            site.note(Some(door), &unanswered);
+        }
+        assert!(!site.lost() && !site.lost() && site.gone().is_none());
+        // Two doors of two sites, both failing, neither taking a connection twice: the network
+        // is gone, and a wait ends then. An answer between two probes would have cleared the first.
+        let gone = watch(Duration::ZERO);
+        for door in [closed, shut] {
+            gone.heard_from(door);
+            gone.note(Some(door), &unanswered);
+        }
+        assert!(!gone.lost(), "a first probe that finds none is asked again");
+        gone.heard_from(closed);
+        gone.note(Some(closed), &unanswered);
+        assert!(!gone.lost(), "an answer since: asked again from the start");
+        let (tries, started) = (std::cell::Cell::new(0), Instant::now());
+        assert!(read_again(&[30, 30], &gone, shown, flaky(9, busy, &tries)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(10) && tries.get() == 1);
+        assert!(gone.stop.load(Ordering::Acquire));
+        let why = gone.gone().unwrap();
+        assert!(why.contains("none that answered earlier in this press takes a connection now (") && why.contains(closed), "{why}");
+        // In a press, a name that does not resolve waits as a refused connection does (where this
+        // machine's resolver says so).
+        let unresolved = ureq::get("https://nowhere.invalid/").call().unwrap_err();
+        drop(listener);
+        if matches!(&unresolved, ureq::Error::Transport(f) if f.kind() == ureq::ErrorKind::Dns) {
+            assert!(Watch::default().passing(&unresolved, true).is_none());
+            assert!(works.passing(&unresolved, true).is_some());
+        } else {
+            eprintln!("not checked here: nowhere.invalid did not fail as a name that does not resolve ({unresolved})");
+        }
     }
 
     #[test]

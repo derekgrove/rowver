@@ -161,8 +161,8 @@ impl Datasets {
                 .map_err(|why| Refusal::lasting(Fault::Mistake, why))?;
             readers.push(Box::new(reader.seeing(seen)));
         }
-        let agent = storage.agent();
-        let ask: Ask = Arc::new(move |url: &str| digest_once(&agent, url));
+        let (agent, watch) = (storage.agent(), storage.watch.clone());
+        let ask: Ask = Arc::new(move |url: &str| digest_once(&agent, url, &watch));
         Copies::open(file, order, readers, ask, self.learnt.clone(), first, seen.clone())
     }
 }

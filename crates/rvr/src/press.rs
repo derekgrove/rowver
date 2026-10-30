@@ -1454,6 +1454,14 @@ fn take_all(
     }
     let done = done.into_inner().unwrap_or_else(|e| e.into_inner());
     let errors = || done.iter().flatten().filter_map(|t| t.as_ref().err());
+    // A mistake in the study comes first; then the network gone, which is no file's fault: the
+    // press stops, and keeps what it read.
+    if let Some(mistake) = errors().find(|e| e.fault == Fault::Mistake) {
+        return Err(mistake.clone());
+    }
+    if let Some(why) = watch.gone() {
+        return Err(Failed::new(Fault::Save, why));
+    }
     if let Some(error) = errors().find(|e| e.fault != Fault::Stopped) {
         return Err(error.clone());
     }
@@ -1569,10 +1577,9 @@ pub(crate) fn connect(
             let transport: Arc<dyn grid_catalog::Transport> =
                 Arc::new(GridHttps::new(path.into(), ca));
             let asked = std::time::Instant::now();
-            datasets = Some(Datasets::ask(
-                &Rucio::new(Server::cms(), transport),
-                &catalog,
-            )?);
+            let server = Server::cms();
+            datasets = Some(Datasets::ask(&Rucio::new(server.clone(), transport), &catalog)?);
+            watch.heard_from(&format!("{}:443", server.host()));
             println!(
                 "Rucio said where the {} can be read in {:.1} s.",
                 some(catalog.len(), "dataset file", "dataset files"),
@@ -1756,7 +1763,7 @@ pub fn press(
     let mut picked = (!matches!(on, On::Once)).then(|| crate::journal::pick_up(&staged, &identity)).flatten();
     let resumed = picked.as_mut().map(|p| std::mem::take(&mut p.taken)).unwrap_or_default();
     let picked_up = !resumed.is_empty();
-    let watch = Arc::new(Watch::default());
+    let watch = Arc::new(Watch::press(crate::samples::remote::QUIET, crate::samples::remote::AGAIN));
     let files: Vec<(usize, &File)> = reads
         .iter()
         .enumerate()
