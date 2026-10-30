@@ -15,7 +15,7 @@ rvr validate / dump / diff  # check and inspect .rvr files
 rvr reproduce FILE          # press a file's own study again and compare
 ```
 
-New to `.rvr` files? [The examples](https://gitlab.cern.ch/dgrove/rowver/-/blob/main/examples/README.md)
+New to `.rvr` files? [The examples](https://gitlab.cern.ch/dgrove/rowver/-/blob/main/docs/examples/README.md)
 make a first one from a DAS dataset and take it, step by step, to a plot.
 
 ## Install

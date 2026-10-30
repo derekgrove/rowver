@@ -18,7 +18,7 @@ rvr --version
 (`[all]` adds Awkward, pandas and pyarrow, for list columns and tables. For `rvr` alone, run
 `cargo install --locked rvr`, or download it from the
 [releases](https://gitlab.cern.ch/dgrove/rowver/-/releases) with no Rust at all; see
-[Install](../crates/rvr/README.md#install).)
+[Install](../../crates/rvr/README.md#install).)
 
 ## 2. Install your grid certificate on your laptop
 

@@ -242,8 +242,8 @@ Comparing the two with rvr diff:
 The headers show no difference in rows, samples, columns, by_sample or sample columns.
 ```
 
-[The introduction](intro/README.md) says what a `.rvr` file is and why it speeds up an
-analysis. [The examples](examples/README.md) take one study from a first file to a finished plot, with
+[The introduction](docs/intro/README.md) says what a `.rvr` file is and why it speeds up an
+analysis. [The examples](docs/examples/README.md) take one study from a first file to a finished plot, with
 central datasets from DAS: histograms in Python and ROOT, a column added later, data and
 simulation together, reading more events, sharing and signing, your own ntuples, and what to do
 when something goes wrong, every output from a real run.
@@ -263,9 +263,9 @@ every key of `samples.toml`.
 | [`crates/rvr-recipe`](crates/rvr-recipe/README.md) | the recipe language of `rvr press`: every table, operator and function, each with an example |
 | [`crates/rowver-py`](crates/rowver-py/README.md) | the Python package `rowver`: `.rvr` files as NumPy, Awkward, Arrow, pandas and Parquet, and the `rvr` command |
 | [`crates/rowver`](crates/rowver/README.md) | the Rust library that reads, validates and writes `.rvr` files; the reference builder of the format |
-| [`intro`](intro/README.md) | what a `.rvr` file is, and why it makes an analysis fast |
-| [`setup`](setup/README.md) | install `rvr` and `rowver`, and make a grid proxy on your laptop |
-| [`examples`](examples/README.md) | your first `.rvr` file, step by step, from DAS datasets to plots |
+| [`docs/intro`](docs/intro/README.md) | what a `.rvr` file is, and why it makes an analysis fast |
+| [`docs/setup`](docs/setup/README.md) | install `rvr` and `rowver`, and make a grid proxy on your laptop |
+| [`docs/examples`](docs/examples/README.md) | your first `.rvr` file, step by step, from DAS datasets to plots |
 | [`FORMAT.md`](FORMAT.md) | the `.rvr` specification |
 
 It reads ROOT with [hep-root](https://crates.io/crates/hep-root) and reaches the grid with

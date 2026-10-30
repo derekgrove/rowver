@@ -11,7 +11,7 @@ If you don't have `rvr` or your grid proxy installed, set it
 up once by following the instructions in [the setup section](../setup/README.md):
 
 1. [Install rvr and rowver](../setup/README.md#1-install-rvr-and-rowver)
-2. [Put your grid certificate on your laptop](../setup/README.md#2-put-your-grid-certificate-on-your-laptop)
+2. [Install your grid certificate on your laptop](../setup/README.md#2-install-your-grid-certificate-on-your-laptop)
 3. [Make a grid proxy](../setup/README.md#3-make-a-grid-proxy)
 4. [Check it](../setup/README.md#4-check-it): you are ready when `rvr proxy` says the proxy is valid.
 
@@ -148,8 +148,8 @@ Only what `[copy]` and `[column]` name is stored. `good_muon` is a working name:
 muons' pt, add a column, `good_muon_pt = "good_muon.pt"`.
 
 Every word you can use in a recipe (`count`, `first`, `pair_mass` and the rest) is listed in the
-[recipe reference](../crates/rvr-recipe/README.md), each with an example and what it gives. If you
-know Awkward, its [last section](../crates/rvr-recipe/README.md#from-python-to-rvr) puts common
+[recipe reference](../../crates/rvr-recipe/README.md), each with an example and what it gives. If you
+know Awkward, its [last section](../../crates/rvr-recipe/README.md#from-python-to-rvr) puts common
 selections side by side with how you write them in a recipe. To try an expression on real events
 before you press, use [`rvr try`](#trying-an-expression).
 
@@ -479,7 +479,7 @@ plt.savefig("stack.png")
 ![Data against Drell-Yan and tt̄](plots/stack.png)
 
 `f.to_pandas()`, `f.to_parquet("zmumu.parquet")` and `f.arrays()` (Awkward) give the same columns
-in other forms; the [Python README](../crates/rowver-py/README.md) lists them.
+in other forms; the [Python README](../../crates/rowver-py/README.md) lists them.
 
 ## 8. Read more events
 
@@ -639,8 +639,8 @@ three.rvr: valid, 317070 rows, 7 columns, read all 636390 entries, not signed
 The filled file is the one a press of all 90 files writes. A press that stops part way (Ctrl-C, a
 laptop asleep, the network gone, a disk not mounted) keeps what it read beside its file (in
 `three.rvr.partial/` for `three.rvr`), and the next `rvr press` carries on from there;
-`rvr status` says how far it got ([Stopped part way](../crates/rvr/README.md#stopped-part-way)).
+`rvr status` says how far it got ([Stopped part way](../../crates/rvr/README.md#stopped-part-way)).
 
-The [rvr README](../crates/rvr/README.md#when-something-goes-wrong) lists every message, and
+The [rvr README](../../crates/rvr/README.md#when-something-goes-wrong) lists every message, and
 describes every command and every key of `samples.toml`; the
-[recipe reference](../crates/rvr-recipe/README.md) lists everything a recipe can say.
+[recipe reference](../../crates/rvr-recipe/README.md) lists everything a recipe can say.
