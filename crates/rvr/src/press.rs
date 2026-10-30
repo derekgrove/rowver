@@ -1,7 +1,7 @@
 //! `rvr press`: read what a study's samples.lock names through its recipe.toml, keep the events
 //! the recipe's cuts pass, and write one `.rvr` file that carries all three texts.
 //!
-//! Documentation: `FORMAT.md` (repository root) ("made", "data"); the README of rvr.
+//! Documentation: `docs/FORMAT.md` ("made", "data"); the README of rvr.
 //! ROOT is read with hep-root (`RootFile::read_range`). Every input is checked against the lock
 //! before it is read (size, adler32, ROOT UUID, entries). Rows keep the order of their entries,
 //! and several files are read at once, each a run of entries at a time. A random choice reads
@@ -183,16 +183,6 @@ pub fn study(
     Ok((dir, name, target))
 }
 
-/// The columns a recipe stores, in the order a file holds them: its copies, then its computed columns.
-pub fn outputs(recipe: &Recipe) -> Vec<Output<'_>> {
-    recipe
-        .copy
-        .iter()
-        .map(|(n, e)| (n, e, true))
-        .chain(recipe.columns.iter().map(|(n, e)| (n, e, false)))
-        .collect()
-}
-
 /// The three texts of a study, which the file carries.
 pub struct Texts {
     pub recipe: String,
@@ -269,14 +259,14 @@ pub fn plan(
 /// The recipe a press runs, or what stops it.
 pub fn read_recipe(source: &str) -> Result<Recipe, String> {
     let recipe = Recipe::read(source).map_err(|e| format!("recipe.toml: {}", e.0))?;
-    if recipe.copy.is_empty() && recipe.columns.is_empty() {
-        return Err("recipe.toml stores nothing: name branches under [copy] or computed columns under [column].".into());
+    if recipe.columns.is_empty() {
+        return Err("recipe.toml stores nothing: under [columns], list branches (branches = [\"MET_pt\"]) or name computed columns (ht = \"sum(Jet_pt)\").".into());
     }
     Ok(recipe)
 }
 
-/// An output column: the name written, the expression it comes from, and whether it is a copy.
-pub type Output<'a> = (&'a String, &'a Expression, bool);
+/// An output column: one of the recipe's columns, its name and the expression it comes from.
+pub type Output<'a> = &'a (String, Expression);
 
 /// One file to read, in the lock's order.
 #[derive(Clone)]
@@ -336,7 +326,6 @@ struct Shared<'a> {
 pub(crate) struct Branches<'a, S: ByteSource> {
     file: &'a RootFile<S>,
     tree: &'a Tree,
-    names: &'a [String],
     first: i64,
     last: i64,
     read: RefCell<HashMap<String, Array>>,
@@ -346,10 +335,10 @@ pub(crate) struct Branches<'a, S: ByteSource> {
 }
 
 impl<'a, S: ByteSource> Branches<'a, S> {
-    /// Entries `first..last` of a tree whose branches are `names`.
-    pub fn over(file: &'a RootFile<S>, tree: &'a Tree, names: &'a [String], first: i64, last: i64) -> Self {
+    /// Entries `first..last` of a tree.
+    pub fn over(file: &'a RootFile<S>, tree: &'a Tree, first: i64, last: i64) -> Self {
         let read = RefCell::new(HashMap::new());
-        Branches { file, tree, names, first, last, read, failure: RefCell::new(None) }
+        Branches { file, tree, first, last, read, failure: RefCell::new(None) }
     }
 
     /// The first failure to read a branch, if one failed.
@@ -378,6 +367,10 @@ fn kind_of(kind: hep_root::columns::Kind) -> Kind {
 }
 
 impl<S: ByteSource> Columns for Branches<'_, S> {
+    fn has(&self, name: &str) -> bool {
+        self.tree.branch(name).is_some()
+    }
+
     fn column(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
         if let Some(held) = self.read.borrow().get(name) {
             return Ok(Some(held.clone()));
@@ -404,9 +397,6 @@ impl<S: ByteSource> Columns for Branches<'_, S> {
         Ok(Some(array))
     }
 
-    fn begins(&self, start: &str) -> bool {
-        self.names.iter().any(|name| name.starts_with(start))
-    }
 }
 
 /// One output column gathered over the kept events of a file, then of a sample.
@@ -451,25 +441,6 @@ pub(crate) fn fields(metadata: &Map<String, Value>) -> BTreeMap<String, Constant
         .iter()
         .filter_map(|(name, value)| Some((name.clone(), read(value)?)))
         .collect()
-}
-
-/// The branch a copied column names: a branch by name, or `branch(...)` of a sample field.
-fn copied(scope: &Scope, from: &Expression) -> Result<Array, String> {
-    let name = match from {
-        Expression::Name(name) => name.clone(),
-        Expression::Call(_, arguments) if arguments.len() == 1 => {
-            match scope.evaluate(&arguments[0]).map_err(|e| e.0)? {
-                Array::Constant(Constant::Text(name)) => name,
-                _ => return Err("branch(...) needs the name of a branch as text".into()),
-            }
-        }
-        _ => return Err("a copied column names one branch".into()),
-    };
-    scope
-        .columns
-        .column(&name)
-        .map_err(|e| e.0)?
-        .ok_or_else(|| format!("there is no branch named {name}"))
 }
 
 /// Which events one cut lets through: those it does not apply to, and those that pass it.
@@ -774,23 +745,14 @@ impl ByteSource for Held {
     }
 }
 
-/// Whether a branch may be asked for: its name, or the name it would have as an attribute or a
-/// count of a collection, appears in the recipe or among the sample's text fields.
+/// Whether a branch may be asked for: its name appears in the recipe, or among the sample's text
+/// fields (for `branch(sample.FIELD)`).
 fn mentioned(
     mentions: &BTreeSet<String>,
     sample: &BTreeMap<String, Constant>,
     branch: &str,
 ) -> bool {
-    let mut parts = branch
-        .match_indices('_')
-        .map(|(at, _)| (&branch[..at], &branch[at + 1..]));
     mentions.contains(branch)
-        || parts.any(|(collection, attribute)| {
-            mentions.contains(collection) && mentions.contains(attribute)
-        })
-        || branch
-            .strip_prefix('n')
-            .is_some_and(|collection| mentions.contains(collection))
         || sample
             .values()
             .any(|value| matches!(value, Constant::Text(text) if text == branch))
@@ -982,29 +944,24 @@ fn opened(
 }
 
 /// What to do about a failure reading a file's events: a name that is not a branch, with the
-/// nearest branches; a function that is not one, with the nearest functions and the recipe's
-/// helpers; a damaged file (hep-root says `decompression failed`), whose every copy is damaged
-/// when it is a dataset's.
+/// nearest branches and defined names; a function that is not one, with the nearest functions;
+/// a damaged file (hep-root says `decompression failed`), whose every copy is damaged when it
+/// is a dataset's.
 pub(crate) fn hint(error: &str, branches: &[String], recipe: &Recipe, dataset: bool) -> String {
-    let missing = ["there is no branch named ", "There is no column named "]
-        .iter()
-        .find_map(|said| error.rsplit_once(said).map(|(_, name)| name.trim()));
-    if let Some(name) = missing {
-        // A collection is named by the prefix of its branches (Jet for Jet_pt), so those count too.
-        let prefixes = branches.iter().filter_map(|b| b.split_once('_').map(|(p, _)| p));
-        let mut names: Vec<&str> = branches.iter().map(String::as_str).chain(prefixes).collect();
+    if let Some((_, name)) = error.rsplit_once("There is no column named ") {
+        let defined = recipe.defines.keys().map(String::as_str);
+        let mut names: Vec<&str> = branches.iter().map(String::as_str).chain(defined).collect();
         names.sort();
         names.dedup();
-        let near = resolve::nearest(name, names.into_iter());
+        let near = resolve::nearest(name.trim(), names.into_iter());
         let near = match near.is_empty() {
             true => String::new(),
             false => format!(" Did you mean: {}?", near.join(", ")),
         };
-        return format!(".{near} rvr branches lists every branch and collection the file has.");
+        return format!(".{near} rvr branches lists every branch the file has.");
     }
-    if let Some((_, name)) = error.rsplit_once("There is no operation or helper named ") {
-        let helpers = recipe.helpers.keys().map(String::as_str);
-        let near = resolve::nearest(name.trim(), rvr_recipe::FUNCTIONS.iter().copied().chain(helpers));
+    if let Some((_, name)) = error.rsplit_once("There is no function named ") {
+        let near = resolve::nearest(name.trim(), rvr_recipe::FUNCTIONS.iter().copied());
         let near = match near.is_empty() {
             true => String::new(),
             false => format!(" Did you mean: {}?", near.join(", ")),
@@ -1238,14 +1195,8 @@ fn take(
                     seen.clear();
                 }
             }
-            let branches = Branches::over(&file, &tree, &names, first as i64, last as i64);
-            let scope = Scope {
-                columns: &branches,
-                sample: &sample,
-                objects: &recipe.objects,
-                collections: &recipe.collections,
-                helpers: &recipe.helpers,
-            };
+            let branches = Branches::over(&file, &tree, first as i64, last as i64);
+            let scope = Scope::new(&branches, &sample, &recipe.defines);
             // A failure reading the events says where they are, and what to do when the file is damaged.
             let within = |error: String| {
                 format!(
@@ -1264,19 +1215,16 @@ fn take(
                 .collect();
             let mut counted = vec![0_u64; recipe.keep.len()];
             let read = kept(recipe, &scope, start, &mut counted).and_then(|keep| {
-                for (index, (column, from, plain)) in outputs.iter().enumerate() {
-                    let array = if *plain {
-                        copied(&scope, from)
-                    } else {
-                        scope
-                            .evaluate(from)
-                            .and_then(|value| rvr_recipe::per_event(value, count))
-                            .map_err(|e| e.0)
-                    };
-                    // A copied branch's own name already begins what failed of it.
+                for (index, (column, from)) in outputs.iter().enumerate() {
+                    let array = scope
+                        .evaluate(from)
+                        .and_then(|value| rvr_recipe::per_event(value, count))
+                        .map_err(|e| e.0);
+                    // An error that begins with the column's name already (a branch of that name
+                    // that could not be read) is not named again.
                     let named = |e: String| match e.starts_with(&format!("{column}: ")) {
                         true => e,
-                        false => format!("{column}: {e}"),
+                        false => format!("[columns] {column}: {e}"),
                     };
                     let array = stored(recipe, column, array.map_err(named)?);
                     let (kind, listed) = match &array {
@@ -1556,7 +1504,7 @@ fn joined(
     let (mut rows, mut records, mut missing) = (0, Map::new(), 0);
     for input in inputs {
         let taken = taken.next().ok_or("a file was left unread")?;
-        for ((index, found), (name, _, _)) in taken.kinds.into_iter().enumerate().zip(outputs) {
+        for ((index, found), (name, _)) in taken.kinds.into_iter().enumerate().zip(outputs) {
             if *kinds[index].get_or_insert(found) != found {
                 return Err(format!(
                     "{name} is not the same kind of column in {} as in the files before it",
@@ -1695,13 +1643,13 @@ pub fn press(
     if let Some(sample) = lock.sample.iter().find(|s| s.metadata.contains_key("events_missing")) {
         return Err(format!("{} has a key events_missing in samples.toml, a name rvr press gives what a file with holes misses: give it another name, and resolve again.", sample.name));
     }
-    let outputs = outputs(&recipe);
+    let outputs: Vec<Output> = recipe.columns.iter().collect();
     let filling = match on {
         On::Holes(kinds) => Some(crate::fill::plan(target, texts, &lock, &asked, kinds)?),
         _ => None,
     };
     let mut earlier = match matches!(on, On::Earlier)
-        .then(|| crate::reuse::earlier(target, texts, &recipe, &lock, &asked, &outputs))
+        .then(|| crate::reuse::earlier(target, texts, &recipe, &lock, &asked))
         .flatten()
     {
         Some(Ok(earlier)) => Some(earlier),
@@ -1741,7 +1689,7 @@ pub fn press(
         }
     }
     let uncut = earlier.as_ref().map(|_| {
-        let names: Vec<&String> = reading.iter().map(|(n, _, _)| *n).collect();
+        let names: Vec<&String> = reading.iter().map(|(n, _)| n).collect();
         crate::reuse::only(&recipe, &names)
     });
     let reader = uncut.as_ref().unwrap_or(&recipe);
@@ -1809,7 +1757,7 @@ pub fn press(
         "samples": write::text_checksum(&texts.samples),
         "lock": write::text_checksum(&texts.lock),
         "events": asked.iter().map(|e| e.record()).collect::<Vec<_>>(),
-        "reading": reading.iter().map(|(n, _, _)| n.as_str()).collect::<Vec<_>>(),
+        "reading": reading.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
         "on": match (&filling, &earlier, &on) {
             (Some(filling), _, On::Holes(kinds)) => json!({"fill": filling.file.header()["data"]["sha256"], "kinds": kinds}),
             (_, Some(earlier), _) => json!({"earlier": earlier.file().header()["data"]["sha256"]}),
@@ -1848,7 +1796,7 @@ pub fn press(
             );
         }
         Some(_) => {
-            let names: Vec<&str> = reading.iter().map(|(n, _, _)| n.as_str()).collect();
+            let names: Vec<&str> = reading.iter().map(|(n, _)| n.as_str()).collect();
             println!(
                 "{} has the events this recipe keeps ({}) and {} of its {} columns.",
                 target.display(),
@@ -1874,7 +1822,19 @@ pub fn press(
             workers.min(work.len()).max(1)
         ),
     }
-    let mentions = reader.mentions();
+    // What this press evaluates: the cuts it runs, the columns it reads, and the defined names
+    // they reach; only the branches those name are fetched ahead.
+    let roots: Vec<&Expression> = reader
+        .keep
+        .iter()
+        .flat_map(rvr_recipe::Cut::expressions)
+        .chain(reading.iter().map(|(_, e)| e))
+        .collect();
+    let defined = crate::reuse::reached(reader, &roots);
+    let mut mentions = BTreeSet::new();
+    for expression in roots.iter().copied().chain(defined.iter().map(|d| &reader.defines[d])) {
+        rvr_recipe::names(expression, &mut mentions);
+    }
     // The bars: each sample's entries chosen of what this press reads, and what it picked up.
     let (mut chosen, mut already, mut holed) = (vec![0; lock.sample.len()], vec![0; lock.sample.len()], 0);
     for (at, input) in reads.iter().enumerate() {
@@ -1992,7 +1952,7 @@ pub fn press(
             return Err(format!("nothing could be read: every entry the press chose is in a hole, so no column's kind is known, and {} was not written. The first: {}", target.display(), hole["why"].as_str().unwrap_or("")));
         }
     }
-    for ((column, _, _), kind) in reading.iter().zip(&kinds) {
+    for ((column, _), kind) in reading.iter().zip(&kinds) {
         if kind.is_none() {
             return Err(format!("no sample has an event to take {column} from, so its kind is unknown: press more events"));
         }
@@ -2012,11 +1972,11 @@ pub fn press(
     // which is nothing when no sample kept an event of it.
     let mut fresh = reading
         .iter()
-        .map(|(name, _, _)| *name)
+        .map(|(name, _)| name)
         .zip(&kinds)
         .enumerate();
     let mut columns = Vec::new();
-    for (index, (name, _, _)) in outputs.iter().enumerate() {
+    for (index, (name, _)) in outputs.iter().enumerate() {
         if let Some(earlier) = earlier.as_ref().filter(|e| e.reused[index]) {
             let copied = write::Source::Copied(earlier.file(), (*name).clone());
             columns.push(((*name).clone(), copied));
@@ -2063,14 +2023,14 @@ pub fn press(
     made.insert("toolchain".into(), toolchain());
     let mut pressed = text(source);
     pressed["format"] = "rvr-recipe".into();
-    pressed["columns"] = outputs.iter().map(|(n, _, _)| n.as_str()).collect();
+    pressed["columns"] = outputs.iter().map(|(n, _)| n.as_str()).collect();
     made.insert("recipe".into(), pressed);
     made.insert("samples".into(), text(&texts.samples));
     made.insert("lock".into(), text(&texts.lock));
     made.insert("files".into(), Value::Object(made_files));
     let mut made = Value::Object(made);
     let names: Vec<&str> = lock.sample.iter().map(|s| s.name.as_str()).collect();
-    let written: Vec<&str> = outputs.iter().map(|(n, _, _)| n.as_str()).collect();
+    let written: Vec<&str> = outputs.iter().map(|(n, _)| n.as_str()).collect();
     data["sample_cols"] = write::sample_cols(&names, &made["files"], &written)
         .map_err(failed)?
         .into();

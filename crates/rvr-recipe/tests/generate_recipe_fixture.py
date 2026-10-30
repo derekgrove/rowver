@@ -21,11 +21,12 @@ from coffea.nanoevents.methods import vector
 
 EVENTS = 60
 SAMPLE = {"trigger": "flag", "year": 2018, "xsec": 87.3, "is_data": False, "era": "UL18"}
-OBJECTS = {"good_muon": "Muon where tight and pt > 15", "central_jet": "Jet where pt > 30 and abs(eta) < 2.4"}
-HELPERS = {
-    "hem_veto": {"takes": [], "value": "count(Jet where pt > 30 and eta > -3.2 and eta < -1.3 and phi > -1.57 and phi < -0.87) == 0"},
-    "near": {"takes": ["eta", "phi", "others"], "value": "dr_nearest(eta, phi, others.eta, others.phi)"},
-    "twice": {"takes": ["x"], "value": "x * 2"},
+# The names the cases may use, as a recipe's [define] gives them: each may use the ones above it.
+DEFINES = {
+    "good_muon": "Muon_tight and Muon_pt > 15",
+    "central_jet": "Jet_pt > 30 and abs(Jet_eta) < 2.4",
+    "hem_veto": "count(Jet_pt > 30 and Jet_eta > -3.2 and Jet_eta < -1.3 and Jet_phi > -1.57 and Jet_phi < -0.87) == 0",
+    "met_twice": "MET * 2",
 }
 
 
@@ -142,9 +143,9 @@ def cases(c):
         ("MET + pi", c["MET"] + pi), ("2 * pi", 2 * pi), ("1 + 2 * 3 - 4 / 8", 1 + 2 * 3 - 4 / 8), ("7 % 3 == 1", True),
         ("Jet_pt > 30", c["Jet_pt"] > 30), ("Jet_pt * MET", c["Jet_pt"] * c["MET"]), ("Jet_pt - 2 * Jet_btag", c["Jet_pt"] - 2 * c["Jet_btag"]),
         ("Jet_id + nlep", c["Jet_id"] + c["nlep"]), ("Jet_pt[Jet_pt > 30]", c["Jet_pt"][c["Jet_pt"] > 30]),
-        ("count(Jet_pt > 30)", ak.sum(c["Jet_pt"] > 30, axis=1)), ("count(Jet_pt)", ak.num(c["Jet_pt"])), ("count(Jet)", c["nJet"]),
-        ("count(Jet where pt > 30 and abs(eta) < 2.4)", ak.sum(central, axis=1)), ("count(central_jet)", ak.sum(central, axis=1)),
-        ("(Jet where btag > 0.5).pt", c["Jet_pt"][c["Jet_btag"] > 0.5]), ("(central_jet where btag > 0.5).eta", c["Jet_eta"][central & (c["Jet_btag"] > 0.5)]),
+        ("count(Jet_pt > 30)", ak.sum(c["Jet_pt"] > 30, axis=1)), ("count(Jet_pt)", ak.num(c["Jet_pt"])),
+        ("count(Jet_pt > 30 and abs(Jet_eta) < 2.4)", ak.sum(central, axis=1)), ("count(central_jet)", ak.sum(central, axis=1)),
+        ("Jet_pt[Jet_btag > 0.5]", c["Jet_pt"][c["Jet_btag"] > 0.5]), ("Jet_eta[central_jet and Jet_btag > 0.5]", c["Jet_eta"][central & (c["Jet_btag"] > 0.5)]),
         ("sum(Jet_pt)", ak.sum(c["Jet_pt"], axis=1)), ("sum(Muon_charge)", ak.sum(c["Muon_charge"], axis=1)),
         ("sum(Jet_pt > 30)", ak.sum(c["Jet_pt"] > 30, axis=1)), ("any(Jet_btag > 0.5)", ak.any(c["Jet_btag"] > 0.5, axis=1)),
         ("all(Jet_pt > 20)", ak.all(c["Jet_pt"] > 20, axis=1)),
@@ -152,7 +153,7 @@ def cases(c):
         ("greatest(Jet_id, -1)", extreme(c["Jet_id"], max, -1, "i4")), ("least(Jet_id, 0.5)", extreme(c["Jet_id"], min, 0.5, "f8")),
         ("first(Jet_pt, -1)", pad(c["Jet_pt"], 0, -1, "f4")), ("nth(Jet_pt, 1, 0)", pad(c["Jet_pt"], 1, 0, "f4")),
         ("first(Muon_charge, 0)", pad(c["Muon_charge"], 0, 0, "i4")), ("nth(Jet_eta, 2, -99.5)", pad(c["Jet_eta"], 2, -99.5, "f4")),
-        ("good_muon.pt", gm["pt"]), ("count(good_muon)", ak.sum(good, axis=1)), ("sum(good_muon.charge) == 0", ak.sum(gm["charge"], axis=1) == 0),
+        ("Muon_pt[good_muon]", gm["pt"]), ("count(good_muon)", ak.sum(good, axis=1)), ("sum(Muon_charge[good_muon]) == 0", ak.sum(gm["charge"], axis=1) == 0),
         ("Muon_eta[good_muon]", gm["eta"]), ("index(Jet_pt)", ak.local_index(c["Jet_pt"], axis=1)),
         ("listed(Jet_pt, Jet_id)", ak.any(ak.local_index(c["Jet_pt"], axis=1)[:, :, None] == c["Jet_id"][:, None, :], axis=2)),
         # Coffea: the nearest member of the other list and the distance to it.
@@ -160,7 +161,7 @@ def cases(c):
         ("nearest_index(Jet_eta, Jet_phi, Muon_eta, Muon_phi)", nearest_index),
         ("least(dr_nearest(Muon_eta, Muon_phi, Jet_eta, Jet_phi), inf) > 0.4",
          ak.fill_none(ak.min(muons.nearest(jets, return_metric=True)[1], axis=1), np.inf) > 0.4),
-        ("near(Jet_eta, Jet_phi, good_muon)", narrow(ak.fill_none(jets.nearest(good_muons, return_metric=True)[1], np.inf)), True),
+        ("dr_nearest(Jet_eta, Jet_phi, Muon_eta[good_muon], Muon_phi[good_muon])", narrow(ak.fill_none(jets.nearest(good_muons, return_metric=True)[1], np.inf)), True),
         # The ranks after the nearest: argsort over coffea's metric_table.
         ("dr_second_nearest(Jet_eta, Jet_phi, Muon_eta, Muon_phi)", narrow(ak.fill_none(second_dr, np.inf)), True),
         ("second_nearest_index(Jet_eta, Jet_phi, Muon_eta, Muon_phi)", ak.fill_none(second_index, -1)),
@@ -171,8 +172,8 @@ def cases(c):
         ("second_farthest_index(Jet_eta, Jet_phi, Muon_eta, Muon_phi)", ak.fill_none(second_far_index, -1)),
         ("take(Muon_pt, nearest_index(Jet_eta, Jet_phi, Muon_eta, Muon_phi), -1)", narrow(ak.fill_none(nearest_muon.pt, -1))),
         # Coffea: the mass of a sum of four-momenta, signed where it is spacelike.
-        ("mass(good_muon.pt, good_muon.eta, good_muon.phi)", summed_mass(momenta(gm["pt"], gm["eta"], gm["phi"])), scale),
-        ("mass(good_muon.pt, good_muon.eta, good_muon.phi, good_muon.mass)", summed_mass(good_muons), scale),
+        ("mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon])", summed_mass(momenta(gm["pt"], gm["eta"], gm["phi"])), scale),
+        ("mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon])", summed_mass(good_muons), scale),
         ("mass(Muon_pt, Muon_eta, Muon_phi, Muon_mass) > 60", summed_mass(muons) > 60),
         # Coffea: delta phi and delta R between two values, a list against one value per event.
         ("delta_phi(Jet_phi, MET_phi)", narrow(jets.delta_phi(met)), True),
@@ -214,7 +215,7 @@ def cases(c):
         ("MET * sample.xsec", c["MET"] * 87.3), ("sample.is_data or MET > 30", c["MET"] > 30), ("sample.year - 2000", 18),
         ("stored(count(Jet_pt > 30), 'i4')", ak.to_numpy(ak.sum(c["Jet_pt"] > 30, axis=1)).astype("i4")), ("stored(MET, 'f8')", c["MET"].astype("f8")),
         ("stored(Jet_pt, 'i2')", ak.values_astype(c["Jet_pt"], "i2")),
-        ("hem_veto()", ak.sum(hem, axis=1) == 0), ("twice(MET) > twice(30)", c["MET"] * 2 > 60), ("twice(Jet_pt)", c["Jet_pt"] * 2),
+        ("hem_veto", ak.sum(hem, axis=1) == 0), ("met_twice > 60", c["MET"] * 2 > 60), ("Jet_pt * 2", c["Jet_pt"] * 2),
     ]
 
 
@@ -256,7 +257,7 @@ def main():
         """One compact line per record."""
         return ",\n".join("  " + json.dumps(item, separators=(",", ":")) for item in records)
 
-    text = ("{\n" + f' "versions": {json.dumps(versions)},\n "sample": {json.dumps(SAMPLE)},\n "objects": {json.dumps(OBJECTS)},\n "helpers": {json.dumps(HELPERS)},\n'
+    text = ("{\n" + f' "versions": {json.dumps(versions)},\n "sample": {json.dumps(SAMPLE)},\n "defines": {json.dumps(DEFINES)},\n'
             + ' "columns": {\n' + ",\n".join(f"  {json.dumps(name)}: {json.dumps(item, separators=(',', ':'))}" for name, item in held.items())
             + '\n },\n "cases": [\n' + lines(results) + "\n ]\n}\n")
     json.loads(text)

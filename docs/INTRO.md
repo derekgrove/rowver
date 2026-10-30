@@ -57,11 +57,11 @@ To put a number on it: take a sample of 30 ROOT files (30 copies of one TChiWZ s
 
 Most of what is in a ROOT file is never used by any one analysis: the file holds every branch of every event, and you need a handful of branches for the events that pass your preselection. A `.rvr` file holds only that. One of the files above is 136 MB (its main tree alone is 22.7 MB, 285 branches); pressed with the recipe above, it becomes a 157 kB `.rvr`. That is small enough to send in a message, keep in a git repository, or keep on your laptop for every study you have.
 
-A `.rvr` file also describes itself: it carries the whole text of the `samples.toml`, `recipe.toml` and `samples.lock` that made it. Whoever you send it to can see exactly what is in it and how it was cut, check it with `rvr validate`, and press it again from the same inputs. [Step 9 of the examples](../examples/README.md#9-share-it-check-it-sign-it) shows how to sign a file, so they also know it came from you.
+A `.rvr` file also describes itself: it carries the whole text of the `samples.toml`, `recipe.toml` and `samples.lock` that made it. Whoever you send it to can see exactly what is in it and how it was cut, check it with `rvr validate`, and press it again from the same inputs. [Step 9 of the examples](examples/README.md#9-share-it-check-it-sign-it) shows how to sign a file, so they also know it came from you.
 
 ### Local analysis
 
-Because the file is small and opens in milliseconds, the analysis itself moves to your laptop. The grid is used once, to press the file, and `rvr press` reads only the branches the recipe uses, from wherever the dataset is stored. Everything after that (plots, cuts, fits, trying out ideas) runs on your own processor, in Python, with no batch jobs, no queue and no grid proxy. When you change your mind about what to store, change the recipe and press again: `rvr` reads only the new branches, and only for the events it already kept ([step 5 of the examples](../examples/README.md#5-add-a-column-you-forgot)).
+Because the file is small and opens in milliseconds, the analysis itself moves to your laptop. The grid is used once, to press the file, and `rvr press` reads only the branches the recipe uses, from wherever the dataset is stored. Everything after that (plots, cuts, fits, trying out ideas) runs on your own processor, in Python, with no batch jobs, no queue and no grid proxy. When you change your mind about what to store, change the recipe and press again: `rvr` reads only the new branches, and only for the events it already kept ([step 5 of the examples](examples/README.md#5-add-a-column-you-forgot)).
 
 ### The rules
 
@@ -69,4 +69,4 @@ Because the file is small and opens in milliseconds, the analysis itself moves t
 2) **The file says how it was made.** The recipe and the samples are inside it. You never edit a `.rvr` file by hand: you change the recipe and press again.
 3) **Store what you use.** A `.rvr` holds the columns of your analysis, not a copy of the dataset. When you need another branch, add it to the recipe.
 
-To make your first one, follow [the examples](../examples/README.md).
+To make your first one, follow [the examples](examples/README.md).

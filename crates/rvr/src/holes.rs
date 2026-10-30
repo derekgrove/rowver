@@ -1,8 +1,8 @@
 //! What a press does when it cannot read something: a file, or a run of its entries, becomes a
-//! hole of one kind (FORMAT.md, "Holes"), or the press ends. A mistake in the study or the recipe
-//! ends it; so does a failure that is not the file's own (a proxy or certificate refused, a local
-//! file that cannot be read for want of rights), which would fail every later file the same, and
-//! so makes no holes.
+//! hole of one kind (docs/FORMAT.md, "Holes"), or the press ends. A mistake in the study or the
+//! recipe ends it; so does a failure that is not the file's own (a proxy or certificate refused, a
+//! local file that cannot be read for want of rights), which would fail every later file the same,
+//! and so makes no holes.
 
 use std::sync::Mutex;
 

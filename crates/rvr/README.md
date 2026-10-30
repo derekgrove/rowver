@@ -7,7 +7,7 @@ look inside the `.rvr` files it makes.
 rvr new DIR                 # start a study
 rvr proxy init              # make a grid proxy from your certificate (for grid storage)
 rvr samples resolve …       # find every file the study reads
-rvr branches                # the branches and collections a sample's file holds
+rvr branches                # the branches a sample's file holds
 rvr try "EXPRESSION"        # what an expression gives on the first events, before pressing
 rvr press                   # read them through the recipe into one .rvr file
 rvr status                  # is the .rvr current, and what would press read
@@ -206,9 +206,9 @@ Wrote local.rvr (22,325 rows, 11 columns, 2.4 MB) in 0.2 s.
 ```
 
 Here that reads at most 26.3 MB of baskets (`Jet_pt` and `nJet`) where a full press reads
-108.0 MB; on local copies of the two files it takes 0.2 s instead of 0.6 s (2026-10-19).
-A column counts as changed when its expression, its stored kind, or any object, helper or
-collection it uses changed. When the file cannot be built on, `rvr press` says why and presses
+108.0 MB; on local copies of the two files it takes 0.2 s instead of 0.6 s (Apple M5, 2026-10-30).
+A column counts as changed when its expression, its stored kind, or any name it uses from
+`[define]` changed. When the file cannot be built on, `rvr press` says why and presses
 every column; `--full` always does. A sample added or removed, a lock resolved again, other
 `--events`, or another build of rvr all mean a full press, since the file's rows or the code that
 computed them would no longer be the ones it records.
@@ -465,99 +465,45 @@ rvr press --fill would read 5 entries of 1 file.
 
 ### `rvr branches [DIR] [--sample NAME] [--find TEXT]`
 
-Lists every branch of the first file of the study's first sample (or of `--sample NAME`), one per
-line with its type and its shape: `flat` (one value per event), `jagged` (a list per event), or `3
-per event` for a fixed array. Branches are grouped by the prefix before their first `_`, and
-a group of jagged branches is a **collection**: under `Jet:`, its counter `nJet` comes first, then
-`Jet_pt` and the rest (write `from = "Jet"`, `count(Jet)`, `Jet where pt > 30`, and `pt` inside its
-`where` for `Jet_pt`). A member of a split object is grouped under its object, the name before its
-first `.`: in MiniAOD and AOD, one EDM product (`recoMuons_muons__RECO`, its count `.obj` first);
-in ATLAS DAOD_PHYSLITE, one container (`AnalysisJetsAuxDyn`). A recipe names those branches through
-a `[collection]` (`pt = "recoMuons_muons__RECO.obj.m_state.p4Polar_.fCoordinates.fPt"`) or
-`branch('…')`. Branches in no group are listed last, under `Other:`, and branches `rvr` cannot read
-(whole objects, strings, nested vectors) under `Not readable by rvr:`, each with why. A dataset's
-file with no copy on disk (only on tape) is passed over for the next one, up to the tenth. It reads
-the file's description only, no events, so it takes as long as opening the file. `--find TEXT`
-shows only the branches whose name holds TEXT, in any case: `rvr branches --find muon`. A name a
-recipe uses that the file does not have is answered with the nearest branches and collections, and
-a pointer here. Groups longer than seven are cut with `…` below:
+Lists every branch of the first file of the study's first sample (or of `--sample NAME`), in
+alphabetical order whatever the case, one per line with its type and its shape: `flat` (one value
+per event), `jagged` (a list per event), or `3 per event` for a fixed array. These are the names a
+recipe uses, in full: `Jet_pt`, `lep_pt` in an ATLAS ntuple, `H1_PX` in an LHCb one, and for a
+member of a split object such as `recoMuons_muons__RECO.obj.m_state.p4Polar_.fCoordinates.fPt`,
+`branch('…')` with its name. Branches `rvr` cannot read (whole objects, strings, nested vectors)
+are listed last, under `Not readable by rvr:`, each with why. A dataset's file with no copy on disk
+(only on tape) is passed over for the next one, up to the tenth. It reads the file's description
+only, no events, so it takes as long as opening the file. `--find TEXT` shows only the branches
+whose name holds TEXT, in any case. A name a recipe uses that the file does not have is answered
+with the nearest branches, and a pointer here.
 
 ```text
-$ rvr branches
-GluGluToHToTauTau: GluGluToHToTauTau.root, tree Events, 69 branches
+$ rvr branches --find jet
+GluGluToHToTauTau: GluGluToHToTauTau.root, tree Events, 9 of its 69 branches hold "jet"
 
-GenPart:
-  nGenPart        uint32  flat
-  GenPart_eta     float   jagged
-  GenPart_mass    float   jagged
-  GenPart_pdgId   int32   jagged
-  GenPart_phi     float   jagged
-  GenPart_pt      float   jagged
-  GenPart_status  int32   jagged
-
-Jet:
-  nJet      uint32  flat
-  Jet_btag  float   jagged
-  Jet_eta   float   jagged
-  Jet_mass  float   jagged
-  Jet_phi   float   jagged
-  Jet_pt    float   jagged
-  Jet_puId  bool    jagged
-
-Muon:
-  nMuon                uint32  flat
-  Muon_charge          int32   jagged
-  Muon_dxy             float   jagged
-  Muon_dxyErr          float   jagged
-  Muon_dz              float   jagged
-  …
-
-Tau:
-  nTau                 uint32  flat
-  Tau_charge           int32   jagged
-  Tau_decayMode        int32   jagged
-  Tau_eta              float   jagged
-  Tau_genPartIdx       int32   jagged
-  …
-
-HLT:
-  HLT_IsoMu17_eta2p1_LooseIsoPFTau20  bool  flat
-  HLT_IsoMu24                         bool  flat
-  HLT_IsoMu24_eta2p1                  bool  flat
-
-MET:
-  MET_CovXX         float  flat
-  MET_CovXY         float  flat
-  MET_CovYY         float  flat
-  MET_phi           float  flat
-  MET_pt            float  flat
-  MET_significance  float  flat
-  MET_sumet         float  flat
-
-PV:
-  PV_npvs  int32  flat
-  PV_x     float  flat
-  PV_y     float  flat
-  PV_z     float  flat
-
-Other:
-  event            uint64  flat
-  luminosityBlock  uint32  flat
-  run              int32   flat
+  Jet_btag     float   jagged
+  Jet_eta      float   jagged
+  Jet_mass     float   jagged
+  Jet_phi      float   jagged
+  Jet_pt       float   jagged
+  Jet_puId     bool    jagged
+  Muon_jetIdx  int32   jagged
+  nJet         uint32  flat
+  Tau_jetIdx   int32   jagged
 ```
 
 ### `rvr try "EXPRESSION" [DIR] [--events N] [--sample NAME] [--kept]`
 
 Shows what one expression gives, event by event, on the first `--events` events (10 unless told)
 of the study's first sample, or of `--sample NAME`. It reads the study's `samples.lock`, so resolve
-first, and its `recipe.toml`, so the recipe's objects, helpers and collections can be used. It
+first, and its `recipe.toml`, so the names it defines can be used. It
 opens one file and reads only the branches the expression names. `--kept` shows only the events
 the `[keep]` cuts keep, which are the rows `rvr press` would write. A mistake in the expression, or
 a branch the file does not have, is said as `rvr press` would say it.
 
 ```text
-$ rvr try "first(pair_mass(good_muon.pt, good_muon.eta, good_muon.phi, good_muon.mass), -1)" --kept --events 5
-Rucio said where the 1 dataset file can be read in 3.2 s.
+$ rvr try "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)" --kept --events 5
+Rucio said where the 10 dataset files can be read in 1.6 s.
 DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events (f4, one value per event)
   entry       14   88.6032
   entry       25   93.59802
@@ -748,28 +694,21 @@ example and its result.
 format = "rvr-recipe"
 version = 1
 
-[object.good_muon]            # the muons that pass, as a collection of their own
-from = "Muon"
-where = "tightId and pfRelIso04_all < 0.15 and pt > 20"
+[define]                      # names for expressions, used by the lines below them
+good_muon = "Muon_tightId and Muon_pfRelIso04_all < 0.15 and Muon_pt > 20"
 
 [keep]                        # an event is kept when it passes every line
 trigger = "HLT_IsoMu24"
 one_muon = "count(good_muon) >= 1"
 
-[copy]                        # branches stored as they are
-branches = ["MET_pt", "Muon_pt", "Jet_pt"]
+[columns]                     # what the file stores
+branches = ["MET_pt", "Muon_pt", "Jet_pt"]    # branches stored as they are
+ht = "sum(Jet_pt)"            # computed while pressing, one number per event
 ```
 
-Also `[helper.NAME]` for named expressions you reuse, `[collection.NAME]` to group branches as one
-collection's attributes, and `[column]` for computed columns, written after the copies:
-
-```toml
-[column]
-ht = "sum(Jet_pt)"            # one number per event
-```
-
-A cut can apply to some samples only: `hem = { if = "sample.era == 3", apply = "hem_veto()" }`,
-where `sample.NAME` is a sample's metadata.
+Every branch is named in full. A defined name may use the names above it, and may not be a
+branch's name. A cut can apply to some samples only: `hem = { if = "sample.era == 3", apply =
+"hem_veto" }`, where `sample.NAME` is a sample's metadata. Each table may be empty, or left out.
 
 ## Grid access
 

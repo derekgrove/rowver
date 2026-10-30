@@ -1,4 +1,4 @@
-//! RowVer 14 in Rust: read, validate, and write `.rvr` files as `FORMAT.md` specifies them.
+//! RowVer 14 in Rust: read, validate, and write `.rvr` files as `docs/FORMAT.md` specifies them.
 
 pub mod choice;
 mod codec;

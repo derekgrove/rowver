@@ -1,0 +1,35 @@
+# Every table of a recipe, and most kinds of function, in one study. The recipe reference
+# (crates/rvr-recipe/README.md) explains each.
+format = "rvr-recipe"
+version = 1
+title = "A tour of the recipe language"
+
+# Names for expressions, used by the lines below them; a name may use the names above it.
+[define]
+good_muon = "Muon_tightId and Muon_pfRelIso04_all < 0.15 and Muon_pt > 20 and abs(Muon_eta) < 2.1"
+good_tau = "Tau_idDecayMode and Tau_idIsoTight and Tau_idAntiMuTight and Tau_pt > 20 and abs(Tau_eta) < 2.3"
+# Jets above 30 GeV, ΔR > 0.4 away from every good muon and good tau.
+clean_jet = "Jet_pt > 30 and abs(Jet_eta) < 4.7 and dr_nearest(Jet_eta, Jet_phi, Muon_eta[good_muon], Muon_phi[good_muon]) > 0.4 and dr_nearest(Jet_eta, Jet_phi, Tau_eta[good_tau], Tau_phi[good_tau]) > 0.4"
+opposite = "first(Muon_charge[good_muon], 0) * first(Tau_charge[good_tau], 0) < 0"
+
+# The cuts, in order. Each sample's metadata names its trigger's branch; the last cut applies to
+# the VBF sample alone, and the other passes it.
+[keep]
+trigger = "branch(sample.trigger)"
+a_muon_and_a_tau = "count(good_muon) >= 1 and count(good_tau) >= 1"
+opposite_charge = "opposite"
+two_jets_in_vbf = { if = "sample.production == 'vbf'", apply = "count(clean_jet) >= 2" }
+
+# Branches stored as they are, one under a new name, and columns computed while pressing: flat
+# and jagged, and one stored as a smaller type.
+[columns]
+branches = ["run", "event", "MET_pt", "MET_phi"]
+npv = "PV_npvs"
+n_clean_jets = { value = "count(clean_jet)", stored = "u1" }
+clean_jet_pt = "Jet_pt[clean_jet]"
+leading_jet_pt = "nth(sorted(Jet_pt[clean_jet], 'descending'), 0, -1)"
+jet_eta_by_pt = "take(Jet_eta[clean_jet], order(Jet_pt[clean_jet], 'descending'), -9)"
+max_mjj = "greatest(pair_mass(Jet_pt[clean_jet], Jet_eta[clean_jet], Jet_phi[clean_jet], Jet_mass[clean_jet]), -1)"
+dr_mu_tau = "delta_r(first(Muon_eta[good_muon], 0), first(Muon_phi[good_muon], 0), first(Tau_eta[good_tau], 0), first(Tau_phi[good_tau], 0))"
+b_tagged = "count(Jet_btag[clean_jet] > 0.8)"
+tau_decay_mode = "first(Tau_decayMode[good_tau], -1)"

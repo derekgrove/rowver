@@ -1,6 +1,6 @@
 //! Read chosen columns of an `.rvr` file, leaving every other array compressed on disk.
 //!
-//! Documentation: `FORMAT.md` (repository root) ("Arrays", "Checksums").
+//! Documentation: `docs/FORMAT.md` ("Arrays", "Checksums").
 //! Every fact of the header is checked when the file is opened (`checked_header`), and each
 //! array against its `sha256` when it is read. Per-sample array checksums, column facts and
 //! the event choice need every array; `validate_file` checks those.

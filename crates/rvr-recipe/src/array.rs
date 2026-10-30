@@ -20,7 +20,7 @@ pub struct Values {
 }
 
 /// How numbers are held while they are worked on. The numbers are shared, so naming a
-/// column again, or passing it into a helper, copies nothing.
+/// column again, or passing it into a function, copies nothing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Store {
     /// Whole numbers and truth values; a `u8` is held by its bits.

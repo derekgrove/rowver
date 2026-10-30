@@ -1,0 +1,32 @@
+# A muon and a hadronic tau of opposite charge, the selection of the CMS Open Data H → ττ study,
+# with the pair's visible mass and the muon's transverse mass. Only branches every sample has are
+# used: the data have no GenPart.
+format = "rvr-recipe"
+version = 1
+title = "H → ττ, muon and tau"
+
+[define]
+good_muon = "Muon_tightId and Muon_pfRelIso04_all < 0.1 and Muon_pt > 17 and abs(Muon_eta) < 2.1"
+good_tau = "Tau_idDecayMode and Tau_idIsoTight and Tau_idAntiEleTight and Tau_idAntiMuTight and Tau_pt > 20 and abs(Tau_eta) < 2.3"
+# The leading good muon (mu1) and good tau (tau1).
+mu1_pt = "first(Muon_pt[good_muon], 0)"
+mu1_eta = "first(Muon_eta[good_muon], 0)"
+mu1_phi = "first(Muon_phi[good_muon], 0)"
+mu1_charge = "first(Muon_charge[good_muon], 0)"
+tau1_pt = "first(Tau_pt[good_tau], 0)"
+tau1_eta = "first(Tau_eta[good_tau], 0)"
+tau1_phi = "first(Tau_phi[good_tau], 0)"
+tau1_charge = "first(Tau_charge[good_tau], 0)"
+
+[keep]
+trigger = "HLT_IsoMu17_eta2p1_LooseIsoPFTau20"
+a_good_muon = "count(good_muon) >= 1"
+a_good_tau = "count(good_tau) >= 1"
+opposite_charge = "mu1_charge * tau1_charge < 0"
+
+[columns]
+branches = ["run", "luminosityBlock", "event", "PV_npvs", "MET_pt", "MET_phi", "Jet_pt"]
+mu_pt = "mu1_pt"
+tau_pt = "tau1_pt"
+visible_mass = "sqrt(2 * mu1_pt * tau1_pt * (cosh(mu1_eta - tau1_eta) - cos(delta_phi(mu1_phi, tau1_phi))))"
+mt = "sqrt(2 * mu1_pt * MET_pt * (1 - cos(delta_phi(mu1_phi, MET_phi))))"

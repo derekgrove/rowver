@@ -18,6 +18,9 @@ mod samples;
 mod status;
 mod trying;
 
+/// The recipe a press runs, read from its text, or what is wrong with it.
+pub use press::read_recipe;
+
 const USAGE: &str = "usage:
   rvr new DIR                              start a study: samples.toml, recipe.toml, .gitignore
   rvr samples COMMAND ...                  what a study reads (rvr samples, alone, lists them)
@@ -28,7 +31,7 @@ const USAGE: &str = "usage:
                                            is the study's .rvr current and whole, and what would
                                            press read
   rvr branches [DIR] [--sample NAME] [--find TEXT]
-                                           the branches and collections a sample's file holds
+                                           the branches a sample's file holds
   rvr try \"EXPRESSION\" [DIR] [--events N] [--sample NAME] [--kept]
                                            what an expression gives on a sample's first events
   rvr validate FILE... [--parent PARENT] [--complete]

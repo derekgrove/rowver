@@ -29,13 +29,13 @@ xsec = 1.5
 RECIPE = """format = "rvr-recipe"
 version = 1
 
+[define]
+
 [keep]
 jets = "nJet >= 1"
 
-[copy]
+[columns]
 branches = ["weight", "nJet", "Jet_pt", "isGood"]
-
-[column]
 ht = "sum(Jet_pt)"
 """
 

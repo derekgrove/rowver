@@ -8,7 +8,7 @@
 use crate::samples::resolve::Lock;
 use crate::samples::spec::Events;
 use rowver::rvr::Reader;
-use rvr_recipe::{names, Expression, Recipe};
+use rvr_recipe::{uses, Cut, Expression, Recipe};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -22,76 +22,46 @@ pub struct Earlier {
     pub kept: HashMap<(String, String), Vec<u64>>,
 }
 
-/// Every name an expression uses, the names of the functions and helpers it calls included.
-fn used(expression: &Expression, found: &mut BTreeSet<String>) {
-    use Expression::*;
-    names(expression, found);
-    match expression {
-        Call(name, arguments) => {
-            found.insert(name.clone());
-            arguments.iter().for_each(|argument| used(argument, found));
-        }
-        Field(inner, _) | Negate(inner) | Not(inner) => used(inner, found),
-        In(left, list) => {
-            used(left, found);
-            list.iter().for_each(|member| used(member, found));
-        }
-        Binary(_, left, right) | Pick(left, right) | Where(left, right) => {
-            used(left, found);
-            used(right, found);
-        }
-        Constant(_) | Name(_) => {}
-    }
-}
-
-/// The recipe cut down to `roots` and the objects, helpers and collections they reach.
-fn reaching(recipe: &Recipe, roots: &[&Expression]) -> Recipe {
+/// The names the recipe defines that `roots` reach, directly or through others: the ones a press
+/// evaluates.
+pub(crate) fn reached(recipe: &Recipe, roots: &[&Expression]) -> Vec<String> {
     let mut found = BTreeSet::new();
     let mut todo: Vec<&Expression> = roots.to_vec();
     while let Some(expression) = todo.pop() {
         let mut named = BTreeSet::new();
-        used(expression, &mut named);
+        uses(expression, &mut named);
         for name in named {
-            if found.insert(name.clone()) {
-                todo.extend(recipe.objects.get(&name));
-                todo.extend(recipe.helpers.get(&name).map(|helper| &helper.value));
+            if let Some(defined) = recipe.defines.get(&name) {
+                if found.insert(name) {
+                    todo.push(defined);
+                }
             }
         }
     }
-    let reached = |name: &String| found.contains(name);
+    found.into_iter().collect()
+}
+
+/// The recipe cut down to the names it defines that `roots` reach.
+fn reaching(recipe: &Recipe, roots: &[&Expression]) -> Recipe {
+    let defines = reached(recipe, roots).into_iter().map(|name| {
+        let defined = recipe.defines[&name].clone();
+        (name, defined)
+    });
     Recipe {
-        objects: recipe
-            .objects
-            .iter()
-            .filter(|(n, _)| reached(n))
-            .map(|(n, e)| (n.clone(), e.clone()))
-            .collect(),
-        collections: recipe
-            .collections
-            .iter()
-            .filter(|(n, _)| reached(n))
-            .map(|(n, c)| (n.clone(), c.clone()))
-            .collect(),
-        helpers: recipe
-            .helpers
-            .iter()
-            .filter(|(n, _)| reached(n))
-            .map(|(n, h)| (n.clone(), h.clone()))
-            .collect(),
+        defines: defines.collect(),
         ..Recipe::default()
     }
 }
 
-/// The recipe cut down to reading `columns`: no cuts, and only what those columns reach.
+/// The recipe cut down to reading `columns`: no cuts, and only the defined names they reach.
 pub fn only(recipe: &Recipe, columns: &[&String]) -> Recipe {
-    let pick = |list: &[(String, Expression)]| -> Vec<(String, Expression)> {
-        list.iter()
-            .filter(|(n, _)| columns.contains(&n))
-            .cloned()
-            .collect()
-    };
-    let (copy, computed) = (pick(&recipe.copy), pick(&recipe.columns));
-    let roots: Vec<&Expression> = copy.iter().chain(&computed).map(|(_, e)| e).collect();
+    let picked: Vec<(String, Expression)> = recipe
+        .columns
+        .iter()
+        .filter(|(n, _)| columns.contains(&n))
+        .cloned()
+        .collect();
+    let roots: Vec<&Expression> = picked.iter().map(|(_, e)| e).collect();
     let reached = reaching(recipe, &roots);
     Recipe {
         stored: recipe
@@ -100,19 +70,14 @@ pub fn only(recipe: &Recipe, columns: &[&String]) -> Recipe {
             .filter(|(n, _)| columns.contains(n))
             .map(|(n, k)| (n.clone(), *k))
             .collect(),
-        copy,
-        columns: computed,
+        columns: picked,
         ..reached
     }
 }
 
 /// The recipe cut down to its cuts and what they reach.
 pub fn cuts(recipe: &Recipe) -> Recipe {
-    let roots: Vec<&Expression> = recipe
-        .keep
-        .iter()
-        .flat_map(|cut| cut.when.iter().chain([&cut.pass]))
-        .collect();
+    let roots: Vec<&Expression> = recipe.keep.iter().flat_map(Cut::expressions).collect();
     Recipe {
         keep: recipe.keep.clone(),
         ..reaching(recipe, &roots)
@@ -168,10 +133,9 @@ pub fn earlier(
     recipe: &Recipe,
     lock: &Lock,
     asked: &[Events],
-    outputs: &[(&String, &Expression, bool)],
 ) -> Option<Result<Earlier, String>> {
     path.exists()
-        .then(|| read(path, texts, recipe, lock, asked, outputs))
+        .then(|| read(path, texts, recipe, lock, asked))
 }
 
 fn read(
@@ -180,7 +144,6 @@ fn read(
     recipe: &Recipe,
     lock: &Lock,
     asked: &[Events],
-    outputs: &[(&String, &Expression, bool)],
 ) -> Result<Earlier, String> {
     let file = Reader::open(path).map_err(|e| format!("it could not be read ({e})"))?;
     let header = file.header();
@@ -230,9 +193,10 @@ fn read(
         }
         at += n;
     }
-    let reused = outputs
+    let reused = recipe
+        .columns
         .iter()
-        .map(|&(name, _, _)| {
+        .map(|(name, _)| {
             file.record(name).is_some() && only(&old, &[name]) == only(recipe, &[name])
         })
         .collect();
@@ -247,24 +211,18 @@ mod tests {
 format = "rvr-recipe"
 version = 1
 
-[object.good_jet]
-from = "Jet"
-where = "pt > 30"
-
-[helper.jets_above]
-takes = ["threshold"]
-value = "count(Jet where pt > threshold)"
+[define]
+good_jet = "Jet_pt > 30"
+hard_jet = "Jet_pt > 80"
 
 [keep]
 two_jets = "count(good_jet) >= 2"
-one_hard = "jets_above(50) >= 1"
+one_hard = "count(Jet_pt > 50) >= 1"
 
-[copy]
+[columns]
 MET = "MET_pt"
-
-[column]
 n_jet = "count(good_jet)"
-n_hard = "jets_above(80)"
+n_hard = "count(hard_jet)"
 "#;
 
     fn same(old: &str, new: &str, column: &str) -> bool {
@@ -279,26 +237,22 @@ n_hard = "jets_above(80)"
 
     #[test]
     fn a_column_or_a_cut_is_the_same_only_with_everything_it_reaches() {
-        let added = BASE.replace("[column]", "[column]\nht = \"sum(good_jet.pt)\"");
+        let added = BASE.replace("[columns]", "[columns]\nht = \"sum(Jet_pt[good_jet])\"");
         for column in ["MET", "n_jet", "n_hard"] {
             assert!(same(BASE, &added, column), "{column}");
         }
         assert!(!same(BASE, &added, "ht"), "a new column is read");
         assert!(same_cuts(BASE, &added));
-        // A changed object changes what reaches it, and only that.
-        let tighter = BASE.replace("pt > 30", "pt > 40");
+        // A changed defined name changes what reaches it, and only that.
+        let tighter = BASE.replace("Jet_pt > 30", "Jet_pt > 40");
         assert!(!same(BASE, &tighter, "n_jet"));
-        assert!(same(BASE, &tighter, "MET"), "MET reaches no object");
-        assert!(
-            same(BASE, &tighter, "n_hard"),
-            "n_hard reaches the helper, not the object"
-        );
+        assert!(same(BASE, &tighter, "MET"), "MET reaches no defined name");
+        assert!(same(BASE, &tighter, "n_hard"), "n_hard reaches hard_jet, not good_jet");
         assert!(!same_cuts(BASE, &tighter));
-        // A changed helper, which is only ever called, changes what calls it.
-        let helper = BASE.replace("pt > threshold", "pt >= threshold");
-        assert!(!same(BASE, &helper, "n_hard"));
-        assert!(same(BASE, &helper, "n_jet"));
-        assert!(!same_cuts(BASE, &helper));
+        let harder = BASE.replace("Jet_pt > 80", "Jet_pt >= 80");
+        assert!(!same(BASE, &harder, "n_hard"));
+        assert!(same(BASE, &harder, "n_jet"));
+        assert!(same_cuts(BASE, &harder), "no cut reaches hard_jet");
         // A column stored as another kind is changed.
         let stored = BASE.replace(
             "n_jet = \"count(good_jet)\"",
@@ -308,7 +262,7 @@ n_hard = "jets_above(80)"
         // Reading a column needs only what it reaches.
         let hard = String::from("n_hard");
         let read = only(&Recipe::read(BASE).unwrap(), &[&hard]);
-        assert!(read.keep.is_empty() && read.objects.is_empty());
-        assert_eq!(read.helpers.keys().collect::<Vec<_>>(), ["jets_above"]);
+        assert!(read.keep.is_empty());
+        assert_eq!(read.defines.keys().collect::<Vec<_>>(), ["hard_jet"]);
     }
 }

@@ -267,7 +267,7 @@ pub(crate) fn spool_old(
         spool.add(outputs.len(), (*order, 0), write::Values::Flat(write::array(entries))).map_err(failed)?;
     }
     let mut kinds = Vec::new();
-    for (index, (name, _, _)) in outputs.iter().enumerate() {
+    for (index, (name, _)) in outputs.iter().enumerate() {
         let held = file.column(name).map_err(failed)?.ok_or_else(|| format!("the file being filled has no column {name}"))?;
         let kind = Kind::named(&held.kind).map_err(|_| format!("the file being filled holds {name} as {}, a kind rvr does not press", held.kind))?;
         let w = kind.width();

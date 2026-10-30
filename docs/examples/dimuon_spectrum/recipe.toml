@@ -1,0 +1,15 @@
+# Events with exactly two muons of opposite charge, and the mass of the pair. Plotted on a log scale
+# from 0.25 to 300 GeV, it shows the resonances from the eta to the Z.
+format = "rvr-recipe"
+version = 1
+title = "Dimuon mass spectrum"
+
+[define]
+
+[keep]
+two_muons = "nMuon == 2"
+opposite_charge = "sum(Muon_charge) == 0"
+
+[columns]
+branches = ["Muon_pt", "Muon_eta"]
+mass = "first(pair_mass(Muon_pt, Muon_eta, Muon_phi, Muon_mass), -1)"

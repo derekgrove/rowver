@@ -1,36 +1,28 @@
-//! A recipe as it is saved: TOML naming objects, helpers, cuts, and columns, each value
-//! one expression.
+//! A recipe as it is saved: TOML naming expressions, cuts and columns, each value one
+//! expression.
 //!
 //! ```toml
 //! format = "rvr-recipe"
 //! version = 1
 //!
-//! [collection.lep]
-//! pt = "PT_lep"
-//! eta = "Eta_lep"
-//!
-//! [object.good_muon]
-//! from = "Muon"
-//! where = "tight and pt > 15"
-//!
-//! [helper.hem_veto]
-//! pass = "count(Jet where eta < -1.3 and phi < -0.87) == 0"
+//! [define]
+//! good_muon = "Muon_pt > 15 and Muon_tightId"
 //!
 //! [keep]
 //! two_muons = "count(good_muon) == 2"
-//! hem = { if = "sample.year == 2018", apply = "hem_veto()" }
+//! hem = { if = "sample.year == 2018", apply = "count(Jet_pt[Jet_eta < -1.3] > 30) == 0" }
 //!
-//! [copy]
+//! [columns]
 //! branches = ["Muon_pt", "MET"]
+//! ht = "sum(Jet_pt)"
 //! rho = "branch(sample.rho)"
 //! ```
 //!
 //! Every table, key and function is described in this crate's README.
 
-use crate::evaluate::Helper;
 use crate::parse::{parse, Expression};
 use crate::{problem, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use toml::{Table, Value};
 
 /// One named condition of a recipe; every cut must pass for an event to be kept.
@@ -42,23 +34,25 @@ pub struct Cut {
     pub pass: Expression,
 }
 
+impl Cut {
+    /// Its expressions: the condition of the samples it applies to, if any, then the cut.
+    pub fn expressions(&self) -> impl Iterator<Item = &Expression> {
+        self.when.iter().chain([&self.pass])
+    }
+}
+
 /// A parsed recipe.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Recipe {
     pub title: Option<String>,
-    pub objects: BTreeMap<String, Expression>,
-    /// Collections whose attributes are columns of any name: for each, every attribute and
-    /// its column, in the order written and never empty. The first column's lists say how
-    /// many members the collection has.
-    pub collections: BTreeMap<String, Vec<(String, String)>>,
-    pub helpers: BTreeMap<String, Helper>,
+    /// The names `[define]` gives expressions; none is stored.
+    pub defines: BTreeMap<String, Expression>,
     /// The cuts in the order written, which is the order of the cutflow.
     pub keep: Vec<Cut>,
-    /// The copied columns in order: the name written to the file, and the branch it comes from.
-    pub copy: Vec<(String, Expression)>,
-    /// The computed columns, in order, written after the copied ones.
+    /// The stored columns in the order written: each one's name, and the expression that makes
+    /// it (a branch alone is stored as the file holds it).
     pub columns: Vec<(String, Expression)>,
-    /// The number kind a computed column is stored as, where it is not the kind it is computed in.
+    /// The number kind a column is stored as, where it is not the kind it is computed in.
     pub stored: BTreeMap<String, crate::Kind>,
 }
 
@@ -70,7 +64,7 @@ fn expression(value: &Value, place: &str) -> Result<Expression> {
     parse(text).map_err(|error| problem(format!("{place}: {}", error.0)))
 }
 
-/// Read a table held under a key, or an empty one when the key is absent.
+/// Read a table held under a key, or none when the key is absent.
 fn table<'a>(root: &'a Table, key: &str) -> Result<Option<&'a Table>> {
     match root.get(key) {
         None => Ok(None),
@@ -95,30 +89,39 @@ fn plain(text: &str) -> bool {
     matches!(parse(text), Ok(Expression::Name(name)) if name == text)
 }
 
-/// Add every name an expression mentions: branches, collections, attributes, and helpers.
-pub fn names(expression: &Expression, found: &mut std::collections::BTreeSet<String>) {
+/// Add every name an expression mentions: branches, defined names, and text that may name a
+/// branch (`branch('…')`).
+pub fn names(expression: &Expression, found: &mut BTreeSet<String>) {
+    gather(expression, found, true);
+}
+
+/// Add the bare names an expression uses, branches and defined names, and no text.
+pub fn uses(expression: &Expression, found: &mut BTreeSet<String>) {
+    gather(expression, found, false);
+}
+
+/// Add the bare names an expression holds, and with `text` the text it holds too.
+fn gather(expression: &Expression, found: &mut BTreeSet<String>, text: bool) {
     use Expression::*;
     match expression {
-        Constant(crate::Constant::Text(text)) => {
-            found.insert(text.clone());
+        Constant(crate::Constant::Text(held)) if text => {
+            found.insert(held.clone());
         }
-        Constant(_) => {}
+        Constant(_) | Sample(_) => {}
         Name(name) => {
             found.insert(name.clone());
         }
-        Field(left, name) => {
-            found.insert(name.clone());
-            names(left, found);
-        }
-        Call(_, arguments) => arguments.iter().for_each(|argument| names(argument, found)),
+        Call(_, arguments) => arguments
+            .iter()
+            .for_each(|argument| gather(argument, found, text)),
         In(left, list) => {
-            names(left, found);
-            list.iter().for_each(|member| names(member, found));
+            gather(left, found, text);
+            list.iter().for_each(|member| gather(member, found, text));
         }
-        Negate(inner) | Not(inner) => names(inner, found),
-        Binary(_, left, right) | Pick(left, right) | Where(left, right) => {
-            names(left, found);
-            names(right, found);
+        Negate(inner) | Not(inner) => gather(inner, found, text),
+        Binary(_, left, right) | Pick(left, right) => {
+            gather(left, found, text);
+            gather(right, found, text);
         }
     }
 }
@@ -142,43 +145,6 @@ fn unparsed(text: &str, error: &toml::de::Error) -> String {
 }
 
 impl Recipe {
-    /// Every name the recipe mentions anywhere, which bounds the branches it can ask for.
-    pub fn mentions(&self) -> std::collections::BTreeSet<String> {
-        let mut found = std::collections::BTreeSet::new();
-        let helpers = self.helpers.values().map(|helper| &helper.value);
-        let cuts = self
-            .keep
-            .iter()
-            .flat_map(|cut| cut.when.iter().chain([&cut.pass]));
-        let columns = self
-            .copy
-            .iter()
-            .chain(&self.columns)
-            .map(|(_, value)| value);
-        for expression in self
-            .objects
-            .values()
-            .chain(helpers)
-            .chain(cuts)
-            .chain(columns)
-        {
-            names(expression, &mut found);
-        }
-        // Of a collection the recipe mentions: the column that counts its members, and
-        // the column behind each attribute the recipe names anywhere.
-        for (name, named) in &self.collections {
-            if found.contains(name) {
-                let used = named
-                    .iter()
-                    .enumerate()
-                    .filter(|(at, (attribute, _))| *at == 0 || found.contains(attribute));
-                let columns: Vec<String> = used.map(|(_, (_, column))| column.clone()).collect();
-                found.extend(columns);
-            }
-        }
-        found
-    }
-
     /// Read a recipe from its TOML text.
     pub fn read(text: &str) -> Result<Self> {
         let root: Table = text
@@ -191,113 +157,64 @@ impl Recipe {
                 "A recipe starts with format = \"rvr-recipe\" and version = 1",
             ));
         }
+        // The tables of the earlier language, each said in what it became.
+        let became = [
+            ("copy", "the branches it stored are listed under [columns] as branches = [...]"),
+            ("column", "its columns are lines of [columns], NAME = \"expression\""),
+            ("object", "write it as a line of [define], a mask: good_muon = \"Muon_pt > 20 and Muon_tightId\", used as Muon_pt[good_muon]"),
+            ("helper", "write it as a line of [define], good = \"expression\", used by its name alone"),
+            ("collection", "name each branch in full, as the file spells it, or through branch('…')"),
+        ];
+        if let Some((table, how)) = became.iter().find(|(table, _)| root.contains_key(*table)) {
+            return Err(problem(format!(
+                "A recipe has no [{table}] table: {how}. A recipe's tables are [define], [keep] and [columns]."
+            )));
+        }
         only(
             &root,
-            &[
-                "format",
-                "version",
-                "title",
-                "collection",
-                "object",
-                "helper",
-                "keep",
-                "copy",
-                "column",
-            ],
+            &["format", "version", "title", "define", "keep", "columns"],
             "A recipe",
         )?;
         let mut recipe = Self {
             title: root.get("title").and_then(Value::as_str).map(str::to_owned),
             ..Self::default()
         };
-        for (name, value) in table(&root, "collection")?.into_iter().flatten() {
-            let place = format!("[collection.{name}]");
-            let named = value
-                .as_table()
-                .ok_or_else(|| problem(format!("{place} must be a table")))?;
-            if name == "sample" || !plain(name) {
+        let defines = table(&root, "define")?;
+        let every: BTreeSet<&String> = defines.iter().flat_map(|table| table.keys()).collect();
+        for (name, value) in defines.into_iter().flatten() {
+            let place = format!("[define] {name}");
+            if !plain(name) || name == "sample" {
                 return Err(problem(format!(
-                    "{place}: a collection needs a plain name that an expression can use"
+                    "{place}: a defined name is one plain name an expression can use, such as good_muon"
                 )));
             }
-            let mut columns = Vec::new();
-            for (attribute, column) in named {
-                if !plain(attribute) {
-                    return Err(problem(format!(
-                        "{place}: {attribute} is not a name an expression can use"
-                    )));
-                }
-                let column = column.as_str().filter(|column| !column.is_empty());
-                let column = column.ok_or_else(|| {
-                    problem(format!("{place} {attribute} must name a column in quotes"))
-                })?;
-                columns.push((attribute.clone(), column.to_owned()));
+            let value = expression(value, &place)?;
+            let mut used = BTreeSet::new();
+            uses(&value, &mut used);
+            let later = used
+                .iter()
+                .find(|used| every.contains(used) && !recipe.defines.contains_key(*used));
+            if let Some(later) = later {
+                let itself = if later == name {
+                    ", itself"
+                } else {
+                    ", which is defined below it"
+                };
+                return Err(problem(format!("{place} uses {later}{itself}: a defined name may use only the names defined above it")));
             }
-            if columns.is_empty() {
-                return Err(problem(format!("{place} names no column")));
-            }
-            recipe.collections.insert(name.clone(), columns);
-        }
-        for (name, value) in table(&root, "object")?.into_iter().flatten() {
-            let place = format!("[object.{name}]");
-            if recipe.collections.contains_key(name) {
-                return Err(problem(format!(
-                    "{name} is both a collection and an object; give the object another name"
-                )));
-            }
-            let object = value
-                .as_table()
-                .ok_or_else(|| problem(format!("{place} must be a table")))?;
-            only(object, &["from", "where"], &place)?;
-            let from = object.get("from").and_then(Value::as_str);
-            let from = from.ok_or_else(|| problem(format!("{place} needs from = a collection")))?;
-            let mut members = Expression::Name(from.to_owned());
-            if let Some(condition) = object.get("where") {
-                let condition = expression(condition, &format!("{place} where"))?;
-                members = Expression::Where(Box::new(members), Box::new(condition));
-            }
-            recipe.objects.insert(name.clone(), members);
-        }
-        for (name, value) in table(&root, "helper")?.into_iter().flatten() {
-            let place = format!("[helper.{name}]");
-            let helper = value
-                .as_table()
-                .ok_or_else(|| problem(format!("{place} must be a table")))?;
-            only(helper, &["about", "takes", "pass", "value"], &place)?;
-            let body = match (helper.get("pass"), helper.get("value")) {
-                (Some(body), None) | (None, Some(body)) => expression(body, &place)?,
-                _ => {
-                    return Err(problem(format!(
-                        "{place} needs exactly one of pass or value"
-                    )))
-                }
-            };
-            let takes = match helper.get("takes") {
-                None => Vec::new(),
-                Some(Value::Array(names)) => names
-                    .iter()
-                    .map(|name| name.as_str().map(str::to_owned))
-                    .collect::<Option<_>>()
-                    .ok_or_else(|| problem(format!("{place} takes must be a list of names")))?,
-                Some(_) => return Err(problem(format!("{place} takes must be a list of names"))),
-            };
-            recipe
-                .helpers
-                .insert(name.clone(), Helper { takes, value: body });
+            recipe.defines.insert(name.clone(), value);
         }
         for (name, value) in table(&root, "keep")?.into_iter().flatten() {
             let place = format!("[keep] {name}");
             let cut = match value {
                 Value::Table(cut) => {
-                    only(cut, &["if", "apply", "pass"], &place)?;
-                    let pass = match (cut.get("apply"), cut.get("pass")) {
-                        (Some(body), None) | (None, Some(body)) => expression(body, &place)?,
-                        _ => {
-                            return Err(problem(format!(
-                                "{place} needs exactly one of apply or pass"
-                            )))
-                        }
-                    };
+                    if cut.contains_key("pass") {
+                        return Err(problem(format!("{place}: a cut for some samples says what it applies with apply = \"…\", not pass")));
+                    }
+                    only(cut, &["if", "apply"], &place)?;
+                    let pass = cut.get("apply").ok_or_else(|| {
+                        problem(format!("{place} needs apply = \"…\": the cut, for the samples its if is true for"))
+                    })?;
                     let when = cut
                         .get("if")
                         .map(|when| expression(when, &format!("{place} if")))
@@ -305,7 +222,7 @@ impl Recipe {
                     Cut {
                         name: name.clone(),
                         when,
-                        pass,
+                        pass: expression(pass, &place)?,
                     }
                 }
                 plain => Cut {
@@ -316,34 +233,25 @@ impl Recipe {
             };
             recipe.keep.push(cut);
         }
-        for (name, value) in table(&root, "copy")?.into_iter().flatten() {
-            match (name.as_str(), value) {
-                ("branches", Value::Array(names)) => {
-                    for branch in names {
-                        let branch = branch.as_str().ok_or_else(|| {
-                            problem("[copy] branches must be a list of branch names")
-                        })?;
-                        recipe
-                            .copy
-                            .push((branch.to_owned(), Expression::Name(branch.to_owned())));
+        for (name, value) in table(&root, "columns")?.into_iter().flatten() {
+            if name == "branches" {
+                let list = value
+                    .as_array()
+                    .ok_or_else(|| problem("[columns] branches must be a list of branch names"))?;
+                for branch in list {
+                    let branch = branch.as_str().filter(|branch| !branch.is_empty());
+                    let branch = branch.ok_or_else(|| {
+                        problem("[columns] branches must be a list of branch names")
+                    })?;
+                    if recipe.defines.contains_key(branch) {
+                        return Err(problem(format!("[columns] branches lists {branch}, a name [define] gives an expression: list branches only, and store the expression as a column of its own, such as {branch}_stored = \"{branch}\"")));
                     }
+                    let copied = Expression::Name(branch.to_owned());
+                    recipe.columns.push((branch.to_owned(), copied));
                 }
-                ("branches", _) => {
-                    return Err(problem("[copy] branches must be a list of branch names"))
-                }
-                _ => {
-                    let source = expression(value, &format!("[copy] {name}"))?;
-                    let plain = matches!(&source, Expression::Name(_))
-                        || matches!(&source, Expression::Call(called, _) if called == "branch");
-                    if !plain {
-                        return Err(problem(format!("[copy] {name} must name a branch, or use branch(...); a computed column belongs under [column]")));
-                    }
-                    recipe.copy.push((name.clone(), source));
-                }
+                continue;
             }
-        }
-        for (name, value) in table(&root, "column")?.into_iter().flatten() {
-            let place = format!("[column] {name}");
+            let place = format!("[columns] {name}");
             let value = match value {
                 Value::Table(column) => {
                     only(column, &["value", "stored"], &place)?;
@@ -367,17 +275,12 @@ impl Recipe {
                 .columns
                 .push((name.clone(), expression(value, &place)?));
         }
-        for (name, _) in recipe.copy.iter().chain(&recipe.columns) {
+        for (name, _) in &recipe.columns {
             if name.is_empty() || ["sample", "entry", "file"].contains(&name.as_str()) {
                 return Err(problem(format!("A column cannot be named \"{name}\"")));
             }
         }
-        let mut names: Vec<&String> = recipe
-            .copy
-            .iter()
-            .chain(&recipe.columns)
-            .map(|(name, _)| name)
-            .collect();
+        let mut names: Vec<&String> = recipe.columns.iter().map(|(name, _)| name).collect();
         names.sort();
         if let Some(pair) = names.windows(2).find(|pair| pair[0] == pair[1]) {
             return Err(problem(format!("Two columns are named {}", pair[0])));

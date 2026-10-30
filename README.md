@@ -104,7 +104,7 @@ marks what was cut, and checksums are shortened.
   sample were read (all, the first N, or N at random from a seed), and every input file.
 - A signed file also has a **`signature`**.
 
-[FORMAT.md](FORMAT.md) specifies every field.
+[The format](docs/FORMAT.md) specifies every field.
 
 ## Tutorial: from nothing to a file
 
@@ -147,26 +147,22 @@ kind = "signal"
 `recipe.toml` says which events to keep and what to store of them:
 
 ```toml
-[object.good_muon]
-from = "Muon"
-where = "tightId and pfRelIso04_all < 0.15 and pt > 20 and abs(eta) < 2.1"
-
-[object.good_tau]
-from = "Tau"
-where = "idDecayMode and idIsoTight and idAntiMuTight and pt > 20 and abs(eta) < 2.3"
+[define]
+good_muon = "Muon_tightId and Muon_pfRelIso04_all < 0.15 and Muon_pt > 20 and abs(Muon_eta) < 2.1"
+good_tau = "Tau_idDecayMode and Tau_idIsoTight and Tau_idAntiMuTight and Tau_pt > 20 and abs(Tau_eta) < 2.3"
 
 [keep]
 trigger = "HLT_IsoMu17_eta2p1_LooseIsoPFTau20"
 a_good_muon = "count(good_muon) >= 1"
 a_good_tau = "count(good_tau) >= 1"
 
-[copy]
+[columns]
 branches = ["run", "luminosityBlock", "event", "PV_npvs", "MET_pt", "MET_phi", "Muon_pt", "Muon_eta", "Tau_pt", "Tau_eta", "Jet_pt"]
 ```
 
-Each value in quotes is an expression. `[object.good_muon]` names the muons that pass its `where`
-condition, and the `[keep]` cuts count them. What is stored is only what `[copy]` (and `[column]`)
-name, so `Muon_pt` holds every muon of each kept event. The
+Each value in quotes is an expression over the event's branches, each named in full. `[define]`
+names the muons and taus that pass their conditions, and the `[keep]` cuts count them. What is
+stored is only what `[columns]` names, so `Muon_pt` holds every muon of each kept event. The
 [recipe reference](crates/rvr-recipe/README.md) explains every part, with examples.
 
 **3. Find the inputs.** No event is read yet. This writes `samples.lock`, which pins every file.
@@ -242,7 +238,7 @@ Comparing the two with rvr diff:
 The headers show no difference in rows, samples, columns, by_sample or sample columns.
 ```
 
-[The introduction](docs/intro/README.md) says what a `.rvr` file is and why it speeds up an
+[The introduction](docs/INTRO.md) says what a `.rvr` file is and why it speeds up an
 analysis. [The examples](docs/examples/README.md) take one study from a first file to a finished plot, with
 central datasets from DAS: histograms in Python and ROOT, a column added later, data and
 simulation together, reading more events, sharing and signing, your own ntuples, and what to do
@@ -257,16 +253,17 @@ every key of `samples.toml`.
 
 ## What is in this repository
 
-| folder | what it is |
+| where | what it is |
 |---|---|
 | [`crates/rvr`](crates/rvr/README.md) | the `rvr` command: start a study, resolve its samples, press them, and validate, dump, diff and reproduce `.rvr` files |
 | [`crates/rvr-recipe`](crates/rvr-recipe/README.md) | the recipe language of `rvr press`: every table, operator and function, each with an example |
 | [`crates/rowver-py`](crates/rowver-py/README.md) | the Python package `rowver`: `.rvr` files as NumPy, Awkward, Arrow, pandas and Parquet, and the `rvr` command |
 | [`crates/rowver`](crates/rowver/README.md) | the Rust library that reads, validates and writes `.rvr` files; the reference builder of the format |
-| [`docs/intro`](docs/intro/README.md) | what a `.rvr` file is, and why it makes an analysis fast |
-| [`docs/setup`](docs/setup/README.md) | install `rvr` and `rowver`, and make a grid proxy on your laptop |
-| [`docs/examples`](docs/examples/README.md) | your first `.rvr` file, step by step, from DAS datasets to plots |
-| [`FORMAT.md`](FORMAT.md) | the `.rvr` specification |
+| [`docs/INTRO.md`](docs/INTRO.md) | what a `.rvr` file is, and why it makes an analysis fast |
+| [`docs/SETUP.md`](docs/SETUP.md) | install `rvr` and `rowver`, and make a grid proxy on your laptop |
+| [`docs/examples`](docs/examples/README.md) | your first `.rvr` file, step by step, from DAS datasets to plots, and example studies, each checked to press |
+| [`docs/FEATURES.md`](docs/FEATURES.md) | every feature of RowVer, and the measurements behind its design |
+| [`docs/FORMAT.md`](docs/FORMAT.md) | the `.rvr` specification, shown on a real file |
 
 It reads ROOT with [hep-root](https://crates.io/crates/hep-root) and reaches the grid with
 [voms-proxy](https://crates.io/crates/voms-proxy), [rucio-client](https://crates.io/crates/rucio-client)

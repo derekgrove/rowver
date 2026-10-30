@@ -1,6 +1,6 @@
 # Step by step "rowver-vication" 
 
-This file walks you through making plots and embedding `.rvr` files into your analysis framework. To learn why `.rvr` exists and how it speeds up an analysis, [read the introduction](../intro/README.md).
+This file walks you through making plots and embedding `.rvr` files into your analysis framework. To learn why `.rvr` exists and how it speeds up an analysis, [read the introduction](../INTRO.md).
 
 
 ## 0. Before you start
@@ -8,12 +8,12 @@ This file walks you through making plots and embedding `.rvr` files into your an
 `rvr` is meant to run on your own laptop, reading CMS datasets straight from grid storage. Another idea is to press (create) the `.rvr` file(s) on a remote machine (like CMS LPC) and then copy it to your local machine. Why you might want to do that is by getting the code closer to the `.root` files, the `.rvr` file could be created faster than loading files over then network, but this is not always the case. 
 
 If you don't have `rvr` or your grid proxy installed, set it
-up once by following the instructions in [the setup section](../setup/README.md):
+up once by following the instructions in [the setup section](../SETUP.md):
 
-1. [Install rvr and rowver](../setup/README.md#1-install-rvr-and-rowver)
-2. [Install your grid certificate on your laptop](../setup/README.md#2-install-your-grid-certificate-on-your-laptop)
-3. [Make a grid proxy](../setup/README.md#3-make-a-grid-proxy)
-4. [Check it](../setup/README.md#4-check-it): you are ready when `rvr proxy` says the proxy is valid.
+1. [Install rvr and rowver](../SETUP.md#1-install-rvr-and-rowver)
+2. [Install your grid certificate on your laptop](../SETUP.md#2-install-your-grid-certificate-on-your-laptop)
+3. [Make a grid proxy](../SETUP.md#3-make-a-grid-proxy)
+4. [Check it](../SETUP.md#4-check-it): you are ready when `rvr proxy` says the proxy is valid.
 
 ## What you write
 
@@ -26,7 +26,25 @@ You write two short text files, and `rvr` does the rest:
 | `samples.lock` | every file the samples are, pinned (size, checksum, entries) | `rvr samples resolve` |
 | `zmumu.rvr` | the events, with the three texts above inside it | `rvr press` |
 
-The study here is Z → μμ: Drell-Yan simulation first, then data and tt̄ beside it.
+The study here is Z → μμ: Drell-Yan simulation first, then data and tt̄ beside it. Its files, as
+they are at step 6, are in [`zmumu`](zmumu), and the study of step 7 is in [`sumw`](sumw).
+
+### The example studies
+
+Each folder here is a whole study: a `samples.toml` and a `recipe.toml`. Copy one, then run
+`rvr samples resolve samples.toml` and `rvr press` in it. Each was resolved, pressed and validated
+on real data (`rvr press --events 2000`, 2026-10-30), and a test (`crates/rvr/tests/examples.rs`)
+checks that every one still reads.
+
+| study | what it shows | grid proxy |
+|---|---|---|
+| [`dimuon_spectrum`](dimuon_spectrum) | the dimuon mass spectrum of CMS Open Data: two muons of opposite charge, and their mass | no |
+| [`higgs_tautau`](higgs_tautau) | every sample of the CMS Open Data H → ττ study: the data from two files by a pattern, signals and backgrounds, a muon and a tau of opposite charge | no |
+| [`lhcb_b_to_kkk`](lhcb_b_to_kkk) | LHCb Open Data: B± → K± K+ K− from three tracks' flat branches, the B mass from defined names, the two magnet polarities written as eras | no |
+| [`recipe_tour`](recipe_tour) | every table of a recipe: defined names that use one another, jets cleaned of muons and taus, a trigger named by each sample, a cut for one sample only, a renamed branch, a stored type; events chosen at random | no |
+| [`zmumu`](zmumu) | this page's study: data, Drell-Yan and tt̄ from DAS, with a weight per event | yes |
+| [`sumw`](sumw) | the sum of generator weights over the events `zmumu` read (step 7) | yes |
+| [`eras`](eras) | one sample per era (UL17, UL18), an era's values in dataset names and metadata, a cut for 2018 only | yes |
 
 ## 2. Make your first file
 
@@ -51,101 +69,62 @@ a later rvr knows how to read it. The rest is explained below it.
 format = "rvr-recipe"
 version = 1
 
-[object.good_muon]
-from = "Muon"
-where = "pt > 20 and abs(eta) < 2.4 and tightId and pfRelIso04_all < 0.15"
+[define]
+good_muon = "Muon_pt > 20 and abs(Muon_eta) < 2.4 and Muon_tightId and Muon_pfRelIso04_all < 0.15"
 
 [keep]
 two_muons = "count(good_muon) == 2"
 
-[copy]
+[columns]
 branches = ["MET_pt", "nJet"]
-
-[column]
-mass = "first(pair_mass(good_muon.pt, good_muon.eta, good_muon.phi, good_muon.mass), -1)"
+mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
 ```
 
-**Reading the recipe.** Two of its words come from SQL, the language of database queries, where
-`SELECT … FROM muons WHERE pt > 20` picks the rows of a table that pass a condition. A recipe uses
-`from` and `where` the same way, on the particles inside each event:
+**Reading the recipe.** Every value in quotes is an expression over the event's branches, each
+named in full, as the file spells it.
 
-- `[object.good_muon]` makes a new collection, `good_muon`, out of one the file has.
-  - `from = "Muon"` names the collection to start from: the muons, which are the branches named
-    `Muon_…` (`Muon_pt`, `Muon_eta`, `Muon_tightId`, …).
-  - `where = "…"` says which of them to keep. Inside it a bare name is the muon's own branch:
-    `pt` is `Muon_pt`, `tightId` is `Muon_tightId`. A muon is a good muon when the whole condition
-    is true for it.
-
-  So in each event, `good_muon` is the muons with pt above 20 GeV, |η| below 2.4, the tight ID and
-  an isolation below 0.15. An event with three muons, two of which pass, has two good muons.
-  `where` never removes an event: it chooses muons within each one. After it, `good_muon.pt` is
-  their pt and `count(good_muon)` how many there are. The same choice can be written inside an
-  expression: `count(Muon where pt > 20)` counts the muons above 20 GeV.
+- `[define]` gives names to expressions, for the lines below to use. `good_muon` is true or false
+  for each muon of each event: true for the muons with pt above 20 GeV, |η| below 2.4, the tight ID
+  and an isolation below 0.15. An event with three muons, two of which pass, has two good muons.
+  Nothing under `[define]` is stored.
 - `[keep]` chooses the events. Each line is a cut: a name you choose (`two_muons`) and a condition
-  that is true or false for each event. An event is kept when every cut is true, and `rvr press`
-  prints how many pass each one.
-- `[copy]` stores branches as the ROOT file has them, for the events kept.
-- `[column]` stores a value computed for each event kept: here the mass of its two good muons
-  (`first(…, -1)` takes the first pair's mass, or -1 for an event with no pair).
+  that is true or false for each event. `count(good_muon)` counts the good muons, so an event is
+  kept when it has exactly two. An event is kept when every cut is true, and `rvr press` prints
+  how many pass each one.
+- `[columns]` says what the file stores. `branches` are stored as the ROOT file has them, for the
+  events kept. `mass` is computed for each event kept: `Muon_pt[good_muon]` is the good muons'
+  pt (the brackets keep the members where `good_muon` is true), `pair_mass` the mass of each pair
+  of them, and `first(…, -1)` the first pair's mass, or -1 for an event with no pair.
 
-**How do you know the file has a `Muon` collection?** You don't have to guess. Once the samples
-are resolved (just below), `rvr branches` lists every collection and branch of the sample's file,
-and `--find` narrows the 1,628 branches of a NanoAOD file down (long groups are cut with `…`):
+**How do you know the file has `Muon_pt`?** You don't have to guess. Once the samples are resolved
+(just below), `rvr branches` lists every branch of the sample's file, and `--find` narrows the
+1,628 branches of a NanoAOD file down (here cut with `…`):
 
 ```text
 $ rvr branches --find muon
-Rucio said where the 1 dataset file can be read in 3.6 s.
+Rucio said where the 10 dataset files can be read in 4.7 s.
 DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events, 108 of its 1,628 branches hold "muon"
 
-Jet:
-  Jet_muonIdx1         int32  jagged
-  Jet_muonIdx2         int32  jagged
-  Jet_muonSubtrFactor  float  jagged
-  Jet_nMuons           int32  jagged
-
-Muon:
-  nMuon                  uint32  flat
-  Muon_charge            int32   jagged
-  Muon_cleanmask         uint8   jagged
-  Muon_dxy               float   jagged
-  Muon_dxybs             float   jagged
+  CorrT1METJet_muonSubtrFactor                float   jagged
+  FatJet_muonIdx3SJ                           int32   jagged
+  Flag_BadPFMuonDzFilter                      bool    flat
   …
-
-Flag:
-  Flag_BadPFMuonDzFilter        bool  flat
-  Flag_BadPFMuonFilter          bool  flat
-  Flag_BadPFMuonSummer16Filter  bool  flat
-  Flag_muonBadTrackFilter       bool  flat
-
-HLT:
-  HLT_Dimuon0_Jpsi                            bool  flat
-  HLT_Dimuon0_Jpsi3p5_Muon2                   bool  flat
-  HLT_Dimuon0_Jpsi_L1_4R_0er1p5R              bool  flat
-  HLT_Dimuon0_Jpsi_L1_NoOS                    bool  flat
-  HLT_Dimuon0_Jpsi_NoVertexing                bool  flat
+  Muon_charge                                 int32   jagged
+  Muon_cleanmask                              uint8   jagged
+  Muon_dxy                                    float   jagged
   …
-
-L1PreFiringWeight:
-  L1PreFiringWeight_Muon_Nom     float  flat
-  L1PreFiringWeight_Muon_StatDn  float  flat
-  L1PreFiringWeight_Muon_StatUp  float  flat
-  L1PreFiringWeight_Muon_SystDn  float  flat
-  L1PreFiringWeight_Muon_SystUp  float  flat
-
-Other:
-  CorrT1METJet_muonSubtrFactor  float  jagged
-  FatJet_muonIdx3SJ             int32  jagged
-  FsrPhoton_muonIdx             int32  jagged
+  Muon_eta                                    float   jagged
+  …
+  Muon_mass                                   float   jagged
+  …
 ```
 
 Each branch says its type and whether it is `flat` (one value per event) or `jagged` (a list per
-event). The jagged branches under `Muon:` make the collection you use in `from = "Muon"`, `nMuon`
-says how many muons each event has, and every other branch under it is an attribute you can write
-inside its `where` without the prefix: `Muon_pt` is `pt`, `Muon_tightId` is `tightId`. Run `rvr branches` with no `--find` for all of them. A name the file doesn't have is caught too: `count(Jets)` says "There is no column named
-Jets. Did you mean: Jet, nJet, Jet_pt?".
+event). Run `rvr branches` with no `--find` for all of them. A name the file doesn't have is caught
+too: `count(Muon_ptt > 20)` says "There is no column named Muon_ptt. Did you mean: Muon_pt, …?".
 
-Only what `[copy]` and `[column]` name is stored. `good_muon` is a working name: to store the good
-muons' pt, add a column, `good_muon_pt = "good_muon.pt"`.
+Only what `[columns]` names is stored. `good_muon` is a working name: to store the good muons' pt,
+add a column, `good_muon_pt = "Muon_pt[good_muon]"`.
 
 Every word you can use in a recipe (`count`, `first`, `pair_mass` and the rest) is listed in the
 [recipe reference](../../crates/rvr-recipe/README.md), each with an example and what it gives. If you
@@ -190,7 +169,7 @@ first), opens one file and reads only the branches the expression names, so it t
 
 ```text
 $ rvr try "count(good_muon)"
-Rucio said where the 1 dataset file can be read in 1.6 s.
+Rucio said where the 10 dataset files can be read in 2.0 s.
 DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events (i8, one value per event)
   entry        0   0
   entry        1   0
@@ -204,21 +183,21 @@ DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events (i8, one value per ev
   entry        9   1
 ```
 
-The recipe's objects and helpers work in it, `--events N` shows N events, and `--kept` shows only
-the events the `[keep]` cuts keep. Those are the rows the press writes: the entries and masses here
+The recipe's defined names work in it, `--events N` shows N events, and `--kept` shows only the
+events the `[keep]` cuts keep. Those are the rows the press writes: the entries and masses here
 are the first ones `zmumu.rvr` holds (step 3 shows them).
 
 ```text
-$ rvr try "good_muon.pt" --kept --events 5
-Rucio said where the 1 dataset file can be read in 1.3 s.
+$ rvr try "Muon_pt[good_muon]" --kept --events 5
+Rucio said where the 10 dataset files can be read in 1.5 s.
 DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events (f4, a list per event)
   entry       14   [29.942936, 21.988777]
   entry       25   [46.90944, 46.79786]
   entry       35   [49.50759, 40.395164]
   entry       43   [47.15005, 43.033558]
   entry       52   [51.090717, 42.2735]
-$ rvr try "first(pair_mass(good_muon.pt, good_muon.eta, good_muon.phi, good_muon.mass), -1)" --kept --events 5
-Rucio said where the 1 dataset file can be read in 3.2 s.
+$ rvr try "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)" --kept --events 5
+Rucio said where the 10 dataset files can be read in 1.6 s.
 DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events (f4, one value per event)
   entry       14   88.6032
   entry       25   93.59802
@@ -360,16 +339,18 @@ xsec = 88.29
 ```
 
 The recipe gains a trigger cut, and a weight for each event: 1 for data, and for simulation its
-generator weight times cross section times luminosity (`0 * MET_pt + 1` makes the 1 a value per
-event, as a column must be).
+generator weight times cross section times luminosity (`0 * MET_pt + 1` is a 1 of the same type
+as the simulation's weight, a float: a column has one type in every sample, and a bare 1 is a whole
+number).
 
 ```toml
 [keep]
 trigger = "HLT_IsoMu24"
 two_muons = "count(good_muon) == 2"
 
-[column]
-mass = "first(pair_mass(good_muon.pt, good_muon.eta, good_muon.phi, good_muon.mass), -1)"
+[columns]
+branches = ["MET_pt", "nJet", "Muon_pt"]
+mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
 weight = "if(sample.kind == 'data', 0 * MET_pt + 1, genWeight * sample.xsec * 1000 * sample.lumi)"
 ```
 
@@ -429,7 +410,11 @@ reads the same events, and its recipe has no cuts and stores only `genWeight`:
 format = "rvr-recipe"
 version = 1
 
-[copy]
+[define]
+
+[keep]
+
+[columns]
 branches = ["genWeight"]
 ```
 
@@ -574,7 +559,7 @@ Every error says what went wrong and what to do. A misspelt branch names the nea
 ```text
 $ rvr press --events 1000
 …
-rvr press: root://cms-xrd-global.cern.ch//store/mc/RunIISummer20UL18NanoAODv9/TTTo2L2Nu_…/0804DEBA-97D5-BE46-BB9D-B1125570966E.root, tree Events, entries 0 to 999: Muon_ptt: there is no branch named Muon_ptt. Did you mean: Muon_pt, Muon_eta, Muon_phi?
+rvr press: root://cms-xrd-global.cern.ch//store/mc/RunIISummer20UL18NanoAODv9/TTTo2L2Nu_…/0804DEBA-97D5-BE46-BB9D-B1125570966E.root, tree Events, entries 0 to 999: [columns] Muon_ptt: There is no column named Muon_ptt. Did you mean: Muon_pt, Muon_eta, Muon_phi? rvr branches lists every branch the file has.
 ```
 
 A dataset name with the wrong version at its end names the ones that exist:

@@ -1,0 +1,24 @@
+# B± → K± K+ K−: three tracks that are kaons, not pions or muons, and the B's mass from their
+# momenta (MeV), each track given the kaon's mass. B_charge tells B+ from B−, for the CP asymmetry.
+format = "rvr-recipe"
+version = 1
+title = "B± → K± K+ K−"
+
+# Each track's energy if it is a kaon (493.677 MeV), and the three tracks' momentum together.
+[define]
+e1 = "sqrt(H1_PX ** 2 + H1_PY ** 2 + H1_PZ ** 2 + 493.677 ** 2)"
+e2 = "sqrt(H2_PX ** 2 + H2_PY ** 2 + H2_PZ ** 2 + 493.677 ** 2)"
+e3 = "sqrt(H3_PX ** 2 + H3_PY ** 2 + H3_PZ ** 2 + 493.677 ** 2)"
+px = "H1_PX + H2_PX + H3_PX"
+py = "H1_PY + H2_PY + H3_PY"
+pz = "H1_PZ + H2_PZ + H3_PZ"
+
+[keep]
+no_muons = "H1_isMuon == 0 and H2_isMuon == 0 and H3_isMuon == 0"
+kaons = "H1_ProbK > 0.5 and H2_ProbK > 0.5 and H3_ProbK > 0.5"
+not_pions = "H1_ProbPi < 0.5 and H2_ProbPi < 0.5 and H3_ProbPi < 0.5"
+
+[columns]
+branches = ["B_FlightDistance", "B_VertexChi2"]
+B_mass = "sqrt((e1 + e2 + e3) ** 2 - px ** 2 - py ** 2 - pz ** 2)"
+B_charge = "H1_Charge + H2_Charge + H3_Charge"

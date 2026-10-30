@@ -1,6 +1,6 @@
 //! Build a derived file: columns computed from another file's columns, naming that parent.
 //!
-//! Documentation: `FORMAT.md` (repository root) ("derived").
+//! Documentation: `docs/FORMAT.md` ("derived").
 //! The caller computes the columns and says which parent columns it read; every column is
 //! marked by the whole source, a newline, and its name.
 

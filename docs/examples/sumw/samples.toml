@@ -1,0 +1,18 @@
+# The simulated samples of ../zmumu, reading the same events, to sum their generator weights: the
+# zmumu file holds only the events that passed its cuts, and a weight is divided by the sum over
+# every event read (step 7 of the walkthrough). Needs a grid proxy (rvr proxy init).
+
+[defaults]
+tree = "Events"
+events = 100_000
+lumi = 31.84                  # fb⁻¹ of 2018D
+
+[[sample]]
+name = "DY"
+dataset = "/DYJetsToLL_M-50_TuneCP5_13TeV-amcatnloFXFX-pythia8/RunIISummer20UL18NanoAODv9-106X_upgrade2018_realistic_v16_L1v1-v2/NANOAODSIM"
+xsec = 6077.22                # pb, for illustration: take yours from XSDB
+
+[[sample]]
+name = "TT"
+dataset = "/TTTo2L2Nu_TuneCP5_13TeV-powheg-pythia8/RunIISummer20UL18NanoAODv9-106X_upgrade2018_realistic_v16_L1v1-v1/NANOAODSIM"
+xsec = 88.29

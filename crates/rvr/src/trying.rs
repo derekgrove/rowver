@@ -1,6 +1,6 @@
 //! `rvr try`: one expression over the first events of a study's sample, printed event by event,
-//! to see what it gives before pressing. It reads the recipe for its objects, helpers and
-//! collections, and with `--kept` shows only the events the recipe's cuts keep.
+//! to see what it gives before pressing. It reads the recipe for the names it defines, and with
+//! `--kept` shows only the events the recipe's cuts keep.
 
 use crate::press::{self, count, fields, hint, kept, Branches};
 use crate::Words;
@@ -66,14 +66,8 @@ fn run(args: &[&str]) -> Result<(), String> {
             false => (first + (wanted - shown) as u64).min(total),
         };
         let entries = (last - first) as usize;
-        let branches = Branches::over(&root, &tree, &names, first as i64, last as i64);
-        let scope = Scope {
-            columns: &branches,
-            sample: &metadata,
-            objects: &recipe.objects,
-            collections: &recipe.collections,
-            helpers: &recipe.helpers,
-        };
+        let branches = Branches::over(&root, &tree, first as i64, last as i64);
+        let scope = Scope::new(&branches, &metadata, &recipe.defines);
         let within = |error: String| {
             let entries = format!("entries {} to {}", count(first), count(last - 1));
             format!("{shown_name}, {entries}: {error}{}", hint(&error, &names, &recipe, file.lfn.is_some()))

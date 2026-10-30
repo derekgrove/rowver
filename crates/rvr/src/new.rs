@@ -42,8 +42,8 @@ Next:
   cd {dir}
   rvr samples resolve samples.toml       find every file; writes samples.lock
   rvr samples plan samples.lock          what a press would read
-  rvr branches                           what the files hold, as a recipe can name it
-  rvr try \"count(Muon)\"                  what an expression gives on the first events
+  rvr branches                           the branches the files hold, as a recipe names them
+  rvr try \"count(good_muon)\"             what an expression gives on the first events
   rvr press --events 50000               a quick first press; rvr press for every event
   {:38} check the file it wrote",
         format!("rvr validate {study}.rvr")

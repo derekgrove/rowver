@@ -1,0 +1,18 @@
+# Two good muons and their mass, with a weight per event: 1 for data, and for simulation its
+# generator weight times cross section times luminosity. `0 * MET_pt + 1` is a 1 of the same type
+# as the simulation's weight, a float: a column has one type in every sample, and a bare 1 is a
+# whole number.
+format = "rvr-recipe"
+version = 1
+
+[define]
+good_muon = "Muon_pt > 20 and abs(Muon_eta) < 2.4 and Muon_tightId and Muon_pfRelIso04_all < 0.15"
+
+[keep]
+trigger = "HLT_IsoMu24"
+two_muons = "count(good_muon) == 2"
+
+[columns]
+branches = ["MET_pt", "nJet", "Muon_pt"]
+mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
+weight = "if(sample.kind == 'data', 0 * MET_pt + 1, genWeight * sample.xsec * 1000 * sample.lumi)"

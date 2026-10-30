@@ -1,0 +1,10 @@
+# No cuts: every event read is kept, with its generator weight.
+format = "rvr-recipe"
+version = 1
+
+[define]
+
+[keep]
+
+[columns]
+branches = ["genWeight"]

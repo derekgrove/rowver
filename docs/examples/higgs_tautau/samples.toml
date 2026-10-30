@@ -1,0 +1,53 @@
+# Every sample of the CMS Open Data H → ττ study (2012): the data, both signals and five
+# backgrounds, all readable with no grid proxy. rvr new writes the two signals alone; this is the
+# whole study. A first press: rvr press --events 50000.
+
+[places]
+opendata = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool"
+
+[defaults]
+tree = "Events"
+kind = "background"
+
+[[sample]]
+name = "data"
+label = "Data, Run 2012 B and C (TauPlusX)"
+files = "{opendata}/Run2012?_TauPlusX.root"     # a pattern: the files of both runs
+kind = "data"
+
+[[sample]]
+name = "ggH"
+label = "gg → H → ττ"
+files = "{opendata}/GluGluToHToTauTau.root"
+kind = "signal"
+
+[[sample]]
+name = "VBF"
+label = "VBF H → ττ"
+files = "{opendata}/VBF_HToTauTau.root"
+kind = "signal"
+
+[[sample]]
+name = "DY"
+label = "Z → ℓℓ"
+files = "{opendata}/DYJetsToLL.root"
+
+[[sample]]
+name = "TT"
+label = "tt̄"
+files = "{opendata}/TTbar.root"
+
+[[sample]]
+name = "W1J"
+label = "W + 1 jet"
+files = "{opendata}/W1JetsToLNu.root"
+
+[[sample]]
+name = "W2J"
+label = "W + 2 jets"
+files = "{opendata}/W2JetsToLNu.root"
+
+[[sample]]
+name = "W3J"
+label = "W + 3 jets"
+files = "{opendata}/W3JetsToLNu.root"

@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Arrays are byte-shuffled and compressed with Zstandard in pure Rust; reading a column is one read
 and one decode. The format is specified in
-[FORMAT.md](https://gitlab.cern.ch/dgrove/rowver/-/blob/v14.3.0/FORMAT.md).
+[docs/FORMAT.md](https://gitlab.cern.ch/dgrove/rowver/-/blob/v14.3.0/docs/FORMAT.md).
 
 The [`rvr`](https://crates.io/crates/rvr) command makes `.rvr` files from ROOT files and
 inspects them; the Python package `rowver` reads them as NumPy and Awkward arrays.

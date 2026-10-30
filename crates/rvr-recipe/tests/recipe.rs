@@ -1,9 +1,7 @@
 //! Every expression of the fixture against what NumPy 2.5.1, awkward 2.12.0 and coffea 2026.7.0
 //! gave for it.
 
-use rvr_recipe::{
-    parse, per_event, Array, Columns, Constant, Helper, Kind, Recipe, Scope, Store, Values,
-};
+use rvr_recipe::{parse, per_event, Array, Columns, Constant, Kind, Recipe, Scope, Store, Values};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -16,9 +14,9 @@ impl Columns for Held {
         Ok(self.0.get(name).cloned())
     }
 
-    /// Whether a held column's name begins with this.
-    fn begins(&self, start: &str) -> bool {
-        self.0.keys().any(|name| name.starts_with(start))
+    /// Whether a column of this name is held.
+    fn has(&self, name: &str) -> bool {
+        self.0.contains_key(name)
     }
 }
 
@@ -130,39 +128,13 @@ fn expressions_give_what_numpy_and_awkward_give() {
             (name.clone(), constant)
         })
         .collect();
-    let objects: BTreeMap<String, _> = fixture["objects"]
+    let defines: BTreeMap<String, _> = fixture["defines"]
         .as_object()
         .unwrap()
         .iter()
         .map(|(name, text)| (name.clone(), parse(text.as_str().unwrap()).unwrap()))
         .collect();
-    let helpers: BTreeMap<String, Helper> = fixture["helpers"]
-        .as_object()
-        .unwrap()
-        .iter()
-        .map(|(name, helper)| {
-            let takes = helper["takes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|name| name.as_str().unwrap().to_owned());
-            let value = parse(helper["value"].as_str().unwrap()).unwrap();
-            (
-                name.clone(),
-                Helper {
-                    takes: takes.collect(),
-                    value,
-                },
-            )
-        })
-        .collect();
-    let scope = Scope {
-        columns: &held,
-        sample: &sample,
-        objects: &objects,
-        collections: &BTreeMap::new(),
-        helpers: &helpers,
-    };
+    let scope = Scope::new(&held, &sample, &defines);
     let mut wrong = Vec::new();
     for case in fixture["cases"].as_array().unwrap() {
         let text = case["expression"].as_str().unwrap();
@@ -227,14 +199,8 @@ fn shown(values: &Values) -> Vec<String> {
 #[test]
 fn mistakes_are_refused_with_a_reason() {
     let held = Held(BTreeMap::new());
-    let (sample, objects, helpers) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-    let scope = Scope {
-        columns: &held,
-        sample: &sample,
-        objects: &objects,
-        collections: &BTreeMap::new(),
-        helpers: &helpers,
-    };
+    let (sample, defines) = (BTreeMap::new(), BTreeMap::new());
+    let scope = Scope::new(&held, &sample, &defines);
     let message = |text: &str| {
         parse(text)
             .and_then(|expression| scope.evaluate(&expression))
@@ -247,8 +213,12 @@ fn mistakes_are_refused_with_a_reason() {
     assert!(message("'open").contains("never closed"));
     assert!(message("3 $ 4").contains("Unexpected $"));
     assert_eq!(message("MET > 30"), "There is no column named MET");
-    assert_eq!(message("Jet.pt"), "There is no column named Jet");
-    assert!(message("nothing(3)").contains("no operation or helper named nothing"));
+    assert!(message("Jet.pt")
+        .contains("Only sample has a field after a dot, as in sample.era (the dot at column 4)"));
+    assert!(message("sample.").contains("Expected a name after sample."));
+    assert!(message("count(Jet where pt > 30)")
+        .starts_with("where is not part of an expression (column 11)"));
+    assert!(message("nothing(3)").contains("There is no function named nothing"));
     assert!(message("sqrt(1, 2)").contains("takes 1 value, not 2"));
     assert!(message("'a' + 1").contains("Text"));
     assert!(message("sample.absent + 1").contains("missing"));
@@ -284,20 +254,14 @@ fn edge_cases_follow_the_documented_rules() {
             .collect(),
     );
     let sample: BTreeMap<String, Constant> = [("is_data".to_owned(), Constant::Truth(true))].into();
-    let objects: BTreeMap<String, _> =
-        [("loop".to_owned(), parse("loop where pt > 1").unwrap())].into();
-    let again = Helper {
-        takes: vec!["x".into()],
-        value: parse("again(x)").unwrap(),
-    };
-    let helpers: BTreeMap<String, Helper> = [("again".to_owned(), again)].into();
-    let scope = Scope {
-        columns: &held,
-        sample: &sample,
-        objects: &objects,
-        collections: &BTreeMap::new(),
-        helpers: &helpers,
-    };
+    // Recipe::read refuses a name that uses itself; a scope built by hand is still safe.
+    let defines: BTreeMap<String, _> = [
+        ("loop".to_owned(), parse("loop + 1").unwrap()),
+        ("ring".to_owned(), parse("round + 1").unwrap()),
+        ("round".to_owned(), parse("ring * 2").unwrap()),
+    ]
+    .into();
+    let scope = Scope::new(&held, &sample, &defines);
     let run = |text: &str| parse(text).and_then(|expression| scope.evaluate(&expression));
     let hundredths = |value: f64| {
         if value.is_nan() {
@@ -315,11 +279,8 @@ fn edge_cases_follow_the_documented_rules() {
         other => panic!("{other:?}"),
     };
     let top = 1_u64 << 63;
-    assert!(run("count(loop)")
-        .unwrap_err()
-        .0
-        .contains("refers to itself"));
-    assert!(run("again(1)").unwrap_err().0.contains("refers to itself"));
+    assert!(run("loop").unwrap_err().0.contains("loop refers to itself"));
+    assert!(run("ring > 0").unwrap_err().0.contains("refers to itself"));
     assert_eq!(whole("if(sample.is_data, 1, genWeight)"), [1]);
     assert_eq!(
         run("sample.is_data or genWeight > 0").unwrap(),
@@ -334,31 +295,21 @@ fn edge_cases_follow_the_documented_rules() {
     assert_eq!(whole("max(ratio, 0)"), [-99, 25, 0]);
     assert_eq!(whole("min(ratio, 0)"), [-99, 0, -200]);
     assert_eq!(whole("stored(ratio, 'b1')"), [1, 1, 1]);
-    assert_eq!(whole("count(Jet where pt > 30)"), [1, 0, 1]);
-    assert!(run("count(Jet where id)")
-        .unwrap_err()
-        .0
-        .contains("true or false"));
-    assert!(run("count(Jet where Muon_pt > 3)")
-        .unwrap_err()
-        .0
-        .contains("not about the members of Jet"));
+    assert_eq!(whole("count(Jet_pt > 30)"), [1, 0, 1]);
+    assert!(
+        run("count(Jet_pt[Muon_pt > 3])").is_err(),
+        "a mask of other lists"
+    );
 }
 
-/// A bare name that is no column is a collection only when columns begin with it followed by
-/// `_`; any other is refused as an unknown name, wherever it stands.
+/// A bare name is a defined name or a column; any other is refused as an unknown column,
+/// wherever it stands, and a collection's prefix alone is no name.
 #[test]
-fn a_name_that_is_no_column_and_no_collection_is_refused_as_unknown() {
+fn a_name_that_is_no_column_and_not_defined_is_refused_as_unknown() {
     let jets = Array::object(&[1, 0], Values::float(Kind::F4, vec![40.0])).unwrap();
     let held = Held([("Jet_pt".to_owned(), jets)].into());
-    let (sample, objects, helpers) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-    let scope = Scope {
-        columns: &held,
-        sample: &sample,
-        objects: &objects,
-        collections: &BTreeMap::new(),
-        helpers: &helpers,
-    };
+    let (sample, defines) = (BTreeMap::new(), BTreeMap::new());
+    let scope = Scope::new(&held, &sample, &defines);
     let message = |text: &str| {
         let read = parse(text).and_then(|expression| scope.evaluate(&expression));
         read.unwrap_err().0
@@ -368,17 +319,9 @@ fn a_name_that_is_no_column_and_no_collection_is_refused_as_unknown() {
         "There is no column named Muon_pt"
     );
     assert_eq!(message("Muon_pt > 3"), "There is no column named Muon_pt");
-    assert_eq!(message("count(Muon)"), "There is no column named Muon");
-    // A name that only begins another, without the `_`, is no collection either.
-    assert_eq!(message("Je > 3"), "There is no column named Je");
-    assert_eq!(message("Jet_ > 3"), "There is no column named Jet_");
-    // A collection is still told from a value, and its missing attribute named whole.
-    assert_eq!(
-        message("Jet > 30"),
-        "An operator needs values, but Jet is a collection; name one of its attributes, such as Jet.pt"
-    );
-    assert_eq!(message("Jet.eta"), "There is no column named Jet_eta");
-    assert!(scope.evaluate(&parse("Jet.pt").unwrap()).is_ok());
+    assert_eq!(message("count(Jet)"), "There is no column named Jet");
+    assert_eq!(message("Jet > 30"), "There is no column named Jet");
+    assert!(scope.evaluate(&parse("Jet_pt").unwrap()).is_ok());
 }
 
 /// Particle coordinates must describe the same members of every event, even when totals match.
@@ -403,14 +346,8 @@ fn kinematics_refuse_coordinates_from_different_event_lists() {
             .map(|(name, array)| (name.to_owned(), array))
             .collect(),
     );
-    let (sample, objects, helpers) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-    let scope = Scope {
-        columns: &held,
-        sample: &sample,
-        objects: &objects,
-        collections: &BTreeMap::new(),
-        helpers: &helpers,
-    };
+    let (sample, defines) = (BTreeMap::new(), BTreeMap::new());
+    let scope = Scope::new(&held, &sample, &defines);
     let run = |text: &str| parse(text).and_then(|expression| scope.evaluate(&expression));
     for expression in [
         "mass(pt, shifted, phi)",
@@ -467,14 +404,8 @@ fn list_operations_place_nan_as_awkward_does_and_refuse_mistakes() {
             .unwrap(),
         ),
     ]));
-    let (sample, objects, helpers) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-    let scope = Scope {
-        columns: &held,
-        sample: &sample,
-        objects: &objects,
-        collections: &BTreeMap::new(),
-        helpers: &helpers,
-    };
+    let (sample, defines) = (BTreeMap::new(), BTreeMap::new());
+    let scope = Scope::new(&held, &sample, &defines);
     let run = |text: &str| parse(text).and_then(|expression| scope.evaluate(&expression));
     let places = |values: Vec<i64>| Array::object(&[3, 1, 0, 3], Values::whole(Kind::I8, values));
     let each = |values: Vec<i64>| Array::Event(Values::whole(Kind::I8, values));
@@ -524,22 +455,38 @@ fn list_operations_place_nan_as_awkward_does_and_refuse_mistakes() {
     assert!(message("delta_phi(x)").contains("takes 2 values"));
 }
 
-/// A `[collection.*]` names the column behind each attribute, for files that do not spell
-/// columns as NanoAOD does; its members are counted from its lists, with no `n` column.
+/// The columns of a run, counting how often each is asked for.
+struct Counted(Held, std::cell::RefCell<BTreeMap<String, usize>>);
+
+impl Columns for Counted {
+    fn column(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
+        *self.1.borrow_mut().entry(name.to_owned()).or_default() += 1;
+        self.0.column(name)
+    }
+
+    fn has(&self, name: &str) -> bool {
+        self.0.has(name)
+    }
+}
+
+/// `[define]` names expressions, each used by the lines below it, whatever a file calls its
+/// branches; a defined name is worked out once however often it is used.
 #[test]
-fn a_collection_reads_its_attributes_from_the_columns_it_names() {
+fn defined_names_are_expressions_used_below_them() {
     let text = r#"
 format = "rvr-recipe"
 version = 1
 
-[collection.lep]
-pt = "PT_lep"
-eta = "Eta_lep"
-charge = "Charge_lep"
+[define]
+good_lep = "PT_lep > 10 and abs(Eta_lep) < 2.4"
+negative = "good_lep and Charge_lep < 0"
 
-[object.good_lep]
-from = "lep"
-where = "pt > 10 and abs(eta) < 2.4"
+[keep]
+one = "count(good_lep) >= 1"
+
+[columns]
+branches = ["PT_lep"]
+n_negative = "count(negative)"
 "#;
     let recipe = Recipe::read(text).unwrap();
     let lists = |values: Values| Array::object(&[2, 0, 1], values).unwrap();
@@ -554,84 +501,100 @@ where = "pt > 10 and abs(eta) < 2.4"
         ),
         (
             "Charge_lep".to_owned(),
-            lists(Values::whole(Kind::I4, vec![1, -1, -1])),
+            lists(Values::whole(Kind::I4, vec![-1, -1, -1])),
         ),
     ]));
-    let (sample, helpers) = (BTreeMap::new(), BTreeMap::new());
-    let scope = Scope {
-        columns: &held,
-        sample: &sample,
-        objects: &recipe.objects,
-        collections: &recipe.collections,
-        helpers: &helpers,
-    };
+    let counted = Counted(held, Default::default());
+    let sample = BTreeMap::new();
+    let scope = Scope::new(&counted, &sample, &recipe.defines);
     let run = |text: &str| parse(text).and_then(|expression| scope.evaluate(&expression));
     let each = |values: Vec<i64>| Array::Event(Values::whole(Kind::I8, values));
-    assert_eq!(run("lep.pt").unwrap(), run("PT_lep").unwrap());
-    assert_eq!(run("count(lep)").unwrap(), each(vec![2, 0, 1]));
     assert_eq!(run("count(good_lep)").unwrap(), each(vec![1, 0, 0]));
-    assert_eq!(run("sum(good_lep.charge)").unwrap(), each(vec![1, 0, 0]));
+    assert_eq!(run("count(negative)").unwrap(), each(vec![1, 0, 0]));
     assert_eq!(
-        run("count(lep where charge < 0)").unwrap(),
-        each(vec![1, 0, 1])
+        run("PT_lep[good_lep]").unwrap(),
+        Array::object(&[1, 0, 0], Values::float(Kind::F4, vec![25.0])).unwrap()
     );
     assert_eq!(
-        run("(lep where pt > 30).eta").unwrap(),
-        Array::object(&[0, 0, 1], Values::float(Kind::F4, vec![-3.0])).unwrap()
+        run("count(good_lep) + count(good_lep) + sum(PT_lep[good_lep])").unwrap(),
+        Array::Event(Values::float(Kind::F8, vec![27.0, 0.0, 0.0]))
     );
-    // The presser is told of the columns behind the attributes the recipe uses, and of
-    // the first, which counts the members; `charge` is used by no expression in it.
-    let mentions = recipe.mentions();
-    assert!(mentions.contains("PT_lep") && mentions.contains("Eta_lep"));
-    assert!(!mentions.contains("Charge_lep"));
-    let message = |text: &str| run(text).unwrap_err().0;
-    let absent = BTreeMap::from([(
-        "tau".to_owned(),
-        vec![("pt".to_owned(), "PT_tau".to_owned())],
-    )]);
-    let lacking = Scope {
-        collections: &absent,
-        columns: &held,
-        sample: &sample,
-        objects: &recipe.objects,
-        helpers: &helpers,
-    };
-    assert_eq!(
-        lacking
-            .evaluate(&parse("count(tau)").unwrap())
-            .unwrap_err()
-            .0,
-        "tau.pt is the column PT_tau, and there is no column of that name"
-    );
-    assert_eq!(
-        message("lep.phi"),
-        "lep has no attribute named phi; it has pt, eta, charge"
-    );
-    // Inside a where, a name the collection does not have is looked for as any other name.
-    assert_eq!(
-        message("count(lep where phi > 0)"),
-        "There is no column named phi"
-    );
-    assert!(message("lep + 1").contains("lep is a collection"));
+    // Eta_lep is read only through good_lep, which is worked out once for all of them.
+    assert_eq!(counted.1.borrow()["Eta_lep"], 1);
+    assert!(run("good_lep()").unwrap_err().0.contains(
+        "good_lep is a defined name, not a function: write it without brackets, as good_lep"
+    ));
+    // A defined name that is also a column is refused where it is used: a name means one thing.
+    let both: BTreeMap<String, _> = [("PT_lep".to_owned(), parse("Eta_lep").unwrap())].into();
+    let shadowed = Scope::new(&counted, &sample, &both);
+    assert!(shadowed.evaluate(&parse("PT_lep > 1").unwrap()).unwrap_err().0.contains("PT_lep is a name [define] gives an expression, and also the name of a branch of this file"));
+    // A `where` after a value is refused, saying how to write it; the word is a name elsewhere.
+    assert!(run("count(PT_lep where PT_lep > 1)")
+        .unwrap_err()
+        .0
+        .starts_with("where is not part of an expression (column 14)"));
+    assert!(parse("sample.where == 'x'").is_ok() && parse("branch('where') > 1").is_ok());
+    // A name with several dots is suggested whole.
+    assert!(parse("sum(recoMuons_muons__RECO.obj.pt_)")
+        .unwrap_err()
+        .0
+        .contains("branch('recoMuons_muons__RECO.obj.pt_')"));
     let refused = |body: &str| {
         let head = "format = \"rvr-recipe\"\nversion = 1\n";
         Recipe::read(&format!("{head}{body}")).unwrap_err().0
     };
     assert_eq!(
-        refused("[collection.lep]\n"),
-        "[collection.lep] names no column"
+        refused("[define]\na = \"b > 1\"\nb = \"PT_lep\"\n"),
+        "[define] a uses b, which is defined below it: a defined name may use only the names defined above it"
     );
+    assert!(refused("[define]\na = \"a + 1\"\n").contains("[define] a uses a, itself"));
+    // A function always has brackets, so a defined name may share a function's name.
+    assert!(Recipe::read("format = \"rvr-recipe\"\nversion = 1\n[define]\nfirst = \"PT_lep\"\n").is_ok());
+    assert!(refused("[define]\n\"good-lep\" = \"PT_lep\"\n").contains("one plain name"));
+    assert!(refused("[define]\nsample = \"PT_lep\"\n").contains("one plain name"));
+    assert!(refused("[define.good]\nvalue = \"PT_lep\"\n")
+        .contains("[define] good must be an expression in quotes"));
     assert_eq!(
-        refused("[collection.lep]\npt = 3\n"),
-        "[collection.lep] pt must name a column in quotes"
+        refused("[object.good]\nfrom = \"lep\"\n"),
+        "A recipe has no [object] table: write it as a line of [define], a mask: good_muon = \"Muon_pt > 20 and Muon_tightId\", used as Muon_pt[good_muon]. A recipe's tables are [define], [keep] and [columns]."
     );
-    assert!(refused("[collection.sample]\npt = \"PT_lep\"\n").contains("plain name"));
-    assert!(refused("[collection.lep]\n\"lep-pt\" = \"PT_lep\"\n").contains("not a name"));
-    assert!(refused("[collection.lep]\nwhere = \"PT_lep\"\n").contains("not a name"));
-    assert!(refused("[collection.lep]\npt = \"\"\n").contains("must name a column"));
+    for (table, became) in [
+        ("copy", "branches = [...]"),
+        ("column", "lines of [columns]"),
+        ("helper", "a line of [define]"),
+        ("collection", "name each branch in full"),
+    ] {
+        assert!(refused(&format!("[{table}]\n")).contains(became), "{table}");
+    }
+    assert!(refused("[derive]\n").contains("A recipe has no setting named derive; it takes format, version, title, define, keep, columns"));
     assert!(
-        refused("[collection.lep]\npt = \"PT_lep\"\n[object.lep]\nfrom = \"lep\"\n")
-            .contains("both a collection and an object")
+        refused("[keep]\nx = { if = \"sample.y == 1\", pass = \"PT_lep\" }\n").contains(
+            "[keep] x: a cut for some samples says what it applies with apply = \"…\", not pass"
+        )
+    );
+    assert!(refused("[keep]\nx = { if = \"sample.y == 1\" }\n").contains("[keep] x needs apply"));
+    assert!(refused("[columns]\nbranches = [\"\"]\n")
+        .contains("branches must be a list of branch names"));
+    assert!(refused("[columns]\nbranches = [\"a\"]\na = \"PT_lep\"\n")
+        .contains("Two columns are named a"));
+    // Text is not a name: a defined name may hold text that another, later, name spells.
+    let quoted = "[define]\nis_mu = \"sample.channel == 'mu'\"\nmu = \"PT_lep > 20\"\n";
+    let head = "format = \"rvr-recipe\"\nversion = 1\n";
+    assert!(Recipe::read(&format!("{head}{quoted}")).is_ok());
+    // A defined name is not a branch to store as it is.
+    assert!(
+        refused("[define]\ngood = \"PT_lep > 1\"\n[columns]\nbranches = [\"good\"]\n")
+            .contains("[columns] branches lists good, a name [define] gives an expression")
+    );
+    // A dot after anything but sample is refused, saying how to name a branch with a dot in it.
+    assert!(refused("[columns]\npt = \"sum(AnalysisJetsAuxDyn.pt)\"\n")
+        .contains("a branch whose name holds a dot is written branch('AnalysisJetsAuxDyn.pt')"));
+    // Every table empty, or left out, is the same recipe.
+    let empty = Recipe::read("format = \"rvr-recipe\"\nversion = 1\n[define]\n[keep]\n[columns]\n")
+        .unwrap();
+    assert_eq!(
+        empty,
+        Recipe::read("format = \"rvr-recipe\"\nversion = 1\n").unwrap()
     );
 }
 
@@ -674,14 +637,8 @@ fn extrema_preserve_large_integer_ordering() {
             .map(|(name, array)| (name.to_owned(), array))
             .collect(),
     );
-    let (sample, objects, helpers) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-    let scope = Scope {
-        columns: &held,
-        sample: &sample,
-        objects: &objects,
-        collections: &BTreeMap::new(),
-        helpers: &helpers,
-    };
+    let (sample, defines) = (BTreeMap::new(), BTreeMap::new());
+    let scope = Scope::new(&held, &sample, &defines);
     for (expression, kind, expected) in [
         (
             "least(signed, 0)",
@@ -728,14 +685,8 @@ fn stored_float_to_u64_preserves_values_above_signed_range() {
         "values".to_owned(),
         Array::Event(Values::float(Kind::F8, values)),
     )]));
-    let (sample, objects, helpers) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-    let scope = Scope {
-        columns: &held,
-        sample: &sample,
-        objects: &objects,
-        collections: &BTreeMap::new(),
-        helpers: &helpers,
-    };
+    let (sample, defines) = (BTreeMap::new(), BTreeMap::new());
+    let scope = Scope::new(&held, &sample, &defines);
     let result = scope
         .evaluate(&parse("stored(values, 'u8')").unwrap())
         .unwrap();
@@ -778,14 +729,8 @@ fn mass_preserves_nan_instead_of_clipping_it_to_zero() {
             lists(vec![0.0, 0.0, 0.0, std::f64::consts::PI]),
         ),
     ]));
-    let (sample, objects, helpers) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-    let scope = Scope {
-        columns: &held,
-        sample: &sample,
-        objects: &objects,
-        collections: &BTreeMap::new(),
-        helpers: &helpers,
-    };
+    let (sample, defines) = (BTreeMap::new(), BTreeMap::new());
+    let scope = Scope::new(&held, &sample, &defines);
     let Array::Event(masses) = scope
         .evaluate(&parse("mass(pt, eta, phi)").unwrap())
         .unwrap()

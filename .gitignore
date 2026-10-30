@@ -11,7 +11,11 @@ dist/
 *.rvr
 *.md
 !README.md
-!FORMAT.md
+# The documents in docs/, by name: the notes kept beside them stay out of git.
+!docs/INTRO.md
+!docs/SETUP.md
+!docs/FEATURES.md
+!docs/FORMAT.md
 
 # What the retired Python presser left on this disk (its studies, notes); its code is at tag v13.0.1.
 /python/

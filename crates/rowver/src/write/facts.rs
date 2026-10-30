@@ -3,7 +3,7 @@
 //! Ported from: RowVer 13.0.1 (`2ec3a16`) `rowver/rvr.py`: `facts`, `outward`, `FEW`.
 //! Underlying behaviours: NumPy 2.5.1 `ndarray.min`, `ndarray.max`, and `unique`; CPython 3.13
 //! `round(x, 6)`, `math.floor`, `math.ceil`, and `math.log10`.
-//! Documentation: `FORMAT.md` (repository root) ("lim", "nice", "vals", "names");
+//! Documentation: `docs/FORMAT.md` ("lim", "nice", "vals", "names");
 //! <https://numpy.org/doc/stable/reference/generated/numpy.unique.html>;
 //! <https://docs.python.org/3/library/functions.html#round>
 //! Difference: a flat column holding a NaN or an infinity is refused with a message; the Python

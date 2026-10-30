@@ -1,6 +1,6 @@
 //! Build and write an `.rvr` file: a plain JSON header, then each array compressed on its own.
 //!
-//! Documentation: `FORMAT.md` (repository root).
+//! Documentation: `docs/FORMAT.md`.
 //! A column is refused, not converted, when its pieces differ in kind; a piece whose column
 //! does not have one value per row is refused before joining.
 

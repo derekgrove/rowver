@@ -1,0 +1,17 @@
+# Two good muons, and in 2018 alone a veto of events with a jet in the HEM 15/16 hole (a cut with
+# an if applies only to the samples it is true for). Each event's weight uses its era's luminosity.
+format = "rvr-recipe"
+version = 1
+
+[define]
+good_muon = "Muon_pt > 20 and abs(Muon_eta) < 2.4 and Muon_tightId and Muon_pfRelIso04_all < 0.15"
+hem_jet = "Jet_pt > 30 and Jet_eta > -3.0 and Jet_eta < -1.3 and Jet_phi > -1.57 and Jet_phi < -0.87"
+
+[keep]
+two_muons = "count(good_muon) == 2"
+hem = { if = "sample.year == 2018", apply = "count(hem_jet) == 0" }
+
+[columns]
+branches = ["MET_pt", "nJet"]
+mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
+weight = "genWeight * sample.xsec * 1000 * sample.lumi"

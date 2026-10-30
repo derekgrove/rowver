@@ -1,9 +1,8 @@
 //! Read the text of an expression into a tree of operations.
 //!
 //! The grammar is this crate's own; its operators and their precedence follow Python's so that an
-//! expression reads as the recipe line it replaces. From loosest to tightest: `where`, `or`,
-//! `and`, `not`, comparisons and `in`, `+ -`, `* / %`, unary `-`, `**`, then `.name`,
-//! `[mask]`, and calls.
+//! expression reads as the recipe line it replaces. From loosest to tightest: `or`, `and`, `not`,
+//! comparisons and `in`, `+ -`, `* / %`, unary `-`, `**`, then `sample.name`, `[mask]`, and calls.
 
 use crate::array::{Constant, Operator};
 use crate::{problem, Result};
@@ -12,18 +11,16 @@ use crate::{problem, Result};
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expression {
     Constant(Constant),
-    /// A branch, an object, or a defined name.
+    /// A branch, or a name the recipe defines.
     Name(String),
-    /// `left.name`: a field of the sample, or an attribute of an object.
-    Field(Box<Expression>, String),
+    /// `sample.name`: a field of the sample's metadata.
+    Sample(String),
     Call(String, Vec<Expression>),
     Negate(Box<Expression>),
     Not(Box<Expression>),
     Binary(Operator, Box<Expression>, Box<Expression>),
     /// `values[mask]`: the members of each event's list that the mask keeps.
     Pick(Box<Expression>, Box<Expression>),
-    /// `Collection where condition`: the members of a collection that pass.
-    Where(Box<Expression>, Box<Expression>),
     /// `value in [a, b]`.
     In(Box<Expression>, Vec<Expression>),
 }
@@ -160,23 +157,36 @@ impl Parser {
         found
     }
 
+    /// What to say of a `where` after a value, where the language once had it: how to write the
+    /// same with a mask.
+    fn stray(&self) -> Option<crate::Error> {
+        matches!(self.peek(), Some(Token::Name(word)) if word == "where").then(|| {
+            problem(format!("where is not part of an expression ({}): to keep some members of each list, use a mask, such as Jet_pt[Jet_pt > 30]", self.place()))
+        })
+    }
+
     /// Require a symbol.
     fn expect(&mut self, symbol: &str) -> Result<()> {
         if self.symbol(symbol) {
-            Ok(())
-        } else {
-            Err(problem(format!("Expected {symbol} at {}", self.place())))
+            return Ok(());
         }
+        Err(self
+            .stray()
+            .unwrap_or_else(|| problem(format!("Expected {symbol} at {}", self.place()))))
     }
 
-    /// `or-expression [where or-expression]`.
-    fn expression(&mut self) -> Result<Expression> {
-        let left = self.either()?;
-        if self.word("where") {
-            let condition = self.either()?;
-            return Ok(Expression::Where(Box::new(left), Box::new(condition)));
+    /// The dotted name that begins at the next token, `obj.m_state.fPt` of `….obj.m_state.fPt`.
+    fn dotted(&self) -> String {
+        let mut parts = Vec::new();
+        let mut at = self.at;
+        while let Some((Token::Name(part), _)) = self.tokens.get(at) {
+            parts.push(part.as_str());
+            match self.tokens.get(at + 1) {
+                Some((Token::Symbol("."), _)) => at += 2,
+                _ => break,
+            }
         }
-        Ok(left)
+        parts.join(".")
     }
 
     /// A chain of one binary operator level, built left to right.
@@ -192,8 +202,8 @@ impl Parser {
         Ok(left)
     }
 
-    /// `and-expression (or and-expression)*`.
-    fn either(&mut self) -> Result<Expression> {
+    /// A whole expression: `and-expression (or and-expression)*`.
+    fn expression(&mut self) -> Result<Expression> {
         self.chain(Self::both, |parser| {
             parser.word("or").then_some(Operator::Or)
         })
@@ -221,7 +231,7 @@ impl Parser {
             self.expect("[")?;
             let mut members = Vec::new();
             while !self.symbol("]") {
-                members.push(self.either()?);
+                members.push(self.expression()?);
                 if !self.symbol(",") {
                     self.expect("]")?;
                     break;
@@ -290,23 +300,22 @@ impl Parser {
         Ok(base)
     }
 
-    /// A primary followed by any number of `.name` and `[mask]`.
+    /// A primary followed by any number of `[mask]`, or `sample.name`.
     fn postfix(&mut self) -> Result<Expression> {
         let mut value = self.primary()?;
         loop {
+            let dot = self.place();
             if self.symbol(".") {
-                match self.tokens.get(self.at) {
-                    Some((Token::Name(name), _)) => {
-                        value = Expression::Field(Box::new(value), name.clone());
-                        self.at += 1;
+                let field = match (&value, self.tokens.get(self.at)) {
+                    (Expression::Name(sample), Some((Token::Name(field), _))) if sample == "sample" => field.clone(),
+                    (Expression::Name(sample), _) if sample == "sample" => {
+                        return Err(problem(format!("Expected a name after sample. at {}", self.place())))
                     }
-                    _ => {
-                        return Err(problem(format!(
-                            "Expected a name after . at {}",
-                            self.place()
-                        )))
-                    }
-                }
+                    (Expression::Name(left), Some((Token::Name(_), _))) => return Err(problem(format!("Only sample has a field after a dot, as in sample.era (the dot at {dot}). Name a branch in full, such as Jet_pt, and keep some members of it with a mask, such as Jet_pt[good_jet]; a branch whose name holds a dot is written branch('{left}.{}')", self.dotted()))),
+                    _ => return Err(problem(format!("Only sample has a field after a dot, as in sample.era (the dot at {dot}): name a branch in full, such as Muon_pt"))),
+                };
+                value = Expression::Sample(field);
+                self.at += 1;
             } else if self.symbol("[") {
                 let mask = self.expression()?;
                 self.expect("]")?;
@@ -346,7 +355,7 @@ impl Parser {
                 "false" => Expression::Constant(Constant::Truth(false)),
                 "pi" => Expression::Constant(Constant::Float(std::f64::consts::PI)),
                 "inf" => Expression::Constant(Constant::Float(f64::INFINITY)),
-                "and" | "or" | "not" | "where" | "in" => {
+                "and" | "or" | "not" | "in" => {
                     return Err(problem(format!("Unexpected {name} at {place}")))
                 }
                 _ if self.symbol("(") => {
@@ -377,7 +386,9 @@ pub fn parse(text: &str) -> Result<Expression> {
     };
     let expression = parser.expression()?;
     if parser.at < parser.tokens.len() {
-        return Err(problem(format!("Unexpected text at {}", parser.place())));
+        return Err(parser
+            .stray()
+            .unwrap_or_else(|| problem(format!("Unexpected text at {}", parser.place()))));
     }
     Ok(expression)
 }

@@ -1,0 +1,20 @@
+# LHCb Open Data ("Antimatter Matters", 2017): B mesons decaying to three charged hadrons, 8.6
+# million candidates read in both magnet polarities. No grid proxy needed. The polarities are
+# written as eras: one sample each, B2HHH_MagnetDown and B2HHH_MagnetUp.
+# A first press: rvr press --events 500000.
+
+[places]
+lhcb = "root://eospublic.cern.ch//eos/opendata/lhcb/AntimatterMatters2017/data"
+
+[eras.MagnetDown]
+polarity = "down"
+
+[eras.MagnetUp]
+polarity = "up"
+
+[[sample]]
+name = "B2HHH"
+label = "B → three hadrons"
+files = "{lhcb}/B2HHH_{era}.root"
+tree = "DecayTree"
+eras = ["MagnetDown", "MagnetUp"]

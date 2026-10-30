@@ -128,14 +128,14 @@ fn run(args: &[&str]) -> Result<bool, String> {
         return Ok(false);
     }
     let new = press::read_recipe(&texts.recipe)?;
-    let outputs = press::outputs(&new);
-    let said = match reuse::earlier(&target, &texts, &new, &lock, &asked, &outputs) {
+    let said = match reuse::earlier(&target, &texts, &new, &lock, &asked) {
         Some(Ok(earlier)) => {
-            let reading: Vec<&str> = outputs
+            let reading: Vec<&str> = new
+                .columns
                 .iter()
                 .zip(&earlier.reused)
                 .filter(|(_, reused)| !**reused)
-                .map(|((name, _, _), _)| name.as_str())
+                .map(|((name, _), _)| name.as_str())
                 .collect();
             let holed = !rowver::rvr::holes(&header).is_empty();
             match (reading.is_empty(), current) {
@@ -230,11 +230,10 @@ fn changes(old: &str, now: &str) -> String {
     let (Ok(old), Ok(now)) = (Recipe::read(old), Recipe::read(now)) else {
         return "changed since (one of the two cannot be read as a recipe)".into();
     };
-    let (before, after) = (press::outputs(&old), press::outputs(&now));
-    let names = |outputs: &[press::Output]| -> Vec<String> {
-        outputs.iter().map(|(n, _, _)| (*n).clone()).collect()
+    let names = |recipe: &Recipe| -> Vec<String> {
+        recipe.columns.iter().map(|(n, _)| n.clone()).collect()
     };
-    let (before, after) = (names(&before), names(&after));
+    let (before, after) = (names(&old), names(&now));
     let mut said = Vec::new();
     let list = |what: &str, names: Vec<&String>| {
         let names: Vec<&str> = names.iter().map(|n| n.as_str()).collect();

@@ -225,13 +225,6 @@ pub(crate) fn count(array: &Array) -> Result<Array> {
     Ok(Array::Event(Values::whole(Kind::I8, counts.collect())))
 }
 
-/// How many members each event's list has, whatever it holds.
-pub(crate) fn lengths(array: &Array) -> Result<Array> {
-    let (offsets, _) = lists(array, "The first column of a collection")?;
-    let lengths = offsets.windows(2).map(|pair| (pair[1] - pair[0]) as i64);
-    Ok(Array::Event(Values::whole(Kind::I8, lengths.collect())))
-}
-
 /// The sum of each event's list: floats in their kind, whole numbers in 64 bits.
 pub(crate) fn sum(array: &Array) -> Result<Array> {
     let (offsets, values) = lists(array, "sum")?;

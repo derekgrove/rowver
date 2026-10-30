@@ -6,7 +6,7 @@ your laptop needs a grid proxy, and for that it needs your grid certificate. You
 ## 1. Install rvr and rowver
 
 `rvr` makes `.rvr` files; the Python package `rowver` reads them
-(from [step 4 of the examples](../examples/README.md#4-plot-it) on). One `pip install` builds the package from this repository and brings the `rvr`
+(from [step 4 of the examples](examples/README.md#4-plot-it) on). One `pip install` builds the package from this repository and brings the `rvr`
 command with it, with no clone. It needs Python 3.11 or later and Rust 1.91 or later
 ([rustup](https://rustup.rs)):
 
@@ -18,7 +18,7 @@ rvr --version
 (`[all]` adds Awkward, pandas and pyarrow, for list columns and tables. For `rvr` alone, run
 `cargo install --locked rvr`, or download it from the
 [releases](https://gitlab.cern.ch/dgrove/rowver/-/releases) with no Rust at all; see
-[Install](../../crates/rvr/README.md#install).)
+[Install](../crates/rvr/README.md#install).)
 
 ## 2. Install your grid certificate on your laptop
 
@@ -72,4 +72,4 @@ The grid proxy at /tmp/x509up_u501 is valid for 7 days.
 
 If you already use `voms-proxy-init -voms cms` on your laptop, the proxy it makes works too.
 
-Now you are ready to move on to [the examples](../examples/README.md).
+Now you are ready to move on to [the examples](examples/README.md).

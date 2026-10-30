@@ -72,10 +72,8 @@ version = 1
 [keep]
 jets = "nJet >= 1"
 
-[copy]
+[columns]
 branches = ["weight", "nJet", "Jet_pt", "Muon_charge"]
-
-[column]
 ht = "sum(Jet_pt)"
 "#;
     let dir = study("keep", FLAT, recipe);
@@ -144,7 +142,7 @@ ht = "sum(Jet_pt)"
 
 #[test]
 fn events_reads_the_first_entries_and_records_where_it_stopped() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"weight\"]\n";
     let dir = study("first", FLAT, recipe);
     let header = pressed(&dir, &["--events", "2"]);
     assert_eq!(header["data"]["rows"], 2);
@@ -179,7 +177,7 @@ fn events_reads_the_first_entries_and_records_where_it_stopped() {
 
 #[test]
 fn a_random_choice_is_recorded_checked_and_reproduced() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"weight\"]\n";
     let dir = study("random", FLAT, recipe);
     let header = pressed(&dir, &["--events", "3", "--random", "--seed", "5"]);
     let sample = &header["made"]["files"]["flat"];
@@ -222,7 +220,7 @@ fn a_random_choice_is_recorded_checked_and_reproduced() {
 
 #[test]
 fn a_file_is_signed_once_there_is_a_key() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"weight\"]\n";
     let dir = study("signed", FLAT, recipe);
     let (code, said) = rvr(&dir, &["key", "new", "Tester"]);
     assert_eq!(code, 0, "{said}");
@@ -251,7 +249,7 @@ fn std_vectors_in_a_folder_are_pressed() {
     let samples = FLAT
         .replace("uproot_flat.root", "stl_vectors.root")
         .replace("\"analysis\"", "\"ntuple/Events\"");
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[keep]\ntwo = \"count(jet_pt) >= 2\"\n\n[copy]\nbranches = [\"evt\", \"jet_pt\", \"u16\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[keep]\ntwo = \"count(jet_pt) >= 2\"\n\n[columns]\nbranches = [\"evt\", \"jet_pt\", \"u16\"]\n";
     let dir = study("vectors", &samples, recipe);
     let header = pressed(&dir, &[]);
     assert_eq!(header["data"]["rows"], 2);
@@ -266,7 +264,7 @@ fn std_vectors_in_a_folder_are_pressed() {
 
 #[test]
 fn presses_that_cannot_be_trusted_are_refused() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"weight\"]\n";
     let dir = study("refused", FLAT, recipe);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
 
@@ -346,7 +344,7 @@ tree = "Empty"
 flat = "x"
 listed = "list"
 "#;
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nvalue = \"branch(sample.flat)\"\nvalues = \"branch(sample.listed)\"\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nvalue = \"branch(sample.flat)\"\nvalues = \"branch(sample.listed)\"\n";
     let dir = study("empty", samples, recipe);
     let header = pressed(&dir, &[]);
     let rows: Vec<u64> = header["data"]["samples"]
@@ -378,7 +376,7 @@ version = 1
 [keep]
 jets = "nJet >= 1"
 
-[copy]
+[columns]
 branches = ["weight", "nJet"]
 "#;
     let dir = study("add", FLAT, recipe);
@@ -386,7 +384,7 @@ branches = ["weight", "nJet"]
     let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     let added = recipe.replace(
         r#"branches = ["weight", "nJet"]"#,
-        "branches = [\"weight\", \"nJet\", \"Jet_pt\"]\n\n[column]\nht = \"sum(Jet_pt)\"",
+        "branches = [\"weight\", \"nJet\", \"Jet_pt\"]\nht = \"sum(Jet_pt)\"",
     );
     std::fs::write(dir.join("recipe.toml"), &added).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
@@ -449,7 +447,7 @@ version = 1
 [keep]
 jets = "nJet >= 1"
 
-[copy]
+[columns]
 branches = ["weight", "nJet"]
 "#;
     let dir = study("status", FLAT, recipe);
@@ -550,7 +548,7 @@ fn damage(path: &Path, branch: &str) {
 
 #[test]
 fn a_damaged_basket_is_a_hole_named_with_its_file_tree_and_entries() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"weight\"]\n";
     let dir = twice("damaged", recipe);
     // Damaged before the lock is written: press checks size and adler32 first.
     damage(&dir.join("flat_b.root"), "weight");
@@ -588,7 +586,7 @@ fn a_damaged_basket_is_a_hole_named_with_its_file_tree_and_entries() {
     assert_eq!(code, 3, "{said}");
     assert!(said.contains("with 1 hole: rvr press --fill reads them again"), "{said}");
     // A column added is read for the events kept; the hole stays a hole.
-    let more = format!("{recipe}\n[column]\ndouble = \"weight * 2\"\n");
+    let more = format!("{recipe}double = \"weight * 2\"\n");
     std::fs::write(dir.join("recipe.toml"), more).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 3, "{said}");
@@ -620,7 +618,7 @@ fn a_damaged_basket_is_a_hole_named_with_its_file_tree_and_entries() {
 
 #[test]
 fn a_file_gone_or_changed_since_the_lock_is_a_hole_of_its_own() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"weight\"]\n";
     let dir = twice("gone", recipe);
     std::fs::copy(dir.join("uproot_flat.root"), dir.join("flat_c.root")).unwrap();
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
@@ -652,7 +650,7 @@ fn a_file_gone_or_changed_since_the_lock_is_a_hole_of_its_own() {
 
 #[test]
 fn a_fill_takes_the_choice_it_was_pressed_with_and_the_file_put_back() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"weight\"]\n";
     let dir = twice("refill", recipe);
     let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
@@ -713,7 +711,7 @@ fn a_press_stopped_part_way_is_picked_up_where_it_stopped() {
     if !cfg!(debug_assertions) {
         return;
     }
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[keep]\njets = \"nJet >= 1\"\n\n[copy]\nbranches = [\"weight\", \"Jet_pt\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[keep]\njets = \"nJet >= 1\"\n\n[columns]\nbranches = [\"weight\", \"Jet_pt\"]\n";
     let dir = twice("resume", recipe);
     std::fs::copy(dir.join("uproot_flat.root"), dir.join("flat_c.root")).unwrap();
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
@@ -790,7 +788,7 @@ fn a_press_stopped_part_way_is_picked_up_where_it_stopped() {
 #[test]
 fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
     let samples = "format = \"rvr-samples\"\nversion = 1\n\n[[sample]]\nname = \"flat\"\nlabel = \"Flat\"\nfiles = [\"a/flat.root\", \"b/flat.root\"]\ntree = \"analysis\"\n";
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"weight\"]\n";
     let dir = study("unmounted", samples, recipe);
     for folder in ["a", "b"] {
         std::fs::create_dir_all(dir.join(folder)).unwrap();
@@ -825,7 +823,7 @@ fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
 #[test]
 fn a_flag_some_samples_lack_is_compared_or_given_to_all_in_defaults() {
     let samples = |defaults: &str| format!("format = \"rvr-samples\"\nversion = 1\n\n[defaults]\ntree = \"analysis\"\n{defaults}\n[[sample]]\nname = \"data\"\nfiles = \"data.root\"\nisData = true\n\n[[sample]]\nname = \"mc\"\nfiles = \"mc.root\"\nxsec = 88.29\n");
-    let recipe = |condition: &str| format!("format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n\n[column]\nw = \"if({condition}, 0 * weight + 1, weight * sample.xsec)\"\n");
+    let recipe = |condition: &str| format!("format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"weight\"]\nw = \"if({condition}, 0 * weight + 1, weight * sample.xsec)\"\n");
     let dir = study("flag", &samples(""), &recipe("sample.isData"));
     for name in ["data.root", "mc.root"] {
         std::fs::copy(dir.join("uproot_flat.root"), dir.join(name)).unwrap();
@@ -834,7 +832,7 @@ fn a_flag_some_samples_lack_is_compared_or_given_to_all_in_defaults() {
     // A flag on the data sample alone is missing for mc: a condition it cannot be.
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
-    assert!(said.contains("mc.root, tree analysis, ") && said.contains(": w: if needs a true-or-false condition"), "{said}");
+    assert!(said.contains("mc.root, tree analysis, ") && said.contains(": [columns] w: if needs a true-or-false condition"), "{said}");
     // Compared, a sample without it is not data; it is in the metadata, but no sample column.
     std::fs::write(dir.join("recipe.toml"), recipe("sample.isData == true")).unwrap();
     assert_eq!(rvr(&dir, &["press"]).0, 0);
@@ -852,7 +850,7 @@ fn a_flag_some_samples_lack_is_compared_or_given_to_all_in_defaults() {
 
 #[test]
 fn a_mistake_in_the_recipe_stops_the_press_with_no_file_and_no_holes() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[column]\nht = \"sum(Jet_ptt)\"\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nht = \"sum(Jet_ptt)\"\n";
     let dir = twice("mistake", recipe);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     let (code, said) = rvr(&dir, &["press"]);
@@ -860,12 +858,29 @@ fn a_mistake_in_the_recipe_stops_the_press_with_no_file_and_no_holes() {
     assert!(said.contains("There is no column named Jet_ptt. Did you mean: Jet_pt"), "{said}");
     assert!(!said.contains("hole"), "{said}");
     assert!(!dir.join(format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap())).exists());
+    // A column naming a branch the file does not have says which column, and which branch.
+    let renamed = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nnpv = \"PV_npvs\"\n";
+    std::fs::write(dir.join("recipe.toml"), renamed).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("[columns] npv: There is no column named PV_npvs."), "{said}");
+    // A defined name the press uses that is also a branch is refused: a name means one thing.
+    let both = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\nweight = \"nJet > 1\"\n\n[columns]\nbranches = [\"nJet\"]\nheavy = \"weight\"\n";
+    std::fs::write(dir.join("recipe.toml"), both).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("weight is a name [define] gives an expression, and also the name of a branch of this file: give the defined name another"), "{said}");
+    assert!(!said.contains("hole"), "{said}");
+    // One nothing uses is never evaluated, and stands in for no branch.
+    std::fs::write(dir.join("recipe.toml"), both.replace("heavy = \"weight\"\n", "")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn a_press_that_can_read_nothing_writes_nothing() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"weight\"]\n";
     let dir = study("damaged-only", FLAT, recipe);
     damage(&dir.join("uproot_flat.root"), "weight");
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
@@ -882,14 +897,13 @@ fn try_shows_what_an_expression_gives_on_the_first_events() {
     let recipe = r#"format = "rvr-recipe"
 version = 1
 
-[object.hard_jet]
-from = "Jet"
-where = "pt > 30"
+[define]
+hard_jet = "Jet_pt > 30"
 
 [keep]
 jets = "nJet >= 1"
 
-[copy]
+[columns]
 branches = ["nJet"]
 "#;
     let dir = study("try", FLAT, recipe);
@@ -900,8 +914,8 @@ branches = ["nJet"]
     let values: Vec<&str> = said.lines().skip(1).map(|l| l.split_whitespace().last().unwrap()).collect();
     assert_eq!(values, ["3", "4", "3", "0"], "{said}");
     assert!(said.starts_with("flat: uproot_flat.root, tree analysis ("), "{said}");
-    // The recipe's objects can be used, and --kept passes over the event the cut drops.
-    let (code, said) = rvr(&dir, &["try", "hard_jet.pt", "--kept"]);
+    // The recipe's defined names can be used, and --kept passes over the event the cut drops.
+    let (code, said) = rvr(&dir, &["try", "Jet_pt[hard_jet]", "--kept"]);
     assert_eq!(code, 0, "{said}");
     assert!(said.contains("  entry        0   [65.3125]\n"), "{said}");
     assert!(!said.contains("entry        3"), "{said}");
@@ -912,6 +926,16 @@ branches = ["nJet"]
     let (code, said) = rvr(&dir, &["try", "count(Jet_pt"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("the expression: Expected )"), "{said}");
+    // The old ways of naming members are refused, each saying what to write instead.
+    let (code, said) = rvr(&dir, &["try", "count(Jet where pt > 30)"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("where is not part of an expression (column 11): to keep some members of each list, use a mask, such as Jet_pt[Jet_pt > 30]"), "{said}");
+    let (code, said) = rvr(&dir, &["try", "Jet.pt"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("Only sample has a field after a dot, as in sample.era"), "{said}");
+    let (code, said) = rvr(&dir, &["try", "hard_jet()"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("hard_jet is a defined name, not a function: write it without brackets"), "{said}");
     // A flag it does not know, or one without its value, is refused; a word that is also a
     // flag's value is still a word.
     let (code, said) = rvr(&dir, &["try", "nJet", "--keep"]);
@@ -925,40 +949,37 @@ branches = ["nJet"]
 }
 
 #[test]
-fn branches_lists_the_collections_and_values_a_recipe_can_name() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"nJet\"]\n";
+fn branches_lists_every_branch_with_its_type_and_shape() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"nJet\"]\n";
     let dir = study("branches", FLAT, recipe);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     let (code, said) = rvr(&dir, &["branches"]);
     assert_eq!(code, 0, "{said}");
     assert!(said.starts_with("flat: uproot_flat.root, tree analysis, 17 branches\n"), "{said}");
-    // Each group's counter comes first; every branch says its type and whether it is a list.
-    let jet = "\n\nJet:\n  nJet     int32  flat\n  Jet_eta  float  jagged\n  Jet_pt   float  jagged\n";
+    // In alphabetical order whatever the case, each with its type and whether it is a list.
+    let jet = "\n  isGood           bool    flat\n  Jet_eta          float   jagged\n  Jet_pt           float   jagged\n";
     assert!(said.contains(jet), "{said}");
-    assert!(said.contains("\n  Muon_tight   bool   jagged\n"), "{said}");
-    assert!(said.contains("\n\nOther:\n  event            uint64  flat\n"), "{said}");
+    assert!(said.contains("\n  Muon_tight       bool    jagged\n  nJet             int32   flat\n"), "{said}");
     assert!(said.contains("\n  pv               float   3 per event\n"), "{said}");
     let (code, said) = rvr(&dir, &["branches", "--find", "JET"]);
     assert_eq!(code, 0, "{said}");
     assert!(said.contains("3 of its 17 branches hold \"jet\""), "{said}");
     assert!(!said.contains("Muon"), "{said}");
-    // A file whose counted branches have no prefix, and one with branches rvr cannot read.
-    let others = [("codecs-zlib.root", "Events", "\n  pt   float   jagged\n"), ("stl_vectors.root", "ntuple/Events", "\n  label  (string: strings are not read)\n")];
-    for (file, tree, line) in others {
-        let samples = format!("[[sample]]\nname = \"other\"\nfiles = \"{file}\"\ntree = \"{tree}\"\n");
-        std::fs::write(dir.join("samples.toml"), samples).unwrap();
-        assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
-        let (code, said) = rvr(&dir, &["branches"]);
-        assert_eq!(code, 0, "{said}");
-        assert!(said.contains(line), "{said}");
-    }
+    // A file with branches rvr cannot read lists them apart, with why.
+    let samples = "[[sample]]\nname = \"other\"\nfiles = \"stl_vectors.root\"\ntree = \"ntuple/Events\"\n";
+    std::fs::write(dir.join("samples.toml"), samples).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["branches"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("\nNot readable by rvr:\n"), "{said}");
+    assert!(said.contains("\n  label  (string: strings are not read)\n"), "{said}");
     std::fs::write(dir.join("samples.toml"), FLAT).unwrap();
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
-    // A wrong collection name suggests the collection, and says where to look.
-    let (code, said) = rvr(&dir, &["try", "count(Jets where pt > 30)"]);
+    // A misspelt branch suggests the nearest, and says where to look.
+    let (code, said) = rvr(&dir, &["try", "count(Jets_pt > 30)"]);
     assert_eq!(code, 1, "{said}");
-    assert!(said.contains("There is no column named Jets. Did you mean: Jet,"), "{said}");
-    assert!(said.contains("rvr branches lists every branch and collection the file has."), "{said}");
+    assert!(said.contains("There is no column named Jets_pt. Did you mean: Jet_pt"), "{said}");
+    assert!(said.contains("rvr branches lists every branch the file has."), "{said}");
     // rvr branches needs only the lock: a study with no recipe yet can look.
     std::fs::remove_file(dir.join("recipe.toml")).unwrap();
     let (code, said) = rvr(&dir, &["branches", "--find", "jet"]);

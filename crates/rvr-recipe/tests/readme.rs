@@ -13,8 +13,8 @@ impl Columns for Events {
         Ok(self.0.get(name).cloned())
     }
 
-    fn begins(&self, start: &str) -> bool {
-        self.0.keys().any(|name| name.starts_with(start))
+    fn has(&self, name: &str) -> bool {
+        self.0.contains_key(name)
     }
 }
 
@@ -55,29 +55,17 @@ fn events() -> Events {
     ]))
 }
 
-/// The objects, collection and helpers the README's examples name.
+/// The names the README's examples define.
 const RECIPE: &str = r#"
 format = "rvr-recipe"
 version = 1
 
-[collection.lep]
-pt = "Muon_pt"
-charge = "Muon_charge"
-
-[object.good_jet]
-from = "Jet"
-where = "pt > 30 and abs(eta) < 2.4"
-
-[object.good_muon]
-from = "Muon"
-where = "tightId and pt > 20"
-
-[helper.jets_above]
-takes = ["threshold"]
-value = "count(Jet where pt > threshold)"
-
-[helper.hem_veto]
-value = "count(Jet where eta < -1.3 and phi > 2.5) == 0"
+[define]
+good_jet = "Jet_pt > 30 and abs(Jet_eta) < 2.4"
+good_muon = "Muon_tightId and Muon_pt > 20"
+hard_central = "good_jet and Jet_pt > 100"
+clean_jet = "Jet_pt > 30 and dr_nearest(Jet_eta, Jet_phi, Muon_eta[good_muon], Muon_phi[good_muon]) > 0.4"
+hem_veto = "count(Jet_eta < -1.3 and Jet_phi > 2.5) == 0"
 "#;
 
 /// The README's tables: for each row, its cells by the header above them.
@@ -155,20 +143,14 @@ fn every_function_is_known_and_in_the_readme() {
     let text = std::fs::read_to_string(format!("{}/README.md", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let recipe = Recipe::read(RECIPE).unwrap();
     let (events, sample) = (events(), BTreeMap::new());
-    let scope = Scope {
-        columns: &events,
-        sample: &sample,
-        objects: &recipe.objects,
-        collections: &recipe.collections,
-        helpers: &recipe.helpers,
-    };
+    let scope = Scope::new(&events, &sample, &recipe.defines);
     for name in rvr_recipe::FUNCTIONS {
         let said = scope.evaluate(&parse(&format!("{name}(MET_pt)")).unwrap());
-        assert!(!matches!(&said, Err(e) if e.0.contains("no operation")), "{name} is listed but unknown");
+        assert!(!matches!(&said, Err(e) if e.0.contains("no function named")), "{name} is listed but unknown");
         assert!(text.contains(&format!("`{name}(")) || text.contains(&format!("`{name}`")), "{name} is not in the README");
     }
     let said = scope.evaluate(&parse("cnt(MET_pt)").unwrap()).unwrap_err();
-    assert!(said.0.contains("There is no operation or helper named cnt"), "{said:?}");
+    assert!(said.0.contains("There is no function named cnt"), "{said:?}");
 }
 
 #[test]
@@ -182,13 +164,7 @@ fn every_readme_example_gives_the_result_it_shows() {
         ("rho".to_owned(), Constant::Text("MET_pt".into())),
     ]);
     let events = events();
-    let scope = Scope {
-        columns: &events,
-        sample: &sample,
-        objects: &recipe.objects,
-        collections: &recipe.collections,
-        helpers: &recipe.helpers,
-    };
+    let scope = Scope::new(&events, &sample, &recipe.defines);
     let (mut checked, mut wrong) = (0, Vec::new());
     for row in tables(&text) {
         let said = row.get("`rvr` says");
