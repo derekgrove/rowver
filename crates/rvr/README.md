@@ -180,7 +180,7 @@ The first entries come from one file; a random choice is spread over every file 
 which avoids the bias of reading only the start (the earliest runs of data, one batch of MC) but
 reads every file.
 
-### `rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N] [--full] [--fill [KINDS]]`
+### `rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N] [--full] [--fill [KINDS]] [--restart]`
 
 Presses the study in `DIR` (the current folder when not given): reads what `samples.lock` names,
 keeps the events that pass every cut of `recipe.toml`, and writes `DIR/<DIR's name>.rvr`, or
@@ -270,13 +270,56 @@ Read 5 entries in the holes; with no cuts, every one is kept.
 Wrote flat.rvr (10 rows, 2 columns, 0.0 MB) in 0.0 s.
 ```
 
+#### Stopped part way
+
+A press is staged in a folder beside its output, `FILE.partial/`, with a journal of the files it
+has finished. A press stopped part way (Ctrl-C, a killed process, a laptop gone to sleep, a failure
+that is not a file's own, such as a disk not mounted, a disk full or a certificate refused) leaves
+the folder, and the next `rvr press` of the same study carries on from the files it had finished;
+`rvr status` says how far it got. The journal is made safe on disk every 2 seconds while files
+finish, so a press stopped loses at most the files of its last 2 seconds, which are read again; a
+file stopped half read is read again from its start, and so is one that became a hole for a reason
+that may pass (`unreachable`, `refused`, `tape`), while a `damaged`, `gone` or `changed` one stays
+a hole. A press that fails once every file is read
+(the disk filled while the file was written) keeps them all, and the next press only writes the
+file. A press that is not the same (another recipe, samples, lock, choice of events, columns read
+or build of rvr) starts over and says why. `--restart` always starts over. While a press runs it
+holds its journal, and another press of the same output, or a `--restart`, is refused. The folder
+goes once the file is in place, and when the press fails for a reason pressing again would not
+mend (a mistake in the recipe).
+
+```text
+$ rvr press --workers 1
+Pressing 1 sample, 90 files, 636,390 entries, 1 at a time:
+   1/90        7,071 entries      3,523 kept   f01.root
+…
+  57/90        7,071 entries      3,523 kept   f57.root
+^C
+$ rvr status
+tchiwz.rvr.partial: a press stopped there with 33 of 90 files done (journal from 2026-10-30T10:24:33Z). rvr press carries on from there when the study and the press are the same, and --restart starts over.
+tchiwz.rvr is not there: rvr press makes it.
+$ rvr press --workers 1
+Picking up tchiwz.rvr where it stopped: 33 of 90 files done (journal from 2026-10-30T10:24:33Z).
+Pressing 1 sample, 90 files, 636,390 entries, 1 at a time:
+  34/90        7,071 entries      3,523 kept   f34.root
+…
+  90/90        7,071 entries      3,523 kept   f90.root
+Read 636,390 entries; kept after each cut:
+  met                                  317,070
+  leptons                              317,070
+Wrote tchiwz.rvr (317,070 rows, 7 columns, 0.8 MB) in 3.7 s.
+```
+
+The file picked up is the one an uninterrupted press writes. Keeping the journal costs under 1%:
+on the TChiWZ skim, 0.392 s against 0.391 s without it (30 files, default workers), 5.625 s
+against 5.611 s (90 files, `--workers 1`, three checkpoints), and 3.804 s against 3.808 s for a
+50.7 MB file of 22 columns, synced before it is put in place; Apple M5, 2026-10-30.
+
 What a press holds in memory does not grow with the events it keeps (building on an earlier
 file, it holds the entry number of each event that file kept, 8 bytes each). Each file's kept values go
-to a temporary `FILE.partial.spool` beside the output as they are read, compressed where that
-pays, and each column is then packed from there a piece at a time into `FILE.partial.arrays/`.
-Both are deleted once the file is written, or when the press fails; a press that is killed
-leaves them, and the next one replaces them. While the columns are packed both exist, so a press
-needs free disk of about twice the file it writes. Pressing 12 million rows of 31 columns
+to `FILE.partial/spool` as they are read, compressed where that pays, and each column is then
+packed from there a piece at a time into `FILE.partial/pressed.rvr.arrays/`. While the columns are packed
+both exist, so a press needs free disk of about twice the file it writes. Pressing 12 million rows of 31 columns
 (a 1.5 GB file, 4 workers) peaks at 0.3 GB of memory, where holding every row took 4.9 GB
 (2026-10-20).
 
@@ -350,7 +393,8 @@ holds the study as it is now, from the study's three texts and the file alone (n
 `recipe.toml` (columns new, changed or dropped; the cuts), whether `samples.toml` was edited or
 the lock resolved again since, and what `rvr press` would read; then how much of what it chose
 each sample holds, and its holes by kind, each kind with what to do about it (`--holes` lists every
-hole: sample, file, entries, kind and why). Exit status 0 when the file holds the study as it is,
+hole: sample, file, entries, kind and why). A press that stopped part way is shown, with how many
+files it finished, and so is one under way. Exit status 0 when the file holds the study as it is,
 was pressed with the same `--events`, `--random` and `--seed`, and has no holes, so a script or an
 app can ask before pressing. It asks no storage: whether the input files changed since the lock is
 `rvr samples check samples.lock`.

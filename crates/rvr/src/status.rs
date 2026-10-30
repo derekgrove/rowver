@@ -61,6 +61,19 @@ fn run(args: &[&str]) -> Result<bool, String> {
     if !resolved {
         println!("samples.toml has changed since samples.lock was written: run rvr samples resolve samples.toml and review the new lock.");
     }
+    let stopped = crate::journal::folder(&target);
+    if crate::journal::under_way(&stopped) {
+        println!("{}: a press is under way there now.", stopped.display());
+    } else if let Some((press, done)) = crate::journal::unfinished(&stopped).filter(|(_, done)| !done.inputs.is_empty()) {
+        let inputs = press["inputs"].as_u64().unwrap_or(0) as usize;
+        println!(
+            "{}: a press stopped there with {} of {} done (journal from {}). rvr press carries on from there when the study and the press are the same, and --restart starts over.",
+            stopped.display(),
+            done.inputs.len(),
+            some(inputs, "file", "files"),
+            done.when
+        );
+    }
     if !target.exists() {
         println!("{} is not there: rvr press makes it.", target.display());
         return Ok(false);

@@ -6,6 +6,7 @@ mod diff;
 mod dump;
 mod fill;
 mod holes;
+mod journal;
 mod key;
 mod new;
 mod press;

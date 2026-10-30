@@ -87,8 +87,9 @@ fn run(
         &target,
         &asked,
         workers,
-        press::On::Nothing,
-    )?;
+        press::On::Once,
+    )
+    .map_err(|why| format!("{why}\nTo press it again, remove {} and run rvr reproduce again.", dir.display()))?;
     println!("Comparing the two with rvr diff:");
     Ok(crate::diff::main(
         &file.to_string_lossy(),

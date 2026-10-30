@@ -28,6 +28,8 @@ pub enum Fault {
     Mistake,
     /// Another input ended the press.
     Stopped,
+    /// A bug in rvr: the press stops, and keeps what it read.
+    Bug,
 }
 
 impl Fault {
@@ -40,7 +42,7 @@ impl Fault {
             Fault::Gone => "gone",
             Fault::Changed => "changed",
             Fault::Refused => "refused",
-            Fault::Save | Fault::Mistake | Fault::Stopped => return None,
+            Fault::Save | Fault::Mistake | Fault::Stopped | Fault::Bug => return None,
         })
     }
 
@@ -49,6 +51,11 @@ impl Fault {
     pub fn local(self) -> bool {
         self == Fault::Damaged
     }
+}
+
+/// Whether a hole of `kind` may pass (a storage busy, down or refusing; tape), so is read again.
+pub fn passing(kind: &str) -> bool {
+    matches!(kind, "unreachable" | "refused" | "tape")
 }
 
 /// A failure to read, what it is and why, in words for a person.
@@ -140,10 +147,13 @@ mod tests {
     #[test]
     fn every_kind_of_hole_is_one_the_reader_knows() {
         use Fault::*;
-        let kinds: Vec<&str> = [Tape, Unreachable, Damaged, Gone, Changed, Refused, Save, Mistake, Stopped]
+        let kinds: Vec<&str> = [Tape, Unreachable, Damaged, Gone, Changed, Refused, Save, Mistake, Stopped, Bug]
             .iter()
             .filter_map(|fault| fault.kind())
             .collect();
         assert_eq!(kinds, rowver::rvr::HOLE_KINDS);
+        // Only what is about the file's bytes or place lasts.
+        let lasting: Vec<&str> = kinds.into_iter().filter(|kind| !passing(kind)).collect();
+        assert_eq!(lasting, ["damaged", "gone", "changed"]);
     }
 }

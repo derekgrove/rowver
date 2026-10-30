@@ -5,6 +5,7 @@ use super::column::{read_at, write_at, Pieces};
 use super::Values;
 use crate::numeric::width;
 use crate::{codec, invalid, Result};
+use serde_json::{json, Value};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,7 @@ pub type Order = (usize, usize);
 
 /// Where one run of bytes lies in the spool, how many bytes it holds, and whether it is
 /// compressed.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Span {
     at: u64,
     size: usize,
@@ -27,7 +28,7 @@ struct Span {
 const PROBE: usize = 16 << 10;
 
 /// One piece of a column: each byte lane of its values, and for a list column each row's count.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Part {
     kind: String,
     values: usize,
@@ -35,34 +36,126 @@ struct Part {
     counts: Option<Span>,
 }
 
-/// Pieces of columns in a file of their own beside the file they will be written into, deleted
-/// when dropped. Pieces are added in any order and packed in the order of their `order`.
+/// Pieces of columns in a file of their own beside the file they will be written into. Pieces
+/// are added in any order and packed in the order of their `order`.
 pub struct Spool {
     path: PathBuf,
     file: std::fs::File,
     /// How many bytes it holds.
     end: Mutex<u64>,
     parts: Mutex<BTreeMap<(usize, Order), Part>>,
+    /// Whether its file stays when it is dropped (whoever made its folder removes it).
+    keep: bool,
 }
 
 impl Spool {
-    /// An empty spool at `path` with `.spool` added to its name.
+    /// An empty spool at `path` with `.spool` added to its name, deleted when dropped.
     pub fn beside(path: &Path) -> Result<Self> {
         let mut name = path.as_os_str().to_owned();
         name.push(".spool");
-        let path = PathBuf::from(name);
+        Self::empty(&PathBuf::from(name), false)
+    }
+
+    /// An empty spool in a file at `path`, which stays when it is dropped.
+    pub fn create(path: &Path) -> Result<Self> {
+        Self::empty(path, true)
+    }
+
+    fn empty(path: &Path, keep: bool) -> Result<Self> {
         let file = std::fs::File::options()
             .read(true)
             .write(true)
             .create(true)
             .truncate(true)
-            .open(&path)?;
+            .open(path)?;
         Ok(Self {
-            path,
+            path: path.to_owned(),
             file,
             end: Mutex::new(0),
             parts: Mutex::new(BTreeMap::new()),
+            keep,
         })
+    }
+
+    /// The spool at `path` holding only the pieces `held` gave, cut after the last; kept when dropped.
+    pub fn reopen(path: &Path, held: &[&Value]) -> Result<Self> {
+        let file = std::fs::File::options().read(true).write(true).open(path)?;
+        let end = file.metadata()?.len();
+        let span = |value: &Value| -> Option<Span> {
+            let [at, size, bytes, packed] = value.as_array()?.as_slice() else {
+                return None;
+            };
+            let span = Span {
+                at: at.as_u64()?,
+                size: usize::try_from(size.as_u64()?).ok()?,
+                bytes: usize::try_from(bytes.as_u64()?).ok()?,
+                packed: packed.as_bool()?,
+            };
+            (span.at.checked_add(span.size as u64)? <= end).then_some(span)
+        };
+        let piece = |piece: &Value| -> Option<((usize, Order), Part)> {
+            let [column, input, at, kind, values, lanes, counts] = piece.as_array()?.as_slice() else {
+                return None;
+            };
+            let part = Part {
+                kind: kind.as_str()?.to_owned(),
+                values: usize::try_from(values.as_u64()?).ok()?,
+                lanes: lanes.as_array()?.iter().map(span).collect::<Option<_>>()?,
+                counts: match counts {
+                    Value::Null => None,
+                    counts => Some(span(counts)?),
+                },
+            };
+            // One lane of every value per byte of its kind, and a count per row of a list.
+            let fits = |span: &Span, bytes: usize| span.bytes == bytes;
+            let lanes = width(&part.kind).ok()? == part.lanes.len();
+            let lanes = lanes && part.lanes.iter().all(|lane| fits(lane, part.values));
+            (lanes && part.counts.as_ref().is_none_or(|counts| counts.bytes % 8 == 0)).then_some(())?;
+            let order = (input.as_u64()? as usize, at.as_u64()? as usize);
+            Some(((column.as_u64()? as usize, order), part))
+        };
+        let mut parts = BTreeMap::new();
+        let held = held.iter().map(|held| held.as_array().ok_or_else(|| invalid("A journal line names no spooled pieces")));
+        for value in held.collect::<Result<Vec<_>>>()?.into_iter().flatten() {
+            let (key, part) = piece(value)
+                .ok_or_else(|| invalid("A piece the journal names is not in the spool"))?;
+            if parts.insert(key, part).is_some() {
+                return Err(invalid("The journal names a spooled piece twice"));
+            }
+        }
+        let spans = parts.values().flat_map(|part: &Part| part.lanes.iter().chain(&part.counts));
+        let end = spans.map(|span| span.at + span.size as u64).max().unwrap_or(0);
+        file.set_len(end)?;
+        Ok(Self {
+            path: path.to_owned(),
+            file,
+            end: Mutex::new(end),
+            parts: Mutex::new(parts),
+            keep: true,
+        })
+    }
+
+    /// Every piece of every column the spool holds of the inputs `inputs`, for `reopen`.
+    pub fn held(&self, inputs: &[usize]) -> Value {
+        let copied: Vec<((usize, Order), Part)> = {
+            let parts = self.parts.lock().unwrap_or_else(|e| e.into_inner());
+            let columns = parts.last_key_value().map_or(0, |((column, _), _)| column + 1);
+            let ranges = (0..columns).flat_map(|column| {
+                inputs.iter().map(move |&input| (column, (input, 0))..(column, (input + 1, 0)))
+            });
+            ranges.flat_map(|range| parts.range(range).map(|(key, part)| (*key, part.clone()))).collect()
+        };
+        let span = |s: &Span| json!([s.at, s.size, s.bytes, s.packed]);
+        let held = copied.iter().map(|((column, (input, piece)), part)| {
+            let lanes: Vec<Value> = part.lanes.iter().map(span).collect();
+            json!([column, input, piece, part.kind, part.values, lanes, part.counts.as_ref().map(span)])
+        });
+        Value::Array(held.collect())
+    }
+
+    /// Make what the spool holds durable on disk.
+    pub fn sync(&self) -> Result<()> {
+        Ok(self.file.sync_data()?)
     }
 
     /// Add `bytes` at the end, compressed when `compress` and a sample of them shrinks by a
@@ -177,7 +270,9 @@ impl Spool {
 
 impl Drop for Spool {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if !self.keep {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -289,6 +384,51 @@ mod tests {
         drop((flat, listed));
         drop(spool);
         assert!(!path.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_spool_reopened_holds_the_pieces_it_is_given_and_no_others() {
+        let dir = std::env::temp_dir().join(format!("rowver-reopen-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("spool");
+        let jagged = |counts: Vec<usize>, values: &[f32]| Values::Jagged {
+            counts,
+            content: array(values),
+        };
+        // Inputs 0 and 2 finished; input 1 did not, and lies between them.
+        let spool = Spool::create(&path).unwrap();
+        spool.add(0, (0, 0), Values::Flat(array(&[5_i16, 6]))).unwrap();
+        spool.add(1, (0, 0), jagged(vec![2, 0], &[3.0, 4.0])).unwrap();
+        spool.add(0, (1, 0), Values::Flat(array(&[9_i16]))).unwrap();
+        spool.add(0, (2, 0), Values::Flat(array(&[7_i16]))).unwrap();
+        spool.add(0, (2, 1), Values::Flat(array(&[8_i16]))).unwrap();
+        spool.add(0, (3, 0), Values::Flat(array(&[4_i16]))).unwrap();
+        let (first, third) = (spool.held(&[0]), spool.held(&[2]));
+        assert_eq!(first.as_array().unwrap().len(), 2, "both columns of input 0");
+        spool.sync().unwrap();
+        drop(spool);
+        assert!(path.exists(), "a spool made with create stays");
+        let length = std::fs::metadata(&path).unwrap().len();
+        let again = Spool::reopen(&path, &[&first, &third]).unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() < length, "cut after input 2, input 3 gone");
+        // Input 1 was not given: its piece is passed over, and can be spooled again.
+        again.add(0, (1, 0), Values::Flat(array(&[1_i16]))).unwrap();
+        assert!(again.add(0, (2, 0), Values::Flat(array(&[1_i16]))).is_err());
+        assert_eq!(joined(&again.take(0).unwrap().unwrap()).0, array(&[5_i16, 6, 1, 7, 8]).bytes);
+        assert_eq!(
+            joined(&again.take(1).unwrap().unwrap()),
+            (array(&[3.0_f32, 4.0]).bytes, vec![2, 0])
+        );
+        drop(again);
+        let mut beyond = first.clone();
+        beyond[0][5][0][0] = 1_000_000.into();
+        assert!(Spool::reopen(&path, &[&beyond]).is_err(), "a piece past the spool's end");
+        assert!(Spool::reopen(&path, &[&first, &first]).is_err(), "a piece named twice");
+        let mut short = first.clone();
+        short[0][5].as_array_mut().unwrap().pop();
+        assert!(Spool::reopen(&path, &[&short]).is_err(), "an i2 piece with one lane");
+        assert!(Spool::reopen(&path, &[&Value::Null]).is_err(), "a line naming no pieces");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

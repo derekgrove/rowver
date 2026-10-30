@@ -685,6 +685,143 @@ fn a_fill_takes_the_choice_it_was_pressed_with_and_the_file_put_back() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `rvr press` with `flags`, one file at a time, stopped as a crash would once `n` files are done.
+fn stopped_after(dir: &Path, n: usize, flags: &[&str]) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
+        .args([&["press", "--workers", "1"], flags].concat())
+        .current_dir(dir)
+        .env("RVR_CONFIG", dir.join(".rvr-config"))
+        .env("RVR_STOP_AFTER", n.to_string())
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(said.contains(&format!("Stopped with {n} files done")), "{said}");
+    said
+}
+
+/// The data checksum of a study's file.
+fn data_sha256(dir: &Path) -> Value {
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let header: Value = serde_json::from_str(&rvr(dir, &["header", &name]).1).unwrap();
+    header["data"]["sha256"].clone()
+}
+
+#[test]
+fn a_press_stopped_part_way_is_picked_up_where_it_stopped() {
+    // RVR_STOP_AFTER stops a debug build only.
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[keep]\njets = \"nJet >= 1\"\n\n[copy]\nbranches = [\"weight\", \"Jet_pt\"]\n";
+    let dir = twice("resume", recipe);
+    std::fs::copy(dir.join("uproot_flat.root"), dir.join("flat_c.root")).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let staged = dir.join(format!("{name}.partial"));
+    let said = stopped_after(&dir, 1, &[]);
+    assert!(!said.contains("Starting over") && !said.contains("Picking up"), "a first press is new: {said}");
+    assert!(staged.join("journal.jsonl").exists() && !dir.join(&name).exists());
+    let (code, said) = rvr(&dir, &["status"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains(".rvr.partial: a press stopped there with 1 of 3 files done (journal from "), "{said}");
+    // While a press holds the journal, another press of it, or a restart, is refused.
+    let held = std::fs::File::open(staged.join("journal.jsonl")).unwrap();
+    held.lock().unwrap();
+    for flags in [&["press"][..], &["press", "--restart"]] {
+        let (code, said) = rvr(&dir, flags);
+        assert_eq!(code, 1, "{said}");
+        assert!(said.contains(" is under way (it holds "), "{said}");
+    }
+    assert!(rvr(&dir, &["status"]).1.contains(".rvr.partial: a press is under way there now."));
+    drop(held);
+    // Another recipe is another press: it starts over.
+    std::fs::write(dir.join("recipe.toml"), format!("{recipe}# the same columns\n")).unwrap();
+    let said = stopped_after(&dir, 2, &[]);
+    assert!(said.contains("Starting over: the press that stopped in "), "{said}");
+    assert!(said.contains("was another press: recipe.toml changed."), "{said}");
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains(&format!("Picking up {name} where it stopped: 2 of 3 files done (journal from ")), "{said}");
+    assert!(said.contains("  3/3 ") && !said.contains("  1/3 "), "{said}");
+    assert!(!staged.exists(), "the folder goes once the file is in place");
+    let picked = data_sha256(&dir);
+    assert_eq!(rvr(&dir, &["validate", &name]).0, 0);
+    std::fs::remove_file(dir.join(&name)).unwrap();
+    assert_eq!(rvr(&dir, &["press"]).0, 0);
+    assert_eq!(picked, data_sha256(&dir), "picked up, the file is the one a press makes at once");
+
+    // A target in a folder that is not there is refused, and the folder is not made.
+    let (code, said) = rvr(&dir, &["press", "--out", "nowhere/x.rvr"]);
+    assert!(code == 1 && said.contains("nowhere/x.rvr cannot be written: the folder nowhere is not there."), "{said}");
+    assert!(!dir.join("nowhere").exists());
+
+    // --restart starts over.
+    std::fs::remove_file(dir.join(&name)).unwrap();
+    stopped_after(&dir, 1, &[]);
+    let (code, said) = rvr(&dir, &["press", "--restart"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("Starting over: removed the press that stopped in ") && !said.contains("Picking up"), "{said}");
+    assert!(said.contains("  1/3 "), "{said}");
+
+    // A fill stopped part way is picked up too: two files gone are two holes, read again.
+    std::fs::remove_file(dir.join(&name)).unwrap();
+    for gone in ["flat_b.root", "flat_c.root"] {
+        std::fs::rename(dir.join(gone), dir.join(format!("{gone}.away"))).unwrap();
+    }
+    // A file gone is a hole that lasts: a press picked up keeps it (one holed for a passing
+    // reason, such as a storage down, is read again).
+    stopped_after(&dir, 2, &[]);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 3, "{said}");
+    assert!(said.contains("where it stopped: 2 of 3 files done") && said.contains("  3/3 "), "{said}");
+    for gone in ["flat_b.root", "flat_c.root"] {
+        std::fs::rename(dir.join(format!("{gone}.away")), dir.join(gone)).unwrap();
+    }
+    stopped_after(&dir, 1, &["--fill"]);
+    let (code, said) = rvr(&dir, &["press", "--fill"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("where it stopped: 1 of 2 files done"), "{said}");
+    assert_eq!(picked, data_sha256(&dir), "filled, the file is the one a press makes at once");
+    assert!(!staged.exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
+    let samples = "format = \"rvr-samples\"\nversion = 1\n\n[[sample]]\nname = \"flat\"\nlabel = \"Flat\"\nfiles = [\"a/flat.root\", \"b/flat.root\"]\ntree = \"analysis\"\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let dir = study("unmounted", samples, recipe);
+    for folder in ["a", "b"] {
+        std::fs::create_dir_all(dir.join(folder)).unwrap();
+        std::fs::copy(dir.join("uproot_flat.root"), dir.join(folder).join("flat.root")).unwrap();
+    }
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    // b's folder gone, as a disk not mounted: not the file's fault, so no hole, and no file.
+    std::fs::rename(dir.join("b"), dir.join("away")).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--workers", "1"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("its folder is not there either (a disk not mounted?)"), "{said}");
+    assert!(said.contains("then press again, which carries on from the 1 of 2 files done"), "{said}");
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    assert!(!dir.join(&name).exists());
+    std::fs::rename(dir.join("away"), dir.join("b")).unwrap();
+    // Every file read, the file cannot be put in place (a folder stands there): what was read is
+    // kept, and the next press reads nothing again.
+    std::fs::create_dir_all(dir.join(&name).join("in the way")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("where it stopped: 1 of 2 files done") && said.contains("  2/2 "), "{said}");
+    assert!(said.contains("could not be written: "), "{said}");
+    assert!(said.contains("Mend it, then press again, which carries on from the 2 of 2 files done"), "{said}");
+    std::fs::remove_dir_all(dir.join(&name)).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("where it stopped: 2 of 2 files done") && !said.contains("/2 "), "{said}");
+    assert!(rvr(&dir, &["validate", &name, "--complete"]).1.contains("read all 10 entries"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn a_mistake_in_the_recipe_stops_the_press_with_no_file_and_no_holes() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[column]\nht = \"sum(Jet_ptt)\"\n";
