@@ -1,7 +1,12 @@
 # The `.rvr` file
 
-Version 14 (rowver 14.1). `crates/rowver` reads and writes everything here and is the reference
+Version 14 (rowver 14.3). `crates/rowver` reads and writes everything here and is the reference
 builder; `rvr press` writes pressed files with it.
+
+New in 14.3: a file may record **holes**, entries the press chose but could not read, each with
+its kind and why (`made.files[sample].files[at].holes`, see Holes), and then says how many entries
+each sample misses (`events_missing`). A file with no hole and no `uuid: null` has nothing new,
+and a 14.2 reader opens it; a 14.2 reader refuses a file that has either.
 
 New in 14.1: a file of a catalog dataset says which storage it was read from
 (`made.files[sample].files[at].served`). The header still says `rowver: 14`; a 14.0 reader refuses
@@ -183,7 +188,10 @@ twice, and a reader checks that they agree in both directions.
 
 `rvr press` adds two keys to every sample's metadata, so that they are sample
 columns: `events_read`, the entries it read of the sample (before any cut),
-and `events_total`, the entries its files hold.
+and `events_total`, the entries its files hold. In a file with holes it adds a
+third to every sample: `events_missing`, the entries chosen that lie in holes
+(0 for a sample with none), so `events_read + events_missing` is what the
+event choice chose. A file with no hole has no `events_missing`.
 
 A viewer never rewrites `data`. The presser writes it once.
 
@@ -258,6 +266,8 @@ A viewer never rewrites `data`. The presser writes it once.
     read moved to another copy part way, `served` names the copy that served
     the last read; every copy holds the same bytes, checked against the lock's
     size (and its adler32, when the storage gives one) before it is read;
+    and `holes`, only when the press could not read some of the entries it
+    chose (see Holes);
   - `metadata` — the sample's metadata, from the lock: text, whole numbers,
     finite floats, `true`, `false`, `null`, and lists and objects of those.
     The keys that hold one number, text or truth value per sample are written
@@ -302,6 +312,53 @@ Entry `i` of the run is entry `i − start` of the file it falls in, where
 is how many chosen entries fall in it, and a row's entry is one of them. A
 reader chooses the entries again from the seed to check every row, so the
 same seed, files and N always give the same choice.
+
+#### Holes
+
+A press that cannot read part of a file it chose (a basket that does not
+decompress, a storage that kept failing, a file only on tape) still writes the
+file, without those events, and says so in the file's record:
+
+```json
+"holes": [
+  {"entries": [50000, 100000], "kind": "damaged",
+   "why": "basket 12 of branch Muon_pt (entries 50,000 to 53,999) does not decompress: …"}
+]
+```
+
+Each hole has exactly:
+
+- `entries` — `[first, last]`, two whole numbers with `first < last`: the
+  entries `first` to `last − 1` of the file's tree.
+- `kind` — one word of this list, so a tool can group holes and act on them:
+
+  | `kind` | the press found |
+  |---|---|
+  | `tape` | every copy of the dataset's file is on tape only |
+  | `unreachable` | its storage kept failing after every wait (busy, down, not answering) |
+  | `damaged` | a basket failed to decompress, or another error reading the file's bytes |
+  | `gone` | the file is not there any more |
+  | `changed` | the file differs from the lock (size, adler32, ROOT UUID, entries) |
+  | `refused` | its storage refuses the file with a valid grid proxy |
+
+  The list is closed: a reader refuses a kind it does not know, and a new kind
+  is a new format version.
+- `why` — nonempty text for a person: what failed, where, and what to do.
+
+The holes are in entry order, apart (one ends at or before the next begins),
+and within what the file's choice read: below `stop` when there is one,
+otherwise below `entries`. A hole holds at least one entry the choice chose; for
+a random choice, it is missing just the chosen entries inside it. Holes do not
+change the event choice: `stop` and `take` are what they are without them, so a
+reader still chooses the entries again and checks them. No row's entry lies in a
+hole of its file. The key is absent when a file has no hole; an empty list is
+refused.
+
+A file the press could not open at all has one hole of every entry it chose
+(`[0, stop]`, or `[0, entries]`), no rows, and the `entries` and `uuid` the lock
+gave. When the lock has no UUID for it (a catalog dataset's file), `uuid` is
+`null`, which only such a file may have, or a file the press chose no entry of
+(`take` 0, or no entries) and could not open for its UUID.
 
 ### `derived` — columns made from another file's columns
 
@@ -523,6 +580,10 @@ and refuses the file on the first problem:
 - `data.samples` and `data.files` against `made.files`: the same samples and
   files, each record's fields, and every sample's `events` against its
   files' `stop` and `take`;
+- each file's `holes`: their fields, a kind of the list, in order and apart,
+  within what the choice read; `uuid: null` only on a file that is one whole
+  hole or that the choice took nothing of; and, in a file with holes whose
+  samples carry `events_read`, `events_missing` on every sample;
 - in a pure file, `data.cols` names exactly `made.recipe.columns`, in order;
   in a derived file, `derived` has every field and exactly one parent,
   `derived.columns` names exactly the file's columns in order, `made.sha256`
@@ -545,7 +606,10 @@ line per file:
 - sample rows and file rows sum to `rows`; the sample index runs through the
   samples in order; each file's rows are its sample's, with distinct entry
   numbers that the event choice read, a random choice being made again from
-  its seed;
+  its seed, and none in a hole;
+- every hole holds an entry the choice chose, and `events_missing`, when there,
+  is the entries chosen that lie in holes (`rvr validate` also checks that
+  `events_read` is the entries chosen less those);
 - every `by_sample` has one checksum per sample, each matching that sample's
   values;
 - jagged offsets start at 0, never decrease and end at `count`; flat floats

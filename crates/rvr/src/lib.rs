@@ -4,6 +4,8 @@
 mod branches;
 mod diff;
 mod dump;
+mod fill;
+mod holes;
 mod key;
 mod new;
 mod press;
@@ -17,15 +19,19 @@ mod trying;
 const USAGE: &str = "usage:
   rvr new DIR                              start a study: samples.toml, recipe.toml, .gitignore
   rvr samples COMMAND ...                  what a study reads (rvr samples, alone, lists them)
-  rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N]
-                                           press the study in DIR (.) into DIR/<its name>.rvr
-  rvr status [DIR] [--out FILE] [--events N|all] [--random] [--seed S]
-                                           is the study's .rvr current, and what would press read
+  rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N] [--fill [KINDS]]
+                                           press the study in DIR (.) into DIR/<its name>.rvr;
+                                           --fill reads only its holes again
+  rvr status [DIR] [--out FILE] [--events N|all] [--random] [--seed S] [--holes]
+                                           is the study's .rvr current and whole, and what would
+                                           press read
   rvr branches [DIR] [--sample NAME] [--find TEXT]
                                            the branches and collections a sample's file holds
   rvr try \"EXPRESSION\" [DIR] [--events N] [--sample NAME] [--kept]
                                            what an expression gives on a sample's first events
-  rvr validate FILE... [--parent PARENT]   check files; a derived file against its parent
+  rvr validate FILE... [--parent PARENT] [--complete]
+                                           check files; a derived file against its parent;
+                                           --complete fails a file with holes
   rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns]
                                            the header in full, the study's texts, every column
   rvr header FILE                          the JSON header only, as the file holds it
@@ -155,8 +161,10 @@ fn header(file: &str) -> Result<(), String> {
 }
 
 /// One line per file: valid, or the first problem found. The parent, when named, is checked
-/// as a file itself and compared with what each derived file records of it.
+/// as a file itself and compared with what each derived file records of it. With `--complete`,
+/// a valid file with holes fails too.
 fn validate(words: &[&str], args: &[String]) -> u8 {
+    let complete = args.iter().any(|a| a == "--complete");
     let parent = args
         .iter()
         .position(|a| a == "--parent")
@@ -202,7 +210,13 @@ fn validate(words: &[&str], args: &[String]) -> u8 {
                 Some((read, total)) => format!("read {read} of {total} entries, "),
                 None => String::new(),
             };
-            Ok((summary.rows, summary.columns, read + &signed))
+            let holes = rowver::rvr::holes(&summary.header);
+            Ok((summary.rows, summary.columns, read + &holed(&holes) + &signed, holes.is_empty()))
+        });
+        // With --complete, a file with holes fails, on its one line.
+        let compared = compared.and_then(|(rows, columns, said, whole)| match complete && !whole {
+            true => Err(format!("it has holes, and --complete asks for none ({said}): rvr status lists them, rvr press --fill reads them again")),
+            false => Ok((rows, columns, said)),
         });
         ok &= said(file, &compared);
     }
@@ -224,6 +238,7 @@ fn entries_read(made: &serde_json::Value) -> Result<Option<(u64, u64)>, String> 
         ) else {
             return Ok(None);
         };
+        let missing = sample["metadata"]["events_missing"].as_u64().unwrap_or(0);
         let files = sample["files"].as_object().into_iter().flatten();
         let (mut held, mut taken) = (0, 0);
         for (_, file) in files {
@@ -235,13 +250,32 @@ fn entries_read(made: &serde_json::Value) -> Result<Option<(u64, u64)>, String> 
                 .unwrap_or(entries);
         }
         // A file the first N events never reach is not recorded: its entries are in the total alone.
-        if said_read != taken || said_total < held {
-            return Err(format!("sample {name} says it read {said_read} of {said_total} entries, but its files record {taken} read of {held}"));
+        if said_read + missing != taken || said_total < held {
+            return Err(format!("sample {name} says it read {said_read} of {said_total} entries ({missing} in holes), but its files record {taken} chosen of {held}"));
         }
-        read += taken;
+        read += said_read;
         total += said_total;
     }
     Ok(Some((read, total)))
+}
+
+/// How many holes, by kind: `1 hole (tape), ` or `4 holes (3 tape, 1 damaged), `; nothing for none.
+fn holed(holes: &[rowver::rvr::Hole]) -> String {
+    let mut kinds: Vec<(&str, usize)> = Vec::new();
+    for hole in holes {
+        match kinds.iter_mut().find(|(kind, _)| *kind == hole.kind) {
+            Some((_, n)) => *n += 1,
+            None => kinds.push((&hole.kind, 1)),
+        }
+    }
+    match kinds[..] {
+        [] => String::new(),
+        [(kind, _)] => format!("{} ({kind}), ", samples::some(holes.len(), "hole", "holes")),
+        _ => {
+            let each: Vec<String> = kinds.iter().map(|(kind, n)| format!("{n} {kind}")).collect();
+            format!("{} holes ({}), ", holes.len(), each.join(", "))
+        }
+    }
 }
 
 fn said(file: &str, verdict: &Result<(usize, usize, String), String>) -> bool {

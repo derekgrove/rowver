@@ -4,17 +4,22 @@
 use crate::press;
 use crate::reuse;
 use crate::samples::Choice;
+use crate::press::count;
+use crate::samples::some;
 use rvr_recipe::Recipe;
+use serde_json::Value;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 /// How `rvr status` is used.
 pub const USAGE: &str = "usage:
-  rvr status [DIR] [--out FILE] [--events N|all] [--random] [--seed S]
+  rvr status [DIR] [--out FILE] [--events N|all] [--random] [--seed S] [--holes]
                                            whether DIR/<its name>.rvr (or FILE) holds the study
-                                           in DIR as it is now, and what rvr press would read;
-                                           exit status 0 when it does";
+                                           in DIR as it is now, how much of what it chose it
+                                           holds (--holes: every hole), and what rvr press would
+                                           read; exit status 0 when it is current and complete";
 
-/// `rvr status …` with the words after `status`: 0 when the file holds the study as it is.
+/// `rvr status …` with the words after `status`: 0 when the file holds the study as it is, whole.
 pub fn main(args: &[&str]) -> u8 {
     match run(args) {
         Ok(current) => u8::from(!current),
@@ -26,7 +31,7 @@ pub fn main(args: &[&str]) -> u8 {
 }
 
 fn run(args: &[&str]) -> Result<bool, String> {
-    let (mut dir, mut out) = (None, None);
+    let (mut dir, mut out, mut every) = (None, None, false);
     let mut choice = Choice::default();
     let mut words = args.iter();
     while let Some(&word) = words.next() {
@@ -42,6 +47,7 @@ fn run(args: &[&str]) -> Result<bool, String> {
             "--random" => choice.random = true,
             "--seed" => choice.seed = Some(Choice::seed(given()?)?),
             "--out" => out = Some(PathBuf::from(given()?)),
+            "--holes" => every = true,
             flag if flag.starts_with("--") => {
                 return Err(format!("status does not know {flag}.\n{USAGE}"))
             }
@@ -118,7 +124,9 @@ fn run(args: &[&str]) -> Result<bool, String> {
                 .filter(|(_, reused)| !**reused)
                 .map(|((name, _, _), _)| name.as_str())
                 .collect();
+            let holed = !rowver::rvr::holes(&header).is_empty();
             match (reading.is_empty(), current) {
+                (true, true) if holed => "It holds the study as it is, but for its holes: rvr press --fill reads them.".to_string(),
                 (true, true) => "It is current: rvr press has nothing to read.".to_string(),
                 (true, false) => "rvr press would read nothing: every column is copied from it into a file that holds the study as it is now.".into(),
                 (false, _) => format!(
@@ -132,7 +140,80 @@ fn run(args: &[&str]) -> Result<bool, String> {
         None => unreachable!("the file is there"),
     };
     println!("{said}");
-    Ok(current)
+    // Whether --fill would fill it, to say so only when it would.
+    let kinds = crate::fill::kinds(None)?;
+    let shown = target.display().to_string();
+    let fillable = crate::fill::fits(&header, &shown, &texts, &lock, &asked, &kinds).map(drop);
+    let complete = completeness(&header, every, fillable);
+    Ok(current && complete)
+}
+
+/// How much of what it chose the file holds, from its header alone: one bar per sample, then its
+/// holes by kind with what to do about each kind, or (with `every`) one line per hole, and what
+/// `--fill` would read (or why it cannot fill it). Whether it is complete.
+fn completeness(header: &Value, every: bool, fillable: Result<(), String>) -> bool {
+    let made = &header["made"];
+    let holes = rowver::rvr::holes(header);
+    let names: Vec<&str> = header["data"]["samples"].as_array().into_iter().flatten().filter_map(|s| s["name"].as_str()).collect();
+    let width = names.iter().map(|n| n.chars().count()).max().unwrap_or(0);
+    println!();
+    for name in &names {
+        let sample = &made["files"][*name];
+        let read = sample["metadata"]["events_read"].as_u64().unwrap_or(0);
+        let missing = sample["metadata"]["events_missing"].as_u64().unwrap_or(0);
+        let part = if read + missing == 0 { 1.0 } else { read as f64 / (read + missing) as f64 };
+        let full = (part * 24.0).floor() as usize;
+        let full = if missing > 0 { full.min(23) } else { full };
+        let bar = format!("{}{}", "█".repeat(full), "░".repeat(24 - full));
+        let files = sample["files"].as_object().map_or(0, |f| f.len());
+        let holed = holes.iter().filter(|h| h.sample == *name).count();
+        let holed = match holed {
+            0 => String::new(),
+            n => format!(", {}", some(n, "hole", "holes")),
+        };
+        let percent = if missing > 0 { (part * 100.0).floor().min(99.0) } else { 100.0 };
+        println!("  {name:width$}  {bar} {percent:>3.0}%   {}{holed}", some(files, "file", "files"));
+    }
+    if holes.is_empty() {
+        return true;
+    }
+    let chosen = match rowver::rvr::chosen_in_holes(header) {
+        Ok(chosen) if chosen.len() == holes.len() => chosen,
+        _ => {
+            println!("\nIts holes cannot be counted: the file is not valid (rvr validate says why).");
+            return false;
+        }
+    };
+    if every {
+        println!("\nHoles:");
+        for (hole, n) in holes.iter().zip(&chosen) {
+            let name = hole.file.rsplit('/').next().unwrap_or(&hole.file);
+            println!("  {}  {name}  entries {} to {} ({n} chosen)  {}: {}", hole.sample, count(hole.first), count(hole.last.saturating_sub(1)), hole.kind, hole.why);
+        }
+    } else {
+        println!("\nHoles, by why:");
+        for kind in rowver::rvr::HOLE_KINDS {
+            let these: Vec<(&rowver::rvr::Hole, u64)> = holes.iter().zip(&chosen).filter(|(h, _)| h.kind == kind).map(|(h, n)| (h, *n)).collect();
+            let Some((first, _)) = these.first() else { continue };
+            let files: BTreeSet<(&str, &str)> = these.iter().map(|(h, _)| (h.sample.as_str(), h.file.as_str())).collect();
+            let samples: BTreeSet<&str> = these.iter().map(|(h, _)| h.sample.as_str()).collect();
+            let entries: u64 = these.iter().map(|(_, n)| n).sum();
+            let runs = match these.len() == files.len() {
+                true => some(files.len(), "file", "files"),
+                false => format!("{} in {}", some(these.len(), "hole", "holes"), some(files.len(), "file", "files")),
+            };
+            let samples: Vec<&str> = samples.into_iter().collect();
+            println!("  {kind:12} {runs}, {} entries   {}", count(entries), samples.join(", "));
+            println!("      {}", first.why);
+        }
+        println!("(rvr status --holes lists every hole.)");
+    }
+    let files: BTreeSet<(&str, &str)> = holes.iter().map(|h| (h.sample.as_str(), h.file.as_str())).collect();
+    match fillable {
+        Ok(()) => println!("rvr press --fill would read {} entries of {}.", count(chosen.iter().sum()), some(files.len(), "file", "files")),
+        Err(why) => println!("rvr press --fill would not: {why}"),
+    }
+    false
 }
 
 /// What changed from one recipe to another, in the columns and cuts it stores and keeps.

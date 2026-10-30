@@ -123,7 +123,8 @@ The headers show no difference in rows, samples, columns, by_sample or sample co
 ## Commands
 
 Every command prints what it did, or one sentence saying what is wrong and how to fix it. Exit
-status: 0 when all went well, 1 when something failed or differs, 2 for a command it does not know.
+status: 0 when all went well, 1 when something failed or differs, 2 for a command it does not know;
+`rvr press` exits 3 when the file it leaves has holes (see Holes, below).
 
 ### `rvr new DIR`
 
@@ -179,7 +180,7 @@ The first entries come from one file; a random choice is spread over every file 
 which avoids the bias of reading only the start (the earliest runs of data, one batch of MC) but
 reads every file.
 
-### `rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N] [--full]`
+### `rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N] [--full] [--fill [KINDS]]`
 
 Presses the study in `DIR` (the current folder when not given): reads what `samples.lock` names,
 keeps the events that pass every cut of `recipe.toml`, and writes `DIR/<DIR's name>.rvr`, or
@@ -212,11 +213,62 @@ every column; `--full` always does. A sample added or removed, a lock resolved a
 `--events`, or another build of rvr all mean a full press, since the file's rows or the code that
 computed them would no longer be the ones it records.
 
-Before anything is read, every file is checked against the lock: its size and adler32, then its
-ROOT UUID and entries. A file that changed, or a `samples.toml` edited since the lock was written,
-stops the press with what changed; resolve again and review the new lock if the change is wanted.
-So a `.rvr` file always holds exactly what its lock says it read. Nothing is written until every
-file has been read: the file appears whole, or not at all.
+Before a file is read, it is checked against the lock: its size and adler32, then its ROOT UUID
+and entries. A file that changed is not read: it is a hole (below), and the file says so. A
+`samples.toml` edited since the lock was written stops the press: resolve again and review the new
+lock. Nothing is written until every file has been read or found to be a hole: the file appears
+whole, or not at all.
+
+#### Holes
+
+A press that cannot read part of what it chose still writes the file, without those events, and
+records each **hole** in it: the entries of the file it could not read, a kind, and why. The kinds
+are `tape` (every copy of a dataset's file is on tape only), `unreachable` (its storage kept
+failing after every wait), `damaged` (a basket does not decompress), `gone` (the file is not
+there any more), `changed` (it is not the file the lock names) and `refused` (its storage refuses
+it with a valid proxy). A damaged basket makes a hole of the 50,000 entries read with it, and the
+rest of the file is read; any other kind makes a hole of the rest of the file. What is not the
+file's fault makes no hole and stops the press: a mistake in the recipe, a grid proxy missing or
+refused, a certificate rvr does not trust, a local file that cannot be read for want of rights or
+a mount gone. The press exits 3 when the file has holes:
+
+```text
+$ rvr press
+Pressing 1 sample, 2 files, 10 entries, 2 at a time:
+  1/2            0 entries          0 kept   flat_b.root
+    hole (damaged): ./flat_b.root, tree analysis, entries 0 to 4: weight: decompression failed (zlib): corrupt deflate stream, in basket 0 of branch weight (entries 0 to 4, 111 bytes at byte 662). The file is damaged there: if another copy of it exists, put it in its place, run rvr samples resolve samples.toml, then rvr press --fill.
+  2/2            5 entries          5 kept   flat_a.root
+Read 5 of 10 entries; with no cuts, every one is kept.
+Wrote flat.rvr (5 rows, 2 columns, 0.0 MB) in 0.0 s, with 1 hole:
+  damaged     flat  ./flat_b.root, tree analysis, entries 0 to 4: weight: decompression failed (zlib): corrupt deflate stream, in basket 0 of branch weight (entries 0 to 4, 111 bytes at byte 662). The file is damaged there: if another copy of it exists, put it in its place, run rvr samples resolve samples.toml, then rvr press --fill.
+rvr press --fill reads them again once they can be read.
+```
+
+`rvr status` shows what each sample is missing, by kind of hole. Each sample's `events_read` counts the entries read, and a file with holes adds `events_missing`
+(the entries chosen that lie in holes) to every sample's metadata, so both are sample columns.
+`rvr validate` says how many holes, of which kinds; `rvr validate --complete` fails a file with
+holes, for scripts. Pressing again a file that holds the study as it is but for its holes says so
+and writes nothing (exit 3: the file still has holes).
+
+**`--fill`** reads only the holes, and writes the file again with their rows in place: within each
+input file, its rows and the new ones merged by entry. Every column is packed again, but nothing
+but the holes is read. `--fill tape,unreachable` reads only holes of those kinds. Holes that fail
+again stay holes, with their new kind and reason; a fill that fills nothing, each hole failing as
+before, leaves the file as it was. A fill holds one column of the file at a time in memory. The
+study must be the one that pressed the file, except that the lock may have been resolved again for
+the files whose holes it reads (a file put back where it was, or another copy of it in its place),
+and for where a dataset's copies are (a Rucio rule): the file filled is then the one a full press
+makes. A file that moved, or has other entries, changes the events chosen: press again. `rvr status`
+says whether `--fill` would fill the file, or why not. On the TChiWZ skim (30 files, 212,130 entries) with one file's hole, a fill takes 0.16 s
+where a full press takes 0.39 s (0.18 s and 1.84 s with `--workers 1`; Apple M5, 2026-10-29).
+
+```text
+$ rvr press --fill
+Filling flat.rvr: reading 1 hole of 1 file, 5 entries, 1 at a time; every other row is the file's own:
+  1/1            5 entries          5 kept   flat_b.root
+Read 5 entries in the holes; with no cuts, every one is kept.
+Wrote flat.rvr (10 rows, 2 columns, 0.0 MB) in 0.0 s.
+```
 
 What a press holds in memory does not grow with the events it keeps (building on an earlier
 file, it holds the entry number of each event that file kept, 8 bytes each). Each file's kept values go
@@ -249,11 +301,11 @@ A storage under load refuses requests for minutes at a time (EOS answers `403`; 
   waiting 30 s to ask again for WZTo3LNu_UL18.root (3 of 8 tries made): its storage answered 403 Forbidden
 ```
 
-The press goes on where it was; only a read that fails all eight times stops it, and the others
-stop waiting as soon as one input has failed for good. A file that is gone (`404`), a `401`, a
-certificate that is not trusted, a host name that does not resolve, or a damaged file stops it at
-once; so does a `403` when there is no grid proxy (it needs one). Fetching ahead is never waited
-for: the read that needs the bytes is.
+The press goes on where it was; a read that fails all eight times leaves a hole (`unreachable`, or
+`refused` for a `403` that stays), and the others stop waiting as soon as the press stops. A file
+that is gone (`404`) is a hole at once; a `401`, or a certificate that is not trusted, stops the
+press, as every file there would fail the same. Fetching ahead is never waited for: the read that
+needs the bytes is.
 
 A file of a central dataset (`dataset = …`) is read from one of its copies. As the press starts,
 Rucio is asked once where every such file can be read over HTTPS. Only copies on disk, available,
@@ -263,7 +315,8 @@ far and to two not yet measured. The first to answer with the file the lock name
 its adler32 when the storage gives one) is read, so every storage of the dataset gets timed as its
 files open. A storage that failed twice since it last served a whole file is tried last. A read
 that fails is tried at the other copies, since every copy holds the same bytes: the copies it
-failed at are left once another serves it, and a read that every copy fails stops the press. The
+failed at are left once another serves it, and a read that every copy fails is a hole. A file
+whose every copy is on tape is a hole of kind `tape`, and the press goes on with the others. The
 file records which storage served each dataset file (`served`: its Rucio storage element and
 door), and the press says what it read from where:
 
@@ -290,24 +343,48 @@ FNAL served 7 of the files and the press took 37.5 s). Since 14.3.0 rvr carries 
 access): on 2026-10-29 the same dataset, through a recipe reading 419 MB of it, took 29.5 s, FNAL
 serving 5 files.
 
-### `rvr status [DIR] [--out FILE] [--events N|all] [--random] [--seed S]`
+### `rvr status [DIR] [--out FILE] [--events N|all] [--random] [--seed S] [--holes]`
 
 Says whether the study's `.rvr` file (the one `rvr press` with the same options would write)
 holds the study as it is now, from the study's three texts and the file alone (no input is read): what changed in
 `recipe.toml` (columns new, changed or dropped; the cuts), whether `samples.toml` was edited or
-the lock resolved again since, and what `rvr press` would read. Exit status 0 when the file holds
-the study as it is, and was pressed with the same `--events`, `--random` and `--seed`, so a script
-or an app can ask before pressing. It asks no storage: whether the
-input files changed since the lock is `rvr samples check samples.lock`.
+the lock resolved again since, and what `rvr press` would read; then how much of what it chose
+each sample holds, and its holes by kind, each kind with what to do about it (`--holes` lists every
+hole: sample, file, entries, kind and why). Exit status 0 when the file holds the study as it is,
+was pressed with the same `--events`, `--random` and `--seed`, and has no holes, so a script or an
+app can ask before pressing. It asks no storage: whether the input files changed since the lock is
+`rvr samples check samples.lock`.
 
 ```text
 $ rvr status
-wz.rvr: pressed 2026-10-29T19:21:36Z by rvr 14.3.0
-  recipe.toml   changed since: new: Jet_pt, ht
+flat.rvr: pressed 2026-10-30T05:41:02Z by rvr 14.3.0
+  recipe.toml   changed since: new: ht
   samples.toml  as the file holds it
   samples.lock  as the file holds it
   events        as the file holds it
-rvr press would read only Jet_pt, ht, for the events the file kept, and copy every other column from it.
+rvr press would read only ht, for the events the file kept, and copy every other column from it.
+
+  flat  ████████████████████████ 100%   2 files
+```
+
+A file with a hole (the one under Holes, above):
+
+```text
+$ rvr status
+flat.rvr: pressed 2026-10-30T04:06:48Z by rvr 14.3.0
+  recipe.toml   as the file holds it
+  samples.toml  as the file holds it
+  samples.lock  as the file holds it
+  events        as the file holds it
+It holds the study as it is, but for its holes: rvr press --fill reads them.
+
+  flat  ████████████░░░░░░░░░░░░  50%   2 files, 1 hole
+
+Holes, by why:
+  damaged      1 file, 5 entries   flat
+      ./flat_b.root, tree analysis, entries 0 to 4: weight: decompression failed (zlib): corrupt deflate stream, in basket 0 of branch weight (entries 0 to 4, 111 bytes at byte 662). The file is damaged there: if another copy of it exists, put it in its place, run rvr samples resolve samples.toml, then rvr press --fill.
+(rvr status --holes lists every hole.)
+rvr press --fill would read 5 entries of 1 file.
 ```
 
 ### `rvr branches [DIR] [--sample NAME] [--find TEXT]`
@@ -413,14 +490,15 @@ DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events (f4, one value per ev
   entry       52   92.6495
 ```
 
-### `rvr validate FILE... [--parent PARENT]`
+### `rvr validate FILE... [--parent PARENT] [--complete]`
 
 Checks each file completely: every array decompresses to its declared length and checksum, every
 per-sample checksum, the column facts, the study's texts and their checksums, that the rows belong
 to the files recorded, and that every row's entry was read (a random choice is made again from its
 seed). One line per file: `valid`, how many entries the press read of how many its samples hold
-(`read all 968616 entries`, so you can see nothing was left out), and who signed it, or the
-first problem found. A derived file
+(`read all 968616 entries`, so you can see nothing was left out), its holes by kind
+(`read 5 of 10 entries, 1 hole (damaged)`), and who signed it, or the first problem found.
+`--complete` also fails (exit 1, on its line) a valid file that has holes. A derived file
 (columns computed from another file) is compared with its parent when you name it with `--parent`.
 
 Every reader (rvr, the Python package) refuses a file whose header fails these checks, or whose
@@ -612,16 +690,17 @@ what to run.
 | `No usable grid proxy: … Run rvr proxy init to make one.` | run `rvr proxy init` |
 | `… holds your private key, and other accounts on this machine can read it` (from `proxy init`) | run the `chmod` given |
 | `…: the passphrase is wrong` (from `proxy init`) | type it again; it is the one you chose when you saved the certificate |
-| `… has no copy that can be read now (T1_…_Tape: on tape; …)` (from `press`) | the file is only on tape: ask for a Rucio rule that puts the dataset on disk |
+| `… has no copy that can be read now (T1_…_Tape: on tape; …)` (a `tape` hole, from `press`) | the file is only on tape: ask for a Rucio rule that puts the dataset on disk, then `rvr press --fill` |
 | `passed over … invalid peer certificate: UnknownIssuer` (from `press`) | an authority newer than rvr's: set `X509_CERT_DIR` to the grid authorities folder (`/etc/grid-security/certificates` where grid tools are installed) |
-| `waiting 30 s to ask again for … its storage answered 403 Forbidden` (from `press`) | nothing: the storage is busy and the read is asked again; if all eight tries fail, press again later (or when fewer jobs read that storage) |
+| `waiting 30 s to ask again for … its storage answered 403 Forbidden` (from `press`) | nothing: the storage is busy and the read is asked again; if all eight tries fail it is a hole (`refused` for a `403` that stays, `unreachable` otherwise): `rvr press --fill` later |
+| `Wrote … with 2 holes:` (exit status 3, from `press`) | each hole says why; `rvr press --fill` reads them again once they can be read |
 | `… refused the listing (403, 4 tries over 50 s). Either the grid proxy does not give access there, or the storage is refusing requests while it is busy …` | `rvr proxy` shows whether the proxy is valid; if it is, try again later |
-| `…, tree T, entries A to B: X: decompression failed (zlib): …, in basket N of branch X (…)` (from `press`) | the file is damaged at that basket: read it from another copy if there is one, or leave that file or tree out of `samples.toml` |
+| `…, tree T, entries A to B: X: decompression failed (zlib): …, in basket N of branch X (…)` (a `damaged` hole, from `press`) | the file is damaged at that basket: put another copy in its place if there is one, resolve again, and `rvr press --fill` |
 | `rvr press would press every column, as it was made by another build of rvr (…)` (from `status` or `press`) | a full press, by design: columns made by another build are not copied |
 | `a name holds only letters, digits, _ and - …` | use the name it suggests, and put the text in `label` |
 | `1 file differs from the lock: …` (from `check`) | the file changed since the lock: resolve again if that is intended, and review the new lock |
 | `samples.toml has changed since the lock was written` | resolve again |
-| `… has changed since samples.lock was written …` (from `press`) | as for `check`: resolve again if the change is wanted, and review the new lock |
+| `… has changed since samples.lock was written …` (a `changed` hole, from `press`) | as for `check`: resolve again if the change is wanted, review the new lock, and `rvr press --fill` |
 | `… has a samples.lock but no samples.toml` (from `press`) | put samples.toml back: the file carries both |
 | `This file is rowver 13; this reader reads rowver 14 only.` | press its study again with `rvr press` |
 | `The header changed after it was signed` | the file was edited after it was pressed: press it again |

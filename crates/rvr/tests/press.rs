@@ -510,40 +510,205 @@ branches = ["weight", "nJet"]
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-#[test]
-fn a_damaged_basket_is_named_with_its_file_tree_and_entries() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
-    let dir = study("damaged", FLAT, recipe);
-    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
-    let path = dir.join("uproot_flat.root");
+/// FLAT's file twice, as one sample: flat_a.root and flat_b.root.
+const TWICE: &str = r#"format = "rvr-samples"
+version = 1
+
+[[sample]]
+name = "flat"
+label = "Flat ntuple"
+files = "flat_*.root"
+tree = "analysis"
+"#;
+
+/// A study of TWICE.
+fn twice(name: &str, recipe: &str) -> PathBuf {
+    let dir = study(name, TWICE, recipe);
+    for copy in ["flat_a.root", "flat_b.root"] {
+        std::fs::copy(dir.join("uproot_flat.root"), dir.join(copy)).unwrap();
+    }
+    dir
+}
+
+/// Damage the first basket of `branch` in a fixture file.
+fn damage(path: &Path, branch: &str) {
     let (seek, nbytes) = {
-        let file = hep_root::RootFile::open(hep_root::LocalFile::open(&path).unwrap()).unwrap();
+        let file = hep_root::RootFile::open(hep_root::LocalFile::open(path).unwrap()).unwrap();
         let tree = file.tree_at("analysis").unwrap();
-        let branch = tree.branch("weight").unwrap();
+        let branch = tree.branch(branch).unwrap();
         (
             branch.basket_seek[0] as usize,
             branch.basket_bytes[0] as usize,
         )
     };
-    // Damaged after the lock was written: press checks size and adler32 first, so write a lock
-    // that matches the damaged file.
-    let mut bytes = std::fs::read(&path).unwrap();
+    let mut bytes = std::fs::read(path).unwrap();
     for b in &mut bytes[seek + nbytes - 12..seek + nbytes] {
         *b ^= 0x5a;
     }
-    std::fs::write(&path, &bytes).unwrap();
+    std::fs::write(path, &bytes).unwrap();
+}
+
+#[test]
+fn a_damaged_basket_is_a_hole_named_with_its_file_tree_and_entries() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let dir = twice("damaged", recipe);
+    // Damaged before the lock is written: press checks size and adler32 first.
+    damage(&dir.join("flat_b.root"), "weight");
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 3, "{said}");
+    assert!(said.contains("flat_b.root, tree analysis, entries 0 to 4: "), "{said}");
+    assert!(said.contains("in basket 0 of branch weight (entries 0 to "), "{said}");
+    assert!(said.contains("The file is damaged there"), "{said}");
+    assert!(said.contains("Read 5 of 10 entries"), "{said}");
+    assert!(said.contains("with 1 hole:\n  damaged     flat  "), "{said}");
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let (_, header) = rvr(&dir, &["header", &name]);
+    let header: Value = serde_json::from_str(&header).unwrap();
+    let file = &header["made"]["files"]["flat"];
+    let hole = &file["files"]["./flat_b.root"]["holes"][0];
+    assert_eq!((&hole["entries"], &hole["kind"]), (&serde_json::json!([0, 5]), &Value::from("damaged")));
+    assert!(file["files"]["./flat_a.root"].get("holes").is_none());
+    assert_eq!((&file["metadata"]["events_read"], &file["metadata"]["events_missing"]), (&5.into(), &5.into()));
+    assert_eq!(header["data"]["rows"], 5);
+    let (code, said) = rvr(&dir, &["validate", &name]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("read 5 of 10 entries, 1 hole (damaged), not signed"), "{said}");
+    let (code, said) = rvr(&dir, &["validate", &name, "--complete"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains(": INVALID: it has holes, and --complete asks for none"), "{said}");
+    assert_eq!(said.lines().count(), 1, "{said}");
+    let (code, said) = rvr(&dir, &["status"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains(" 50%   2 files, 1 hole"), "{said}");
+    assert!(said.contains("  damaged      1 file, 5 entries   flat"), "{said}");
+    assert!(said.contains("rvr press --fill would read 5 entries of 1 file."), "{said}");
+    // Pressed again as it is, it is filled, not pressed: press says so.
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 3, "{said}");
+    assert!(said.contains("with 1 hole: rvr press --fill reads them again"), "{said}");
+    // A column added is read for the events kept; the hole stays a hole.
+    let more = format!("{recipe}\n[column]\ndouble = \"weight * 2\"\n");
+    std::fs::write(dir.join("recipe.toml"), more).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 3, "{said}");
+    assert!(said.contains("Reading only double for those events"), "{said}");
+    let (code, said) = rvr(&dir, &["validate", &name]);
+    assert!(code == 0 && said.contains("1 hole (damaged)"), "{said}");
+
+    // The good file put back and resolved again, a fill reads only the hole, and the file is
+    // the one a full press makes.
+    std::fs::copy(dir.join("uproot_flat.root"), dir.join("flat_b.root")).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press", "--fill"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("reading 1 hole of 1 file, 5 entries"), "{said}");
+    let filled: Value = serde_json::from_str(&rvr(&dir, &["header", &name]).1).unwrap();
+    assert_eq!(rvr(&dir, &["validate", &name, "--complete"]).0, 0);
+    std::fs::remove_file(dir.join(&name)).unwrap();
+    assert_eq!(rvr(&dir, &["press"]).0, 0);
+    let full: Value = serde_json::from_str(&rvr(&dir, &["header", &name]).1).unwrap();
+    assert_eq!(filled["data"]["sha256"], full["data"]["sha256"]);
+    let (code, said) = rvr(&dir, &["status"]);
+    assert!(code == 0 && said.contains("100%"), "{said}");
+    assert_eq!(filled["made"]["files"], full["made"]["files"]);
+    let (code, said) = rvr(&dir, &["press", "--fill"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("has no holes: there is nothing to fill"), "{said}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_file_gone_or_changed_since_the_lock_is_a_hole_of_its_own() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let dir = twice("gone", recipe);
+    std::fs::copy(dir.join("uproot_flat.root"), dir.join("flat_c.root")).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    std::fs::remove_file(dir.join("flat_b.root")).unwrap();
+    std::fs::copy(dir.join("codecs-zlib.root"), dir.join("flat_c.root")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 3, "{said}");
+    assert!(said.contains("with 2 holes:\n  gone        flat  ./flat_b.root no longer exists"), "{said}");
+    assert!(said.contains("\n  changed     flat  "), "{said}");
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let (code, said) = rvr(&dir, &["validate", &name]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("read 5 of 15 entries, 2 holes (1 gone, 1 changed)"), "{said}");
+    let (code, said) = rvr(&dir, &["press", "--fill", "tape,unreachabel"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("not \"unreachabel\""), "{said}");
+    let (code, said) = rvr(&dir, &["press", "--fill", "tape"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("has no holes of kind tape: its holes are changed, gone"), "{said}");
+    // --fill gone reads only that kind: still gone, it fills nothing and leaves the file.
+    let before = std::fs::read(dir.join(&name)).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--fill", "gone"]);
+    assert_eq!(code, 3, "{said}");
+    assert!(said.contains("reading 1 hole of 1 file"), "{said}");
+    assert!(said.contains("None of the 1 hole could be read"), "{said}");
+    assert_eq!(std::fs::read(dir.join(&name)).unwrap(), before);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_fill_takes_the_choice_it_was_pressed_with_and_the_file_put_back() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let dir = twice("refill", recipe);
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    std::fs::rename(dir.join("flat_b.root"), dir.join("away.root")).unwrap();
+    // The first 8 entries: all of flat_a, 3 of flat_b, which is gone.
+    assert_eq!(rvr(&dir, &["press", "--events", "8"]).0, 3);
+    // A recipe edited in a comment only is not a fill: the file is written again, holes and all.
+    std::fs::write(dir.join("recipe.toml"), format!("{recipe}# weights only\n")).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--events", "8"]);
+    assert_eq!(code, 3, "{said}");
+    assert!(said.contains("Nothing to read: every column is copied from it."), "{said}");
+    // Put back as another ROOT file (its UUID changed) and resolved again: its UUID is the new one.
+    let mut bytes = std::fs::read(dir.join("away.root")).unwrap();
+    bytes[50] ^= 0x01;
+    std::fs::write(dir.join("flat_b.root"), &bytes).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press", "--fill"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("fill it with the --events, --random and --seed it was pressed with"), "{said}");
+    let (code, said) = rvr(&dir, &["press", "--fill", "--events", "8"]);
+    assert_eq!(code, 0, "{said}");
+    let filled: Value = serde_json::from_str(&rvr(&dir, &["header", &name]).1).unwrap();
+    std::fs::remove_file(dir.join(&name)).unwrap();
+    assert_eq!(rvr(&dir, &["press", "--events", "8"]).0, 0);
+    let full: Value = serde_json::from_str(&rvr(&dir, &["header", &name]).1).unwrap();
+    assert_eq!(filled["made"]["files"], full["made"]["files"]);
+    assert_eq!(filled["data"]["sha256"], full["data"]["sha256"]);
+    let uuid = |at: &str| filled["made"]["files"]["flat"]["files"][at]["uuid"].clone();
+    assert_ne!(uuid("./flat_b.root"), uuid("./flat_a.root"), "flat_b is another ROOT file now");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_mistake_in_the_recipe_stops_the_press_with_no_file_and_no_holes() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[column]\nht = \"sum(Jet_ptt)\"\n";
+    let dir = twice("mistake", recipe);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
-    assert!(
-        said.contains("uproot_flat.root, tree analysis, entries 0 to "),
-        "{said}"
-    );
-    assert!(
-        said.contains("in basket 0 of branch weight (entries 0 to "),
-        "{said}"
-    );
-    assert!(said.contains("The file is damaged there"), "{said}");
+    assert!(said.contains("There is no column named Jet_ptt. Did you mean: Jet_pt"), "{said}");
+    assert!(!said.contains("hole"), "{said}");
+    assert!(!dir.join(format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap())).exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_press_that_can_read_nothing_writes_nothing() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let dir = study("damaged-only", FLAT, recipe);
+    damage(&dir.join("uproot_flat.root"), "weight");
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("every entry the press chose is in a hole"), "{said}");
+    assert!(said.contains("in basket 0 of branch weight (entries 0 to "), "{said}");
+    assert!(!dir.join(format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap())).exists());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

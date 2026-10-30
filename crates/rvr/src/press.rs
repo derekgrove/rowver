@@ -7,8 +7,11 @@
 //! and several files are read at once, each a run of entries at a time. A random choice reads
 //! only the runs that hold a chosen entry.
 
+use crate::holes::{fault_of, Failed, Fault, Seen};
 use crate::samples::copies::{Datasets, Reader};
-use crate::samples::remote::{patiently, read_again, HttpsFile, Storage, READING, STOPPED};
+use crate::samples::remote::{
+    digest_seen, patiently, read_again, HttpsFile, Refusal, Storage, Watch, READING, STOPPED,
+};
 use crate::samples::resolve::{self, adler32_file, File, Lock, Locked};
 use crate::samples::spec::Events;
 use crate::samples::{some, Choice};
@@ -22,7 +25,7 @@ use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// How many entries of a file are read and held at a time.
@@ -40,14 +43,13 @@ const GAP: u64 = 2_000;
 /// The recipe reference, which lists every function an expression can call.
 const RECIPES: &str = "https://gitlab.cern.ch/dgrove/rowver/-/blob/main/crates/rvr-recipe/README.md";
 
-/// The runs of entries a press reads of a file, as [first, last): every `CHUNK` entries, or for
-/// a random choice runs around its chosen entries, cut where two are `gap` or more apart.
-fn runs(entries: u64, chosen: Option<&[u64]>, gap: u64) -> Vec<(u64, u64)> {
+/// The runs of entries a press reads of entries `[from, to)` of a file, as [first, last): every
+/// `CHUNK` entries, or for a random choice runs around its chosen entries (those in the range),
+/// cut where two are `gap` or more apart.
+fn runs(from: u64, to: u64, chosen: Option<&[u64]>, gap: u64) -> Vec<(u64, u64)> {
     let Some(chosen) = chosen else {
-        let starts = (0..entries).step_by(CHUNK as usize);
-        return starts
-            .map(|first| (first, entries.min(first + CHUNK)))
-            .collect();
+        let starts = (from..to).step_by(CHUNK as usize);
+        return starts.map(|first| (first, to.min(first + CHUNK))).collect();
     };
     let mut runs: Vec<(u64, u64)> = Vec::new();
     for &e in chosen {
@@ -61,15 +63,20 @@ fn runs(entries: u64, chosen: Option<&[u64]>, gap: u64) -> Vec<(u64, u64)> {
 
 pub const USAGE: &str = "usage:
   rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N] [--full]
+            [--fill [KINDS]]
                                            press DIR/samples.lock through DIR/recipe.toml into
                                            DIR/<DIR's name>.rvr (DIR is . when not given); when
                                            only stored columns changed since that file was
-                                           pressed, read just those (--full reads everything)";
+                                           pressed, read just those (--full reads everything);
+                                           --fill reads only the file's holes (of KINDS, such as
+                                           tape,unreachable) and writes it again with them";
 
-/// `rvr press …` with the words after `press`: the exit status.
+/// `rvr press …` with the words after `press`: the exit status, 3 when the file at the target has
+/// holes (whether or not this press wrote it).
 pub fn main(args: &[&str]) -> u8 {
     match run(args) {
-        Ok(()) => 0,
+        Ok(0) => 0,
+        Ok(_) => 3,
         Err(why) => {
             eprintln!("rvr press: {why}");
             1
@@ -77,8 +84,9 @@ pub fn main(args: &[&str]) -> u8 {
     }
 }
 
-fn run(args: &[&str]) -> Result<(), String> {
-    let (mut dir, mut out, mut workers, mut full) = (None, None, None, false);
+/// Press as the words ask: how many holes the file has.
+fn run(args: &[&str]) -> Result<usize, String> {
+    let (mut dir, mut out, mut workers, mut full, mut fill) = (None, None, None, false, None);
     let mut choice = Choice::default();
     let mut words = args.iter();
     while let Some(&word) = words.next() {
@@ -95,6 +103,16 @@ fn run(args: &[&str]) -> Result<(), String> {
             "--seed" => choice.seed = Some(Choice::seed(given()?)?),
             "--out" => out = Some(PathBuf::from(given()?)),
             "--full" => full = true,
+            "--fill" => {
+                // Its kinds are optional: the next word is kinds when it names kinds, else a
+                // folder, else a mistake.
+                let next = words.clone().next().copied().filter(|w| !w.starts_with("--"));
+                let kinds = next.filter(|w| crate::fill::kinds(Some(w)).is_ok() || !Path::new(w).is_dir());
+                if kinds.is_some() {
+                    words.next();
+                }
+                fill = Some(crate::fill::kinds(kinds).map_err(|e| format!("{e} (and it is not a study folder)"))?);
+            }
             "--workers" => {
                 let n = given()?;
                 workers = Some(n.parse::<usize>().ok().filter(|n| *n > 0).ok_or(format!(
@@ -107,6 +125,9 @@ fn run(args: &[&str]) -> Result<(), String> {
             folder if dir.is_none() => dir = Some(PathBuf::from(folder)),
             _ => return Err(format!("press takes one study folder.\n{USAGE}")),
         }
+    }
+    if full && fill.is_some() {
+        return Err(format!("--fill reads only a file's holes, --full every entry: give one.\n{USAGE}"));
     }
     let (dir, name, target) = study(dir, out)?;
     let workers =
@@ -122,7 +143,11 @@ fn run(args: &[&str]) -> Result<(), String> {
         &target,
         &|s| choice.of(s),
         workers,
-        !full,
+        match (&fill, full) {
+            (Some(kinds), _) => On::Holes(kinds),
+            (None, true) => On::Nothing,
+            (None, false) => On::Earlier,
+        },
     )
 }
 
@@ -232,14 +257,22 @@ pub fn read_recipe(source: &str) -> Result<Recipe, String> {
 pub type Output<'a> = (&'a String, &'a Expression, bool);
 
 /// One file to read, in the lock's order.
-struct Input<'a> {
-    sample: usize,
-    tree: &'a str,
-    file: &'a File,
+#[derive(Clone)]
+pub(crate) struct Input<'a> {
+    pub(crate) sample: usize,
+    pub(crate) tree: &'a str,
+    pub(crate) file: &'a File,
     /// For a random choice, the entries chosen in this file, ascending.
-    chosen: Option<Vec<u64>>,
-    /// When building on an earlier file, the entries it kept of this file, ascending.
-    kept: Option<Vec<u64>>,
+    pub(crate) chosen: Option<Vec<u64>>,
+    /// When building on an earlier file, the entries it kept of this file, ascending, and its
+    /// record of the file.
+    pub(crate) kept: Option<Vec<u64>>,
+    pub(crate) before: Option<Value>,
+    /// For a fill, the holes of the file being filled that are read, as entries `[first, last)`,
+    /// each with its own place among the pieces of the spool.
+    pub(crate) ranges: Option<Vec<(u64, u64, usize)>>,
+    /// Its place among the pieces of the spool, when it is read whole.
+    pub(crate) order: usize,
 }
 
 /// Where a study's files can be read from: its folder, its storage and its datasets' copies.
@@ -251,8 +284,8 @@ pub(crate) struct Reach<'a> {
     pub offline: &'a str,
     /// The study folder, which a relative path in the lock is relative to.
     pub dir: &'a Path,
-    /// Set once any input has failed, so the others stop reading, and stop waiting to.
-    pub failed: Arc<AtomicBool>,
+    /// What every read shares while it waits; it stops once an input ends the press.
+    pub watch: Arc<Watch>,
     /// Whether a local file is read whole for its adler32 before it is opened (a press reads it;
     /// a look at its branches or first events does not).
     pub whole: bool,
@@ -277,13 +310,21 @@ pub(crate) struct Branches<'a, S: ByteSource> {
     first: i64,
     last: i64,
     read: RefCell<HashMap<String, Array>>,
+    /// The first failure to read a branch, which tells a file that cannot be read from a recipe
+    /// that asks the wrong thing of it.
+    failure: RefCell<Option<hep_root::Error>>,
 }
 
 impl<'a, S: ByteSource> Branches<'a, S> {
     /// Entries `first..last` of a tree whose branches are `names`.
     pub fn over(file: &'a RootFile<S>, tree: &'a Tree, names: &'a [String], first: i64, last: i64) -> Self {
         let read = RefCell::new(HashMap::new());
-        Branches { file, tree, names, first, last, read }
+        Branches { file, tree, names, first, last, read, failure: RefCell::new(None) }
+    }
+
+    /// The first failure to read a branch, if one failed.
+    pub fn failure(&self) -> Option<hep_root::Error> {
+        self.failure.take()
     }
 }
 
@@ -314,11 +355,14 @@ impl<S: ByteSource> Columns for Branches<'_, S> {
         let Some(branch) = self.tree.branch(name) else {
             return Ok(None);
         };
-        let fail = |error: String| rvr_recipe::Error(format!("{name}: {error}"));
-        let values = self
-            .file
-            .read_range(branch, self.first, self.last)
-            .map_err(|e| fail(e.to_string()))?;
+        let values = match self.file.read_range(branch, self.first, self.last) {
+            Ok(values) => values,
+            Err(e) => {
+                let said = rvr_recipe::Error(format!("{name}: {e}"));
+                self.failure.borrow_mut().get_or_insert(e);
+                return Err(said);
+            }
+        };
         let held = Values::from_bytes(kind_of(values.kind), &values.bytes);
         let array = match &values.counts {
             Some(counts) => Array::object(counts, held)?,
@@ -345,16 +389,19 @@ struct Gathered {
 }
 
 /// What one input contributed; its values are in the spool.
-struct Taken {
+pub(crate) struct Taken {
     /// Each output's kind and whether it is a list, unless no entry was read.
-    kinds: Vec<(Kind, bool)>,
+    pub(crate) kinds: Vec<(Kind, bool)>,
     /// How many events it kept.
-    rows: usize,
-    record: Value,
+    pub(crate) rows: usize,
+    /// Its record in `made.files`, its holes included.
+    pub(crate) record: Value,
     /// Entries read, before any cut.
-    entries: u64,
+    pub(crate) entries: u64,
+    /// The entries chosen that lie in its holes.
+    pub(crate) missing: u64,
     /// The events still kept after each cut.
-    cutflow: Vec<u64>,
+    pub(crate) cutflow: Vec<u64>,
 }
 
 /// The metadata fields an expression can read: numbers, text, and truth values.
@@ -511,10 +558,10 @@ fn spooled(
 }
 
 /// Refuse a file that differs from what the lock recorded of it.
-fn changed(file: &File, bytes: Option<u64>, adler32: Option<String>) -> Result<(), String> {
+fn changed(file: &File, bytes: Option<u64>, adler32: Option<String>) -> Result<(), Failed> {
     match resolve::differs(file, bytes, adler32.as_deref()) {
         None => Ok(()),
-        Some(how) => Err(format!("{how}. It has changed since samples.lock was written: if the change is wanted, run rvr samples resolve samples.toml and review the new lock.")),
+        Some(how) => Err(Failed::new(Fault::Changed, format!("{how}. It has changed since samples.lock was written: if the change is wanted, run rvr samples resolve samples.toml and review the new lock."))),
     }
 }
 
@@ -526,9 +573,11 @@ pub(crate) struct Held {
     inner: Box<dyn ByteSource>,
     /// Disjoint ranges, in order of position.
     held: Mutex<Vec<(u64, Vec<u8>)>>,
-    /// For a remote file: how long a read that failed waits to be asked again, and the flag
+    /// For a remote file: how long a read that failed waits to be asked again, and the watch
     /// that ends the waiting (another input failed). Fetching ahead is never asked again.
-    again: Option<(&'static [u64], Arc<AtomicBool>)>,
+    again: Option<(&'static [u64], Arc<Watch>)>,
+    /// For a remote file, what its last failed request said.
+    seen: Option<Arc<Seen>>,
     /// What the file is, for what is printed while a read waits.
     shown: String,
 }
@@ -590,7 +639,10 @@ impl Held {
             .flat_map(|&(at, len)| gaps(&kept, at, len))
             .collect();
         let fetched = match self.inner.read_ranges(&missing) {
-            Ok(fetched) => fetched,
+            Ok(fetched) => {
+                self.answered();
+                fetched
+            }
             Err(e) => {
                 *self.held.lock().unwrap() = kept;
                 return Err(e);
@@ -607,11 +659,29 @@ impl Held {
     /// Read from the file itself, asked again while a remote read fails as a busy storage does.
     fn fetch(&self, ranges: &[(u64, usize)]) -> hep_root::Result<Vec<Vec<u8>>> {
         match &self.again {
-            Some((waits, stop)) => {
-                read_again(waits, stop, &self.shown, || self.inner.read_ranges(ranges))
+            Some((waits, watch)) => {
+                let read = read_again(waits, watch, &self.shown, || {
+                    self.inner.read_ranges(ranges)
+                });
+                if read.is_ok() {
+                    self.answered();
+                }
+                read
             }
             None => self.inner.read_ranges(ranges),
         }
+    }
+
+    /// A remote read succeeded: what failed before it is past.
+    fn answered(&self) {
+        if let Some(seen) = &self.seen {
+            seen.clear();
+        }
+    }
+
+    /// For a remote file, what its last failed request said.
+    pub(crate) fn seen(&self) -> Option<&Seen> {
+        self.seen.as_deref()
     }
 }
 
@@ -707,56 +777,70 @@ fn spans(branches: &[&hep_root::Branch], first: i64, last: i64) -> Vec<(u64, u64
 }
 
 /// Check one input against the lock and open it, local, remote, or from a dataset's copies (with
-/// the reader that says which copy served it).
-pub(crate) fn open(reach: &Reach, file: &File) -> Result<(RootFile<Held>, Option<Reader>), String> {
+/// the reader that says which copy served it); a failure says what it means for the file.
+pub(crate) fn open(reach: &Reach, file: &File) -> Result<(RootFile<Held>, Option<Reader>), Failed> {
     let at = &file.at;
+    // No usable grid proxy is not the file's fault: every remote file would fail the same.
+    let offline = || Failed::new(Fault::Save, format!("{at}: {}", reach.offline));
+    let again = Some((READING, reach.watch.clone()));
     if file.lfn.is_some() {
         let (Some(datasets), Some(storage)) = (reach.datasets, reach.storage) else {
-            return Err(format!("{at}: {}", reach.offline));
+            return Err(offline());
         };
-        // Every copy failing as a busy storage does is asked again, as a read is.
-        let busy = |(why, busy): &(String, bool)| busy.then(|| why.clone());
+        // A copy failing as a busy storage does is asked again, as a read is.
+        let busy = |refused: &Refusal| refused.busy.then(|| refused.why.clone());
         let name = at.rsplit('/').next().unwrap_or(at);
-        let reader = patiently(READING, &reach.failed, name, busy, || datasets.open(storage, file))
-            .map_err(|(why, _)| match reach.failed.load(Ordering::Acquire) {
-                true => format!("{at}: {STOPPED}"),
-                false => why,
+        let seen = Arc::new(Seen::default());
+        let reader = patiently(READING, &reach.watch, name, busy, || datasets.open(storage, file, &seen))
+            .map_err(|refused| match reach.watch.stop.load(Ordering::Acquire) {
+                true => Failed::new(Fault::Stopped, format!("{at}: {STOPPED}")),
+                false => Failed::new(refused.fault, refused.why),
             })?;
         let handle = reader.handle();
-        let again = Some((READING, reach.failed.clone()));
-        return opened(file, Box::new(reader), again).map(|root| (root, Some(handle)));
+        return opened(file, Box::new(reader), again, Some(seen)).map(|root| (root, Some(handle)));
     }
     if !at.contains("://") {
         // A relative path is the lock's own: relative to the study folder.
         let path = reach.dir.join(at);
-        let meta = std::fs::metadata(&path).map_err(|_| {
-            format!(
-                "{at} no longer exists. If it moved, run rvr samples resolve samples.toml again."
-            )
+        // A file whose folder is not there either may be on a disk not mounted: not the file's fault.
+        let folder = path.parent().is_none_or(Path::exists);
+        let meta = std::fs::metadata(&path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound if !folder => Failed::new(Fault::Save, format!(
+                "{at} cannot be read: its folder is not there either (a disk not mounted?)"
+            )),
+            std::io::ErrorKind::NotFound => Failed::new(Fault::Gone, format!(
+                "{at} no longer exists: put it back and run rvr press --fill (if it moved, run rvr samples resolve samples.toml again, then rvr press)."
+            )),
+            _ => Failed::new(Fault::Save, format!("{at} could not be read: {e}")),
         })?;
+        // A file that cannot be read for want of rights, or on a mount that went, is not the
+        // file's fault.
+        let unreadable = |e: std::io::Error| Failed::new(Fault::Save, format!("{at} could not be read: {e}"));
         // Read whole for its adler32 only when the lock has one to compare with, and a press asks.
         let adler32 = match file.adler32 {
-            Some(_) if reach.whole => Some(adler32_file(&path).map_err(|e| format!("{at}: {e}"))?),
+            Some(_) if reach.whole => Some(adler32_file(&path).map_err(unreadable)?),
             _ => None,
         };
         changed(file, Some(meta.len()), adler32)?;
-        let local = hep_root::LocalFile::open(&path).map_err(|e| format!("{at}: {e}"))?;
-        return opened(file, Box::new(local), None).map(|root| (root, None));
+        let local = hep_root::LocalFile::open(&path)
+            .map_err(|e| Failed::new(fault_of(&e, None), format!("{at}: {e}")))?;
+        return opened(file, Box::new(local), None, None).map(|root| (root, None));
     }
-    let storage = reach
-        .storage
-        .ok_or_else(|| format!("{at}: {}", reach.offline))?;
+    let storage = reach.storage.ok_or_else(offline)?;
     // The storage's size and adler32 are asked while the file is opened at the size the lock
     // gives; a changed file is reported before anything the opening found.
     std::thread::scope(|scope| {
-        let digest = scope.spawn(|| storage.digest(at));
-        let root = HttpsFile::new(storage, at, file.bytes).and_then(|remote| {
-            let again = Some((READING, reach.failed.clone()));
-            opened(file, Box::new(remote), again)
+        let agent = storage.agent();
+        let digest = scope.spawn(move || {
+            digest_seen(&agent, at, storage.waits, storage.proxy.is_some(), &storage.watch)
         });
+        let seen = Arc::new(Seen::default());
+        let root = HttpsFile::new(storage, at, file.bytes)
+            .map_err(Failed::from)
+            .and_then(|remote| opened(file, Box::new(remote.seeing(&seen)), again, Some(seen)));
         let (bytes, adler32) = digest
             .join()
-            .map_err(|_| format!("{at}: asking its storage stopped unexpectedly"))??;
+            .map_err(|_| Failed::from(format!("{at}: asking its storage stopped unexpectedly")))??;
         changed(file, bytes, adler32)?;
         root.map(|root| (root, None))
     })
@@ -797,18 +881,15 @@ pub(crate) fn first_readable<'a>(
     if files.is_empty() {
         return Err(format!("{} has no file with events", s.name));
     }
-    // Each file is looked up on its own: Rucio refuses a lookup when any file in it is on tape.
+    let watch = Arc::new(Watch::default());
+    let (storage, datasets, offline) = connect(lock, &files, &watch)?;
+    let reach = Reach { storage: storage.as_ref(), datasets: datasets.as_ref(), offline: &offline, dir, watch, whole: false };
     let mut tape = None;
     for &(_, file) in &files {
-        let failed = Arc::new(AtomicBool::new(false));
-        let opened = connect(lock, &[(sample, file)], &failed).and_then(|(storage, datasets, offline)| {
-            let reach = Reach { storage: storage.as_ref(), datasets: datasets.as_ref(), offline: &offline, dir, failed, whole: false };
-            open(&reach, file)
-        });
-        match opened {
+        match open(&reach, file) {
             Ok((root, _)) => return Ok((root, file)),
-            Err(why) if why.contains("has no copy that can be read now") => tape = tape.or(Some(why)),
-            Err(why) => return Err(why),
+            Err(failed) if failed.fault == Fault::Tape => tape = tape.or(Some(failed.why)),
+            Err(failed) => return Err(failed.why),
         }
     }
     let why = tape.unwrap_or_default();
@@ -818,28 +899,34 @@ pub(crate) fn first_readable<'a>(
     })
 }
 
-/// Open a checked input and refuse one whose ROOT UUID is not the lock's; `again` as `Held`'s.
+/// Open a checked input and refuse one whose ROOT UUID is not the lock's; `again` and `seen` as
+/// `Held`'s.
 fn opened(
     file: &File,
     source: Box<dyn ByteSource>,
-    again: Option<(&'static [u64], Arc<AtomicBool>)>,
-) -> Result<RootFile<Held>, String> {
+    again: Option<(&'static [u64], Arc<Watch>)>,
+    seen: Option<Arc<Seen>>,
+) -> Result<RootFile<Held>, Failed> {
     let at = &file.at;
     let source = Held {
         shown: source.describe(),
         inner: source,
         held: Mutex::new(Vec::new()),
         again,
+        seen: seen.clone(),
     };
-    let root = RootFile::open(source).map_err(|e| match e {
-        hep_root::Error::Remote(_) | hep_root::Error::SourceChanged(_) | hep_root::Error::Io(_) => {
-            format!("{at} could not be read: {e}")
+    let root = RootFile::open(source).map_err(|e| {
+        let fault = fault_of(&e, seen.as_deref());
+        match e {
+            hep_root::Error::Remote(_) | hep_root::Error::SourceChanged(_) | hep_root::Error::Io(_) => {
+                Failed::new(fault, format!("{at} could not be read: {e}"))
+            }
+            e => Failed::new(fault, format!("{at} is not a ROOT file this reader can open: {e}")),
         }
-        e => format!("{at} is not a ROOT file this reader can open: {e}"),
     })?;
     let uuid = root.header().uuid_string();
     if file.uuid.as_ref().is_some_and(|locked| *locked != uuid) {
-        return Err(format!("{at} is not the file samples.lock recorded: its ROOT UUID was {}, it is now {uuid}. Run rvr samples resolve samples.toml and review the new lock.", file.uuid.as_deref().unwrap_or("?")));
+        return Err(Failed::new(Fault::Changed, format!("{at} is not the file samples.lock recorded: its ROOT UUID was {}, it is now {uuid}. Run rvr samples resolve samples.toml and review the new lock.", file.uuid.as_deref().unwrap_or("?"))));
     }
     Ok(root)
 }
@@ -876,48 +963,132 @@ pub(crate) fn hint(error: &str, branches: &[String], recipe: &Recipe, dataset: b
     }
     match (error.contains("decompression failed"), dataset) {
         (false, _) => String::new(),
-        (true, true) => ". The file is damaged there, and every copy of a dataset's file holds the same bytes: leave the sample out of samples.toml for now, and report the file to the dataset's owners.".into(),
-        (true, false) => ". The file is damaged there: if another copy of it exists, point samples.toml at that; otherwise leave this file, or this tree, out of samples.toml and resolve again.".into(),
+        (true, true) => ". The file is damaged there, and every copy of a dataset's file holds the same bytes: report the file to the dataset's owners.".into(),
+        (true, false) => ". The file is damaged there: if another copy of it exists, put it in its place, run rvr samples resolve samples.toml, then rvr press --fill.".into(),
     }
 }
 
-/// Read one input a run of entries at a time, keeping the events the cuts pass.
+/// How many entries of `[first, last)` an input's choice chose: all, or a random choice's.
+pub(crate) fn chosen_in(input: &Input, first: u64, last: u64) -> u64 {
+    match &input.chosen {
+        Some(chosen) => {
+            (chosen.partition_point(|e| *e < last) - chosen.partition_point(|e| *e < first)) as u64
+        }
+        None => last.saturating_sub(first),
+    }
+}
+
+/// An input's record as the lock gives it: its tree, UUID (`null` when the lock has none) and
+/// entries, and what the choice reads of it.
+fn planned(input: &Input) -> Value {
+    let mut record = json!({"tree": input.tree, "uuid": input.file.uuid, "entries": input.file.entries.unwrap_or(0)});
+    if let Some(stop) = input.file.stop {
+        record["stop"] = stop.into();
+    }
+    if let Some(chosen) = &input.chosen {
+        record["take"] = chosen.len().into();
+    }
+    record
+}
+
+/// A failure as a hole, or what ends the press: one that is no kind of hole, or any building on an
+/// earlier file (whose own holes are its only ones).
+fn hole_or_end(mut failed: Failed, input: &Input) -> Result<Failed, Failed> {
+    if failed.fault.kind().is_some() && input.kept.is_some() {
+        failed.why += " Building on the earlier file, a file that cannot be read stops the press: rvr press --full makes holes of it.";
+        return Err(failed);
+    }
+    match failed.fault.kind() {
+        Some(_) => Ok(failed),
+        None => Err(failed),
+    }
+}
+
+/// A hole as a file records it.
+fn hole((first, last, failed): &(u64, u64, Failed)) -> Value {
+    json!({"entries": [first, last], "kind": failed.fault.kind(), "why": failed.why})
+}
+
+/// A hole's entries, as `[first, last)`.
+pub(crate) fn range(hole: &Value) -> (u64, u64) {
+    let entry = |at: usize| hole["entries"][at].as_u64().unwrap_or(0);
+    (entry(0), entry(1))
+}
+
+/// The holes a file's record holds, as `[first, last)`.
+pub(crate) fn ranges(record: &Value) -> Vec<(u64, u64)> {
+    record["holes"].as_array().into_iter().flatten().map(range).collect()
+}
+
+/// Read one input a run of entries at a time, keeping the events the cuts pass. A file that
+/// cannot be opened, and a run of it that cannot be read, are holes; the error is what ends the
+/// press (a mistake in the recipe, a failure that is not the file's own, or another input's).
 fn take(
     shared: &Shared,
     sample: &BTreeMap<String, Constant>,
     input: &Input,
     order: usize,
-) -> Result<Taken, String> {
+) -> Result<Taken, Failed> {
     let Shared {
         recipe, outputs, ..
     } = *shared;
     let at = &input.file.at;
     let located = |error: String| format!("{at}: {error}");
+    let nothing = |record: Value, missing: u64| Taken {
+        kinds: Vec::new(),
+        rows: 0,
+        record,
+        entries: 0,
+        missing,
+        cutflow: vec![0; recipe.keep.len()],
+    };
     // A file a random choice takes nothing from is recorded from the lock, not opened, when the
     // lock has its UUID; a dataset file has none in the lock, so it is opened for it.
-    if let (Some(chosen), Some(uuid), Some(total)) =
-        (&input.chosen, &input.file.uuid, input.file.entries)
-    {
-        if chosen.is_empty() {
-            if input.kept.as_ref().is_some_and(|kept| !kept.is_empty()) {
-                return Err(located("none of the events the earlier file kept were chosen (a bug in rvr: press with --full, and please report it)".into()));
-            }
-            return Ok(Taken {
-                kinds: Vec::new(),
-                rows: 0,
-                record: json!({"tree": input.tree, "uuid": uuid, "entries": total, "take": 0}),
-                entries: 0,
-                cutflow: vec![0; recipe.keep.len()],
-            });
+    if input.chosen.as_ref().is_some_and(Vec::is_empty) && input.file.uuid.is_some() && input.file.entries.is_some() {
+        if input.kept.as_ref().is_some_and(|kept| !kept.is_empty()) {
+            return Err(located("none of the events the earlier file kept were chosen (a bug in rvr: press with --full, and please report it)".into()).into());
         }
+        return Ok(nothing(planned(input), 0));
     }
-    let (file, served) = open(&shared.reach, input.file)?;
-    let tree = file
-        .tree_at(input.tree)
-        .map_err(|e| located(format!("its tree {:?}: {e}", input.tree)))?;
+    // The entries the choice reads of the file, by the lock, and (building on an earlier file)
+    // the holes that file has in it, which are this file's too.
+    let limit = input.file.stop.or(input.file.entries).unwrap_or(0);
+    let carried = input.before.as_ref().map(ranges).unwrap_or_default();
+    let missed = |holes: &[(u64, u64)]| holes.iter().map(|(first, last)| chosen_in(input, *first, *last)).sum();
+    // A file the earlier one could not open, or chose nothing of, is not opened again: its
+    // record is the earlier one.
+    if let (Some(before), true) = (&input.before, missed(&carried) == chosen_in(input, 0, limit)) {
+        return Ok(nothing(before.clone(), missed(&carried)));
+    }
+    // What it reads: every entry the choice reads, or for a fill the holes asked, each range
+    // with its own place among the spool's pieces.
+    let to_read = input.ranges.clone().unwrap_or_else(|| vec![(0, limit, order)]);
+    let chosen_here: u64 = to_read.iter().map(|(from, to, _)| chosen_in(input, *from, *to)).sum();
+    // A file that cannot be opened is one hole of every entry chosen of what it reads.
+    let unread = |failed: Failed| {
+        let failed = hole_or_end(failed, input)?;
+        let ranges = to_read.iter().filter(|(from, to, _)| chosen_in(input, *from, *to) > 0);
+        let holes: Vec<Value> = ranges.map(|&(from, to, _)| hole(&(from, to, failed.clone()))).collect();
+        let mut record = planned(input);
+        if !holes.is_empty() {
+            record["holes"] = holes.into();
+        }
+        Ok(nothing(record, chosen_here))
+    };
+    let (file, served) = match open(&shared.reach, input.file) {
+        Ok(opened) => opened,
+        Err(failed) => return unread(failed),
+    };
+    let tree = match file.tree_at(input.tree) {
+        Ok(tree) => tree,
+        Err(e) => {
+            let fault = fault_of(&e, file.source().inner().seen());
+            return unread(Failed::new(fault, located(format!("its tree {:?}: {e}", input.tree))));
+        }
+    };
     let total = tree.entries.max(0) as u64;
     if input.file.entries.is_some_and(|locked| locked != total) {
-        return Err(located(format!("its tree {} has {total} entries, not the {} samples.lock recorded. Run rvr samples resolve samples.toml and review the new lock.", input.tree, input.file.entries.unwrap())));
+        return unread(Failed::new(Fault::Changed, located(format!("its tree {} has {total} entries, not the {} samples.lock recorded. Run rvr samples resolve samples.toml and review the new lock.", input.tree, input.file.entries.unwrap()))));
     }
     let entries = input.file.stop.map_or(total, |stop| stop.min(total));
     let chosen = input.chosen.as_deref();
@@ -943,125 +1114,194 @@ fn take(
     };
     let mut gathered: Vec<Option<Gathered>> = outputs.iter().map(|_| None).collect();
     let mut cutflow = vec![0_u64; recipe.keep.len()];
-    let (mut entry, mut piece, mut rows) = (Vec::new(), 0, 0);
+    let (mut entry, mut rows) = (Vec::new(), 0);
+    let mut holes: Vec<(u64, u64, Failed)> = Vec::new();
     // Building on an earlier file, the events kept must be the ones it kept.
     let again = |entry: &[i64], from: usize| {
         match &input.kept {
-        Some(kept) if kept.get(from..from + entry.len()).is_none_or(|kept| kept.iter().zip(entry).any(|(k, e)| *k as i64 != *e)) => Err(located("the events read again are not the ones the earlier file kept (a bug in rvr: press with --full, and please report it)".into())),
+        Some(kept) if kept.get(from..from + entry.len()).is_none_or(|kept| kept.iter().zip(entry).any(|(k, e)| *k as i64 != *e)) => Err(Failed::from(located("the events read again are not the ones the earlier file kept (a bug in rvr: press with --full, and please report it)".into()))),
         _ => Ok(()),
     }
     };
     let gap = if remote { CHUNK } else { GAP };
-    for (first, last) in runs(entries, chosen, gap) {
-        if shared.reach.failed.load(Ordering::Acquire) {
-            return Err(STOPPED.into());
-        }
-        let count = (last - first) as usize;
-        // A random choice starts each run with only its chosen entries.
-        let start = match chosen {
-            Some(chosen) => {
-                let from = chosen.partition_point(|e| *e < first);
-                let to = chosen.partition_point(|e| *e < last);
-                let mut start = vec![false; count];
-                for e in &chosen[from..to] {
-                    start[(e - first) as usize] = true;
-                }
-                start
+    'ranges: for (at_range, &(from, to, order)) in to_read.iter().enumerate() {
+        let (to, mut piece, mut ended) = (to.min(entries), 0, false);
+        let here = chosen.map(|c| &c[c.partition_point(|e| *e < from)..c.partition_point(|e| *e < to)]);
+        for (first, last) in runs(from, to, here, gap) {
+            if shared.reach.watch.stop.load(Ordering::Acquire) {
+                return Err(Failed::new(Fault::Stopped, STOPPED));
             }
-            None => vec![true; count],
-        };
-        // Building on an earlier file: its kept events and no others, without running the cuts.
-        let start = match &input.kept {
-            Some(kept) => {
-                let mut only = vec![false; count];
-                let from = kept.partition_point(|e| *e < first);
-                for &e in kept[from..].iter().take_while(|e| **e < last) {
-                    only[(e - first) as usize] = start[(e - first) as usize];
+            let count = (last - first) as usize;
+            // A random choice starts each run with only its chosen entries.
+            let start = match chosen {
+                Some(chosen) => {
+                    let from = chosen.partition_point(|e| *e < first);
+                    let to = chosen.partition_point(|e| *e < last);
+                    let mut start = vec![false; count];
+                    for e in &chosen[from..to] {
+                        start[(e - first) as usize] = true;
+                    }
+                    start
                 }
-                only
+                None => vec![true; count],
+            };
+            // Building on an earlier file: its kept events and no others, without running the cuts;
+            // a run in one of its holes is not read.
+            if carried.iter().any(|(from, to)| *from <= first && last <= *to) {
+                continue;
             }
-            None => start,
-        };
-        if remote {
-            // Fetching ahead only saves round trips; a branch that cannot be fetched is reported
-            // when an expression asks for it.
-            let _ = file
-                .source()
-                .inner()
-                .hold(spans(&wanted, first as i64, last as i64));
-        }
-        let branches = Branches::over(&file, &tree, &names, first as i64, last as i64);
-        let scope = Scope {
-            columns: &branches,
-            sample: &sample,
-            objects: &recipe.objects,
-            collections: &recipe.collections,
-            helpers: &recipe.helpers,
-        };
-        // A failure reading the events says where they are, and what to do when the file is damaged.
-        let within = |error: String| {
-            format!(
-                "{at}, tree {}, entries {} to {}: {error}{}",
-                input.tree,
-                self::count(first),
-                self::count(last - 1),
-                hint(&error, &names, recipe, input.file.lfn.is_some())
-            )
-        };
-        let keep = kept(recipe, &scope, start, &mut cutflow).map_err(within)?;
-        for (index, (column, from, plain)) in outputs.iter().enumerate() {
-            let array = if *plain {
-                copied(&scope, from)
-            } else {
-                scope
-                    .evaluate(from)
-                    .and_then(|value| rvr_recipe::per_event(value, count))
-                    .map_err(|e| e.0)
-            };
-            let array = stored(
-                recipe,
-                column,
-                array.map_err(|e| within(format!("{column}: {e}")))?,
-            );
-            let (kind, listed) = match &array {
-                Array::Event(values) => (values.kind, false),
-                Array::Object { values, .. } => (values.kind, true),
-                Array::Constant(_) => {
-                    return Err(located(format!("{column} is a fixed value, not a column")))
+            let start = match &input.kept {
+                Some(kept) => {
+                    let mut only = vec![false; count];
+                    let from = kept.partition_point(|e| *e < first);
+                    for &e in kept[from..].iter().take_while(|e| **e < last) {
+                        only[(e - first) as usize] = start[(e - first) as usize];
+                    }
+                    only
                 }
+                None => start,
             };
-            let held = gathered[index].get_or_insert_with(|| Gathered {
-                name: (*column).clone(),
-                kind,
-                bytes: Vec::new(),
-                counts: listed.then(Vec::new),
+            if remote {
+                // Fetching ahead only saves round trips; a branch that cannot be fetched is reported
+                // when an expression asks for it. What failed before the run's reads says nothing
+                // of them.
+                let _ = file
+                    .source()
+                    .inner()
+                    .hold(spans(&wanted, first as i64, last as i64));
+                if let Some(seen) = file.source().inner().seen() {
+                    seen.clear();
+                }
+            }
+            let branches = Branches::over(&file, &tree, &names, first as i64, last as i64);
+            let scope = Scope {
+                columns: &branches,
+                sample: &sample,
+                objects: &recipe.objects,
+                collections: &recipe.collections,
+                helpers: &recipe.helpers,
+            };
+            // A failure reading the events says where they are, and what to do when the file is damaged.
+            let within = |error: String| {
+                format!(
+                    "{at}, tree {}, entries {} to {}: {error}{}",
+                    input.tree,
+                    self::count(first),
+                    self::count(last - 1),
+                    hint(&error, &names, recipe, input.file.lfn.is_some())
+                )
+            };
+            // What each column held before the run, put back if the run fails part way: a run is
+            // kept whole or not at all.
+            let before: Vec<Option<(usize, usize)>> = gathered
+                .iter()
+                .map(|g| g.as_ref().map(|g| (g.bytes.len(), g.counts.as_ref().map_or(0, Vec::len))))
+                .collect();
+            let mut counted = vec![0_u64; recipe.keep.len()];
+            let read = kept(recipe, &scope, start, &mut counted).and_then(|keep| {
+                for (index, (column, from, plain)) in outputs.iter().enumerate() {
+                    let array = if *plain {
+                        copied(&scope, from)
+                    } else {
+                        scope
+                            .evaluate(from)
+                            .and_then(|value| rvr_recipe::per_event(value, count))
+                            .map_err(|e| e.0)
+                    };
+                    // A copied branch's own name already begins what failed of it.
+                    let named = |e: String| match e.starts_with(&format!("{column}: ")) {
+                        true => e,
+                        false => format!("{column}: {e}"),
+                    };
+                    let array = stored(recipe, column, array.map_err(named)?);
+                    let (kind, listed) = match &array {
+                        Array::Event(values) => (values.kind, false),
+                        Array::Object { values, .. } => (values.kind, true),
+                        Array::Constant(_) => return Err(format!("{column} is a fixed value, not a column")),
+                    };
+                    let held = gathered[index].get_or_insert_with(|| Gathered {
+                        name: (*column).clone(),
+                        kind,
+                        bytes: Vec::new(),
+                        counts: listed.then(Vec::new),
+                    });
+                    gather(held, array, &keep, at)?;
+                }
+                Ok(keep)
             });
-            gather(held, array, &keep, at)?;
+            let keep = match read {
+                Ok(keep) => keep,
+                Err(error) => {
+                    for (held, before) in gathered.iter_mut().zip(&before) {
+                        match (held.as_mut(), before) {
+                            (Some(held), Some((bytes, counts))) => {
+                                held.bytes.truncate(*bytes);
+                                if let Some(held) = &mut held.counts {
+                                    held.truncate(*counts);
+                                }
+                            }
+                            _ => *held = None,
+                        }
+                    }
+                    // A branch that could not be read is the file's; anything else is the recipe's.
+                    let fault = branches
+                        .failure()
+                        .map_or(Fault::Mistake, |e| fault_of(&e, file.source().inner().seen()));
+                    let mut failed = Failed::new(fault, within(error));
+                    // A local file that cannot be opened now at all (a mount gone) is not the file's
+                    // fault; one that can, but not read there, is damaged there.
+                    if !remote && matches!(fault, Fault::Damaged | Fault::Save) {
+                        failed.fault = match std::fs::File::open(shared.reach.dir.join(at)) {
+                            Ok(_) => Fault::Damaged,
+                            Err(_) => Fault::Save,
+                        };
+                    }
+                    let failed = hole_or_end(failed, input)?;
+                    // Only a damaged basket leaves the rest of the file worth reading: otherwise the
+                    // rest of this range, and every range after it, is a hole.
+                    if failed.fault.local() {
+                        holes.push((first, last, failed));
+                        continue;
+                    }
+                    let rest = to_read[at_range + 1..].iter().map(|&(from, to, _)| (from, to.min(entries), failed.clone()));
+                    let rest: Vec<_> = rest.filter(|(from, to, _)| chosen_in(input, *from, *to) > 0).collect();
+                    holes.push((first, to, failed));
+                    holes.extend(rest);
+                    ended = true;
+                    break;
+                }
+            };
+            for (total, kept) in cutflow.iter_mut().zip(counted) {
+                *total += kept;
+            }
+            entry.extend(
+                (first..last)
+                    .filter(|event| keep[(event - first) as usize])
+                    .map(|event| event as i64),
+            );
+            let held: usize = gathered
+                .iter()
+                .flatten()
+                .map(|g| g.bytes.len() + g.counts.as_ref().map_or(0, |c| c.len() * 8))
+                .sum();
+            if held + entry.len() * 8 >= SPOOLED {
+                again(&entry, rows)?;
+                rows += entry.len();
+                spooled(shared.spool, &mut gathered, &mut entry, (order, piece)).map_err(located)?;
+                piece += 1;
+            }
         }
-        entry.extend(
-            (first..last)
-                .filter(|event| keep[(event - first) as usize])
-                .map(|event| event as i64),
-        );
-        let held: usize = gathered
-            .iter()
-            .flatten()
-            .map(|g| g.bytes.len() + g.counts.as_ref().map_or(0, |c| c.len() * 8))
-            .sum();
-        if held + entry.len() * 8 >= SPOOLED {
+        if !entry.is_empty() {
             again(&entry, rows)?;
             rows += entry.len();
             spooled(shared.spool, &mut gathered, &mut entry, (order, piece)).map_err(located)?;
-            piece += 1;
+        }
+        if ended {
+            break 'ranges;
         }
     }
-    if !entry.is_empty() {
-        again(&entry, rows)?;
-        rows += entry.len();
-        spooled(shared.spool, &mut gathered, &mut entry, (order, piece)).map_err(located)?;
-    }
     if input.kept.as_ref().is_some_and(|kept| kept.len() != rows) {
-        return Err(located("fewer events were read again than the earlier file kept (a bug in rvr: press with --full, and please report it)".into()));
+        return Err(located("fewer events were read again than the earlier file kept (a bug in rvr: press with --full, and please report it)".into()).into());
     }
     let mut record =
         json!({"tree": input.tree, "uuid": file.header().uuid_string(), "entries": total});
@@ -1071,12 +1311,26 @@ fn take(
     if let Some(chosen) = chosen {
         record["take"] = chosen.len().into();
     }
-    if let Some(reader) = &served {
+    // A copy is counted as having served the file only when it was read to its end.
+    if let Some(reader) = served.as_ref().filter(|_| holes.iter().all(|(_, _, failed)| failed.fault.local())) {
         reader.finish();
     }
     if let Some((rse, host)) = served.and_then(|reader| reader.served()) {
         record["served"] = json!({"rse": rse, "host": host});
     }
+    // Building on an earlier file, its holes are this file's: what it kept was read around them.
+    let missing = match input.before.as_ref().filter(|_| !carried.is_empty()) {
+        Some(before) => {
+            record["holes"] = before["holes"].clone();
+            missed(&carried)
+        }
+        None => {
+            if !holes.is_empty() {
+                record["holes"] = holes.iter().map(hole).collect();
+            }
+            holes.iter().map(|(first, last, _)| chosen_in(input, *first, *last)).sum()
+        }
+    };
     Ok(Taken {
         kinds: gathered
             .into_iter()
@@ -1085,7 +1339,8 @@ fn take(
             .collect(),
         rows,
         record,
-        entries: chosen.map_or(entries, |chosen| chosen.len() as u64),
+        entries: chosen_here - missing,
+        missing,
         cutflow,
     })
 }
@@ -1096,11 +1351,12 @@ fn take_all(
     lock: &Lock,
     work: &[Input],
     workers: usize,
-) -> Result<Vec<Taken>, String> {
+) -> Result<Vec<Taken>, Failed> {
     let fields: Vec<BTreeMap<String, Constant>> =
         lock.sample.iter().map(|s| fields(&s.metadata)).collect();
     let next = AtomicUsize::new(0);
-    let done: Mutex<Vec<Option<Result<Taken, String>>>> =
+    let watch = &shared.reach.watch;
+    let done: Mutex<Vec<Option<Result<Taken, Failed>>>> =
         Mutex::new(work.iter().map(|_| None).collect());
     let finished = AtomicUsize::new(0);
     let crashed = std::thread::scope(|scope| {
@@ -1108,24 +1364,29 @@ fn take_all(
             .map(|_| {
                 scope.spawn(|| loop {
                     let at = next.fetch_add(1, Ordering::Relaxed);
-                    if at >= work.len() || shared.reach.failed.load(Ordering::Acquire) {
+                    if at >= work.len() || watch.stop.load(Ordering::Acquire) {
                         break;
                     }
                     let input = &work[at];
-                    let taken = take(shared, &fields[input.sample], input, at);
+                    let taken = take(shared, &fields[input.sample], input, input.order);
                     match &taken {
                         Ok(taken) => {
                             let n = finished.fetch_add(1, Ordering::Relaxed) + 1;
+                            let name = input.file.at.rsplit('/').next().unwrap_or(&input.file.at);
                             println!(
-                                "  {n:>w$}/{}  {:>11} entries  {:>9} kept   {}",
+                                "  {n:>w$}/{}  {:>11} entries  {:>9} kept   {name}",
                                 work.len(),
                                 count(taken.entries),
                                 count(taken.rows as u64),
-                                input.file.at.rsplit('/').next().unwrap_or(&input.file.at),
                                 w = work.len().to_string().len()
                             );
+                            // Building on an earlier file, its holes are carried, not found again.
+                            let holes = taken.record["holes"].as_array().filter(|_| input.kept.is_none());
+                            for hole in holes.into_iter().flatten() {
+                                println!("    hole ({}): {}", hole["kind"].as_str().unwrap_or(""), hole["why"].as_str().unwrap_or(""));
+                            }
                         }
-                        Err(_) => shared.reach.failed.store(true, Ordering::Release),
+                        Err(_) => watch.stop.store(true, Ordering::Release),
                     }
                     done.lock().unwrap_or_else(|e| e.into_inner())[at] = Some(taken);
                 })
@@ -1137,21 +1398,26 @@ fn take_all(
             .fold(false, |crashed, reader| reader.join().is_err() || crashed)
     });
     if crashed {
-        return Err("a file reader stopped unexpectedly (a bug in rvr: please report it with the command you ran)".into());
+        return Err("a file reader stopped unexpectedly (a bug in rvr: please report it with the command you ran)".to_string().into());
     }
     let done = done.into_inner().unwrap_or_else(|e| e.into_inner());
     let errors = || done.iter().flatten().filter_map(|t| t.as_ref().err());
-    if let Some(error) = errors().find(|e| !e.contains(STOPPED)).or(errors().next()) {
+    if let Some(error) = errors().find(|e| e.fault != Fault::Stopped) {
+        return Err(error.clone());
+    }
+    if let Some(error) = errors().next() {
         return Err(error.clone());
     }
     done.into_iter()
         .collect::<Option<Result<Vec<_>, _>>>()
-        .ok_or("a file was left unread")?
+        .ok_or_else(|| Failed::from("a file was left unread".to_string()))?
 }
 
 /// What a press counts over every input.
 struct Tally {
     read: u64,
+    /// Every hole, with its sample.
+    holes: Vec<(String, Value)>,
     cutflow: Vec<u64>,
     /// The `data.files` records, in order.
     files: Vec<Value>,
@@ -1165,8 +1431,8 @@ fn joined(
     outputs: &[Output],
     kinds: &mut [Option<(Kind, bool)>],
     tally: &mut Tally,
-) -> Result<(usize, Map<String, Value>), String> {
-    let (mut rows, mut records) = (0, Map::new());
+) -> Result<(usize, Map<String, Value>, u64), String> {
+    let (mut rows, mut records, mut missing) = (0, Map::new(), 0);
     for input in inputs {
         let taken = taken.next().ok_or("a file was left unread")?;
         for ((index, found), (name, _, _)) in taken.kinds.into_iter().enumerate().zip(outputs) {
@@ -1181,13 +1447,17 @@ fn joined(
             *total += kept;
         }
         tally.read += taken.entries;
+        missing += taken.missing;
+        for hole in taken.record["holes"].as_array().into_iter().flatten() {
+            tally.holes.push((sample.name.clone(), hole.clone()));
+        }
         tally
             .files
             .push(json!({"sample": sample.name, "path": input.file.at, "rows": taken.rows}));
         records.insert(input.file.at.clone(), taken.record);
         rows += taken.rows;
     }
-    Ok((rows, records))
+    Ok((rows, records, missing))
 }
 
 /// A whole number with thousands separated, as rvr prints them.
@@ -1220,7 +1490,7 @@ pub fn toolchain() -> Value {
 pub(crate) fn connect(
     lock: &Lock,
     files: &[(usize, &File)],
-    failed: &Arc<AtomicBool>,
+    watch: &Arc<Watch>,
 ) -> Result<(Option<Storage>, Option<Datasets>, String), String> {
     let remote = files
         .iter()
@@ -1260,7 +1530,7 @@ pub(crate) fn connect(
         match Storage::new(proxy.path.as_deref(), proxy.ca.as_deref()) {
             Ok(mut storage) => {
                 storage.waits = READING;
-                storage.stop = failed.clone();
+                storage.watch = watch.clone();
                 (Some(storage), proxy.said)
             }
             Err(why) => (None, why),
@@ -1271,10 +1541,20 @@ pub(crate) fn connect(
     Ok((storage, datasets, offline))
 }
 
+/// What a press builds on, besides what it reads.
+pub enum On<'a> {
+    /// A full press.
+    Nothing,
+    /// The file at the target, for its kept events and every column whose definition is the same,
+    /// when the same study, cuts and event choice pressed it.
+    Earlier,
+    /// The file at the target but for its holes of these kinds: a fill.
+    Holes(&'a [String]),
+}
+
 /// Press a study's texts: check, read, keep, write `target` (through a temporary file beside
-/// it). Relative local paths in the lock are read from `base`; `events` says what each sample
-/// reads. With `reuse`, a file already at `target` that the same study, cuts and event choice
-/// pressed gives its kept events and every column whose definition is unchanged.
+/// it), building on what `on` says. Relative local paths in the lock are read from `base`;
+/// `events` says what each sample reads. How many holes the file has.
 pub fn press(
     texts: &Texts,
     base: &Path,
@@ -1282,16 +1562,23 @@ pub fn press(
     target: &Path,
     events: &dyn Fn(&Locked) -> Result<Events, String>,
     workers: usize,
-    reuse: bool,
-) -> Result<(), String> {
+    on: On,
+) -> Result<usize, String> {
     let started = std::time::Instant::now();
     let mut lock: Lock = toml::from_str(&texts.lock)
         .map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
     let source = &texts.recipe;
     let recipe = read_recipe(source)?;
     let asked = plan(&mut lock, events)?;
+    if let Some(sample) = lock.sample.iter().find(|s| s.metadata.contains_key("events_missing")) {
+        return Err(format!("{} has a key events_missing in samples.toml, a name rvr press gives what a file with holes misses: give it another name, and resolve again.", sample.name));
+    }
     let outputs = outputs(&recipe);
-    let mut earlier = match reuse
+    let filling = match on {
+        On::Holes(kinds) => Some(crate::fill::plan(target, texts, &lock, &asked, kinds)?),
+        _ => None,
+    };
+    let mut earlier = match matches!(on, On::Earlier)
         .then(|| crate::reuse::earlier(target, texts, &recipe, &lock, &asked, &outputs))
         .flatten()
     {
@@ -1316,6 +1603,21 @@ pub fn press(
             .collect(),
         None => outputs.clone(),
     };
+    // A file that holds the study as it is, but for its holes, is filled, not pressed again.
+    let same = |earlier: &&crate::reuse::Earlier| {
+        reading.is_empty() && earlier.file().header()["made"]["recipe"]["text"] == texts.recipe.as_str()
+    };
+    if let Some(earlier) = earlier.as_ref().filter(same) {
+        let holes = rowver::rvr::holes(earlier.file().header()).len();
+        if holes > 0 {
+            println!(
+                "{} holds this study as it is, with {}: rvr press --fill reads them again (rvr press --full presses everything again).",
+                target.display(),
+                some(holes, "hole", "holes")
+            );
+            return Ok(holes);
+        }
+    }
     let uncut = earlier.as_ref().map(|_| {
         let names: Vec<&String> = reading.iter().map(|(n, _, _)| *n).collect();
         crate::reuse::only(&recipe, &names)
@@ -1344,9 +1646,15 @@ pub fn press(
                     file,
                     chosen,
                     kept: None,
+                    before: None,
+                    ranges: None,
+                    order: 0,
                 })
         })
         .collect();
+    for (order, input) in work.iter_mut().enumerate() {
+        input.order = order;
+    }
     let kept: usize = earlier
         .iter()
         .flat_map(|e| e.kept.values())
@@ -1358,14 +1666,37 @@ pub fn press(
                 lock.sample[input.sample].name.clone(),
                 input.file.at.clone(),
             );
+            let record = &earlier.file().header()["made"]["files"][&key.0]["files"][&key.1];
+            input.before = Some(record.clone()).filter(|r| !r.is_null());
             input.kept = Some(earlier.kept.remove(&key).unwrap_or_default());
         }
     }
-    let failed = Arc::new(AtomicBool::new(false));
-    let files: Vec<(usize, &File)> = work.iter().map(|i| (i.sample, i.file)).collect();
-    let (storage, datasets, offline) = connect(&lock, &files, &failed)?;
+    // A fill reads only the holes asked; every other row is the file's own.
+    let (holes, laid) = match &filling {
+        Some(filling) => crate::fill::laid(&work, &lock, &filling.files, &filling.entries)?,
+        None => (Vec::new(), Vec::new()),
+    };
+    let reads = match &filling {
+        Some(_) => &holes,
+        None => &work,
+    };
+    let watch = Arc::new(Watch::default());
+    let files: Vec<(usize, &File)> = reads.iter().map(|i| (i.sample, i.file)).collect();
+    let (storage, datasets, offline) = connect(&lock, &files, &watch)?;
     let read: u64 = lock.sample.iter().map(|s| s.events_read).sum();
     match &earlier {
+        _ if filling.is_some() => {
+            let entries = crate::fill::ranged(reads);
+            let holes = reads.iter().flat_map(|i| i.ranges.iter().flatten()).count();
+            println!(
+                "Filling {}: reading {} of {}, {} entries, {} at a time; every other row is the file's own:",
+                target.display(),
+                some(holes, "hole", "holes"),
+                some(reads.len(), "file", "files"),
+                count(entries),
+                workers.min(reads.len()).max(1)
+            );
+        }
         Some(_) => {
             let names: Vec<&str> = reading.iter().map(|(n, _, _)| n.as_str()).collect();
             println!(
@@ -1405,23 +1736,40 @@ pub fn press(
             datasets: datasets.as_ref(),
             offline: &offline,
             dir: base,
-            failed,
+            watch,
             whole: true,
         },
         mentions: &mentions,
         spool: &spool,
     };
-    let mut taken = take_all(&shared, &lock, &work, workers)?.into_iter();
+    let read = take_all(&shared, &lock, reads, workers).map_err(|failed| ended(failed, target))?;
+    let mut taken = match &filling {
+        // A fill that read none of its holes again, each failing as before, leaves the file.
+        Some(filling) if read.iter().map(|t| t.missing).sum::<u64>() == crate::fill::ranged(reads) && crate::fill::same_kinds(filling, &lock, reads, &read) => {
+            let holes = rowver::rvr::holes(filling.file.header()).len();
+            let asked = reads.iter().flat_map(|i| i.ranges.iter().flatten()).count();
+            println!("None of the {} could be read: {} is as it was.", some(asked, "hole", "holes"), target.display());
+            return Ok(holes);
+        }
+        Some(filling) => {
+            let old = crate::fill::spool_old(&spool, &filling.file, &reading, &laid)?;
+            crate::fill::merged(&work, &lock, filling, &laid, read, &old)?
+        }
+        None => read,
+    }
+    .into_iter();
     let mut tally = Tally {
         read: 0,
+        holes: Vec::new(),
         cutflow: vec![0; recipe.keep.len()],
         files: Vec::new(),
     };
     let (mut samples, mut made_files) = (Vec::new(), Map::new());
     let mut kinds: Vec<Option<(Kind, bool)>> = vec![None; reading.len()];
+    let mut missing = Vec::new();
     for (index, sample) in lock.sample.iter().enumerate() {
         let inputs: Vec<&Input> = work.iter().filter(|i| i.sample == index).collect();
-        let (rows, records) = joined(
+        let (rows, records, lacks) = joined(
             sample, &inputs, &mut taken, &reading, &mut kinds, &mut tally,
         )?;
         samples.push(write::Sample {
@@ -1430,15 +1778,27 @@ pub fn press(
             rows,
         });
         let mut metadata = sample.metadata.clone();
-        metadata.insert("events_read".into(), sample.events_read.into());
+        metadata.insert("events_read".into(), (sample.events_read - lacks).into());
         metadata.insert("events_total".into(), sample.events_total.into());
+        missing.push(lacks);
         made_files.insert(
             sample.name.clone(),
             json!({"events": asked[index].record(), "files": records, "metadata": metadata}),
         );
     }
+    // What each sample misses is said only in a file with holes, and then on every sample.
+    if !tally.holes.is_empty() {
+        for (sample, lacks) in lock.sample.iter().zip(&missing) {
+            made_files[&sample.name]["metadata"]["events_missing"] = (*lacks).into();
+        }
+    }
     for line in datasets.iter().flat_map(Datasets::summary) {
         println!("  {line}");
+    }
+    if kinds.iter().any(Option::is_none) && tally.read == 0 {
+        if let Some((_, hole)) = tally.holes.first() {
+            return Err(format!("nothing could be read: every entry the press chose is in a hole, so no column's kind is known, and {} was not written. The first: {}", target.display(), hole["why"].as_str().unwrap_or("")));
+        }
     }
     for ((column, _, _), kind) in reading.iter().zip(&kinds) {
         if kind.is_none() {
@@ -1538,12 +1898,14 @@ pub fn press(
     }
     let bytes = std::fs::metadata(target).map_or(0, |m| m.len());
     if !built_on {
+        let read = match missing.iter().sum::<u64>() {
+            _ if filling.is_some() => format!("{} entries in the holes", count(tally.read)),
+            0 => format!("{} entries", count(tally.read)),
+            lacks => format!("{} of {} entries", count(tally.read), count(tally.read + lacks)),
+        };
         match recipe.keep.is_empty() {
-            true => println!(
-                "Read {} entries; with no cuts, every one is kept.",
-                count(tally.read)
-            ),
-            false => println!("Read {} entries; kept after each cut:", count(tally.read)),
+            true => println!("Read {read}; with no cuts, every one is kept."),
+            false => println!("Read {read}; kept after each cut:"),
         }
         for (cut, kept) in recipe.keep.iter().zip(&tally.cutflow) {
             println!("  {:30} {:>13}", cut.name, count(*kept));
@@ -1553,15 +1915,39 @@ pub fn press(
         let key = rowver::sign::public_key(secret);
         println!("Signed with your key {}", crate::key::short(&key));
     }
+    let with = match tally.holes.len() {
+        0 => ".".to_string(),
+        n => format!(", with {}:", some(n, "hole", "holes")),
+    };
     println!(
-        "Wrote {} ({} rows, {}, {:.1} MB) in {:.1} s.",
+        "Wrote {} ({} rows, {}, {:.1} MB) in {:.1} s{with}",
         target.display(),
         count(rows),
         some(outputs.len(), "column", "columns"),
         bytes as f64 / 1e6,
         started.elapsed().as_secs_f64()
     );
-    Ok(())
+    for (sample, hole) in &tally.holes {
+        let kind = hole["kind"].as_str().unwrap_or("");
+        println!("  {kind:11} {sample}  {}", hole["why"].as_str().unwrap_or(""));
+    }
+    if !tally.holes.is_empty() {
+        println!("rvr press --fill reads them again once they can be read.");
+    }
+    Ok(tally.holes.len())
+}
+
+/// What a press that ended without a file says: why, and for a failure that is not the files'
+/// own, that pressing again carries on.
+fn ended(failed: Failed, target: &Path) -> String {
+    match failed.fault {
+        Fault::Save => format!(
+            "{}. It is not a file's fault, so no file was made a hole of it: fix it, then press again ({} was not written).",
+            failed.why,
+            target.display()
+        ),
+        _ => failed.why,
+    }
 }
 
 #[cfg(test)]
@@ -1595,6 +1981,7 @@ mod tests {
             inner: Box::new(Asked(bytes.clone(), log.clone())),
             held: Mutex::new(Vec::new()),
             again: None,
+            seen: None,
             shown: String::new(),
         };
         held.hold(vec![(1_000, 100), (1_200, 100), (100_000, 50)])
@@ -1622,22 +2009,23 @@ mod tests {
     #[test]
     fn runs_are_every_chunk_or_the_chosen_entries_cut_at_gaps() {
         assert_eq!(
-            runs(120_000, None, GAP),
+            runs(0, 120_000, None, GAP),
             [(0, 50_000), (50_000, 100_000), (100_000, 120_000)]
         );
-        assert_eq!(runs(0, None, GAP), []);
+        assert_eq!(runs(0, 0, None, GAP), []);
+        assert_eq!(runs(70_000, 125_000, None, GAP), [(70_000, 120_000), (120_000, 125_000)]);
         let chosen = [3, 10, 5_000, 5_001, 60_000];
         assert_eq!(
-            runs(70_000, Some(&chosen), GAP),
+            runs(0, 70_000, Some(&chosen), GAP),
             [(3, 11), (5_000, 5_002), (60_000, 60_001)]
         );
         assert_eq!(
-            runs(70_000, Some(&chosen), CHUNK),
+            runs(0, 70_000, Some(&chosen), CHUNK),
             [(3, 5_002), (60_000, 60_001)]
         );
         let dense: Vec<u64> = (0..120_000).step_by(10).collect();
         assert_eq!(
-            runs(120_000, Some(&dense), GAP),
+            runs(0, 120_000, Some(&dense), GAP),
             [(0, 49_991), (50_000, 99_991), (100_000, 119_991)]
         );
     }

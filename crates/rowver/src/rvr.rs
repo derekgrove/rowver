@@ -28,6 +28,44 @@ pub use stack::{ancestry, Stack};
 
 const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
 
+/// The kinds of hole a file records (FORMAT.md, "Holes"); a reader refuses any other.
+pub const HOLE_KINDS: [&str; 6] = ["tape", "unreachable", "damaged", "gone", "changed", "refused"];
+
+/// Entries `[first, last)` of one file's tree that a press chose but could not read.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Hole {
+    pub sample: String,
+    pub file: String,
+    pub first: u64,
+    pub last: u64,
+    pub kind: String,
+    pub why: String,
+}
+
+/// How many entries the event choice chose in each of `holes(header)`.
+pub fn chosen_in_holes(header: &Value) -> Result<Vec<u64>> {
+    identity::chosen_in_holes(object(header, "data")?, object(header, "made")?)
+}
+
+/// Every hole a checked header records, in the order of `data.files`, then of entries.
+pub fn holes(header: &Value) -> Vec<Hole> {
+    let files = header["data"]["files"].as_array().into_iter().flatten();
+    files
+        .flat_map(|file| {
+            let (sample, at) = (file["sample"].as_str().unwrap_or(""), file["path"].as_str().unwrap_or(""));
+            let record = &header["made"]["files"][sample]["files"][at];
+            record["holes"].as_array().into_iter().flatten().map(move |hole| Hole {
+                sample: sample.into(),
+                file: at.into(),
+                first: hole["entries"][0].as_u64().unwrap_or(0),
+                last: hole["entries"][1].as_u64().unwrap_or(0),
+                kind: hole["kind"].as_str().unwrap_or("").into(),
+                why: hole["why"].as_str().unwrap_or("").into(),
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CheckpointSummary {
     pub rows: usize,

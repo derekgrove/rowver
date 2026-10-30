@@ -1,5 +1,6 @@
 //! Reading the committed fixture, and what readers refuse: a damaged header, another version,
-//! a broken `made`, an entry the event choice did not read, and a header changed after signing.
+//! a broken `made`, an entry the event choice did not read, holes that do not hold, and a header
+//! changed after signing.
 
 mod common;
 
@@ -194,4 +195,78 @@ fn a_signed_header_that_changed_is_refused() {
     assert!(why.contains("after it was signed"), "{why}");
     header["fixture_tool"]["more"] = 1.into();
     assert_eq!(opens(&header), Ok(()));
+}
+
+/// Holes put in the fixture's records, with `events_read` and `events_missing` as a press writes
+/// them (or left out), sealed, and the sample columns made again.
+fn holed(holes: &[(&str, &str, Value)], counts: Option<[(u64, u64); 2]>) -> Value {
+    let (mut header, _) = rebuilt(10.);
+    for (sample, file, list) in holes {
+        header["made"]["files"][*sample]["files"][*file]["holes"] = list.clone();
+    }
+    for (sample, (read, missing)) in ["A", "B"].iter().zip(counts.into_iter().flatten()) {
+        let metadata = &mut header["made"]["files"][*sample]["metadata"];
+        metadata["events_read"] = read.into();
+        metadata["events_missing"] = missing.into();
+    }
+    let names: Vec<String> = header["made"]["recipe"]["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap().to_owned())
+        .collect();
+    let taken: Vec<&str> = names.iter().map(String::as_str).collect();
+    header["data"]["sample_cols"] =
+        rowver::write::sample_cols(&["A", "B"], &header["made"]["files"], &taken)
+            .unwrap()
+            .into();
+    sealed(header)
+}
+
+#[test]
+fn holes_are_ranges_no_row_lies_in_and_the_counts_hold() {
+    let hole = |first: u64, last: u64, kind: &str| json!({"entries": [first, last], "kind": kind, "why": "basket 2 does not decompress"});
+    // A has 10 + 10 + 5 entries chosen; B 4 of 20 at random.
+    let empty = ("A", "fixture-empty.root", json!([hole(3, 7, "damaged")]));
+    assert_eq!(opens(&holed(std::slice::from_ref(&empty), Some([(21, 4), (4, 0)]))), Ok(()));
+    let header = holed(std::slice::from_ref(&empty), Some([(21, 4), (4, 0)]));
+    let found = rowver::rvr::holes(&header);
+    assert_eq!((found.len(), found[0].first, found[0].last, found[0].kind.as_str()), (1, 3, 7, "damaged"));
+    // Holes without the counts are a file a tool other than rvr press wrote.
+    assert_eq!(opens(&holed(std::slice::from_ref(&empty), None)), Ok(()));
+
+    let refused = |holes: &[(&str, &str, Value)], counts, said: &str| {
+        let why = opens(&holed(holes, counts)).unwrap_err();
+        assert!(why.contains(said), "{why}");
+    };
+    let counts = Some([(21, 4), (4, 0)]);
+    refused(&[("A", "fixture-empty.root", json!([hole(1, 5, "damaged"), hole(4, 6, "tape")]))], counts, "in order and apart");
+    refused(&[("A", "fixture-empty.root", json!([hole(3, 11, "damaged")]))], counts, "in order and apart");
+    refused(&[("A", "fixture-empty.root", json!([hole(3, 7, "lost")]))], counts, "not one of tape");
+    refused(&[("A", "fixture-empty.root", json!([]))], counts, "one hole or more");
+    refused(&[("A", "fixture-a2.root", json!([hole(4, 5, "damaged")]))], Some([(24, 1), (4, 0)]), "or one in a hole");
+    refused(std::slice::from_ref(&empty), Some([(21, 3), (4, 0)]), "events_missing");
+    // events_read is the press's own, which rvr validate checks; the reader leaves it.
+    assert_eq!(opens(&holed(std::slice::from_ref(&empty), Some([(22, 4), (4, 0)]))), Ok(()));
+    let mut uncounted = holed(std::slice::from_ref(&empty), Some([(21, 4), (4, 0)]));
+    uncounted["made"]["files"]["B"]["metadata"].as_object_mut().unwrap().shift_remove("events_missing");
+    assert!(opens(&uncounted).is_err(), "a pressed file with holes counts what each sample misses");
+
+    // A random choice's hole holds some of the chosen entries.
+    let chosen = rowver::choice::per_file(&[20], 4, 7).remove(0);
+    let unchosen = (0..20).find(|e| !chosen.contains(e)).unwrap();
+    refused(&[("B", "fixture-b.root", json!([hole(unchosen, unchosen + 1, "unreachable")]))], None, "holds no entry the press chose");
+
+    // Only a file never opened (one hole of every entry chosen, or one chosen nothing of) may
+    // lack its UUID.
+    let mut never = holed(&[("A", "fixture-empty.root", json!([hole(0, 10, "tape")]))], Some([(15, 10), (4, 0)]));
+    never["made"]["files"]["A"]["files"]["fixture-empty.root"]["uuid"] = Value::Null;
+    assert_eq!(opens(&sealed(never)), Ok(()));
+    let mut opened = holed(std::slice::from_ref(&empty), counts);
+    opened["made"]["files"]["A"]["files"]["fixture-empty.root"]["uuid"] = Value::Null;
+    assert!(opens(&sealed(opened)).unwrap_err().contains("no uuid"));
+    let (mut untaken, _) = rebuilt(10.);
+    untaken["made"]["files"]["B"]["files"]["fixture-b.root"]["take"] = 0.into();
+    untaken["made"]["files"]["B"]["files"]["fixture-b.root"]["uuid"] = Value::Null;
+    assert!(!opens(&sealed(untaken)).unwrap_err().contains("no uuid"), "take 0 may lack it");
 }

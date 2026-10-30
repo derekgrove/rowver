@@ -87,7 +87,7 @@ fn run(
         &target,
         &asked,
         workers,
-        false,
+        press::On::Nothing,
     )?;
     println!("Comparing the two with rvr diff:");
     Ok(crate::diff::main(

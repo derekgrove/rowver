@@ -9,8 +9,9 @@
 //! copies, since every copy holds the same bytes: the copies it failed at are left once another
 //! serves it, and a read that every copy fails is the read's own.
 
-use super::remote::{digest_once, HttpsFile, Storage};
+use super::remote::{digest_once, Digest, HttpsFile, Refusal, Storage};
 use super::resolve::{self, File};
+use crate::holes::{Failed, Fault, Seen};
 use grid_catalog::Did;
 use hep_root::ByteSource;
 use rucio_client::Location;
@@ -20,8 +21,6 @@ use std::time::Instant;
 
 /// How many copies a file's first question goes to at once.
 const RACED: usize = 3;
-/// The most files a refusal names before it counts the rest.
-const NAMED: usize = 3;
 
 /// What a press has learnt of the storages it reads from, by door (`host:port`).
 #[derive(Default)]
@@ -83,12 +82,15 @@ fn held(learnt: &Mutex<Learnt>) -> MutexGuard<'_, Learnt> {
 /// Where a press's dataset files can be read, and what it has learnt of their storages.
 pub struct Datasets {
     copies: HashMap<String, Vec<Location>>,
+    /// Why a file cannot be read at all: only on tape, not listed, or not the lock's file.
+    problems: HashMap<String, Failed>,
     learnt: Arc<Mutex<Learnt>>,
 }
 
 impl Datasets {
     /// Ask Rucio once where each file (with the dataset it is of) can be read, and check what it
-    /// says against the lock: the same size and adler32, and at least one copy on disk.
+    /// says against the lock: the same size and adler32, and at least one copy on disk. A file
+    /// that fails these is kept with why, and fails when it is opened.
     pub fn ask(rucio: &rucio_client::Rucio, files: &[(&File, &str)]) -> Result<Self, String> {
         let mut dids: Vec<Did> = files
             .iter()
@@ -103,52 +105,50 @@ impl Datasets {
                 e.message
             )
         })?;
-        let (mut copies, mut problems) = (HashMap::new(), Vec::new());
+        let (mut copies, mut problems) = (HashMap::new(), HashMap::new());
         for (file, dataset) in files {
             let lfn = file.lfn.as_deref().unwrap_or_default();
-            let Some(said) = found.get(lfn) else {
-                problems.push(format!("{lfn}: Rucio listed no copy of it. If the dataset has changed, run rvr samples resolve samples.toml and review the new lock."));
-                continue;
+            let problem = match found.get(lfn) {
+                None => Failed::new(Fault::Gone, format!("{lfn}: Rucio listed no copy of it. If the dataset has changed, run rvr samples resolve samples.toml and review the new lock.")),
+                Some(said) => match resolve::differs(file, said.bytes, said.adler32.as_deref()) {
+                    Some(how) => Failed::new(Fault::Changed, format!("{how}, by Rucio's record. Run rvr samples resolve samples.toml and review the new lock.")),
+                    None if said.copies.is_empty() => Failed::new(Fault::Tape, format!(
+                        "{lfn} has no copy that can be read now ({}). It needs a copy on disk: ask \
+                         for a Rucio rule that puts {dataset} on a disk storage, for example rucio \
+                         add-rule cms:{dataset} 1 T2_US_Nebraska.",
+                        said.left_out.join("; ")
+                    )),
+                    None => {
+                        copies.insert(lfn.to_owned(), said.copies.clone());
+                        continue;
+                    }
+                },
             };
-            if let Some(how) = resolve::differs(file, said.bytes, said.adler32.as_deref()) {
-                problems.push(format!("{how}, by Rucio's record. Run rvr samples resolve samples.toml and review the new lock."));
-            } else if said.copies.is_empty() {
-                problems.push(format!(
-                    "{lfn} has no copy that can be read now ({}). It needs a copy on disk: ask for \
-                     a Rucio rule that puts {dataset} on a disk storage, for example rucio \
-                     add-rule cms:{dataset} 1 T2_US_Nebraska.",
-                    said.left_out.join("; ")
-                ));
-            } else {
-                copies.insert(lfn.to_owned(), said.copies.clone());
-            }
+            problems.insert(lfn.to_owned(), problem);
         }
-        if problems.is_empty() {
-            return Ok(Datasets {
-                copies,
-                learnt: Default::default(),
-            });
-        }
-        let more = problems.len().saturating_sub(NAMED);
-        let mut said = problems
-            .into_iter()
-            .take(NAMED)
-            .collect::<Vec<_>>()
-            .join("\n");
-        if more > 0 {
-            said += &format!("\n... and {more} more files like these");
-        }
-        Err(said)
+        Ok(Datasets {
+            copies,
+            problems,
+            learnt: Default::default(),
+        })
     }
 
-    /// Open a dataset file at the first copy that answers with the lock's size and adler32; a
-    /// failure says whether every copy failed as a busy storage does, so asking again may pass.
-    pub fn open(&self, storage: &Storage, file: &File) -> Result<Reader, (String, bool)> {
+    /// Why a file cannot be read at all, when Rucio's answer said so.
+    pub fn problem(&self, file: &File) -> Option<&Failed> {
+        self.problems.get(file.lfn.as_deref().unwrap_or_default())
+    }
+
+    /// Open a dataset file at the first copy that answers with the lock's size and adler32,
+    /// noting the failed requests of its reads in `seen`; a failure says what it is, and whether
+    /// a copy failed as a busy storage does (so that asking again may pass).
+    pub fn open(&self, storage: &Storage, file: &File, seen: &Arc<Seen>) -> Result<Reader, Refusal> {
+        if let Some(problem) = self.problem(file) {
+            return Err(Refusal::lasting(problem.fault, &problem.why));
+        }
         let lfn = file.lfn.as_deref().unwrap_or_default();
-        let listed = self
-            .copies
-            .get(lfn)
-            .ok_or_else(|| (format!("{}: Rucio was not asked where it is", file.at), false))?;
+        let listed = self.copies.get(lfn).ok_or_else(|| {
+            Refusal::lasting(Fault::Mistake, format!("{}: Rucio was not asked where it is (a bug in rvr: please report it)", file.at))
+        })?;
         let (order, first) = {
             let learnt = held(&self.learnt);
             let order = learnt.order(listed);
@@ -157,12 +157,13 @@ impl Datasets {
         };
         let mut readers: Vec<Box<dyn ByteSource + Send + Sync>> = Vec::new();
         for copy in &order {
-            let reader = HttpsFile::new(storage, &copy.url, file.bytes).map_err(|why| (why, false))?;
-            readers.push(Box::new(reader));
+            let reader = HttpsFile::new(storage, &copy.url, file.bytes)
+                .map_err(|why| Refusal::lasting(Fault::Mistake, why))?;
+            readers.push(Box::new(reader.seeing(seen)));
         }
         let agent = storage.agent();
         let ask: Ask = Arc::new(move |url: &str| digest_once(&agent, url));
-        Copies::open(file, order, readers, ask, self.learnt.clone(), first)
+        Copies::open(file, order, readers, ask, self.learnt.clone(), first, seen.clone())
     }
 }
 
@@ -202,9 +203,8 @@ impl Datasets {
     }
 }
 
-/// Ask a copy's storage for the file's size and adler32 at an address; a failure says why, and
-/// whether it may pass when asked again.
-type Ask = Arc<dyn Fn(&str) -> Result<(Option<u64>, Option<String>), (String, bool)> + Send + Sync>;
+/// Ask a copy's storage for the file's size and adler32 at an address.
+type Ask = Arc<dyn Fn(&str) -> Result<Digest, Refusal> + Send + Sync>;
 
 /// One dataset file and the copies it can be read from.
 struct Copies {
@@ -219,10 +219,11 @@ struct Copies {
     finished: std::sync::atomic::AtomicBool,
     /// The copy being read.
     current: Mutex<usize>,
-    /// Each copy left, by its place in `order`, with why and whether it may pass when asked
-    /// again; shared with the questions in flight.
-    gone: Arc<Mutex<Vec<(usize, String, bool)>>>,
+    /// Each copy left, by its place in `order`, with why; shared with the questions in flight.
+    gone: Arc<Mutex<Vec<(usize, Refusal)>>>,
     learnt: Arc<Mutex<Learnt>>,
+    /// What its copies' failed requests said, the last.
+    seen: Arc<Seen>,
 }
 
 impl Copies {
@@ -234,7 +235,8 @@ impl Copies {
         ask: Ask,
         learnt: Arc<Mutex<Learnt>>,
         first: Vec<usize>,
-    ) -> Result<Reader, (String, bool)> {
+        seen: Arc<Seen>,
+    ) -> Result<Reader, Refusal> {
         let bytes = readers.iter().map(|_| Default::default()).collect();
         let copies = Copies {
             file: file.clone(),
@@ -246,6 +248,7 @@ impl Copies {
             current: Mutex::new(usize::MAX),
             gone: Default::default(),
             learnt,
+            seen,
         };
         let mut current = copies.current();
         copies.choose(&mut current, first)?;
@@ -257,35 +260,35 @@ impl Copies {
         self.current.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn gone(&self) -> MutexGuard<'_, Vec<(usize, String, bool)>> {
+    fn gone(&self) -> MutexGuard<'_, Vec<(usize, Refusal)>> {
         self.gone.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Whether a copy holds the file the lock names, by its storage's size and adler32 (the
     /// adler32 only when the storage gives one); why not, when it does not.
-    fn holds(ask: &Ask, file: &File, copy: &Location) -> Result<(), (String, bool)> {
+    fn holds(ask: &Ask, file: &File, copy: &Location) -> Result<(), Refusal> {
         let (bytes, adler32) = ask(&copy.url)?;
         if bytes.is_none() {
-            return Err(("its storage did not say how big the file is".into(), false));
+            return Err(Refusal::lasting(Fault::Unreachable, "its storage did not say how big the file is"));
         }
         match resolve::differs(file, bytes, adler32.as_deref()) {
-            Some(how) => Err((format!("it is not the file the lock names ({how})"), false)),
+            Some(how) => Err(Refusal::lasting(Fault::Changed, format!("it is not the file the lock names ({how})"))),
             None => Ok(()),
         }
     }
 
     /// Leave a copy for good, counting the failure against its storage.
-    fn leave(&self, index: usize, why: &str, busy: bool) {
-        let said = failed(&self.learnt, &self.order[index], why);
-        self.gone().push((index, said, busy));
+    fn leave(&self, index: usize, refusal: Refusal) {
+        let why = failed(&self.learnt, &self.order[index], &refusal.why);
+        self.gone().push((index, Refusal { why, ..refusal }));
     }
 
     /// Choose the copy to read: ask the copies `first` names at once, and take the first to
     /// answer with the lock's size and adler32; then the others not yet left, one at a time.
-    fn choose(&self, current: &mut usize, first: Vec<usize>) -> Result<(), (String, bool)> {
+    fn choose(&self, current: &mut usize, first: Vec<usize>) -> Result<(), Refusal> {
         let mut asked = first;
         loop {
-            let gone: Vec<usize> = self.gone().iter().map(|(index, _, _)| *index).collect();
+            let gone: Vec<usize> = self.gone().iter().map(|(index, _)| *index).collect();
             asked.retain(|i| !gone.contains(i));
             if asked.is_empty() {
                 asked.extend((0..self.order.len()).find(|i| !gone.contains(i)));
@@ -293,9 +296,22 @@ impl Copies {
             if asked.is_empty() {
                 *current = self.order.len();
                 let gone = self.gone();
-                let why: Vec<&str> = gone.iter().map(|(_, why, _)| why.as_str()).collect();
+                let why: Vec<&str> = gone.iter().map(|(_, refused)| refused.why.as_str()).collect();
                 let said = format!("{}: no copy of it could be read: {}", self.file.at, why.join("; "));
-                return Err((said, gone.iter().all(|(_, _, busy)| *busy)));
+                let faults: Vec<Fault> = gone.iter().map(|(_, refused)| refused.fault).collect();
+                let all = |one: Fault| faults.iter().all(|f| *f == one);
+                // A copy that is busy may serve when asked again. If none does, every copy refusing
+                // it with a valid proxy is refused; else a copy that is not the lock's file says
+                // the lock is out of date; else what every copy says, or that none could be reached.
+                let busy = gone.iter().any(|(_, refused)| refused.busy);
+                let fault = match () {
+                    _ if all(Fault::Refused) => Fault::Refused,
+                    _ if faults.contains(&Fault::Changed) => Fault::Changed,
+                    _ if all(Fault::Gone) => Fault::Gone,
+                    _ if all(Fault::Save) => Fault::Save,
+                    _ => Fault::Unreachable,
+                };
+                return Err(Refusal { why: said, fault, busy });
             }
             let (send, answers) = mpsc::channel();
             // Each answer is timed, or counted and left, as it comes, even after another copy
@@ -312,11 +328,11 @@ impl Copies {
                             let took = started.elapsed().as_millis();
                             held(&learnt).timed.insert(copy.door.clone(), took);
                         }
-                        Err((why, busy)) => {
-                            let said = failed(&learnt, &copy, why);
+                        Err(refused) => {
+                            let why = failed(&learnt, &copy, &refused.why);
                             gone.lock()
                                 .unwrap_or_else(PoisonError::into_inner)
-                                .push((index, said, *busy));
+                                .push((index, Refusal { why, ..refused.clone() }));
                         }
                     }
                     let _ = send.send((index, answer.is_ok()));
@@ -356,24 +372,37 @@ impl Copies {
         };
         let mut current = self.current();
         let mut failed = vec![(index, error.to_string())];
-        let gone: Vec<usize> = self.gone().iter().map(|(at, _, _)| *at).collect();
+        let mut errors = vec![error];
+        let gone: Vec<usize> = self.gone().iter().map(|(at, _)| *at).collect();
         for other in (0..self.order.len()).filter(|at| *at != index && !gone.contains(at)) {
-            if let Err((why, busy)) = Copies::holds(&self.ask, &self.file, &self.order[other]) {
-                self.leave(other, &why, busy);
+            if let Err(refused) = Copies::holds(&self.ask, &self.file, &self.order[other]) {
+                self.leave(other, refused);
                 continue;
             }
             match read(self.readers[other].as_ref()) {
                 Ok(value) => {
-                    for (at, why) in &failed {
-                        self.leave(*at, why, true);
+                    for (at, why) in failed {
+                        let refused = Refusal { why, fault: Fault::Unreachable, busy: true };
+                        self.leave(at, refused);
                     }
                     *current = other;
                     return Ok(served(other, value));
                 }
-                Err(error) => failed.push((other, error.to_string())),
+                Err(failed_too) => {
+                    failed.push((other, failed_too.to_string()));
+                    errors.push(failed_too);
+                }
             }
         }
-        Err(error)
+        // A copy that failed as a busy storage does may serve when asked again: its failure is
+        // the read's, and noted as such. Otherwise the last copy's, which `seen` names.
+        match errors.iter().position(|e| matches!(e, hep_root::Error::Remote(_))) {
+            Some(busy) => {
+                self.seen.note(Fault::Unreachable);
+                Err(errors.swap_remove(busy))
+            }
+            None => Err(errors.pop().expect("one read failed")),
+        }
     }
 }
 
@@ -518,7 +547,7 @@ mod tests {
         answers: [Result<u64, &'static str>; 4],
         good: [isize; 4],
         first: Vec<usize>,
-    ) -> Result<Reader, (String, bool)> {
+    ) -> Result<Reader, Refusal> {
         let order: Vec<Location> = ["A", "B", "C", "D"]
             .iter()
             .map(|rse| copy(rse, &format!("{}:1", rse.to_lowercase())))
@@ -544,18 +573,20 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
             if downs[at].load(std::sync::atomic::Ordering::Relaxed) {
-                return Err(("it went down".to_owned(), true));
+                return Err(Refusal { why: "it went down".into(), fault: Fault::Unreachable, busy: true });
             }
-            answers[at]
-                .map(|bytes| (Some(bytes), None))
-                .map_err(|why| (why.to_owned(), why == "busy"))
+            answers[at].map(|bytes| (Some(bytes), None)).map_err(|why| Refusal {
+                why: why.to_owned(),
+                fault: if why == "refused" { Fault::Refused } else { Fault::Unreachable },
+                busy: why == "busy" || why == "refused",
+            })
         });
         let file = File {
             at: "root://global//store/f.root".into(),
             bytes: 8,
             ..toml::from_str("at = \"x\"\nbytes = 0").unwrap()
         };
-        Copies::open(&file, order, readers, ask, Default::default(), first)
+        Copies::open(&file, order, readers, ask, Default::default(), first, Default::default())
     }
 
     #[test]
@@ -599,9 +630,9 @@ mod tests {
         let gone = reader.0.gone();
         assert_eq!(gone.len(), 2);
         assert!(
-            gone[0].1.contains("the connection was reset"),
+            gone[0].1.why.contains("the connection was reset"),
             "{}",
-            gone[0].1
+            gone[0].1.why
         );
     }
 
@@ -628,8 +659,8 @@ mod tests {
 
     #[test]
     fn a_file_no_copy_can_serve_says_why_for_each() {
-        let (why, busy) = opened(
-            [Err("down"), Err("refused"), Ok(7), Err("gone")],
+        let failed = opened(
+            [Err("down"), Err("denied"), Ok(7), Err("gone")],
             [0; 4],
             vec![0, 1, 2],
         )
@@ -637,17 +668,27 @@ mod tests {
         .unwrap();
         for said in [
             "A (a:1): down",
-            "B (b:1): refused",
+            "B (b:1): denied",
             "C (c:1): it is not the file",
             "D (d:1): gone",
         ] {
-            assert!(why.contains(said), "{why}");
+            assert!(failed.why.contains(said), "{}", failed.why);
         }
-        assert!(!busy, "a copy that is not the file stays so");
-        let (_, busy) = opened([Err("busy"), Err("busy"), Err("busy"), Err("busy")], [0; 4], vec![0])
+        assert!(!failed.busy, "a copy that is not the file stays so");
+        assert_eq!(failed.fault, Fault::Changed);
+        let failed = opened([Err("busy"), Err("busy"), Err("busy"), Err("busy")], [0; 4], vec![0])
             .err()
             .unwrap();
-        assert!(busy, "every copy busy: asking again may pass");
+        assert!(failed.busy, "every copy busy: asking again may pass");
+        let failed = opened([Ok(7), Err("busy"), Err("down"), Err("down")], [0; 4], vec![0, 1])
+            .err()
+            .unwrap();
+        assert!(failed.busy, "one busy copy may serve it yet: asked again");
+        assert_eq!(failed.fault, Fault::Changed, "if none does, the copy not the lock's file names it");
+        let failed = opened([Err("refused"), Err("refused"), Err("refused"), Err("refused")], [0; 4], vec![0])
+            .err()
+            .unwrap();
+        assert_eq!(failed.fault, Fault::Refused, "every copy refuses it with a proxy");
         let reader = opened(
             [Ok(8), Err("down"), Err("down"), Err("down")],
             [0; 4],

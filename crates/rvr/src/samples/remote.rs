@@ -4,6 +4,7 @@
 
 use hep_root::ByteSource;
 use std::collections::HashMap;
+use crate::holes::{Failed, Fault, Seen};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -172,6 +173,12 @@ pub const ASKING: &[u64] = &[5, 15, 30];
 /// What a read answers when it stops waiting because another input failed.
 pub const STOPPED: &str = "Another input failed";
 
+/// What the reads of one press share while they wait: `stop` ends every wait.
+#[derive(Default)]
+pub struct Watch {
+    pub stop: AtomicBool,
+}
+
 /// Why a failed request may succeed when asked again (refused or failed at a busy storage, or
 /// lost on the way), or `None` when it will not: a 401 or 403 without a proxy, a certificate
 /// not trusted, a name that does not resolve, a URL that cannot be asked.
@@ -193,10 +200,11 @@ fn passing(error: &ureq::Error, proxied: bool) -> Option<String> {
     }
 }
 
-/// `ask` until it succeeds, retrying after each of `waits` while `passing` says it may, until `stop`.
+/// `ask` until it succeeds, retrying after each of `waits` while `passing` says it may, until the
+/// watch stops.
 pub fn patiently<T, E>(
     waits: &[u64],
-    stop: &AtomicBool,
+    watch: &Watch,
     what: &str,
     passing: impl Fn(&E) -> Option<String>,
     mut ask: impl FnMut() -> Result<T, E>,
@@ -216,7 +224,7 @@ pub fn patiently<T, E>(
             waits.len() + 1
         );
         for _ in 0..*wait {
-            if stop.load(Ordering::Acquire) {
+            if watch.stop.load(Ordering::Acquire) {
                 return Err(error);
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -237,10 +245,10 @@ pub fn waited(waits: &[u64]) -> String {
     }
 }
 
-/// A remote read, retried while it fails with `Error::Remote`; `STOPPED` once `stop` is set.
+/// A remote read, retried while it fails with `Error::Remote`; `STOPPED` once the watch stops.
 pub fn read_again<T>(
     waits: &[u64],
-    stop: &AtomicBool,
+    watch: &Watch,
     shown: &str,
     read: impl FnMut() -> hep_root::Result<T>,
 ) -> hep_root::Result<T> {
@@ -253,8 +261,8 @@ pub fn read_again<T>(
         ),
         _ => None,
     };
-    patiently(waits, stop, name, passing, read).map_err(|e| match e {
-        _ if stop.load(Ordering::Acquire) => hep_root::Error::Remote(STOPPED.into()),
+    patiently(waits, watch, name, passing, read).map_err(|e| match e {
+        _ if watch.stop.load(Ordering::Acquire) => hep_root::Error::Remote(STOPPED.into()),
         hep_root::Error::Remote(why) if !waits.is_empty() => {
             hep_root::Error::Remote(format!("{why} ({})", waited(waits)))
         }
@@ -269,8 +277,8 @@ pub struct Storage {
     pub proxy: Option<String>,
     /// How long a listing or digest that failed waits before it is asked again (`ASKING`).
     pub waits: &'static [u64],
-    /// Set to end those waits early (a press sets it when an input fails).
-    pub stop: Arc<AtomicBool>,
+    /// What ends those waits early (a press's, which stops when an input fails).
+    pub watch: Arc<Watch>,
 }
 
 impl Storage {
@@ -289,7 +297,7 @@ impl Storage {
             listed: Mutex::new(HashMap::new()),
             proxy: proxy.map(str::to_owned),
             waits: ASKING,
-            stop: Default::default(),
+            watch: Default::default(),
         })
     }
 
@@ -314,7 +322,7 @@ impl Storage {
         let proxied = self.proxy.is_some();
         let reply = patiently(
             self.waits,
-            &self.stop,
+            &self.watch,
             folder,
             |e| passing(e, proxied),
             || {
@@ -328,7 +336,7 @@ impl Storage {
                 .1
             },
         );
-        if reply.is_err() && self.stop.load(Ordering::Acquire) {
+        if reply.is_err() && self.watch.stop.load(Ordering::Acquire) {
             return Err(format!("{folder}: {STOPPED}"));
         }
         let text = match reply {
@@ -364,7 +372,7 @@ impl Storage {
             url,
             self.waits,
             self.proxy.is_some(),
-            &self.stop,
+            &self.watch,
         )
     }
 
@@ -404,28 +412,72 @@ pub fn digest(
     url: &str,
     waits: &[u64],
     proxied: bool,
-    stop: &AtomicBool,
-) -> Result<(Option<u64>, Option<String>), String> {
-    let (origin, path) = door(url)?;
-    let at = format!("{origin}{path}");
-    let reply = patiently(waits, stop, url, |e| passing(e, proxied), || head(agent, &at));
-    if reply.is_err() && stop.load(Ordering::Acquire) {
-        return Err(format!("{url}: {STOPPED}"));
-    }
-    digested(url, reply)
+    watch: &Watch,
+) -> Result<Digest, String> {
+    digest_seen(agent, url, waits, proxied, watch).map_err(|failed| failed.why)
 }
 
-/// `digest` asked once with a proxy; a failure says whether it may pass when asked again.
-pub fn digest_once(
+/// A file's size and adler32, as its storage reports them.
+pub type Digest = (Option<u64>, Option<String>);
+
+/// As `digest`, a failure also saying what it means for the file.
+pub fn digest_seen(
     agent: &ureq::Agent,
     url: &str,
-) -> Result<(Option<u64>, Option<String>), (String, bool)> {
-    let (origin, path) = door(url).map_err(|why| (why, false))?;
+    waits: &[u64],
+    proxied: bool,
+    watch: &Watch,
+) -> Result<Digest, Failed> {
+    let (origin, path) = door(url).map_err(Failed::from)?;
+    let at = format!("{origin}{path}");
+    let reply = patiently(waits, watch, url, |e| passing(e, proxied), || head(agent, &at));
+    if reply.is_err() && watch.stop.load(Ordering::Acquire) {
+        return Err(Failed::new(Fault::Stopped, format!("{url}: {STOPPED}")));
+    }
+    let seen = reply.as_ref().err().map_or(Fault::Unreachable, |e| fault(e, proxied));
+    digested(url, reply).map_err(|why| Failed::new(seen, why))
+}
+
+/// Why a file was not read, what that means for it, and whether asking again may pass.
+#[derive(Clone, Debug)]
+pub struct Refusal {
+    /// What failed, in words.
+    pub why: String,
+    /// What it means for the file.
+    pub fault: Fault,
+    /// Whether asking again may pass.
+    pub busy: bool,
+}
+
+impl Refusal {
+    /// A refusal that asking again does not mend, answered.
+    pub fn lasting(fault: Fault, why: impl Into<String>) -> Self {
+        Refusal { why: why.into(), fault, busy: false }
+    }
+}
+
+/// `digest` asked once with a proxy; a failure says what it means for the file.
+pub fn digest_once(agent: &ureq::Agent, url: &str) -> Result<Digest, Refusal> {
+    let (origin, path) = door(url).map_err(|why| Refusal::lasting(Fault::Mistake, why))?;
     let reply = head(agent, &format!("{origin}{path}"));
-    let busy = reply
-        .as_ref()
-        .is_err_and(|e| passing(e, true).is_some());
-    digested(url, reply).map_err(|why| (why, busy))
+    let fault = reply.as_ref().err().map_or(Fault::Unreachable, |e| fault(e, true));
+    let busy = reply.as_ref().is_err_and(|e| passing(e, true).is_some());
+    digested(url, reply).map_err(|why| Refusal { why, fault, busy })
+}
+
+/// What a failed request means for its file.
+// Gone (404), refused (403 with a proxy), not the file's fault (401; a 403 with no proxy, which
+// needs one; a certificate rvr does not trust), or unreachable.
+pub fn fault(error: &ureq::Error, proxied: bool) -> Fault {
+    match error {
+        ureq::Error::Status(404 | 410, _) => Fault::Gone,
+        ureq::Error::Status(401, _) => Fault::Save,
+        ureq::Error::Status(403, _) if proxied => Fault::Refused,
+        ureq::Error::Status(403, _) => Fault::Save,
+        ureq::Error::Status(..) => Fault::Unreachable,
+        ureq::Error::Transport(failure) if grid_trust::tls_error(failure).is_some() => Fault::Save,
+        ureq::Error::Transport(_) => Fault::Unreachable,
+    }
 }
 
 /// One HEAD asking for the adler32, redirects followed.
@@ -478,6 +530,8 @@ pub struct HttpsFile {
     /// Requests made and bytes read, for the timing the resolver reports.
     pub requests: std::sync::atomic::AtomicUsize,
     pub bytes: std::sync::atomic::AtomicUsize,
+    /// What its last failed request said, shared with whoever reads through it.
+    pub seen: Arc<Seen>,
 }
 
 impl HttpsFile {
@@ -493,7 +547,14 @@ impl HttpsFile {
             proxied: storage.proxy.is_some(),
             requests: Default::default(),
             bytes: Default::default(),
+            seen: Default::default(),
         })
+    }
+
+    /// The same, noting its failed requests in `seen`.
+    pub fn seeing(mut self, seen: &Arc<Seen>) -> Self {
+        self.seen = seen.clone();
+        self
     }
 }
 
@@ -549,6 +610,7 @@ impl HttpsFile {
     /// A failed request as hep-root takes it: `Remote` when asking again may mend it (see
     /// `read_again`), the file gone, or any other failure, which waiting does not mend.
     fn failed(&self, error: &ureq::Error) -> hep_root::Error {
+        self.seen.note(fault(error, self.proxied));
         match error {
             ureq::Error::Status(404 | 410, _) => {
                 hep_root::Error::SourceChanged(format!("{} no longer exists", self.shown))
@@ -738,18 +800,25 @@ impl ByteSource for HttpsFile {
                 reply
                     .into_reader()
                     .read_exact(buf)
-                    .map_err(|e| hep_root::Error::Remote(format!("{}: {e}", self.shown)))
+                    .map_err(|e| {
+                        self.seen.note(Fault::Unreachable);
+                        hep_root::Error::Remote(format!("{}: {e}", self.shown))
+                    })
             }
             Ok(reply) if (300..400).contains(&reply.status()) => {
+                self.seen.note(Fault::Unreachable);
                 Err(hep_root::Error::Remote(format!(
                     "{}: its storage redirected more than four times, or without saying where to",
                     self.shown
                 )))
             }
-            Ok(reply) => Err(self.lasting(format!(
-                "asked for bytes {range}, got status {} (the storage ignored the range)",
-                reply.status()
-            ))),
+            Ok(reply) => Err({
+                self.seen.note(Fault::Unreachable);
+                self.lasting(format!(
+                    "asked for bytes {range}, got status {} (the storage ignored the range)",
+                    reply.status()
+                ))
+            }),
             Err(e) => Err(self.failed(&e)),
         }
     }
@@ -839,7 +908,6 @@ mod tests {
         }
     }
 
-    static NEVER: AtomicBool = AtomicBool::new(false);
 
     #[test]
     fn a_read_refused_by_a_busy_storage_is_asked_again_until_the_waits_run_out() {
@@ -849,12 +917,13 @@ mod tests {
                 "https://door.example/f.root: its storage answered 403 Forbidden".into(),
             )
         };
+        let never = Watch::default();
         let tries = std::cell::Cell::new(0);
-        assert!(read_again(&[0, 0, 0], &NEVER, shown, flaky(2, busy, &tries)).is_ok());
+        assert!(read_again(&[0, 0, 0], &never, shown, flaky(2, busy, &tries)).is_ok());
         assert_eq!(tries.get(), 3);
 
         let tries = std::cell::Cell::new(0);
-        let error = read_again(&[0, 0], &NEVER, shown, flaky(9, busy, &tries)).unwrap_err();
+        let error = read_again(&[0, 0], &never, shown, flaky(9, busy, &tries)).unwrap_err();
         assert_eq!(tries.get(), 3);
         let said = error.to_string();
         assert!(said.ends_with("403 Forbidden (3 tries over 0 s)"), "{said}");
@@ -862,11 +931,12 @@ mod tests {
         // A failure waiting does not mend is not asked again.
         let lasting = || hep_root::Error::Io(std::io::Error::other("UnknownIssuer"));
         let tries = std::cell::Cell::new(0);
-        assert!(read_again(&[0, 0], &NEVER, shown, flaky(1, lasting, &tries)).is_err());
+        assert!(read_again(&[0, 0], &never, shown, flaky(1, lasting, &tries)).is_err());
         assert_eq!(tries.get(), 1);
 
         // Another input failing ends the waiting.
-        let stop = AtomicBool::new(true);
+        let stop = Watch::default();
+        stop.stop.store(true, Ordering::Relaxed);
         let tries = std::cell::Cell::new(0);
         let error = read_again(&[1, 1], &stop, shown, flaky(9, busy, &tries)).unwrap_err();
         assert_eq!(

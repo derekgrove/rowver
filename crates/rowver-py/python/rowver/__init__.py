@@ -112,6 +112,19 @@ class File:
         """Every input file read: its sample, path, and the rows it gave."""
         return self.header["data"]["files"]
 
+    @property
+    def holes(self):
+        """What the press chose but could not read: {sample, file, entries, kind, why} per hole."""
+        made = self.header["made"]["files"]
+        return [{"sample": f["sample"], "file": f["path"], "entries": tuple(h["entries"]),
+                 "kind": h["kind"], "why": h["why"]}
+                for f in self.files for h in made[f["sample"]]["files"][f["path"]].get("holes", [])]
+
+    @property
+    def complete(self):
+        """Whether the press read every entry it chose: the file has no holes."""
+        return not self.holes
+
     def __len__(self):
         return self.rows
 

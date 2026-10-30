@@ -133,6 +133,34 @@ class Pressed(unittest.TestCase):
             rowver.open(self.dir / "missing.rvr")
         self.assertEqual(rowver.Error.__module__, "rowver")
 
+    def test_a_complete_file_has_no_holes(self):
+        self.assertEqual((self.file.complete, self.file.holes), (True, []))
+
+
+class Holed(unittest.TestCase):
+    """A sample of two files, one deleted after the lock was written: a file with one hole."""
+
+    def test_the_hole_says_which_entries_of_which_file_and_why(self):
+        dir = pathlib.Path(tempfile.mkdtemp(prefix="rowver-py-")) / "holed"
+        dir.mkdir()
+        try:
+            os.environ["RVR_CONFIG"] = str(dir.parent / "config")
+            for name in ("flat_a.root", "flat_b.root"):
+                shutil.copy(FIXTURES / "uproot_flat.root", dir / name)
+            (dir / "samples.toml").write_text(SAMPLES.replace("uproot_flat.root", "flat_*.root"))
+            (dir / "recipe.toml").write_text(RECIPE)
+            assert rvr(["samples", "resolve", str(dir / "samples.toml")]) == 0
+            (dir / "flat_b.root").unlink()
+            self.assertEqual(rvr(["press", str(dir)]), 3)
+            f = rowver.open(dir / "holed.rvr")
+            self.assertFalse(f.complete)
+            [hole] = f.holes
+            self.assertEqual((hole["sample"], hole["entries"], hole["kind"]), ("flat", (0, 5), "gone"))
+            self.assertTrue(hole["file"].endswith("flat_b.root") and "no longer exists" in hole["why"])
+            self.assertEqual(f.sample_columns["events_missing"], [5])
+        finally:
+            shutil.rmtree(dir.parent)
+
 
 if __name__ == "__main__":
     unittest.main()

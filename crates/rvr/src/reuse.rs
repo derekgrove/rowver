@@ -9,6 +9,7 @@ use crate::samples::resolve::Lock;
 use crate::samples::spec::Events;
 use rowver::rvr::Reader;
 use rvr_recipe::{names, Expression, Recipe};
+use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
@@ -125,6 +126,41 @@ impl Earlier {
     }
 }
 
+/// Whether a file's header is a press of this study's samples by this build of rvr, or why not.
+pub fn pressed_alike(header: &Value, texts: &crate::press::Texts, lock: &Lock) -> Result<(), String> {
+    let made = &header["made"];
+    if header.get("derived").is_some() {
+        return Err("it is a derived file, not a press".into());
+    }
+    if made["samples"]["text"].as_str() != Some(texts.samples.as_str()) {
+        return Err("samples.toml has changed since".into());
+    }
+    let samples = header["data"]["samples"].as_array().ok_or("it has no samples")?;
+    let names: Vec<&str> = samples.iter().filter_map(|s| s["name"].as_str()).collect();
+    if names != lock.sample.iter().map(|s| s.name.as_str()).collect::<Vec<_>>() {
+        return Err("its samples are not the lock's".into());
+    }
+    same_build(made)
+}
+
+/// Whether this build of rvr made a file (its `made`), or why not.
+// Columns computed by another build (another version, commit or compiler) are not copied: the
+// new file names this build.
+pub fn same_build(made: &Value) -> Result<(), String> {
+    if made["toolchain"] != crate::press::toolchain() {
+        return Err(format!(
+            "it was made by another build of rvr ({} at {})",
+            made["toolchain"]["rvr"].as_str().unwrap_or("?"),
+            made["toolchain"]["commit"].as_str().unwrap_or("?")
+        ));
+    }
+    // A build of changed code whose changes could not be hashed names no one build.
+    if made["toolchain"]["commit"].as_str().is_none_or(|commit| commit.ends_with("-dirty")) {
+        return Err("it was made by an rvr built from changed code that left no record of the changes".into());
+    }
+    Ok(())
+}
+
 /// What the file at `path` gives this press: nothing when there is none, or why it cannot.
 pub fn earlier(
     path: &Path,
@@ -150,12 +186,9 @@ fn read(
     let header = file.header();
     let made = &header["made"];
     let text = |key: &str| made[key]["text"].as_str();
-    if header.get("derived").is_some() {
-        return Err("it is a derived file, not a press".into());
-    }
-    if text("lock") != Some(texts.lock.as_str()) || text("samples") != Some(texts.samples.as_str())
-    {
-        return Err("samples.toml or samples.lock has changed since".into());
+    pressed_alike(header, texts, lock)?;
+    if text("lock") != Some(texts.lock.as_str()) {
+        return Err("samples.lock has changed since".into());
     }
     let old = Recipe::read(text("recipe").unwrap_or_default())
         .map_err(|e| format!("its recipe cannot be read ({})", e.0))?;
@@ -171,38 +204,7 @@ fn read(
             ));
         }
     }
-    let samples = header["data"]["samples"]
-        .as_array()
-        .ok_or("it has no samples")?;
-    let names: Vec<&str> = samples.iter().filter_map(|s| s["name"].as_str()).collect();
-    if names
-        != lock
-            .sample
-            .iter()
-            .map(|s| s.name.as_str())
-            .collect::<Vec<_>>()
-    {
-        return Err("its samples are not the lock's".into());
-    }
-    // Columns computed by another build of rvr (another version, commit or compiler) are not
-    // copied: the new file names this build.
-    if made["toolchain"] != crate::press::toolchain() {
-        return Err(format!(
-            "it was made by another build of rvr ({} at {})",
-            made["toolchain"]["rvr"].as_str().unwrap_or("?"),
-            made["toolchain"]["commit"].as_str().unwrap_or("?")
-        ));
-    }
-    // A build of changed code whose changes could not be hashed names no one build.
-    if made["toolchain"]["commit"]
-        .as_str()
-        .is_none_or(|commit| commit.ends_with("-dirty"))
-    {
-        return Err(
-            "it was made by an rvr built from changed code that left no record of the changes"
-                .into(),
-        );
-    }
+
     let failed = |e: rowver::Error| format!("it could not be read ({e})");
     let entries = file.entry().map_err(failed)?;
     let mut kept = HashMap::new();
