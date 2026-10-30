@@ -449,11 +449,11 @@ pub fn patiently<T, E>(
         let (Some(why), Some((tried, wait))) = (passing(&error), left.next()) else {
             return Err(error);
         };
-        println!(
+        crate::progress::say(&format!(
             "  waiting {wait} s to ask again for {what} ({} of {} tries made): {why}",
             tried + 1,
             waits.len() + 1
-        );
+        ));
         for _ in 0..*wait {
             if watch.stop.load(Ordering::Acquire) || watch.lost() {
                 return Err(error);

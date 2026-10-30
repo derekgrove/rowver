@@ -174,17 +174,13 @@ fn completeness(header: &Value, every: bool, fillable: Result<(), String>) -> bo
         let sample = &made["files"][*name];
         let read = sample["metadata"]["events_read"].as_u64().unwrap_or(0);
         let missing = sample["metadata"]["events_missing"].as_u64().unwrap_or(0);
-        let part = if read + missing == 0 { 1.0 } else { read as f64 / (read + missing) as f64 };
-        let full = (part * 24.0).floor() as usize;
-        let full = if missing > 0 { full.min(23) } else { full };
-        let bar = format!("{}{}", "█".repeat(full), "░".repeat(24 - full));
+        let (bar, percent) = crate::progress::cells(read, read + missing, 24);
         let files = sample["files"].as_object().map_or(0, |f| f.len());
         let holed = holes.iter().filter(|h| h.sample == *name).count();
         let holed = match holed {
             0 => String::new(),
             n => format!(", {}", some(n, "hole", "holes")),
         };
-        let percent = if missing > 0 { (part * 100.0).floor().min(99.0) } else { 100.0 };
         println!("  {name:width$}  {bar} {percent:>3.0}%   {}{holed}", some(files, "file", "files"));
     }
     if holes.is_empty() {

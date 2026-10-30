@@ -10,6 +10,7 @@ mod journal;
 mod key;
 mod new;
 mod press;
+mod progress;
 mod proxy;
 mod reproduce;
 mod reuse;

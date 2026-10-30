@@ -209,15 +209,6 @@ pub(crate) fn same_kinds(filling: &Fill, lock: &Lock, reads: &[Input], read: &[T
     })
 }
 
-/// The entries chosen in what a fill reads.
-pub(crate) fn ranged(reads: &[Input]) -> u64 {
-    let chosen = |input: &Input| {
-        let ranges = input.ranges.iter().flatten();
-        ranges.map(|(first, last, _)| chosen_in(input, *first, *last)).sum::<u64>()
-    };
-    reads.iter().map(chosen).sum()
-}
-
 /// What a fill reads and keeps: for every input, how it is laid; and the files to read, each
 /// with the holes it reads of them.
 pub(crate) fn laid<'a, 'p>(

@@ -300,6 +300,8 @@ pub(crate) struct Reach<'a> {
     /// Whether a local file is read whole for its adler32 before it is opened (a press reads it;
     /// a look at its branches or first events does not).
     pub whole: bool,
+    /// Where every file counts the bytes it reads (the bars').
+    pub read: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// What every input of one press shares.
@@ -315,6 +317,8 @@ struct Shared<'a> {
     /// written for a press that cannot be (`carries` false).
     journal: &'a crate::journal::Journal,
     carries: bool,
+    /// What the bars show.
+    counts: &'a crate::progress::Counts,
 }
 
 /// The branches of one open tree over the entries in hand, read when an expression first names them.
@@ -595,6 +599,8 @@ pub(crate) struct Held {
     seen: Option<Arc<Seen>>,
     /// What the file is, for what is printed while a read waits.
     shown: String,
+    /// Where the bytes read from it are counted, for the bars.
+    bytes: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// The parts of `offset..offset + len` that no held range covers.
@@ -656,6 +662,7 @@ impl Held {
         let fetched = match self.inner.read_ranges(&missing) {
             Ok(fetched) => {
                 self.answered();
+                self.counted(&missing);
                 fetched
             }
             Err(e) => {
@@ -671,9 +678,15 @@ impl Held {
 }
 
 impl Held {
+    /// Bytes of `ranges` read from the file.
+    fn counted(&self, ranges: &[(u64, usize)]) {
+        let bytes: usize = ranges.iter().map(|(_, len)| len).sum();
+        self.bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
     /// Read from the file itself, asked again while a remote read fails as a busy storage does.
     fn fetch(&self, ranges: &[(u64, usize)]) -> hep_root::Result<Vec<Vec<u8>>> {
-        match &self.again {
+        let read = match &self.again {
             Some((waits, watch)) => {
                 let read = read_again(waits, watch, &self.shown, || {
                     self.inner.read_ranges(ranges)
@@ -684,7 +697,11 @@ impl Held {
                 read
             }
             None => self.inner.read_ranges(ranges),
+        };
+        if read.is_ok() {
+            self.counted(ranges);
         }
+        read
     }
 
     /// A remote read succeeded: what failed before it is past.
@@ -812,7 +829,7 @@ pub(crate) fn open(reach: &Reach, file: &File) -> Result<(RootFile<Held>, Option
                 false => Failed::new(refused.fault, refused.why),
             })?;
         let handle = reader.handle();
-        return opened(file, Box::new(reader), again, Some(seen)).map(|root| (root, Some(handle)));
+        return opened(file, Box::new(reader), again, Some(seen), &reach.read).map(|root| (root, Some(handle)));
     }
     if !at.contains("://") {
         // A relative path is the lock's own: relative to the study folder.
@@ -833,13 +850,17 @@ pub(crate) fn open(reach: &Reach, file: &File) -> Result<(RootFile<Held>, Option
         let unreadable = |e: std::io::Error| Failed::new(Fault::Save, format!("{at} could not be read: {e}"));
         // Read whole for its adler32 only when the lock has one to compare with, and a press asks.
         let adler32 = match file.adler32 {
-            Some(_) if reach.whole => Some(adler32_file(&path).map_err(unreadable)?),
+            Some(_) if reach.whole => {
+                let adler32 = adler32_file(&path).map_err(unreadable)?;
+                reach.read.fetch_add(meta.len(), Ordering::Relaxed);
+                Some(adler32)
+            }
             _ => None,
         };
         changed(file, Some(meta.len()), adler32)?;
         let local = hep_root::LocalFile::open(&path)
             .map_err(|e| Failed::new(fault_of(&e, None), format!("{at}: {e}")))?;
-        return opened(file, Box::new(local), None, None).map(|root| (root, None));
+        return opened(file, Box::new(local), None, None, &reach.read).map(|root| (root, None));
     }
     let storage = reach.storage.ok_or_else(offline)?;
     // The storage's size and adler32 are asked while the file is opened at the size the lock
@@ -852,7 +873,7 @@ pub(crate) fn open(reach: &Reach, file: &File) -> Result<(RootFile<Held>, Option
         let seen = Arc::new(Seen::default());
         let root = HttpsFile::new(storage, at, file.bytes)
             .map_err(Failed::from)
-            .and_then(|remote| opened(file, Box::new(remote.seeing(&seen)), again, Some(seen)));
+            .and_then(|remote| opened(file, Box::new(remote.seeing(&seen)), again, Some(seen), &reach.read));
         let (bytes, adler32) = digest
             .join()
             .map_err(|_| Failed::from(format!("{at}: asking its storage stopped unexpectedly")))??;
@@ -898,7 +919,8 @@ pub(crate) fn first_readable<'a>(
     }
     let watch = Arc::new(Watch::default());
     let (storage, datasets, offline) = connect(lock, &files, &watch)?;
-    let reach = Reach { storage: storage.as_ref(), datasets: datasets.as_ref(), offline: &offline, dir, watch, whole: false };
+    let read = Default::default();
+    let reach = Reach { storage: storage.as_ref(), datasets: datasets.as_ref(), offline: &offline, dir, watch, whole: false, read };
     let mut tape = None;
     for &(_, file) in &files {
         match open(&reach, file) {
@@ -914,13 +936,14 @@ pub(crate) fn first_readable<'a>(
     })
 }
 
-/// Open a checked input and refuse one whose ROOT UUID is not the lock's; `again` and `seen` as
-/// `Held`'s.
+/// Open a checked input and refuse one whose ROOT UUID is not the lock's; `again`, `seen` and
+/// `bytes` as `Held`'s.
 fn opened(
     file: &File,
     source: Box<dyn ByteSource>,
     again: Option<(&'static [u64], Arc<Watch>)>,
     seen: Option<Arc<Seen>>,
+    bytes: &Arc<std::sync::atomic::AtomicU64>,
 ) -> Result<RootFile<Held>, Failed> {
     let at = &file.at;
     let source = Held {
@@ -929,6 +952,7 @@ fn opened(
         held: Mutex::new(Vec::new()),
         again,
         seen: seen.clone(),
+        bytes: bytes.clone(),
     };
     let root = RootFile::open(source).map_err(|e| {
         let fault = fault_of(&e, seen.as_deref());
@@ -993,6 +1017,19 @@ pub(crate) fn chosen_in(input: &Input, first: u64, last: u64) -> u64 {
     }
 }
 
+/// The entries the choice reads of an input's file, by the lock: below `stop`, or all.
+fn limit(input: &Input) -> u64 {
+    input.file.stop.or(input.file.entries).unwrap_or(0)
+}
+
+/// How many entries an input reads: of what its choice reads, or for a fill of the holes asked.
+pub(crate) fn chosen_of(input: &Input) -> u64 {
+    match &input.ranges {
+        Some(ranges) => ranges.iter().map(|(first, last, _)| chosen_in(input, *first, *last)).sum(),
+        None => chosen_in(input, 0, limit(input)),
+    }
+}
+
 /// An input's record as the lock gives it: its tree, UUID (`null` when the lock has none) and
 /// entries, and what the choice reads of it.
 fn planned(input: &Input) -> Value {
@@ -1035,14 +1072,16 @@ pub(crate) fn ranges(record: &Value) -> Vec<(u64, u64)> {
     record["holes"].as_array().into_iter().flatten().map(range).collect()
 }
 
-/// Read one input a run of entries at a time, keeping the events the cuts pass. A file that
-/// cannot be opened, and a run of it that cannot be read, are holes; the error is what ends the
-/// press (a mistake in the recipe, a failure that is not the file's own, or another input's).
+/// Read one input a run of entries at a time, keeping the events the cuts pass, and counting each
+/// run's entries in `progressed` as the bars are told of it. A file that cannot be opened, and a run
+/// of it that cannot be read, are holes; the error is what ends the press (a mistake in the
+/// recipe, a failure that is not the file's own, or another input's).
 fn take(
     shared: &Shared,
     sample: &BTreeMap<String, Constant>,
     input: &Input,
     order: usize,
+    progressed: &mut u64,
 ) -> Result<Taken, Failed> {
     let Shared {
         recipe, outputs, ..
@@ -1067,7 +1106,7 @@ fn take(
     }
     // The entries the choice reads of the file, by the lock, and (building on an earlier file)
     // the holes that file has in it, which are this file's too.
-    let limit = input.file.stop.or(input.file.entries).unwrap_or(0);
+    let limit = limit(input);
     let carried = input.before.as_ref().map(ranges).unwrap_or_default();
     let missed = |holes: &[(u64, u64)]| holes.iter().map(|(first, last)| chosen_in(input, *first, *last)).sum();
     // A file the earlier one could not open, or chose nothing of, is not opened again: its
@@ -1078,7 +1117,7 @@ fn take(
     // What it reads: every entry the choice reads, or for a fill the holes asked, each range
     // with its own place among the spool's pieces.
     let to_read = input.ranges.clone().unwrap_or_else(|| vec![(0, limit, order)]);
-    let chosen_here: u64 = to_read.iter().map(|(from, to, _)| chosen_in(input, *from, *to)).sum();
+    let chosen_here = chosen_of(input);
     // A file that cannot be opened is one hole of every entry chosen of what it reads.
     let unread = |failed: Failed| {
         let failed = hole_or_end(failed, input)?;
@@ -1289,11 +1328,15 @@ fn take(
             for (total, kept) in cutflow.iter_mut().zip(counted) {
                 *total += kept;
             }
+            let before = entry.len();
             entry.extend(
                 (first..last)
                     .filter(|event| keep[(event - first) as usize])
                     .map(|event| event as i64),
             );
+            let in_run = chosen_in(input, first, last);
+            shared.counts.ran(input.sample, in_run, (entry.len() - before) as u64);
+            *progressed += in_run;
             let held: usize = gathered
                 .iter()
                 .flatten()
@@ -1405,9 +1448,14 @@ fn take_all(
                         break;
                     }
                     let input = &work[at];
-                    let taken = take(shared, &fields[input.sample], input, input.order);
+                    let mut progressed = 0;
+                    shared.counts.begin(input.sample);
+                    let taken = take(shared, &fields[input.sample], input, input.order, &mut progressed);
                     match &taken {
                         Ok(taken) => {
+                            // What its runs did not tell the bars: a hole, a file not read.
+                            let rest = (taken.entries + taken.missing).saturating_sub(progressed);
+                            shared.counts.ran(input.sample, rest, 0);
                             // Building on an earlier file, its holes are carried, not found again.
                             let holes = taken.record["holes"].as_array().filter(|_| input.kept.is_none());
                             let holes: &[Value] = holes.map_or(&[], Vec::as_slice);
@@ -1417,21 +1465,23 @@ fn take_all(
                             }
                             let n = finished.fetch_add(1, Ordering::Relaxed) + 1;
                             let name = input.file.at.rsplit('/').next().unwrap_or(&input.file.at);
-                            println!(
+                            crate::progress::file(shared.counts, &format!(
                                 "  {n:>w$}/{}  {:>11} entries  {:>9} kept   {name}",
                                 work.len(),
                                 count(taken.entries),
                                 count(taken.rows as u64),
                                 w = work.len().to_string().len()
-                            );
+                            ));
                             for hole in holes {
-                                println!("    hole ({}): {}", hole["kind"].as_str().unwrap_or(""), hole["why"].as_str().unwrap_or(""));
+                                shared.counts.holed();
+                                let (kind, why) = (hole["kind"].as_str().unwrap_or(""), hole["why"].as_str().unwrap_or(""));
+                                crate::progress::say(&format!("    hole ({kind}): {why}"));
                             }
                             if stop_after == Some(n) {
-                                match shared.journal.checkpoint(shared.spool) {
-                                    Ok(n) => println!("Stopped with {n} files done, as RVR_STOP_AFTER asks."),
-                                    Err(why) => println!("Stopped as RVR_STOP_AFTER asks, but {why}."),
-                                }
+                                crate::progress::say(&match shared.journal.checkpoint(shared.spool) {
+                                    Ok(n) => format!("Stopped with {n} files done, as RVR_STOP_AFTER asks."),
+                                    Err(why) => format!("Stopped as RVR_STOP_AFTER asks, but {why}."),
+                                });
                                 std::process::exit(1);
                             }
                         }
@@ -1775,7 +1825,7 @@ pub fn press(
     let read: u64 = lock.sample.iter().map(|s| s.events_read).sum();
     match &earlier {
         _ if filling.is_some() => {
-            let entries = crate::fill::ranged(reads);
+            let entries = reads.iter().map(chosen_of).sum::<u64>();
             let holes = reads.iter().flat_map(|i| i.ranges.iter().flatten()).count();
             println!(
                 "Filling {}: reading {} of {}, {} entries, {} at a time; every other row is the file's own:",
@@ -1814,6 +1864,18 @@ pub fn press(
         ),
     }
     let mentions = reader.mentions();
+    // The bars: each sample's entries chosen of what this press reads, and what it picked up.
+    let (mut chosen, mut already, mut holed) = (vec![0; lock.sample.len()], vec![0; lock.sample.len()], 0);
+    for (at, input) in reads.iter().enumerate() {
+        chosen[input.sample] += chosen_of(input);
+        if let Some(taken) = resumed.get(&at) {
+            already[input.sample] += taken.entries + taken.missing;
+            holed += taken.record["holes"].as_array().filter(|_| input.kept.is_none()).map_or(0, Vec::len);
+        }
+    }
+    let names = lock.sample.iter().map(|s| s.name.clone());
+    let bars = names.zip(chosen).zip(already).map(|((name, chosen), done)| (name, chosen, done)).collect();
+    let display = crate::progress::Display::start(bars, resumed.values().map(|t| t.rows as u64).sum(), holed);
     let shared = Shared {
         recipe: reader,
         outputs: &reading,
@@ -1824,11 +1886,13 @@ pub fn press(
             dir: base,
             watch,
             whole: true,
+            read: display.counts.bytes.clone(),
         },
         mentions: &mentions,
         spool: &spool,
         journal: &journal,
         carries,
+        counts: &display.counts,
     };
     // What was read made durable, and the folder kept when that holds any input.
     let save = || {
@@ -1836,7 +1900,9 @@ pub fn press(
         staged.keep.set(!matches!(saved, None | Some(Ok(0))));
         saved
     };
-    let read = match take_all(&shared, &lock, reads, workers, resumed) {
+    let result = take_all(&shared, &lock, reads, workers, resumed);
+    drop(display);
+    let read = match result {
         Ok(read) => read,
         // A mistake in the study, or a file that will not be read as it is (whose remedy is
         // another press), is pressed again from the start; anything else keeps what was read for
@@ -1860,7 +1926,7 @@ pub fn press(
     let stuck = |why: String| format!("{} Mend it, then {}.", sentence(&why), again(&save(), reads.len()));
     let mut taken = match &filling {
         // A fill that read none of its holes again, each failing as before, leaves the file.
-        Some(filling) if read.iter().map(|t| t.missing).sum::<u64>() == crate::fill::ranged(reads) && crate::fill::same_kinds(filling, &lock, reads, &read) => {
+        Some(filling) if read.iter().map(|t| t.missing).sum::<u64>() == reads.iter().map(chosen_of).sum::<u64>() && crate::fill::same_kinds(filling, &lock, reads, &read) => {
             let holes = rowver::rvr::holes(filling.file.header()).len();
             let asked = reads.iter().flat_map(|i| i.ranges.iter().flatten()).count();
             println!("None of the {} could be read: {} is as it was.", some(asked, "hole", "holes"), target.display());
@@ -2123,6 +2189,7 @@ mod tests {
             again: None,
             seen: None,
             shown: String::new(),
+            bytes: Default::default(),
         };
         held.hold(vec![(1_000, 100), (1_200, 100), (100_000, 50)])
             .unwrap();

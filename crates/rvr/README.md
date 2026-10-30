@@ -219,6 +219,28 @@ and entries. A file that changed is not read: it is a hole (below), and the file
 lock. Nothing is written until every file has been read or found to be a hole: the file appears
 whole, or not at all.
 
+#### While it reads
+
+On a terminal, a press shows one bar per sample (its entries read of those it chose), how many
+events it has kept, how fast it reads and how long it has taken, redrawn five times a second; what
+happens meanwhile (a wait, a hole) is printed above the bars. In a log or a batch job (when the
+output is not a terminal), it prints one line per file instead, as each is read. With more samples
+than fit, the ones under way have a bar and the rest a line. The bars are cut to the terminal's
+width, so none wraps. The rate counts every byte read, the whole-file checksum read of a local
+file included. Drawing costs under 1%: 0.397 s against 0.394 s without it on the TChiWZ skim (30
+files, on a terminal; Apple M5, 2026-10-30).
+
+```text
+$ rvr press --workers 2
+Pressing 3 samples, 90 files, 636,390 entries, 2 at a time:
+
+  early                       ████████████████████ 100%  63,639 / 63,639
+  middle                      ████████████████████ 100%  212,130 / 212,130
+  late_and_long_named_sample  █░░░░░░░░░░░░░░░░░░░   5%  21,213 / 360,621
+
+  147,966 kept so far · 8762 MB/s · 1.5 s
+```
+
 #### Holes
 
 A press that cannot read part of what it chose still writes the file, without those events, and
