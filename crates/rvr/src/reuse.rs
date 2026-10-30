@@ -94,9 +94,6 @@ impl Earlier {
 /// Whether a file's header is a press of this study's samples by this build of rvr, or why not.
 pub fn pressed_alike(header: &Value, texts: &crate::press::Texts, lock: &Lock) -> Result<(), String> {
     let made = &header["made"];
-    if header.get("derived").is_some() {
-        return Err("it is a derived file, not a press".into());
-    }
     if made["samples"]["text"].as_str() != Some(texts.samples.as_str()) {
         return Err("samples.toml has changed since".into());
     }

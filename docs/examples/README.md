@@ -285,30 +285,40 @@ column, for the events the file already has:
 
 ```text
 $ rvr status
-zmumu.rvr: pressed 2026-10-29T19:47:31Z by rvr 14.3.0
+zmumu.rvr: pressed 2026-10-30T19:28:56Z by rvr 15.0.0
   recipe.toml   changed since: new: Muon_pt
   samples.toml  as the file holds it
   samples.lock  as the file holds it
   events        as the file holds it
 rvr press would read only Muon_pt, for the events the file kept, and copy every other column from it.
+
+  DY  ████████████████████████ 100%   2 files
 $ rvr press
-Rucio said where the 2 dataset files can be read in 1.3 s.
+Rucio said where the 2 dataset files can be read in 3.6 s.
 zmumu.rvr has the events this recipe keeps (11,336) and 3 of its 4 columns.
 Reading only Muon_pt for those events, 2 files 2 at a time:
   1/2       40,919 entries      4,698 kept   00C9792D-ACD2-2547-BB04-097F0C4E47E3.root
   2/2       59,081 entries      6,638 kept   13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root
   read from T2_CN_Beijing: 2 files, 0.7 MB
-Wrote zmumu.rvr (11,336 rows, 4 columns, 0.4 MB) in 4.6 s.
+Wrote zmumu.rvr (11,336 rows, 4 columns, 0.4 MB) in 7.2 s.
 $ rvr status
-zmumu.rvr: pressed 2026-10-29T19:47:38Z by rvr 14.3.0
+zmumu.rvr: pressed 2026-10-30T19:29:10Z by rvr 15.0.0
   recipe.toml   as the file holds it
   samples.toml  as the file holds it
   samples.lock  as the file holds it
   events        as the file holds it
 It is current: rvr press has nothing to read.
+
+  DY  ████████████████████████ 100%   2 files
 ```
 
 `Muon_pt` holds a list per event (every muon), which Python reads as an Awkward array.
+
+A column computed only from what the file already stores needs no ROOT file at all, and no room in
+the file either: put it under `[derived]`, as `leading_muon_pt = "first(Muon_pt, -1)"`. The file
+keeps the expression, and the Python package works it out when you ask for `f["leading_muon_pt"]`.
+`rvr press` then reads nothing; `rvr derive zmumu.rvr 'NAME = EXPRESSION'` adds one to the file
+alone ([Derived columns](../../crates/rvr/README.md#derived-columns)).
 
 ## 6. Add data and another background
 
@@ -352,10 +362,13 @@ two_muons = "count(good_muon) == 2"
 branches = ["MET_pt", "nJet", "Muon_pt"]
 mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
 weight = "if(sample.kind == 'data', 0 * MET_pt + 1, genWeight * sample.xsec * 1000 * sample.lumi)"
+
+[derived]
+leading_muon_pt = "first(Muon_pt, -1)"
 ```
 
-Resolve again, since the samples changed. `rvr status` says the file must be pressed whole this
-time, and why:
+`[derived]` holds the column of step 5, kept as its expression. Resolve again, since the samples
+changed. `rvr status` says the file must be pressed whole this time, and why:
 
 ```text
 $ rvr samples resolve samples.toml
@@ -363,24 +376,26 @@ $ rvr samples resolve samples.toml
   ok    DY                                       204 files   257.3 GB   100,000 of 195,510,810 events
   ok    TT                                       155 files   309.0 GB   100,000 of 145,020,000 events
 
-3 samples, 553 distinct files, 1015.6 GB in 4.7 s.
+3 samples, 553 distinct files, 1015.6 GB in 5.3 s.
 Wrote samples.lock (0.4 MB).
 $ rvr status
-zmumu.rvr: pressed 2026-10-29T19:47:38Z by rvr 14.3.0
-  recipe.toml   changed since: new: weight; the cuts under [keep] changed
+zmumu.rvr: pressed 2026-10-30T19:29:10Z by rvr 15.0.0
+  recipe.toml   changed since: new: weight; the cuts under [keep] changed; new derived: leading_muon_pt
   samples.toml  edited since
   samples.lock  resolved again since
   events        as the file holds it
 rvr press would press every column, as samples.toml has changed since.
+
+  DY  ████████████████████████ 100%   2 files
 $ rvr press
 Pressing every column: zmumu.rvr cannot be built on, as samples.toml has changed since.
-Rucio said where the 4 dataset files can be read in 1.4 s.
+Rucio said where the 4 dataset files can be read in 1.9 s.
 Pressing 3 samples, 4 files, 300,000 entries, 4 at a time:
   …
 Read 300,000 entries; kept after each cut:
   trigger                              144,360
   two_muons                             21,257
-Wrote zmumu.rvr (21,257 rows, 5 columns, 0.8 MB) in 15.8 s.
+Wrote zmumu.rvr (21,257 rows, 5 columns and 1 derived, 0.9 MB) in 12.6 s.
 $ rvr dump zmumu.rvr --columns
 sample         i4[21257]  [0, 0, 0, 0, 0, ...]
 entry          i8[21257]  [24, 57, 81, 94, 105, ...]
@@ -389,6 +404,7 @@ nJet           u4[21257]  [9, 4, 5, 2, 6, ...]
 Muon_pt        jagged f4[21257]  [[44.89497, 42.32862], [62.786877, 25.476637], [49.11254, 43.06757], ...]
 mass           f4[21257]  [91.12758, 94.01117, 87.904205, 99.630455, 90.229675, ...]
 weight         f4[21257]  [1, 1, 1, 1, 1, ...]
+leading_muon_pt f4[21257]  derived = "first(Muon_pt, -1)"  [44.89497, 62.786877, 49.11254, 122.43711, 33.896442, ...]
 kind           text by sample[3]  data: "data", DY: null, TT: null
 lumi           f8 by sample[3]  data: 31.84, DY: 31.84, TT: 31.84
 events_read    i8 by sample[3]  data: 100000, DY: 100000, TT: 100000
@@ -500,9 +516,9 @@ It carries all three texts, so `rvr reproduce` makes it again from the file alon
 $ rvr reproduce zmumu.rvr
 Wrote zmumu.reproduced/ with the recipe.toml, samples.toml and samples.lock zmumu.rvr holds.
 …
-Wrote zmumu.reproduced/zmumu.rvr (21,257 rows, 5 columns, 0.8 MB) in 7.3 s.
+Wrote zmumu.reproduced/zmumu.rvr (21,257 rows, 5 columns and 1 derived, 0.9 MB) in 6.8 s.
 Comparing the two with rvr diff:
-The headers show no difference in rows, samples, columns, by_sample or sample columns.
+The headers show no difference in rows, samples, columns, derived columns, by_sample or sample columns.
 ```
 
 `rvr key new` makes a signing key once; every file you press after that is signed, and
@@ -513,15 +529,15 @@ This key was made in the folder `RVR_CONFIG` named; without it, the key goes in 
 $ rvr key new "A. Physicist"
 Made your key ~/rvr-config/key (keep it private). Every file you press is signed with it from now on.
 Your public key, for whoever reads your files:
-  3ea9f1b79d727ed8299a95268ee7a5840a17bc86c713708aabe66829fb832979
+  e7a5e011b05115213df9df4ef1255702f3d0e795bd2f36864f668bdacc7c3efd
 They trust your files with:
-  rvr key trust 3ea9f1b79d727ed8299a95268ee7a5840a17bc86c713708aabe66829fb832979 A. Physicist
+  rvr key trust e7a5e011b05115213df9df4ef1255702f3d0e795bd2f36864f668bdacc7c3efd A. Physicist
 $ rvr press --full
 …
-Signed with your key 3ea9f1b79d727ed8…
-Wrote zmumu.rvr (21,257 rows, 5 columns, 0.8 MB) in 15.7 s.
+Signed with your key e7a5e011b0511521…
+Wrote zmumu.rvr (21,257 rows, 5 columns and 1 derived, 0.9 MB) in 7.0 s.
 $ rvr validate zmumu.rvr
-zmumu.rvr: valid, 21257 rows, 5 columns, read 300000 of 854440704 entries, signed by you
+zmumu.rvr: valid, 21257 rows, 5 columns, 1 derived, read 300000 of 854440704 entries, signed by you
 ```
 
 ## 10. Your own ntuples, and pressing on the LPC
@@ -545,7 +561,7 @@ your logout, on a disk with room for twice the file it writes:
 
 ```sh
 mkdir -p ~/bin && cd ~/bin
-curl -sL https://gitlab.cern.ch/api/v4/projects/dgrove%2Frowver/packages/generic/rvr/14.3.0/rvr-14.3.0-x86_64-linux.tar.gz | tar xz
+curl -sL https://gitlab.cern.ch/api/v4/projects/dgrove%2Frowver/packages/generic/rvr/15.0.0/rvr-15.0.0-x86_64-linux.tar.gz | tar xz
 ~/bin/rvr proxy init                 # reads ~/.globus there, as on a laptop
 cd ~/nobackup/zmumu                  # the study folder, copied there
 tmux new -s press                    # detach with Ctrl-b d; come back with tmux attach -t press
@@ -590,11 +606,11 @@ Pressing 3 samples, 90 files, 636,390 entries, 10 at a time:
 Read 629,319 of 636,390 entries; kept after each cut:
   met                                  313,547
   leptons                              313,547
-Wrote three.rvr (313,547 rows, 7 columns, 0.8 MB) in 1.2 s, with 1 hole:
+Wrote three.rvr (313,547 rows, 7 columns, 0.8 MB) in 1.7 s, with 1 hole:
   gone        late_and_long_named_sample  files/f45.root no longer exists: put it back and run rvr press --fill (if it moved, run rvr samples resolve samples.toml again, then rvr press).
 rvr press --fill reads them again once they can be read.
 $ rvr status
-three.rvr: pressed 2026-10-30T14:44:43Z by rvr 14.3.0
+three.rvr: pressed 2026-10-30T19:30:19Z by rvr 15.0.0
   recipe.toml   as the file holds it
   samples.toml  as the file holds it
   samples.lock  as the file holds it
@@ -616,7 +632,7 @@ Filling three.rvr: reading 1 hole of 1 file, 7,071 entries, 1 at a time; every o
 Read 7,071 entries in the holes; kept after each cut:
   met                                    3,523
   leptons                                3,523
-Wrote three.rvr (317,070 rows, 7 columns, 0.8 MB) in 0.3 s.
+Wrote three.rvr (317,070 rows, 7 columns, 0.8 MB) in 0.4 s.
 $ rvr validate three.rvr --complete
 three.rvr: valid, 317070 rows, 7 columns, read all 636390 entries, not signed
 ```

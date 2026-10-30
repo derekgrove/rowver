@@ -61,6 +61,9 @@ two_jets = "count(good_jet) >= 2"
 [columns]                           # what the file stores
 branches = ["MET_pt", "Jet_pt"]     # branches stored as they are
 ht = "sum(Jet_pt[good_jet])"        # a column computed while pressing
+
+[derived]                           # columns kept as expressions, worked out when read
+met_over_ht = "MET_pt / ht"
 ```
 
 | table | what it holds |
@@ -68,9 +71,11 @@ ht = "sum(Jet_pt[good_jet])"        # a column computed while pressing
 | `[define]` | `NAME = "expression"`: a name for an expression, which the lines below it can use, like `good_jet` above: the jets of each event that pass, as a true-or-false list beside `Jet_pt`. A name may use the names defined above it, and may not be the name of a branch. Nothing here is stored. |
 | `[keep]` | Your cuts, in order. Each one is `name = "condition"`, true or false for each event, and an event is kept only if all of them are true. `rvr press` prints how many events are left after each cut, so this is your cutflow too. |
 | `[columns]` | What the file stores. `branches = [...]` stores branches just as the ROOT file has them, types and all. `NAME = "expression"` stores a column you compute, flat or jagged; a branch's name alone (`npv = "PV_npvs"`) stores that branch under a new name, and `NAME = "branch(sample.FIELD)"` a branch whose name each sample gives in its metadata. Write `NAME = { value = "expression", stored = "f4" }` to choose the type it's stored as. |
+| `[derived]` | `NAME = "expression"`: a column the file keeps as its expression, not as an array, worked out when it is read. It uses only what the file holds: the columns under `[columns]`, the derived columns above it, and `sample.KEY`. A stored column costs space in the file; a derived one costs a moment each time it is worked out. |
 
-Every table may be left empty, or left out: an empty `[define]` defines nothing, and an empty
-`[keep]` keeps every event. Writing all three, even empty, shows at a glance what a recipe does.
+Every table may be left empty, or left out: an empty `[define]` defines nothing, an empty `[keep]`
+keeps every event, and an empty `[derived]` adds nothing. Writing all four, even empty, shows at a
+glance what a recipe does.
 
 Only what `[columns]` names ends up in the file; a defined name is a working name. A cut on
 `good_jet` decides which *events* you keep, but `Jet_pt` in `branches` still stores every jet of
@@ -203,7 +208,9 @@ example marks each jet that is the closest jet to some muon.
 ### Math, value by value
 
 These work on flat and jagged values alike, value by value, and keep whatever float type you
-give them.
+give them. Each gives the same bits on every platform: `exp`, `log`, `cos`, `sin`, `cosh`, `sinh`,
+`hypot` and `**` come from the `libm` crate, not from the platform's own math library, which
+differs from one system to another in the last bit.
 
 | function | example | result |
 |---|---|---|
@@ -314,7 +321,7 @@ tells you what's wrong, in plain words:
 | `count(Jet where pt > 30)` | where is not part of an expression (column 11): to keep some members of each list, use a mask, such as Jet_pt[Jet_pt > 30] |
 | `Jet.pt` | Only sample has a field after a dot, as in sample.era (the dot at column 4). Name a branch in full, such as Jet_pt, and keep some members of it with a mask, such as Jet_pt[good_jet]; a branch whose name holds a dot is written branch('Jet.pt') |
 | `good_jet()` | good_jet is a defined name, not a function: write it without brackets, as good_jet |
-| `select = "…"` at the top of the recipe | A recipe has no setting named select; it takes format, version, title, define, keep, columns |
+| `select = "…"` at the top of the recipe | A recipe has no setting named select; it takes format, version, title, define, keep, columns, derived |
 
 ## From Python to rvr
 

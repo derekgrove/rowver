@@ -136,47 +136,84 @@ fn nice_keeps_the_limit_where_two_digit_rounding_fell_inside() {
 }
 
 #[test]
-fn a_derived_file_names_its_parent_and_is_checked_against_it() {
-    let parent = common::written(&golden(), "parent");
-    let table = rowver::rvr::load(&parent).unwrap();
-    let reader = rowver::rvr::Reader::open(&parent).unwrap();
-    let mut read = serde_json::Map::new();
-    let met = reader.record("MET").unwrap();
-    read.insert(
-        "MET".into(),
-        rowver::rvr::column_checksum(met).unwrap().into(),
-    );
-    let lineage = rowver::write::Lineage {
-        parent: table.header(),
-        path: "parent.rvr",
-        read,
-        source: "twice = MET * 2",
-        by: "rowver tests",
-        parameters: serde_json::Map::new(),
-        runtime: "none",
-        built: "2026-10-18T00:00:00Z",
+fn a_derived_column_is_a_record_with_no_array_that_the_header_check_takes() {
+    let bytes = golden();
+    let length = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let arrays = vec![bytes[12 + length..].to_vec()];
+    let header: Value = serde_json::from_slice(&bytes[12..12 + length]).unwrap();
+    let rows: Vec<usize> = header["data"]["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["rows"].as_u64().unwrap() as usize)
+        .collect();
+    let path = common::written(&bytes, "derived");
+    let met = rowver::rvr::Reader::open(&path).unwrap().column("MET").unwrap().unwrap();
+    std::fs::remove_file(path).unwrap();
+    let twice: Vec<f32> = met
+        .bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes(b.try_into().unwrap()) * 2.)
+        .collect();
+    let twice = rowver::rvr::Held {
+        kind: "f4".into(),
+        bytes: twice.iter().flat_map(|v| v.to_le_bytes()).collect(),
+        offsets: None,
     };
-    let twice: Vec<f32> = [20_f32, 0., 40., 30., 10.].iter().map(|v| v * 2.).collect();
-    let columns = vec![("twice".to_owned(), Values::Flat(array(&twice)))];
-    let (header, arrays) = rowver::write::derived(
-        lineage,
-        reader.sample().unwrap(),
-        reader.entry().unwrap(),
-        columns,
-        Labels::new(),
-    )
-    .unwrap();
-    let child = common::written(&to_bytes(&header, &arrays).unwrap(), "child");
-    let checked = rowver::rvr::validate_file(&child).unwrap();
-    assert_eq!(checked.header["made"], table.header()["made"]);
-    rowver::rvr::confirm_parent(&checked.header, table.header()).unwrap();
-    rowver::rvr::load_derived(&child, &parent).unwrap();
-    let mut other = table.header().clone();
-    other["data"]["sha256"] = "0".repeat(64).into();
-    assert!(rowver::rvr::confirm_parent(&checked.header, &other).is_err());
-    for path in [parent, child] {
-        std::fs::remove_file(path).unwrap();
-    }
+    let record = rowver::write::derived("twice", "MET * 2", &twice, &rows).unwrap();
+    assert_eq!(record["expression"], "MET * 2");
+    assert!(record.get("at").is_none() && record.get("size").is_none());
+    assert_eq!(record["by_sample"].as_array().unwrap().len(), rows.len());
+    let checked = |record: Value| {
+        let mut with = header.clone();
+        with["derived"] = serde_json::json!({ "columns": [record] });
+        rowver::rvr::from_bytes(&to_bytes(&with, &arrays).unwrap()).map(drop)
+    };
+    checked(record.clone()).unwrap();
+    let refused = |change: &dyn Fn(&mut Value)| {
+        let mut wrong = record.clone();
+        change(&mut wrong);
+        checked(wrong).unwrap_err().to_string()
+    };
+    assert!(refused(&|r| r["name"] = "MET".into()).contains("needs a name no other column has"));
+    assert!(refused(&|r| { r.as_object_mut().unwrap().shift_remove("by_sample"); }).contains("is missing by_sample"));
+    assert!(refused(&|r| r["kind"] = "f16".into()).contains("its kind is not one the format defines"));
+    assert!(refused(&|r| r["expression"] = " ".into()).contains("has no expression"));
+}
+
+#[test]
+fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
+    let bytes = golden();
+    let length = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let arrays = vec![bytes[12 + length..].to_vec()];
+    let mut header: Value = serde_json::from_slice(&bytes[12..12 + length]).unwrap();
+    let text = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"MET\"]\n\n[derived]\ntwice = \"MET * 2\"\n";
+    header["made"]["recipe"]["text"] = text.into();
+    header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(text).into();
+    header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
+    let written = |header: &Value, name: &str| common::written(&to_bytes(header, &arrays).unwrap(), name);
+    let plain = written(&header, "derived-plain");
+    let derived = [("twice".to_owned(), "MET * 2".to_owned())];
+    let records = rowver::rvr::derived::records(&rowver::rvr::Reader::open(&plain).unwrap(), &derived, &[]).unwrap();
+    std::fs::remove_file(plain).unwrap();
+    header["derived"] = serde_json::json!({ "columns": records });
+    let path = written(&header, "derived-twice");
+    let reader = rowver::rvr::Reader::open(&path).unwrap();
+    let (met, twice) = (reader.column("MET").unwrap().unwrap(), reader.column("twice").unwrap().unwrap());
+    let doubled: Vec<u8> = met.bytes.chunks_exact(4).flat_map(|b| (f32::from_le_bytes(b.try_into().unwrap()) * 2.).to_le_bytes()).collect();
+    assert_eq!((twice.kind.as_str(), &twice.bytes), ("f4", &doubled));
+    assert_eq!(rowver::rvr::validate_file(&path).unwrap().derived, 1);
+    // A file is not written again into itself, which would empty it first.
+    let refused = rowver::write::rewrite(&path, &path, &header).unwrap_err().to_string();
+    assert!(refused.contains("cannot be written again into itself"), "{refused}");
+    assert_eq!(rowver::rvr::validate_file(&path).unwrap().derived, 1);
+    std::fs::remove_file(path).unwrap();
+    // A record its expression does not give is refused when the file is validated.
+    header["derived"]["columns"][0]["lim"][1] = 1e9.into();
+    let path = written(&header, "derived-changed");
+    let refused = rowver::rvr::validate_file(&path).unwrap_err().to_string();
+    std::fs::remove_file(path).unwrap();
+    assert!(refused.contains("derived column twice, worked out here, is not what the file records"), "{refused}");
 }
 
 #[test]

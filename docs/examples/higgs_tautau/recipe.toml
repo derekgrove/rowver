@@ -30,3 +30,7 @@ mu_pt = "mu1_pt"
 tau_pt = "tau1_pt"
 visible_mass = "sqrt(2 * mu1_pt * tau1_pt * (cosh(mu1_eta - tau1_eta) - cos(delta_phi(mu1_phi, tau1_phi))))"
 mt = "sqrt(2 * mu1_pt * MET_pt * (1 - cos(delta_phi(mu1_phi, MET_phi))))"
+
+# Worked out from the stored jets when it is read; the file keeps only the expression.
+[derived]
+ht = "sum(Jet_pt)"

@@ -12,6 +12,9 @@ f.samples, f.columns      # names, in the file's order
 f["MET_pt"]               # NumPy array, one value per row (no copy)
 f["Muon_pt"]              # Awkward array, a list per row
 f["sample"], f["entry"]   # each row's sample index, and its entry in its file's tree
+f.derived                 # the derived columns: kept as expressions, worked out when first asked for
+f["mean_jet_pt"]          # a derived column, read as any other, checked against what the file records
+f.forget("mean_jet_pt")   # let columns go from memory (every one when none is named)
 f.labels                  # each sample's label, what a plot shows
 f.sample_columns          # per-sample values: events_read, events_total, metadata
 f.recipe                  # the recipe.toml that made it
@@ -29,7 +32,7 @@ f.to_parquet("out.parquet")
 Every column asked for at once (`f.read([...])`, `arrays`, `to_*`) is read in parallel. Only
 NumPy is required; Awkward, pyarrow and pandas are used when installed
 (`pip install "rowver[all]"`). A file whose header does not check out raises `rowver.Error`;
-`rowver.validate(path)` checks every array, as `rvr validate` does.
+`rowver.validate(path)` checks every array and works out every derived column, as `rvr validate` does.
 
 ## Building
 

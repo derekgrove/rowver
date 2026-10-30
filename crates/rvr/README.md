@@ -11,6 +11,7 @@ rvr branches                # the branches a sample's file holds
 rvr try "EXPRESSION"        # what an expression gives on the first events, before pressing
 rvr press                   # read them through the recipe into one .rvr file
 rvr status                  # is the .rvr current, and what would press read
+rvr derive FILE …           # add, drop or rename derived columns of a pressed file
 rvr validate / dump / diff  # check and inspect .rvr files
 rvr reproduce FILE          # press a file's own study again and compare
 ```
@@ -26,7 +27,7 @@ LPC and lxplus; Ubuntu 20.04 on); the macOS one on Apple silicon and Intel. For 
 
 ```sh
 mkdir -p ~/bin && cd ~/bin
-curl -sL https://gitlab.cern.ch/api/v4/projects/dgrove%2Frowver/packages/generic/rvr/14.3.0/rvr-14.3.0-x86_64-linux.tar.gz | tar xz
+curl -sL https://gitlab.cern.ch/api/v4/projects/dgrove%2Frowver/packages/generic/rvr/15.0.0/rvr-15.0.0-x86_64-linux.tar.gz | tar xz
 ~/bin/rvr --version     # add ~/bin to PATH in ~/.bashrc to type just rvr
 ```
 
@@ -108,7 +109,7 @@ Read 100,000 entries; kept after each cut:
   a_good_tau                             2,248
 Wrote higgs_tautau.reproduced/higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 2.4 s.
 Comparing the two with rvr diff:
-The headers show no difference in rows, samples, columns, by_sample or sample columns.
+The headers show no difference in rows, samples, columns, derived columns, by_sample or sample columns.
 ```
 
 ## A study folder
@@ -218,6 +219,31 @@ and entries. A file that changed is not read: it is a hole (below), and the file
 `samples.toml` edited since the lock was written stops the press: resolve again and review the new
 lock. Nothing is written until every file has been read or found to be a hole: the file appears
 whole, or not at all.
+
+#### Derived columns
+
+A column under `[derived]` in `recipe.toml` is kept in the file as its expression, not as an array:
+a reader (`rvr dump`, the Python package) works it out from the file's columns when it is asked
+for, and lets it go when it is done. Its expression uses the columns the file stores, the derived
+columns above it, and `sample.KEY` (the keys of `samples.toml`; not what the press adds to them,
+`events_read`, `events_total` and `events_missing`). While it reads, the press works each one out
+over the events one run of each sample kept, so that a mistake in one (a division by zero, a type
+that differs between samples) stops it then, not once every file is read; this costs nothing
+measurable on the bench. It works each one out once more, from the file it has written (holding
+the columns they use in memory), to record its kind, its checksums and its facts, so that a reader
+can check what it works out and `rvr diff` can compare it, and writes the file again with those
+records, its arrays copied as they are: a press with derived columns writes its file twice. Should one fail there, the file is
+written without its derived columns, and the press says so: fix `[derived]`, and the next press
+reads no input. Changing only `[derived]` reads no ROOT file: every stored column
+is copied from the file, and the derived ones are worked out from it. `rvr derive` changes them in
+a pressed file alone.
+
+Which columns to store and which to derive is a choice of space against time. On 2.1 M rows (300
+copies of the TChiWZ skim, Apple M5, 2026-10-30), seven typical computed columns (a sum, a count, a
+ratio, a transverse mass, the largest jet-pair mass, jets cleaned of leptons) take 55 bytes per row
+stored, 54% more than the ten columns they use; derived, they add 0.9 s to the press (6.9 s
+against 6.0 s), and the Python package works all seven out in 0.97 s, where reading them stored
+takes 0.06 s. A simple one, `sum(PT_jet)`, takes 0.08 s.
 
 #### While it reads
 
@@ -412,11 +438,11 @@ Wrote wz.rvr (1,234,580 rows, 9 columns, 27.8 MB) in 41.4 s.
 
 That is the whole WZTo3LNu UL18 NanoAOD dataset (14.9 GB on storage, of which the recipe's
 branches were 291 MB), read from a laptop in the United States on 2026-10-19. With `--workers 1`
-the same press took 148.8 s. rvr 0.2.0 passed over eight of the dataset's storages, whose
+the same press took 148.8 s. rvr then passed over eight of the dataset's storages, whose
 certificates are signed by grid authorities it did not carry (given them through `X509_CERT_DIR`,
-FNAL served 7 of the files and the press took 37.5 s). Since 14.3.0 rvr carries them (see Grid
-access): on 2026-10-29 the same dataset, through a recipe reading 419 MB of it, took 29.5 s, FNAL
-serving 5 files.
+FNAL served 7 of the files and the press took 37.5 s). rvr now carries them (see Grid access): on
+2026-10-29 the same dataset, through a recipe reading 419 MB of it, took 29.5 s, FNAL serving 5
+files.
 
 ### `rvr status [DIR] [--out FILE] [--events N|all] [--random] [--seed S] [--holes]`
 
@@ -433,7 +459,7 @@ app can ask before pressing. It asks no storage: whether the input files changed
 
 ```text
 $ rvr status
-flat.rvr: pressed 2026-10-30T05:41:02Z by rvr 14.3.0
+flat.rvr: pressed 2026-10-30T19:26:53Z by rvr 15.0.0
   recipe.toml   changed since: new: ht
   samples.toml  as the file holds it
   samples.lock  as the file holds it
@@ -447,7 +473,7 @@ A file with a hole (the one under Holes, above):
 
 ```text
 $ rvr status
-flat.rvr: pressed 2026-10-30T04:06:48Z by rvr 14.3.0
+flat.rvr: pressed 2026-10-30T19:26:53Z by rvr 15.0.0
   recipe.toml   as the file holds it
   samples.toml  as the file holds it
   samples.lock  as the file holds it
@@ -512,16 +538,50 @@ DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events (f4, one value per ev
   entry       52   92.6495
 ```
 
-### `rvr validate FILE... [--parent PARENT] [--complete]`
+### `rvr derive FILE 'NAME = EXPRESSION'...`, `--drop NAME...`, `--rename OLD NEW`
+
+Changes the derived columns of a pressed file: columns kept as the expression that computes them
+from the file's own columns, worked out when they are read (see Derived columns, under
+`rvr press`). A derived column is added with its expression, which may use the file's stored
+columns, the derived columns above it, and `sample.KEY`; dropped; or given another name, its
+expression as it was. An expression is never changed in place: drop the column, then add it
+again. A derived column another uses is dropped with it, or after it, and keeps its name while it
+is used. It first works the file's derived columns out and checks them against their records, as
+`rvr validate` does, so that a file is changed and signed again only when they hold; then only
+what is new is worked out, for its checksums and facts.
+
+The file is written again with its arrays as they were, and the recipe it carries gains, loses or
+renames the line under `[derived]`, so that `rvr reproduce` still presses the same file. The
+study's own `recipe.toml` is not changed: make the same change there, or the next `rvr press` of
+the study writes the file with the derived columns `recipe.toml` lists. Its signature is made again
+with your key; with no key, a file that was signed is no longer.
+
+```text
+$ rvr derive tiny.rvr 'lead = first(Jet_pt, -1)' 'lead_share = lead / ht'
+Added lead, lead_share to tiny.rvr: it has 3 derived columns; signed with your key 4c0303ab0a976be5…
+Its study's recipe.toml is as it was: make the same change under [derived] there to keep it when the study is pressed again.
+$ rvr derive tiny.rvr --drop lead
+rvr derive: lead_share uses lead: drop lead_share first, or with it
+$ rvr derive tiny.rvr --rename lead_share lead_fraction
+Renamed lead_share to lead_fraction in tiny.rvr: it has 3 derived columns; signed with your key 4c0303ab0a976be5…
+Its study's recipe.toml is as it was: make the same change under [derived] there to keep it when the study is pressed again.
+$ rvr derive tiny.rvr 'pt2 = Muon_pt * 2'
+rvr derive: [derived] pt2 uses Muon_pt, but the file does not store Muon_pt: a derived column uses only the columns the file stores, under [columns], and the derived columns above it
+$ rvr derive tiny.rvr 'mean_jet_pt = ht'
+rvr derive: tiny.rvr already has a derived column named mean_jet_pt: an expression is not changed in place; drop it, then add it again
+```
+
+### `rvr validate FILE... [--complete]`
 
 Checks each file completely: every array decompresses to its declared length and checksum, every
 per-sample checksum, the column facts, the study's texts and their checksums, that the rows belong
 to the files recorded, and that every row's entry was read (a random choice is made again from its
 seed). One line per file: `valid`, how many entries the press read of how many its samples hold
 (`read all 968616 entries`, so you can see nothing was left out), its holes by kind
-(`read 5 of 10 entries, 1 hole (damaged)`), and who signed it, or the first problem found.
-`--complete` also fails (exit 1, on its line) a valid file that has holes. A derived file
-(columns computed from another file) is compared with its parent when you name it with `--parent`.
+(`read 5 of 10 entries, 1 hole (damaged)`), and who signed it, or the first problem found. Every
+derived column is worked out, and checked against the checksums and facts the file records of it
+(`1 derived`), and the recipe the file carries lists the same derived columns.
+`--complete` also fails (exit 1, on its line) a valid file that has holes.
 
 Every reader (rvr, the Python package) refuses a file whose header fails these checks, or whose
 signature no longer holds; `rvr dump` still shows it.
@@ -529,9 +589,15 @@ signature no longer holds; `rvr dump` still shows it.
 ### `rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns]`
 
 Prints the inside of a file: the header in full, the texts of recipe.toml, samples.toml and
-samples.lock, and every column with its kind, length and first values. Each flag prints only that
-part: `--files` the files read and each sample's event choice and metadata, `--recipe`,
-`--samples` and `--lock` one text each, `--columns` the columns.
+samples.lock, and every column with its kind, length and first values; a derived column worked
+out, with its expression:
+
+```text
+mean_jet_pt    f8[8]  derived = "ht / nJet"  [33.901041666666664, 38.51171875, 34.822916666666664, 120.5, 33.901041666666664, ...]
+```
+
+Each flag prints only that part: `--files` the files read and each sample's event choice and
+metadata, `--recipe`, `--samples` and `--lock` one text each, `--columns` the columns.
 
 ### `rvr header FILE`
 
@@ -687,7 +753,7 @@ read as `sample.kind == 'data'`) needs no default.
 ## recipe.toml
 
 The recipe is TOML, with one expression per value, evaluated over whole columns of events. The
-[recipe reference](https://crates.io/crates/rvr-recipe/14.3.0) lists every table, operator and function, each with an
+[recipe reference](https://crates.io/crates/rvr-recipe/15.0.0) lists every table, operator and function, each with an
 example and its result.
 
 ```toml
@@ -704,10 +770,14 @@ one_muon = "count(good_muon) >= 1"
 [columns]                     # what the file stores
 branches = ["MET_pt", "Muon_pt", "Jet_pt"]    # branches stored as they are
 ht = "sum(Jet_pt)"            # computed while pressing, one number per event
+
+[derived]                     # kept as expressions, worked out when read
+met_over_ht = "MET_pt / ht"
 ```
 
 Every branch is named in full. A defined name may use the names above it, and may not be a
-branch's name. A cut can apply to some samples only: `hem = { if = "sample.era == 3", apply =
+branch's name. A derived column uses only what the file holds: the stored columns and the derived
+columns above it. A cut can apply to some samples only: `hem = { if = "sample.era == 3", apply =
 "hem_veto" }`, where `sample.NAME` is a sample's metadata. Each table may be empty, or left out.
 
 ## Grid access
@@ -752,7 +822,7 @@ what to run.
 | `samples.toml has changed since the lock was written` | resolve again |
 | `… has changed since samples.lock was written …` (a `changed` hole, from `press`) | as for `check`: resolve again if the change is wanted, review the new lock, and `rvr press --fill` |
 | `… has a samples.lock but no samples.toml` (from `press`) | put samples.toml back: the file carries both |
-| `This file is rowver 13; this reader reads rowver 14 only.` | press its study again with `rvr press` |
+| `This file is rowver 14; this reader reads rowver 15 only.` | press its study again with `rvr press` |
 | `The header changed after it was signed` | the file was edited after it was pressed: press it again |
 
 MIT licensed.

@@ -49,11 +49,12 @@ pub struct Recipe {
     pub defines: BTreeMap<String, Expression>,
     /// The cuts in the order written, which is the order of the cutflow.
     pub keep: Vec<Cut>,
-    /// The stored columns in the order written: each one's name, and the expression that makes
-    /// it (a branch alone is stored as the file holds it).
+    /// The stored columns in the order written, each with the expression that makes it.
     pub columns: Vec<(String, Expression)>,
     /// The number kind a column is stored as, where it is not the kind it is computed in.
     pub stored: BTreeMap<String, crate::Kind>,
+    /// The derived columns in the order written, each with its expression as written.
+    pub derived: Vec<(String, String)>,
 }
 
 /// Read an expression held in a TOML value, naming where it sits in any complaint.
@@ -84,24 +85,34 @@ fn only(found: &Table, allowed: &[&str], place: &str) -> Result<()> {
     }
 }
 
+/// The names an expression gives each row, which no column may have: its sample, its entry, and
+/// its sample's file.
+pub const RESERVED: [&str; 3] = ["sample", "entry", "file"];
+
 /// Whether text is one plain name, as an expression would read it.
-fn plain(text: &str) -> bool {
+pub fn plain(text: &str) -> bool {
     matches!(parse(text), Ok(Expression::Name(name)) if name == text)
 }
 
 /// Add every name an expression mentions: branches, defined names, and text that may name a
 /// branch (`branch('…')`).
 pub fn names(expression: &Expression, found: &mut BTreeSet<String>) {
-    gather(expression, found, true);
+    gather(expression, found, true, false);
 }
 
 /// Add the bare names an expression uses, branches and defined names, and no text.
 pub fn uses(expression: &Expression, found: &mut BTreeSet<String>) {
-    gather(expression, found, false);
+    gather(expression, found, false, false);
 }
 
-/// Add the bare names an expression holds, and with `text` the text it holds too.
-fn gather(expression: &Expression, found: &mut BTreeSet<String>, text: bool) {
+/// Add the columns an expression reads: its bare names, and each `branch('…')`'s.
+pub fn reads(expression: &Expression, found: &mut BTreeSet<String>) {
+    gather(expression, found, false, true);
+}
+
+/// Add the bare names an expression holds; with `text` the text it holds too, and with
+/// `branches` the text each `branch` names.
+fn gather(expression: &Expression, found: &mut BTreeSet<String>, text: bool, branches: bool) {
     use Expression::*;
     match expression {
         Constant(crate::Constant::Text(held)) if text => {
@@ -111,18 +122,39 @@ fn gather(expression: &Expression, found: &mut BTreeSet<String>, text: bool) {
         Name(name) => {
             found.insert(name.clone());
         }
+        Call(function, arguments) if branches && function == "branch" => match arguments.as_slice() {
+            [Constant(crate::Constant::Text(held))] => {
+                found.insert(held.clone());
+            }
+            _ => arguments.iter().for_each(|argument| gather(argument, found, text, branches)),
+        },
         Call(_, arguments) => arguments
             .iter()
-            .for_each(|argument| gather(argument, found, text)),
+            .for_each(|argument| gather(argument, found, text, branches)),
         In(left, list) => {
-            gather(left, found, text);
-            list.iter().for_each(|member| gather(member, found, text));
+            gather(left, found, text, branches);
+            list.iter().for_each(|member| gather(member, found, text, branches));
         }
-        Negate(inner) | Not(inner) => gather(inner, found, text),
+        Negate(inner) | Not(inner) => gather(inner, found, text, branches),
         Binary(_, left, right) | Pick(left, right) => {
-            gather(left, found, text);
-            gather(right, found, text);
+            gather(left, found, text, branches);
+            gather(right, found, text, branches);
         }
+    }
+}
+
+/// Whether an expression names a branch by anything but text, as `branch(sample.KEY)`.
+fn by_sample(expression: &Expression) -> bool {
+    use Expression::*;
+    match expression {
+        Call(function, arguments) => {
+            let text = matches!(arguments.as_slice(), [Constant(crate::Constant::Text(_))]);
+            (function == "branch" && !text) || arguments.iter().any(by_sample)
+        }
+        In(left, list) => by_sample(left) || list.iter().any(by_sample),
+        Negate(inner) | Not(inner) => by_sample(inner),
+        Binary(_, left, right) | Pick(left, right) => by_sample(left) || by_sample(right),
+        Constant(_) | Sample(_) | Name(_) => false,
     }
 }
 
@@ -167,12 +199,12 @@ impl Recipe {
         ];
         if let Some((table, how)) = became.iter().find(|(table, _)| root.contains_key(*table)) {
             return Err(problem(format!(
-                "A recipe has no [{table}] table: {how}. A recipe's tables are [define], [keep] and [columns]."
+                "A recipe has no [{table}] table: {how}. A recipe's tables are [define], [keep], [columns] and [derived]."
             )));
         }
         only(
             &root,
-            &["format", "version", "title", "define", "keep", "columns"],
+            &["format", "version", "title", "define", "keep", "columns", "derived"],
             "A recipe",
         )?;
         let mut recipe = Self {
@@ -276,7 +308,7 @@ impl Recipe {
                 .push((name.clone(), expression(value, &place)?));
         }
         for (name, _) in &recipe.columns {
-            if name.is_empty() || ["sample", "entry", "file"].contains(&name.as_str()) {
+            if name.is_empty() || RESERVED.contains(&name.as_str()) {
                 return Err(problem(format!("A column cannot be named \"{name}\"")));
             }
         }
@@ -284,6 +316,40 @@ impl Recipe {
         names.sort();
         if let Some(pair) = names.windows(2).find(|pair| pair[0] == pair[1]) {
             return Err(problem(format!("Two columns are named {}", pair[0])));
+        }
+        // A derived column is computed from what the file holds: the stored columns and the
+        // derived columns above it.
+        let mut held: BTreeSet<String> = recipe.columns.iter().map(|(name, _)| name.clone()).collect();
+        let derived = table(&root, "derived")?;
+        let every: BTreeSet<&String> = derived.iter().flat_map(|table| table.keys()).collect();
+        for (name, value) in derived.into_iter().flatten() {
+            let place = format!("[derived] {name}");
+            if !plain(name) || RESERVED.contains(&name.as_str()) {
+                return Err(problem(format!(
+                    "{place}: a derived column is named with one plain name, such as ht_over_met"
+                )));
+            }
+            if held.contains(name) || recipe.defines.contains_key(name) {
+                return Err(problem(format!("{place}: {name} is already the name of a column or of a line of [define]; give the derived column another")));
+            }
+            let parsed = expression(value, &place)?;
+            if by_sample(&parsed) {
+                return Err(problem(format!("{place}: branch(sample.KEY) names another column for each sample, which a derived column cannot be checked against before the press: name the column, as branch('Jet.pt')")));
+            }
+            let mut used = BTreeSet::new();
+            reads(&parsed, &mut used);
+            if let Some(missing) = used.iter().find(|used| !held.contains(*used)) {
+                let why = if recipe.defines.contains_key(missing) {
+                    format!("{missing} is a line of [define], which the file does not keep")
+                } else if every.contains(missing) {
+                    format!("{missing} is a derived column below it")
+                } else {
+                    format!("the file does not store {missing}")
+                };
+                return Err(problem(format!("{place} uses {missing}, but {why}: a derived column uses only the columns the file stores, under [columns], and the derived columns above it")));
+            }
+            held.insert(name.clone());
+            recipe.derived.push((name.clone(), value.as_str().unwrap_or_default().to_owned()));
         }
         Ok(recipe)
     }

@@ -19,7 +19,7 @@ pub mod source {
 }
 
 /// The `.rvr` version this crate reads and writes; it reads no other.
-pub const VERSION: u64 = 14;
+pub const VERSION: u64 = 15;
 
 pub use rvr::CheckpointSummary;
 pub use table::{Column, ColumnInfo, EventIdentity, EventView, NumericBuffer, Table};
@@ -30,9 +30,6 @@ pub enum Error {
     Invalid(String),
     #[error("{0}")]
     Io(#[from] std::io::Error),
-    /// A derived file's parent was not found, or no file found is the one it records.
-    #[error("The parent of {child} is missing or is not the file it records (recorded as {hint})")]
-    Parent { child: String, hint: String },
     #[error("Invalid JSON header: {0}")]
     Json(#[from] serde_json::Error),
 }

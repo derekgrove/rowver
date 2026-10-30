@@ -1,11 +1,11 @@
 # The `.rvr` format
 
-Version 14 (rowver 14.3). This page specifies every byte of a `.rvr` file. `crates/rowver` reads
+Version 15 (rowver 15.0). This page specifies every byte of a `.rvr` file. `crates/rowver` reads
 and writes all of it and is the reference builder; `rvr press` writes pressed files with it.
 [The features](FEATURES.md) describe what the tools around the format do.
 
 **The running example.** Every example below is from one real file, `tiny.rvr`, unless it says
-otherwise. It is 5,864 bytes, pressed from two copies of a five-entry test ntuple (one sample
+otherwise. It is 6,267 bytes, pressed from two copies of a five-entry test ntuple (one sample
 each, `signal` and `background`) with this recipe, and signed with a throwaway key:
 
 ```toml
@@ -20,6 +20,9 @@ jets = "nJet >= 1"
 [columns]
 branches = ["nJet", "Jet_pt"]
 ht = "sum(Jet_pt)"
+
+[derived]
+mean_jet_pt = "ht / nJet"
 ```
 
 Checksums are cut to their first 8 hex digits here; a file holds all 64.
@@ -38,27 +41,27 @@ Checksums are cut to their first 8 hex digits here; a file holds all 64.
 The first bytes of `tiny.rvr`:
 
 ```
-00000000: 8952 5652 0d0a 1a0a 9015 0000 7b22 726f  .RVR........{"ro
+00000000: 8952 5652 0d0a 1a0a 2317 0000 7b22 726f  .RVR....#...{"ro
           └──────magic──────┘ └length─┘ └─header…
 ```
 
 - **The magic** is `89 52 56 52 0D 0A 1A 0A` (`\x89RVR\r\n\x1a\n`): a high byte, the letters
   `RVR`, then CR LF, Ctrl-Z and LF. A transfer that strips the eighth bit or rewrites line endings
   therefore breaks the file visibly.
-- **The header length** is `90 15 00 00`, that is 0x1590 = 5,520 bytes. A reader parses that many
+- **The header length** is `23 17 00 00`, that is 0x1723 = 5,923 bytes. A reader parses that many
   bytes of JSON and has every fact about the file without touching any array.
-- **The arrays** start at byte 12 + 5,520 = 5,532 and fill the rest of the file: 332 bytes here.
+- **The arrays** start at byte 12 + 5,923 = 5,935 and fill the rest of the file: 332 bytes here.
   Each is compressed on its own (§7), so a reader decompresses only the arrays it needs. A program
   that changes only the header writes the new header and copies the arrays byte for byte.
 
-A reader refuses a file whose first 8 bytes are not the magic, whose `rowver` is not 14, or whose
+A reader refuses a file whose first 8 bytes are not the magic, whose `rowver` is not 15, or whose
 arrays do not fill the rest of the file exactly.
 
 ## 2. The header at a glance
 
 ```
 {
-  "rowver": 14,                 the format version
+  "rowver": 15,                 the format version
   "data": {                     the rows and their columns (§3 to §5); written once, by the press
     "rows", "samples", "files",
     "sample", "entry",          the two arrays every file has
@@ -67,16 +70,15 @@ arrays do not fill the rest of the file exactly.
     "sample_cols"               one value per sample
   },
   "made": { … },                the study that made the file (§6)
-  "derived": { … },             only in a derived file (§10)
+  "derived": { … },             the derived columns, when there are any (§10)
   "signature": { … },           only in a signed file (§9)
   "<tool>": { … }               any number of tool keys (§11)
 }
 ```
 
 The top level has exactly `rowver`, `data`, `made`, an optional `derived`, an optional
-`signature`, and zero or more tool keys. Nothing else. A file without `derived` is a *pure* file,
-pressed from a study by `rvr press`; a file with `derived` is a *derived* file. No program
-rewrites `data` once the press has written it.
+`signature`, and zero or more tool keys. Nothing else. No program rewrites `data` once the press
+has written it.
 
 ## 3. Rows: `data`
 
@@ -258,14 +260,14 @@ then what the event choice chose. A file with no hole has no `events_missing`.
 ```json
 "made": {
   "study": "tiny",
-  "built": "2026-10-30T17:13:43Z",
-  "by": "rvr 14.3.0",
-  "toolchain": {"rvr": "14.3.0", "rowver": "14", "commit": "d8076c26…",
+  "built": "2026-10-30T19:24:58Z",
+  "by": "rvr 15.0.0",
+  "toolchain": {"rvr": "15.0.0", "rowver": "15", "commit": "e192f78f…",
                 "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
-  "recipe":  {"sha256": "95b35f63", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
+  "recipe":  {"sha256": "52d0feb3", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
               "columns": ["nJet", "Jet_pt", "ht"]},
   "samples": {"sha256": "aa22df20", "text": "…the whole samples.toml…"},
-  "lock":    {"sha256": "99bdaecc", "text": "…the whole samples.lock…"},
+  "lock":    {"sha256": "a406b6b6", "text": "…the whole samples.lock…"},
   "files": {
     "signal": {
       "events": {"choose": "all"},
@@ -275,7 +277,7 @@ then what the event choice chose. A file with no hole has no `events_missing`.
     },
     "background": { … }
   },
-  "sha256": "2a980be6"
+  "sha256": "2281ba6a"
 }
 ```
 
@@ -323,8 +325,6 @@ Each file record holds:
 When a read moved to another copy part way, `served` names the copy that served the last read.
 Every copy holds the same bytes: each is checked against the lock's size, and its adler32 when the
 storage gives one, before it is read.
-
-A derived file carries its parent's `made` unchanged.
 
 ### 6.1 The event choice
 
@@ -469,7 +469,7 @@ stored      28 b5 2f fd 04 38 …                                       a zstd f
 | `data.sha256` | the ASCII text of every array's `sha256` joined, with nothing between them, in file order | `data` |
 | `by_sample` | one SHA-256 per sample, of that sample's part of the array (below) | `entry`, every flat column, both arrays of every jagged column |
 | `made.sha256` | the canonical JSON (below) of `made` without its own `sha256`, as UTF-8 | `made` |
-| `derived.sha256` | the same, of `derived` | `derived` |
+| a derived column's `sha256` and `by_sample` | its values as they are worked out, as a stored column's are of its array | each derived column |
 | `made.recipe.sha256`, `made.samples.sha256`, `made.lock.sha256` | that text alone | the three texts |
 | sample column `sha256` | its values as bytes (§5) | each sample column |
 | `signature.sha256` | §9 | `signature` |
@@ -546,7 +546,7 @@ A press signs the file when the person pressing it has a key. A file without a `
 unsigned, and still valid.
 
 ```json
-"signature": {"ed25519": "68edc5fe…", "key": "4ec3670f…", "sha256": "e725339a…"}
+"signature": {"ed25519": "520bcabe…", "key": "4c0303ab…", "sha256": "2e6734c0…"}
 ```
 
 It has exactly these three members:
@@ -561,65 +561,43 @@ A reader refuses a signed file whose `sha256` is not that of its header, or whos
 not hold for `key`: either means the header changed after it was signed. Whether `key` belongs to
 someone the reader trusts is for the reader to decide.
 
-## 10. Derived files
+## 10. Derived columns
 
-A derived file holds only columns computed from the columns of another `.rvr` file, its parent. It
-does not copy the parent's columns; it names the parent by its checksums.
-
-- `data.rows`, `data.samples` and `data.files` are the parent's. The `sample` and `entry` arrays
-  hold the parent's values and are stored in this file too, since they are small. Row `i` of this
-  file is row `i` of the parent.
-- `data.cols` holds only the derived columns. No derived column has the name of a column or a
-  sample column of its parent. `data.sha256` covers this file's own arrays by the usual rule.
-- `data.sample_cols` is the parent's, unchanged.
-- `made` is the direct parent's `made`, equal to it as a JSON value, so `made.sha256` is the
-  parent's. It still records the study and the ROOT files that made the rows, and
-  `made.recipe.columns` names the pressed file's columns, not this file's.
-
-For example (not from `tiny.rvr`):
+A derived column is kept as the expression that computes it, not as an array. A reader works it
+out from the file's own columns when it is asked for, holds it as long as it needs it, and lets it
+go. It is listed in `derived.columns`, in the order the recipe's `[derived]` table gives:
 
 ```json
-"derived": {
-  "sha256": "…",
-  "built": "2026-10-06T19:12:44Z",
-  "by": "…",
-  "parents": [
-    {"data_sha256": "…", "made_sha256": "…", "derived_sha256": null,
-     "rows": 45147, "path": "/data/my_study.rvr",
-     "read": {"MET": "…", "Jet_pt": "…"}}
-  ],
-  "source": "…the exact text that computed the columns…",
-  "columns": {"mT2": "…", "soft_jets": "…"},
-  "parameters": {"cut": 30},
-  "runtime": "…what ran source…"
-}
+"derived": {"columns": [
+  {"name": "mean_jet_pt", "expression": "ht / nJet", "kind": "f8", "sha256": "e641687e",
+   "by_sample": ["e73c3af8", "e73c3af8"], "lim": [33.901041666666664, 120.5], "nice": [33.0, 130.0]}
+]}
 ```
 
 | field | holds |
 |---|---|
-| `sha256` | the checksum of `derived` (§8) |
-| `built` | when the file was written, UTC, as in `made` |
-| `by` | free text naming the program that wrote the file |
-| `parents` | a list of exactly one parent (a list so that more can be allowed later) |
-| `source` | the exact text that computed the columns |
-| `columns` | every column of the file by name, in `data.cols` order, each with its mark: `sha256(source + "\n" + name)`, so any change to `source` changes the mark of every column |
-| `parameters` | an object of plain JSON values, empty when there are none |
-| `runtime` | free text naming what ran `source` |
+| `name` | what every tool calls it: a name no stored column, sample column or other derived column has, nor `sample`, `entry` or `file` |
+| `expression` | the expression that computes it, as the recipe writes it |
+| `kind` and the rest | what a stored column's record holds, without `at` and `size`: for a flat column `sha256`, `by_sample` and its facts (`lim`, `nice`, and `vals` and `names` where they apply, §4); for a jagged one `offsets` (`sha256`, `by_sample`) and `content` (`kind`, `count`, `sha256`, `by_sample`) |
 
-Each parent has:
+The checksums and facts are of the column's values over every row, as a stored column's are of
+its array (§8): the press works each derived column out once, to record them. In `tiny.rvr`,
+`mean_jet_pt` is `ht / nJet` on each row, `[33.901041666666664, 38.51171875, 34.822916666666664,
+120.5, …]`, and `e641687e` is the SHA-256 of those eight doubles.
 
-| field | holds |
-|---|---|
-| `data_sha256`, `made_sha256` | the parent's `data.sha256` and `made.sha256` |
-| `derived_sha256` | the parent's `derived.sha256`, or `null` when the parent is a pure file |
-| `rows` | the parent's `data.rows` |
-| `path` | the path the parent was opened with: a hint only, since the checksums say which file the parent is |
-| `read` | the parent columns and sample columns that were read, by name. A flat column's value is its array's `sha256`; a jagged column's is the SHA-256 of the ASCII text of its offsets' `sha256` followed by its content's, with nothing between them; a sample column's is its `sha256` |
+An expression uses only what the file holds: its stored columns, the derived columns above it,
+and `sample.KEY` (the metadata of the row's sample, as a press gives it to an expression: without
+`events_read`, `events_total` and `events_missing`, and with `sample.file` the path of the row's
+file in the lock). It is worked out a file's rows at a time, as the press reads
+them, and every function of the recipe language computes the same bits on every platform (none
+calls the platform's own math library), so it has the same values whoever works it out. A reader
+that works one out checks its values against the record, and refuses the column when they differ.
 
-A parent may itself be derived. A derive step reads the columns its direct parent holds and no
-others: a column of the parent's own parent is not looked up. `made` is then the same object all
-the way down the chain, and each file's `derived.parents[0].derived_sha256` names the step before
-it.
+The recipe the file carries (`made.recipe`) lists the same derived columns in its `[derived]`
+table, by the same names, with the same expressions. A derived column is added to a pressed file,
+dropped from it or renamed with `rvr derive`, which changes the recipe's text, `made.recipe.sha256`
+and `made.sha256` with it; an expression is never changed in place. A derived column another uses
+is dropped or renamed only with it, or after it.
 
 ## 11. Tool keys
 
@@ -633,7 +611,7 @@ change its own key without breaking either.
 **On opening**, a reader checks everything the header says without reading an array, and refuses
 the file at the first problem:
 
-- the magic, `rowver: 14`, and the top level;
+- the magic, `rowver: 15`, and the top level;
 - `made`: its fields, the toolchain, each of the three texts against its `sha256`,
   `recipe.columns`, and `made.sha256`;
 - `data.samples` and `data.files` against `made.files`: the same samples and files, each record's
@@ -641,10 +619,9 @@ the file at the first problem:
 - each file's `holes`: their fields, a kind from the list, in order and apart, and within what the
   choice read. `uuid: null` only on a file that is one whole hole or that the choice took nothing
   of. In a file with holes whose samples carry `events_read`, `events_missing` on every sample;
-- in a pure file, that `data.cols` names exactly `made.recipe.columns`, in order. In a derived
-  file, that `derived` has every field and exactly one parent, that `derived.columns` names
-  exactly the file's columns in order, that `made.sha256` and `data.rows` are the ones recorded for
-  the parent, and that `derived.sha256` matches;
+- that `data.cols` names exactly `made.recipe.columns`, in order;
+- each derived column's record: its fields, a name no other column has, a nonempty expression,
+  a kind the format defines, one checksum per sample, and its facts;
 - the sample columns: each has `name`, `kind`, `values` and `sha256`; its kind is one of the four;
   it has one value per sample, of a type its kind allows; its name is no column's, nor `sample`,
   `entry` or `file`; its `sha256` matches its values; and the list is exactly what the metadata
@@ -668,20 +645,9 @@ every array:
 - every `by_sample` has one checksum per sample, each matching that sample's values;
 - jagged offsets start at 0, never decrease, and end at `count`; flat floats are finite; `lim`,
   `nice`, `vals` and `names` agree with the values;
+- every derived column, worked out, has the checksums and facts its record holds, and the
+  recipe's `[derived]` table lists them as `derived.columns` does (`rvr validate`);
 - and it says who signed the file.
-
-**A derived file with its parent.** A derived file's parent is checked only when it is named
-(`rvr validate DERIVED.rvr --parent PARENT.rvr`). The parent is then validated as a file in its
-own right, and compared with what the derived file records:
-
-- its `data.sha256`, `made`, `made.sha256` and `derived.sha256` (absent for `null`) are the ones
-  recorded;
-- its rows, `samples`, `files` and `sample_cols` are the derived file's;
-- its `sample` and `entry` arrays have the derived file's `sha256`s;
-- every column and sample column in `read` has the checksum recorded;
-- it holds no column or sample column with a name of the derived file's.
-
-Without a parent, the derived file can still be valid; the parent is simply not checked.
 
 ## 13. Weights, and what is not in the file
 
@@ -696,28 +662,13 @@ Not in the file, on purpose:
 - per-column provenance beyond the recipe's text;
 - sample metadata per row;
 - percentiles;
-- a parent's columns inside a derived file;
-- any older version: a reader of version 14 reads version 14 only. Press an older file's study
-  again.
+- a derived column's values: only its expression, its checksums and its facts;
+- any other version: a reader of version 15 reads version 15 only, and a file of another version
+  is pressed again from its study.
 
 ## 14. Versions
 
-The header says `rowver: 14` in every 14.x file. The minor versions add to it:
-
-- **14.3**: a file may record holes (`made.files[sample].files[at].holes`, §6.2), and then says
-  how many entries each sample misses (`events_missing`). A file with no hole and no `uuid: null`
-  has nothing new, and a 14.2 reader opens it. A 14.2 reader refuses a file that has either.
-- **14.1**: a file of a catalog dataset says which storage each file was read from (`served`). A
-  14.0 reader refuses a file that has `served`.
-- **14.0**, compared with 13:
-  - arrays are zstd frames instead of zlib streams;
-  - `made` carries the whole study: the texts of `recipe.toml`, `samples.toml` and
-    `samples.lock`, each with its SHA-256, so the study can be written back out of the file and
-    pressed again;
-  - each sample records which of its events were read (all, the first N, or N at random from a
-    seed), which a reader makes again to check every row's entry;
-  - `made.toolchain` names what built the file;
-  - a file may be signed with Ed25519;
-  - each sample has a label;
-  - the canonical JSON of the checksums is rowver's own rule, stated in §8;
-  - a reader refuses a file whose `made` is missing anything or fails a checksum.
+This is version 15, the first released version of the format. The header says `rowver: 15`, the
+major version of the `rowver` crate that reads and writes it, and a reader refuses any other. A
+reader also refuses a field it does not know, so an addition in a later 15.x opens only in a reader
+that has it; each will be listed here with the version that added it.

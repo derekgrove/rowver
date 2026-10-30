@@ -8,3 +8,5 @@ version = 1
 
 [columns]
 branches = ["genWeight"]
+
+[derived]

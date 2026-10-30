@@ -214,12 +214,12 @@ impl<'a> Scope<'a> {
             "abs" => one(f::magnitude)?,
             "sign" => one(f::sign)?,
             "sqrt" => float(f64::sqrt)?,
-            "cos" => float(f64::cos)?,
-            "sin" => float(f64::sin)?,
-            "cosh" => float(f64::cosh)?,
-            "sinh" => float(f64::sinh)?,
-            "exp" => float(f64::exp)?,
-            "log" => float(f64::ln)?,
+            "cos" => float(libm::cos)?,
+            "sin" => float(libm::sin)?,
+            "cosh" => float(libm::cosh)?,
+            "sinh" => float(libm::sinh)?,
+            "exp" => float(libm::exp)?,
+            "log" => float(libm::log)?,
             "min" => {
                 arity(2).and_then(|_| f::pairwise(&arrays[0], &arrays[1], f::Extreme::Least))?
             }

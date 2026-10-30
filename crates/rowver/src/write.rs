@@ -20,7 +20,7 @@ mod spool;
 
 pub use column::Source;
 use column::{Indices, Measure, Packed};
-pub use derived::{derived, derived_with, Lineage};
+pub use derived::derived;
 pub use spool::{Order, Spool, Spooled};
 
 /// The first eight bytes of every `.rvr` file.
@@ -518,7 +518,7 @@ pub fn text_checksum(text: &str) -> String {
     digest(text.as_bytes())
 }
 
-/// SHA-256 of the complete `made` section, or the `derived` one, excluding its own checksum.
+/// SHA-256 of the complete `made` section, excluding its own checksum.
 pub fn made_checksum(made: &Value) -> Result<String> {
     let mut body = made.clone();
     if let Some(body) = body.as_object_mut() {
@@ -555,6 +555,27 @@ pub fn write_laid(path: impl AsRef<Path>, header: &Value, laid: Laid) -> Result<
         std::io::copy(&mut std::fs::File::open(file)?, &mut out)?;
         std::fs::remove_file(file)?;
     }
+    Ok(out.flush()?)
+}
+
+/// Write the file at `from` again at `to` with another header, its arrays copied byte for byte.
+pub fn rewrite(from: impl AsRef<Path>, to: impl AsRef<Path>, header: &Value) -> Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let (from, to) = (from.as_ref(), to.as_ref());
+    if std::fs::canonicalize(to).is_ok_and(|to| std::fs::canonicalize(from).is_ok_and(|from| from == to)) {
+        return Err(invalid(format!("{} cannot be written again into itself: write it at another path, then move that over it", from.display())));
+    }
+    let mut source = std::fs::File::open(from)?;
+    let mut prefix = [0; 12];
+    source.read_exact(&mut prefix)?;
+    if &prefix[..8] != MAGIC {
+        return Err(invalid("The file to write again is not an .rvr file"));
+    }
+    let length = u32::from_le_bytes(prefix[8..12].try_into().unwrap());
+    source.seek(SeekFrom::Start(12 + u64::from(length)))?;
+    let mut out = std::io::BufWriter::new(std::fs::File::create(to)?);
+    frame(&mut out, header, &[])?;
+    std::io::copy(&mut source, &mut out)?;
     Ok(out.flush()?)
 }
 

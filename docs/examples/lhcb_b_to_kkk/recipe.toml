@@ -22,3 +22,7 @@ not_pions = "H1_ProbPi < 0.5 and H2_ProbPi < 0.5 and H3_ProbPi < 0.5"
 branches = ["B_FlightDistance", "B_VertexChi2"]
 B_mass = "sqrt((e1 + e2 + e3) ** 2 - px ** 2 - py ** 2 - pz ** 2)"
 B_charge = "H1_Charge + H2_Charge + H3_Charge"
+
+# Whether a candidate is within 50 MeV of the B mass, worked out when it is read.
+[derived]
+in_b_window = "abs(B_mass - 5279.3) < 50"

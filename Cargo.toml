@@ -7,7 +7,7 @@ default-members = ["crates/rowver", "crates/rvr", "crates/rvr-recipe"]
 # Every crate and the Python package share one version, released together; its major is the .rvr
 # format version.
 [workspace.package]
-version = "14.3.0"
+version = "15.0.0"
 authors = ["Derek Grove <derek.william.grove@cern.ch>"]
 repository = "https://gitlab.cern.ch/dgrove/rowver"
 edition = "2021"
@@ -15,11 +15,11 @@ rust-version = "1.91"
 license = "MIT"
 
 [workspace.dependencies]
-rowver = { path = "crates/rowver", version = "14.3.0" }
-rvr-recipe = { path = "crates/rvr-recipe", version = "14.3.0" }
-rvr = { path = "crates/rvr", version = "14.3.0" }
+rowver = { path = "crates/rowver", version = "15.0.0" }
+rvr-recipe = { path = "crates/rvr-recipe", version = "15.0.0" }
+rvr = { path = "crates/rvr", version = "15.0.0" }
 # The shared HEP crates, from crates.io (each in its own repository, gitlab.cern.ch/dgrove/<crate>).
-hep-columns = "0.1.0"
+hep-columns = "0.1.2"
 hep-root = "0.1.3"
 grid-catalog = "0.1.0"
 grid-trust = "0.1.2"
@@ -38,6 +38,8 @@ ed25519-dalek = "3"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 toml = { version = "0.8", features = ["preserve_order"] }
 zmij = "1"
+# Every float function, so every platform computes the same bits (pure Rust; rust-lang's port of musl).
+libm = "0.2"
 # The Python package only (crates/rowver-py).
 pyo3 = { version = "0.30.1", features = ["abi3-py311"] }
 numpy = "0.30.0"

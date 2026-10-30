@@ -6,7 +6,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
-pub(crate) const RESERVED: [&str; 3] = ["sample", "entry", "file"];
+pub(crate) use rvr_recipe::RESERVED;
 
 /// Hash bytes in pieces so that a long sample can still be cancelled.
 fn chunked(bytes: &[u8], cancellation: Cancellation<'_>) -> Result<String> {

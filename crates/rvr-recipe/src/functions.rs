@@ -173,7 +173,7 @@ pub(crate) fn hypot(left: &Array, right: &Array) -> Result<Array> {
             .numbers()
             .into_iter()
             .zip(b.numbers())
-            .map(|(x, y)| kind.round(x.hypot(y)));
+            .map(|(x, y)| kind.round(libm::hypot(x, y)));
         Ok(Values::float(kind, values.collect()))
     };
     left.zip(
@@ -181,7 +181,7 @@ pub(crate) fn hypot(left: &Array, right: &Array) -> Result<Array> {
         &|constant, beside| Ok(constant.repeat(constant.beside(beside.kind)?, beside.len())),
         &|a, b| {
             Ok(Constant::Float(
-                a.alone(1)?.number(0).hypot(b.alone(1)?.number(0)),
+                libm::hypot(a.alone(1)?.number(0), b.alone(1)?.number(0)),
             ))
         },
         &apply,

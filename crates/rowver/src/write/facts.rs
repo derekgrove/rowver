@@ -24,7 +24,7 @@ fn outward(x: f64, up: bool) -> f64 {
     if x == 0.0 {
         return 0.0;
     }
-    let step = 10_f64.powf(x.abs().log10().floor() - 1.0);
+    let step = libm::pow(10.0, libm::log10(x.abs()).floor() - 1.0);
     let steps: f64 = format!("{:.6}", x / step).parse().unwrap();
     (if up { steps.ceil() } else { steps.floor() }) * step
 }
@@ -132,7 +132,7 @@ impl Facts {
         if !integer {
             let (lo, hi) = (self.low, self.high);
             if !self.finite {
-                return Err(invalid(format!("{name}: floating values must be finite")));
+                return Err(invalid(format!("{name}: some of its values are not finite numbers (NaN or infinity, as a division by zero gives), and a file holds only finite ones: give those rows a finite value")));
             }
             let mut nice = [outward(lo, false).min(lo), outward(hi, true).max(hi)];
             if nice[0] == nice[1] {

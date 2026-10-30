@@ -74,15 +74,15 @@ pub(super) trait Pieces {
     }
 }
 
-/// Values held whole: one piece.
-pub(super) struct Whole {
+/// Values held whole, or lent: one piece.
+pub(super) struct Whole<'a> {
     kind: String,
     w: usize,
-    bytes: Vec<u8>,
-    counts: Option<Vec<usize>>,
+    bytes: Cow<'a, [u8]>,
+    counts: Option<Cow<'a, [usize]>>,
 }
 
-impl Whole {
+impl Whole<'_> {
     /// Require bytes that are exactly the values of a supported kind.
     pub(super) fn new(values: Values, name: &str) -> Result<Self> {
         let (buffer, counts) = match values {
@@ -96,13 +96,13 @@ impl Whole {
         Ok(Self {
             kind: buffer.kind,
             w,
-            bytes: buffer.bytes,
-            counts,
+            bytes: Cow::Owned(buffer.bytes),
+            counts: counts.map(Cow::Owned),
         })
     }
 }
 
-impl Pieces for Whole {
+impl Pieces for Whole<'_> {
     fn kind(&self) -> &str {
         &self.kind
     }
@@ -534,18 +534,25 @@ impl Write for Counted<'_> {
 }
 
 /// Measure one array and write its compressed form to `out`: its record's `size`, `sha256` and
-/// what follows them.
-fn array(
+/// what follows them. With no `out`, the array is measured and not written: its record has no
+/// `at` or `size`.
+fn array<'w>(
     name: &str,
     pieces: &dyn Pieces,
     measure: &Measure,
-    out: &mut dyn Write,
+    out: Option<&mut (dyn Write + 'w)>,
 ) -> Result<Map<String, Value>> {
     let kind = pieces.kind();
     let w = width(kind)?;
     let mut meter = Meter::new(name, kind, measure)?;
     each_raw(pieces, w, |bytes| meter.add(bytes))?;
     let (sha256, mut after) = meter.finish()?;
+    let Some(out) = out else {
+        let mut record = Map::new();
+        record.insert("sha256".into(), sha256.into());
+        record.append(&mut after);
+        return Ok(record);
+    };
     let mut source = Shuffled {
         pieces,
         w,
@@ -604,7 +611,7 @@ pub(super) fn plain(
     measure: &Measure,
     out: &mut dyn Write,
 ) -> Result<Packed> {
-    let record = array(label, pieces, measure, out)?;
+    let record = array(label, pieces, measure, Some(out))?;
     let size = record["size"].as_u64().unwrap_or(0) as usize;
     Ok(Packed {
         record,
@@ -614,7 +621,7 @@ pub(super) fn plain(
 
 /// The pieces a source holds.
 enum Held<'a> {
-    Whole(Whole),
+    Whole(Whole<'a>),
     Spooled(Spooled<'a>),
 }
 
@@ -651,7 +658,6 @@ pub(super) fn column(
     out: &mut dyn Write,
     scratch: Option<&Path>,
 ) -> Result<Packed> {
-    let rows = edges[edges.len() - 1];
     let held = match source {
         Source::Copied(reader, from) => {
             let scratch = scratch.ok_or_else(|| invalid("A copied column needs a scratch file"))?;
@@ -668,9 +674,37 @@ pub(super) fn column(
         Source::Spooled(spooled) => Held::Spooled(spooled),
         Source::Values(values) => Held::Whole(Whole::new(values, name)?),
     };
-    let pieces = held.pieces();
+    laid(name, held.pieces(), edges, labels, Some(out))
+}
+
+/// The record a column of these values would have, its checksums, `by_sample` and facts, with
+/// no array written: a derived column's. `edges` are the samples' row bounds.
+pub(super) fn measured(name: &str, column: &crate::rvr::Held, edges: &[usize]) -> Result<Map<String, Value>> {
+    let w = width(&column.kind)?;
+    if !column.bytes.len().is_multiple_of(w) {
+        return Err(invalid(format!("{name}: bytes do not hold its values")));
+    }
+    let counts = column.offsets.as_ref().map(|o| Cow::Owned(o.windows(2).map(|w| w[1] - w[0]).collect()));
+    let whole = Whole {
+        kind: column.kind.clone(),
+        w,
+        bytes: Cow::Borrowed(&column.bytes),
+        counts,
+    };
+    Ok(laid(name, &whole, edges, None, None)?.record)
+}
+
+/// Measure a column's pieces and, with `out`, write their arrays.
+fn laid<'w>(
+    name: &str,
+    pieces: &dyn Pieces,
+    edges: &[usize],
+    labels: Option<&BTreeMap<i128, String>>,
+    mut out: Option<&mut (dyn Write + 'w)>,
+) -> Result<Packed> {
+    let rows = edges[edges.len() - 1];
     let total: usize = (0..pieces.pieces()).map(|p| pieces.values(p)).sum();
-    let size = |record: &Map<String, Value>| record["size"].as_u64().unwrap_or(0) as usize;
+    let size = |record: &Map<String, Value>| record.get("size").and_then(Value::as_u64).unwrap_or(0) as usize;
     let mut record = Map::new();
     record.insert("name".into(), name.into());
     if !pieces.listed() {
@@ -719,7 +753,7 @@ pub(super) fn column(
         &format!("{name} offsets"),
         &steps,
         &Measure::Steps(edges),
-        out,
+        out.as_deref_mut(),
     )?;
     let mut content = Map::new();
     content.insert("kind".into(), pieces.kind().into());

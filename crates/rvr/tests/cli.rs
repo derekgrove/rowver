@@ -55,7 +55,7 @@ fn pressed(path: &Path, met_b: f32, xsec_b: f64) {
         .into();
     write(
         path,
-        &json!({"rowver": 14, "data": data, "made": made}),
+        &json!({"rowver": 15, "data": data, "made": made}),
         &arrays,
     )
     .unwrap();
@@ -118,6 +118,8 @@ fn validate_header_and_dump_read_a_pressed_file() {
         (code, said),
         (0, format!("{file}: valid, 5 rows, 2 columns, not signed\n"))
     );
+    // A flag it does not know is refused (on stderr), not read past.
+    assert_eq!(rvr(&["validate", file, "--parent", file]), (2, String::new()));
     let (code, said) = rvr(&["header", file]);
     let header: Value = serde_json::from_str(&said).unwrap();
     assert_eq!((code, header["data"]["rows"].as_u64()), (0, Some(5)));

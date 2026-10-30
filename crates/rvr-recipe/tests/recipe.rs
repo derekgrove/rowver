@@ -302,6 +302,21 @@ fn edge_cases_follow_the_documented_rules() {
     );
 }
 
+#[test]
+fn float_functions_give_the_same_bits_on_every_platform() {
+    // The libm crate's results; macOS's own cos and exp give each a last bit one lower.
+    let x = Array::Event(Values::float(Kind::F8, vec![0.46, 0.27]));
+    let held = Held([("x".to_owned(), x)].into_iter().collect());
+    let (sample, defines) = (BTreeMap::new(), BTreeMap::new());
+    let scope = Scope::new(&held, &sample, &defines);
+    let bits = |text: &str| match scope.evaluate(&parse(text).unwrap()).unwrap() {
+        Array::Event(Values { store: Store::Float(held), .. }) => held.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(bits("cos(x)")[0], 0x3fecac76498be14c);
+    assert_eq!(bits("exp(x)")[1], 0x3ff4f59d48ad2682);
+}
+
 /// A bare name is a defined name or a column; any other is refused as an unknown column,
 /// wherever it stands, and a collection's prefix alone is no name.
 #[test]
@@ -548,6 +563,8 @@ n_negative = "count(negative)"
         "[define] a uses b, which is defined below it: a defined name may use only the names defined above it"
     );
     assert!(refused("[define]\na = \"a + 1\"\n").contains("[define] a uses a, itself"));
+    // branch('b') reads the branch b, not the name b defined below it.
+    assert!(Recipe::read("format = \"rvr-recipe\"\nversion = 1\n[define]\na = \"branch('b') * 2\"\nb = \"PT_lep\"\n").is_ok());
     // A function always has brackets, so a defined name may share a function's name.
     assert!(Recipe::read("format = \"rvr-recipe\"\nversion = 1\n[define]\nfirst = \"PT_lep\"\n").is_ok());
     assert!(refused("[define]\n\"good-lep\" = \"PT_lep\"\n").contains("one plain name"));
@@ -556,7 +573,7 @@ n_negative = "count(negative)"
         .contains("[define] good must be an expression in quotes"));
     assert_eq!(
         refused("[object.good]\nfrom = \"lep\"\n"),
-        "A recipe has no [object] table: write it as a line of [define], a mask: good_muon = \"Muon_pt > 20 and Muon_tightId\", used as Muon_pt[good_muon]. A recipe's tables are [define], [keep] and [columns]."
+        "A recipe has no [object] table: write it as a line of [define], a mask: good_muon = \"Muon_pt > 20 and Muon_tightId\", used as Muon_pt[good_muon]. A recipe's tables are [define], [keep], [columns] and [derived]."
     );
     for (table, became) in [
         ("copy", "branches = [...]"),
@@ -566,7 +583,7 @@ n_negative = "count(negative)"
     ] {
         assert!(refused(&format!("[{table}]\n")).contains(became), "{table}");
     }
-    assert!(refused("[derive]\n").contains("A recipe has no setting named derive; it takes format, version, title, define, keep, columns"));
+    assert!(refused("[derive]\n").contains("A recipe has no setting named derive; it takes format, version, title, define, keep, columns, derived"));
     assert!(
         refused("[keep]\nx = { if = \"sample.y == 1\", pass = \"PT_lep\" }\n").contains(
             "[keep] x: a cut for some samples says what it applies with apply = \"…\", not pass"
@@ -589,6 +606,24 @@ n_negative = "count(negative)"
     // A dot after anything but sample is refused, saying how to name a branch with a dot in it.
     assert!(refused("[columns]\npt = \"sum(AnalysisJetsAuxDyn.pt)\"\n")
         .contains("a branch whose name holds a dot is written branch('AnalysisJetsAuxDyn.pt')"));
+    // A derived column uses what the file holds: the stored columns and the derived ones above.
+    let derived = "[define]\ngood = \"PT_lep > 1\"\n[columns]\nbranches = [\"PT_lep\"]\nn = \"count(good)\"\n";
+    let read = Recipe::read(&format!("{head}{derived}[derived]\nhalf = \"n / 2\"\nquarter = \"half / 2\"\n")).unwrap();
+    assert_eq!(read.derived, [("half".to_owned(), "n / 2".to_owned()), ("quarter".to_owned(), "half / 2".to_owned())]);
+    for (line, said) in [
+        ("x = \"good\"", "x uses good, but good is a line of [define], which the file does not keep"),
+        ("x = \"Eta_lep\"", "x uses Eta_lep, but the file does not store Eta_lep"),
+        ("x = \"y\"\ny = \"n\"", "x uses y, but y is a derived column below it"),
+        ("n = \"PT_lep\"", "n is already the name of a column or of a line of [define]"),
+        ("good = \"n\"", "good is already the name of a column or of a line of [define]"),
+        ("entry = \"n\"", "a derived column is named with one plain name"),
+        ("x = \"branch('Eta_lep')\"", "x uses Eta_lep, but the file does not store Eta_lep"),
+        ("x = \"branch('y') + 1\"\ny = \"n\"", "x uses y, but y is a derived column below it"),
+        ("x = \"branch(sample.trigger)\"", "branch(sample.KEY) names another column for each sample"),
+    ] {
+        let wrong = Recipe::read(&format!("{head}{derived}[derived]\n{line}\n")).unwrap_err().0;
+        assert!(wrong.contains(said), "{line}: {wrong}");
+    }
     // Every table empty, or left out, is the same recipe.
     let empty = Recipe::read("format = \"rvr-recipe\"\nversion = 1\n[define]\n[keep]\n[columns]\n")
         .unwrap();

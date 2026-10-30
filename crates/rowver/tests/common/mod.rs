@@ -1,5 +1,5 @@
 //! A small file every test of this crate reads: the columns, samples and study it holds, built
-//! with the writer, and the bytes of it committed as `fixtures/rowver-v14.hex`.
+//! with the writer, and the bytes of it committed as `fixtures/rowver-v15.hex`.
 #![allow(dead_code)]
 
 use rowver::write::{
@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 /// The committed fixture's bytes; `ROWVER_BLESS=1` writes them again from `rebuilt(10.)`.
 pub fn golden() -> Vec<u8> {
     let path = format!(
-        "{}/tests/fixtures/rowver-v14.hex",
+        "{}/tests/fixtures/rowver-v15.hex",
         env!("CARGO_MANIFEST_DIR")
     );
     if std::env::var_os("ROWVER_BLESS").is_some() {
@@ -150,7 +150,7 @@ pub fn rebuilt(muon: f32) -> (Value, Vec<Vec<u8>>) {
         .into();
     made["sha256"] = made_checksum(&made).unwrap().into();
     let header =
-        json!({"rowver": 14, "data": data, "made": made, "fixture_tool": {"preserved": "μ"}});
+        json!({"rowver": 15, "data": data, "made": made, "fixture_tool": {"preserved": "μ"}});
     (header, arrays)
 }
 

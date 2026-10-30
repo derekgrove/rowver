@@ -2,6 +2,7 @@
 //! `.rvr` files. The command's whole work is `run`, which the Python package calls too.
 
 mod branches;
+pub mod derive;
 mod diff;
 mod dump;
 mod fill;
@@ -34,8 +35,9 @@ const USAGE: &str = "usage:
                                            the branches a sample's file holds
   rvr try \"EXPRESSION\" [DIR] [--events N] [--sample NAME] [--kept]
                                            what an expression gives on a sample's first events
-  rvr validate FILE... [--parent PARENT] [--complete]
-                                           check files; a derived file against its parent;
+  rvr derive FILE 'NAME = EXPRESSION'... | --drop NAME... | --rename OLD NEW
+                                           add, drop or rename derived columns of a pressed file
+  rvr validate FILE... [--complete]        check files, their derived columns worked out too;
                                            --complete fails a file with holes
   rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns]
                                            the header in full, the study's texts, every column
@@ -75,6 +77,7 @@ pub fn run(args: &[String]) -> u8 {
     let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
     match words.first() {
         Some(&"press") => return press::main(&rest),
+        Some(&"derive") => return derive::main(&rest),
         Some(&"status") => return status::main(&rest),
         Some(&"try") => return trying::main(&rest),
         Some(&"branches") => return branches::main(&rest),
@@ -82,6 +85,16 @@ pub fn run(args: &[String]) -> u8 {
         Some(&"key") => return key::main(&rest),
         Some(&"proxy") => return proxy::main(&rest),
         _ => {}
+    }
+    let known: &[&str] = match words.first().copied() {
+        Some("validate") => &["--complete"],
+        Some("dump") => &["--files", "--recipe", "--samples", "--lock", "--columns"],
+        Some("help") | None => &["--version", "--help"],
+        _ => &[],
+    };
+    if let Some(flag) = flags.iter().find(|flag| !known.contains(flag)) {
+        eprintln!("rvr: {} does not know {flag}.\n{USAGE}", words.first().unwrap_or(&"rvr"));
+        return 2;
     }
     let code = match (words.first().copied(), &words[1.min(words.len())..]) {
         (Some("new"), [dir]) => report(new::main(dir)),
@@ -165,47 +178,19 @@ fn header(file: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// One line per file: valid, or the first problem found. The parent, when named, is checked
-/// as a file itself and compared with what each derived file records of it. With `--complete`,
-/// a valid file with holes fails too.
+/// One line per file: valid, or the first problem found. Every derived column is worked out and
+/// checked against what the file records of it. With `--complete`, a valid file with holes fails
+/// too.
 fn validate(words: &[&str], args: &[String]) -> u8 {
     let complete = args.iter().any(|a| a == "--complete");
-    let parent = args
-        .iter()
-        .position(|a| a == "--parent")
-        .and_then(|i| args.get(i + 1));
-    let files: Vec<&&str> = words
-        .iter()
-        .filter(|w| Some(**w) != parent.map(String::as_str))
-        .collect();
     let mut ok = true;
-    let above = parent.map(|p| {
-        let checked = rowver::rvr::validate_file(p);
-        ok &= said(
-            p,
-            &checked
-                .as_ref()
-                .map(|s| (s.rows, s.columns, String::from("checked as the parent")))
-                .map_err(ToString::to_string),
-        );
-        checked.ok().map(|s| s.header)
-    });
-    for file in files {
+    for file in words {
         let checked = rowver::rvr::validate_file(file).map_err(|e| e.to_string());
         let compared = checked.and_then(|summary| {
-            let derived = summary.header.get("derived").is_some();
-            match (&above, derived) {
-                (Some(Some(parent)), true) => rowver::rvr::confirm_parent(&summary.header, parent)
-                    .map_err(|e| format!("its parent is not the file it records: {e}"))?,
-                (Some(None), true) => return Err("its parent is not a valid file".into()),
-                (None, true) => {
-                    println!("{file}: the parent was not checked (name it with --parent)")
-                }
-                (Some(_), false) => {
-                    println!("{file}: the parent was not compared: this file is not derived")
-                }
-                (None, false) => {}
-            }
+            let derived = match summary.derived {
+                0 => String::new(),
+                n => format!("{n} derived, "),
+            };
             let signed = match summary.header.get("signature") {
                 Some(signature) => key::signer(signature["key"].as_str().unwrap_or_default()),
                 None => "not signed".into(),
@@ -216,7 +201,8 @@ fn validate(words: &[&str], args: &[String]) -> u8 {
                 None => String::new(),
             };
             let holes = rowver::rvr::holes(&summary.header);
-            Ok((summary.rows, summary.columns, read + &holed(&holes) + &signed, holes.is_empty()))
+            let said = derived + &read + &holed(&holes) + &signed;
+            Ok((summary.rows, summary.columns, said, holes.is_empty()))
         });
         // With --complete, a file with holes fails, on its one line.
         let compared = compared.and_then(|(rows, columns, said, whole)| match complete && !whole {

@@ -44,6 +44,11 @@ fn names(header: &Value) -> Vec<String> {
 }
 
 #[test]
+fn the_format_version_is_the_crate_major_version() {
+    assert_eq!(rowver::VERSION.to_string(), env!("CARGO_PKG_VERSION_MAJOR"));
+}
+
+#[test]
 fn reader_gives_the_columns_the_fixture_holds() {
     let bytes = golden();
     let table = from_bytes(&bytes).unwrap();

@@ -257,6 +257,16 @@ fn changes(old: &str, now: &str) -> String {
     if reuse::cuts(&old) != reuse::cuts(&now) {
         said.push("the cuts under [keep] changed".into());
     }
+    // A derived column is its name and expression: one with another expression is changed.
+    let derived = |recipe: &Recipe| -> Vec<String> { recipe.derived.iter().map(|(n, _)| n.clone()).collect() };
+    let (was, is) = (derived(&old), derived(&now));
+    let expression = |recipe: &Recipe, name: &str| recipe.derived.iter().find(|(n, _)| n == name).map(|(_, e)| e.clone());
+    said.extend(list("new derived:", is.iter().filter(|n| !was.contains(n)).collect()));
+    said.extend(list(
+        "changed derived:",
+        is.iter().filter(|n| was.contains(n) && expression(&old, n) != expression(&now, n)).collect(),
+    ));
+    said.extend(list("dropped derived:", was.iter().filter(|n| !is.contains(n)).collect()));
     match said.is_empty() {
         true => "edited since, with every cut and column the same".into(),
         false => format!("changed since: {}", said.join("; ")),

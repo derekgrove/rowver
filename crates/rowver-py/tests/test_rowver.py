@@ -37,6 +37,10 @@ jets = "nJet >= 1"
 [columns]
 branches = ["weight", "nJet", "Jet_pt", "isGood"]
 ht = "sum(Jet_pt)"
+
+[derived]
+ht_per_jet = "ht / nJet"
+hard_pt = "Jet_pt[Jet_pt > 30]"
 """
 
 
@@ -82,6 +86,34 @@ class Pressed(unittest.TestCase):
         self.assertIsNone(f.signed_by)
         self.assertEqual(rowver.validate(self.path), (4, 5))
 
+    def test_derived_columns_are_worked_out_and_read_as_any_other(self):
+        f = self.file
+        self.assertEqual(f.derived, ["ht_per_jet", "hard_pt"])
+        self.assertIn("ht_per_jet", f)
+        self.assertIn("2 derived", repr(f))
+        np.testing.assert_array_equal(f["ht_per_jet"], f["ht"] / f["nJet"])
+        self.assertEqual(f["ht_per_jet"].dtype, np.float64)
+        self.assertFalse(f["ht_per_jet"].flags.writeable)
+        if has("awkward"):
+            import awkward
+            self.assertEqual(awkward.to_list(f["hard_pt"]), [[p for p in row if p > 30] for row in awkward.to_list(f["Jet_pt"])])
+        f.forget("ht_per_jet")
+        self.assertNotIn("ht_per_jet", f._held)
+        np.testing.assert_array_equal(f["ht_per_jet"], f["ht"] / f["nJet"])
+        f.forget()
+        self.assertEqual(f._held, {})
+
+    def test_validate_works_out_every_derived_column(self):
+        # One hex digit of a derived record changed: every stored checksum still holds.
+        data = bytearray(self.path.read_bytes())
+        at = data.index(b'"sha256":"', data.index(b'"name":"ht_per_jet"')) + len(b'"sha256":"')
+        data[at] = ord("0") if data[at] != ord("0") else ord("1")
+        changed = self.dir / "changed.rvr"
+        changed.write_bytes(data)
+        with self.assertRaisesRegex(rowver.Error, "derived column ht_per_jet, worked out here, is not what"):
+            rowver.validate(changed)
+        changed.unlink()
+
     def test_flat_columns_are_numpy_arrays_of_their_kind(self):
         f = self.file
         np.testing.assert_array_equal(f["weight"], [1.0, 0.5, 2.25, 0.75])
@@ -102,14 +134,15 @@ class Pressed(unittest.TestCase):
     def test_list_columns_are_awkward_arrays(self):
         pt = self.file["Jet_pt"]
         self.assertEqual(pt.tolist()[0], [65.3125, 19.96875, 16.421875])
-        self.assertEqual(self.file.arrays().fields, self.file.columns)
+        self.assertEqual(self.file.arrays().fields, self.file.columns + self.file.derived)
 
     @unittest.skipUnless(has("pyarrow") and has("pandas"), "needs pyarrow and pandas")
     def test_arrow_pandas_and_parquet_hold_the_same(self):
         import pyarrow.parquet as pq
 
         table = self.file.to_arrow()
-        self.assertEqual(table.column_names, ["sample", "entry", *self.file.columns])
+        # Every column when none is named: the derived ones too, worked out.
+        self.assertEqual(table.column_names, ["sample", "entry", *self.file.columns, "ht_per_jet", "hard_pt"])
         self.assertEqual(table["sample"].to_pylist(), ["flat"] * 4)
         frame = self.file.to_pandas(["weight", "ht"])
         self.assertEqual(list(frame.columns), ["sample", "entry", "weight", "ht"])

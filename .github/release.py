@@ -13,7 +13,7 @@ import tomllib
 import urllib.error
 import urllib.request
 
-CRATES = ["rowver", "rvr-recipe", "rvr"]  # the order they are published in: each needs the ones before
+CRATES = ["rvr-recipe", "rowver", "rvr"]  # the order they are published in: each needs the ones before
 AGENT = {"User-Agent": "rowver-release (https://gitlab.cern.ch/dgrove/rowver)"}
 
 

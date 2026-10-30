@@ -32,17 +32,6 @@ pub struct Held {
     pub offsets: Option<Vec<usize>>,
 }
 
-/// The one checksum lineage records for a column: its array's, or for a list column the
-/// SHA-256 of its offsets' checksum followed by its content's.
-pub fn column_checksum(record: &Value) -> Result<String> {
-    if string(record, "kind")? != "jagged" {
-        return Ok(checksum(record)?.to_owned());
-    }
-    let offsets = checksum(object(record, "offsets")?)?;
-    let content = checksum(object(record, "content")?)?;
-    Ok(digest(format!("{offsets}{content}").as_bytes()))
-}
-
 impl Reader {
     /// Open a file and check every fact its header holds, without reading event arrays.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -161,9 +150,12 @@ impl Reader {
             .collect())
     }
 
-    /// Read one row column the file itself holds, or `None` when it holds none of that name.
+    /// Read one row column, stored or derived (worked out and checked), or `None` when there is none.
     pub fn column(&self, name: &str) -> Result<Option<Held>> {
         let Some(record) = self.record(name) else {
+            if super::derived::listed(&self.header).iter().any(|(n, _)| n == name) {
+                return super::derived::columns(self, &[name.to_owned()]).map(|mut held| held.pop());
+            }
             return Ok(None);
         };
         let rows = self.rows()?;

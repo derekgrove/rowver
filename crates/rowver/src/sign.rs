@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn a_signature_holds_until_the_header_changes() {
         let mut header =
-            json!({"rowver": 14, "data": {"rows": 1}, "made": {"study": "s"}, "tool": {}});
+            json!({"rowver": 15, "data": {"rows": 1}, "made": {"study": "s"}, "tool": {}});
         assert_eq!(verify(&header).unwrap(), None);
         sign(&mut header, &[7; 32]).unwrap();
         assert_eq!(verify(&header).unwrap(), Some(public_key(&[7; 32])));

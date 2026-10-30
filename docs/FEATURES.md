@@ -1,6 +1,6 @@
 # RowVer: a self-describing columnar format for reproducible event selection
 
-*The features of RowVer 14.3 (`.rvr` format version 14).*
+*The features of RowVer 15.0 (`.rvr` format version 15).*
 
 ## Abstract
 
@@ -43,7 +43,7 @@ RowVer contributes:
    language (§6);
 4. a press (§7) with bounded memory, atomic output, incremental re-pressing, typed holes,
    resumption, and a rule that tells a storage outage from a network outage;
-5. tools for inspection, comparison and reproduction (§8), derived files (§9), and readers for
+5. tools for inspection, comparison and reproduction (§8), derived columns (§9), and readers for
    Python and Rust (§10).
 
 ## 2. Design principles
@@ -159,7 +159,7 @@ column takes one read and one decode.
 - Every per-row array also carries `by_sample`: one SHA-256 per sample, over that sample's slice.
   For jagged offsets the slice is shifted to start at zero, so a change in one sample never
   changes another sample's checksum.
-- `made.sha256` (and `derived.sha256`) hash a canonical JSON encoding defined in
+- `made.sha256` hashes a canonical JSON encoding defined in
   [the format](FORMAT.md#canonical-json). Keys are sorted by code point, string escapes are
   fixed, and there is no whitespace. Integers are written as given and never turned into
   doubles, so a 64-bit seed is checksummed exactly. Every other number is written as the shortest decimal that reads back as
@@ -270,13 +270,14 @@ entries. The press refuses to run at all if `samples.toml` was edited after the 
 ### 6.1 Structure
 
 `recipe.toml` is TOML, and its values are expressions. It names the language and its version
-(`format = "rvr-recipe"`, `version = 1`) and has three tables:
+(`format = "rvr-recipe"`, `version = 1`) and has four tables:
 
 | table | role |
 |---|---|
 | `[define]` | names for expressions, which the lines below use as if they were branches; none is stored |
 | `[keep]` | the cuts, in order; an event is kept when every one is true, and the press reports the count after each (a cutflow) |
 | `[columns]` | what the file stores: `branches = [...]` copied as they are, and `NAME = "expression"` computed while pressing, optionally with a declared storage kind |
+| `[derived]` | `NAME = "expression"` over the stored columns: kept in the file as its expression and computed when it is read (§9) |
 
 Every branch is named in full, as the file spells it, so the language makes no guess about how an
 experiment names things: `Jet_pt` in CMS NanoAOD, `PT_jet` in an analysis ntuple, `lep_pt` in
@@ -462,24 +463,43 @@ press that leaves holes exits 3.
 | command | question it answers |
 |---|---|
 | `rvr status` | Does the study's file hold the study as it is now? It reports what changed in the recipe (columns new, changed or dropped; the cuts), whether `samples.toml` was edited or the lock resolved again, what a press would read, how complete each sample is, and the holes. It exits 0 only when the file is current, was pressed with the same choice, and is complete, so a script can ask before pressing. It reads no input. |
-| `rvr validate` | Does the file check out in full (§4.4)? One line per file: rows, columns, entries read of the entries the samples hold, holes by kind, and the signer. `--complete` fails a file with holes; `--parent` checks a derived file against its parent. |
-| `rvr dump` | What is inside? The full header, the three study texts, and every column with its kind, length and first values, or any one of these parts. |
+| `rvr validate` | Does the file check out in full (§4.4)? One line per file: rows, columns, derived columns (each worked out and checked), entries read of the entries the samples hold, holes by kind, and the signer. `--complete` fails a file with holes. |
+| `rvr dump` | What is inside? The full header, the three study texts, and every column with its kind, length and first values (a derived column worked out, with its expression), or any one of these parts. |
 | `rvr header` | The JSON header exactly as the file holds it, without reading any array. |
-| `rvr diff A B` | Where do two files differ? From the headers alone: rows, samples, columns, kinds, and each (column, sample) pair whose contents changed. |
+| `rvr diff A B` | Where do two files differ? From the headers alone: rows, samples, columns and derived columns, kinds, expressions, and each (column, sample) pair whose contents changed. |
 | `rvr reproduce` | Does the file's own study, pressed again, give the same data (§4.5)? |
 
-## 9. Derived files
+## 9. Derived columns
 
-A derived file holds columns computed from the columns of another `.rvr` file, its parent, without
-copying the parent's columns. It shares the parent's rows, samples, files and sample columns, and
-carries the parent's `made` unchanged. It names the parent by its checksums: `data.sha256`,
-`made.sha256`, and `derived.sha256` when the parent is itself derived. It also records the
-checksum of every parent column it read, the exact source text that computed its columns, the
-parameters, and what ran the source. Each column is marked with the SHA-256 of the source, a
-newline and the column's name, so any change to the source changes every mark. Derived files can
-form chains, each naming the step before it. The Rust library writes derived files
-(`rowver::write::derived`). `rvr validate --parent` checks one against its parent by validating
-the parent in full and comparing every recorded checksum.
+A column can be stored, an array in the file, or **derived**: kept as the expression that computes
+it from the file's own columns, `ht_over_met = "ht / MET_pt"` under the recipe's `[derived]`. A
+reader works a derived column out when it is first asked for, holds it as long as it is needed,
+and lets it go. The file holds no array of it, only its expression and what the press measured of
+its values when it worked it out, once: its kind, its checksums (whole and per sample) and its
+facts (`lim`, `nice`, `vals`). A reader that works one out checks it against that record, so a
+derived column is as trustworthy as a stored one; `rvr diff` compares it from the headers alone,
+and a plot gets its axis from `nice` without computing anything. The reference reader does the
+work (`Reader::column` in `rowver`), and every function of the recipe language gives the same bits
+on every platform: `exp`, `log`, `cos`, `sin`, `cosh`, `sinh`, `hypot` and `**` come from the
+`libm` crate, as the platforms' own math libraries do not agree. Measured, Apple's and musl's
+disagree in the last bit of 2 to 26% of double results over the ranges physics columns take, and
+on the bench every one of twelve such columns came out different; the `libm` crate costs 1.6% of
+a press of all twelve (6.93 s against 6.82 s, within the run-to-run spread).
+
+A derived expression uses only what the file holds: the stored columns, the derived columns above
+it, and the sample's metadata. `Recipe::read` checks that before anything is pressed. Derived
+columns are added to a pressed file, dropped from it or renamed with `rvr derive FILE`, which
+first checks the derived columns it has, records only what is new, and keeps the recipe the file
+carries in step, so that `rvr reproduce` still makes the same file; the study's `recipe.toml` is
+left to the analyst. An expression is never changed in place: it is dropped and added again.
+Changing only `[derived]` in a study reads no ROOT file: the press copies every stored column from
+the earlier file and works the derived columns out from it.
+
+The trade is space for time, the analyst's to choose column by column. On the 2.1 M-row bench (300
+copies of the TChiWZ skim, Apple M5), seven typical computed columns take 55 bytes per row when
+stored, 54% more than the ten columns they are computed from. Kept as derived columns they cost
+nothing in the file, 0.9 s more at press time to measure them, and 0.97 s to work all seven out in
+Python, against 0.06 s to read them stored; a simple one such as `sum(PT_jet)` takes 0.08 s.
 
 ## 10. Reading files from programs
 
@@ -490,10 +510,13 @@ column as an Awkward array. Several columns asked for together are read in paral
 converts to an Awkward record array, a pyarrow table, a pandas data frame (with the sample as a
 categorical) or Parquet. The package also exposes what the header says: the samples and their
 labels, the sample columns, the recipe and study texts, the signer, and the holes with a
-`complete` flag. Only NumPy is required; Awkward, pandas and pyarrow are used when installed.
+`complete` flag. A derived column is read as any other, `f["name"]`, worked out when first asked
+for; `f.derived` names them, and `f.forget(...)` lets columns go from memory. Only NumPy is
+required; Awkward, pandas and pyarrow are used when installed.
 
 The Rust crate `rowver` is the reference implementation of the format. `rowver::rvr` reads and
-validates files, `rowver::write` builds them in memory or through a spool on disk, `rowver::sign`
+validates files, `rowver::write` builds them in memory or through a spool on disk (and measures a
+derived column's record), `rowver::sign`
 signs and verifies, and `rowver::choice` implements the event choice. The crate's major version is
 the format version.
 
@@ -534,18 +557,19 @@ above 150 GeV and two leptons, and stores 7 branches.
 | `--fill` of one file's hole in the 30-file study | 0.16 s, against 0.39 s for a full press |
 | journal and checkpoints | at most 1.5% (0.395 s with, 0.397 s without; 90 files on one worker: 5.655 s with, 5.609 s without) |
 | progress display | under 1% (0.397 s with, 0.394 s without) |
+| seven computed columns on the 2.1 M-row bench: stored, or kept as derived columns | stored: 55 bytes per row, read in 0.06 s; derived: no bytes, 0.9 s more to press, worked out in 0.97 s |
 | 12 M rows of 31 columns, 1.5 GB output, 4 workers | 0.3 GB peak memory, against 4.9 GB when holding every row |
 | resolving 307 files of a 353-sample study | about 8 s |
-| the whole WZTo3LNu UL18 NanoAOD dataset (9.8 M entries, 18 files, 14.9 GB on storage), read over the wide-area network | 41.4 s with 10 workers and 148.8 s with one (rvr 0.2.0, 291 MB of branches); 29.5 s with 14.3.0 (419 MB of branches) |
+| the whole WZTo3LNu UL18 NanoAOD dataset (9.8 M entries, 18 files, 14.9 GB on storage), read over the wide-area network | 41.4 s with 10 workers and 148.8 s with one (2026-10-19, 291 MB of branches); 29.5 s with 10 workers (2026-10-29, 419 MB of branches) |
 
 The last row depends on the network and the storage sites, and is given as an illustration only.
-rvr 0.2.0 passed over eight of that dataset's storages, whose grid authorities it did not carry.
-14.3.0 carries them, and Fermilab served 5 of the files.
+On 2026-10-19 rvr did not yet carry the grid authorities of eight of that dataset's storages, and
+passed over them; it carries them now, and on 2026-10-29 Fermilab served 5 of the files.
 
 ## 13. Scope and limitations
 
-- A version 14 reader reads version 14 only. A file of an earlier version is pressed again from
-  its study. A 14.2 reader refuses a file with holes.
+- A version 15 reader reads version 15 only. A file of any other version is pressed again from
+  its study.
 - The ROOT reader handles numeric branches, flat or jagged (counted arrays, split members,
   `std::vector`), in every codec ROOT writes (zlib, LZ4, zstd, LZMA). `rvr` reads neither
   RNTuple, nor whole objects, strings or nested vectors; `rvr branches` lists such branches as

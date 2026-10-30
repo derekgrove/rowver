@@ -1,4 +1,4 @@
-//! rowver's canonical JSON, which `made.sha256`, `derived.sha256` and a signature are taken of:
+//! rowver's canonical JSON, which `made.sha256` and a signature are taken of:
 //! keys sorted, no spaces, UTF-8, whole numbers as written, floats in their shortest digits.
 //! (The rule is the bytes Python's `json.dumps(sort_keys=True, separators=(",", ":"),
 //! ensure_ascii=False)` gives, which is where it came from; docs/FORMAT.md states it on its own.)

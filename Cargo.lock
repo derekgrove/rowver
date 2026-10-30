@@ -378,9 +378,12 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hep-columns"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "820091ef37602f81e2a5175fddb485585ac861182854bedb41e2c7b9660d7fad"
+checksum = "a7080f7b07159f95af2007e251cd14e8b65344b975960a44b7c2f94e28e42a5b"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "hep-root"
@@ -888,10 +891,12 @@ dependencies = [
 
 [[package]]
 name = "rowver"
-version = "14.3.0"
+version = "15.0.0"
 dependencies = [
  "ed25519-dalek",
+ "libm",
  "ruzstd",
+ "rvr-recipe",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -901,7 +906,7 @@ dependencies = [
 
 [[package]]
 name = "rowver-py"
-version = "14.3.0"
+version = "15.0.0"
 dependencies = [
  "numpy",
  "pyo3",
@@ -1013,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "rvr"
-version = "14.3.0"
+version = "15.0.0"
 dependencies = [
  "cms-dbs",
  "grid-catalog",
@@ -1033,9 +1038,10 @@ dependencies = [
 
 [[package]]
 name = "rvr-recipe"
-version = "14.3.0"
+version = "15.0.0"
 dependencies = [
  "hep-columns",
+ "libm",
  "serde_json",
  "thiserror",
  "toml",

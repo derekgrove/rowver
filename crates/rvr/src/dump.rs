@@ -27,14 +27,19 @@ fn first(kind: &str, bytes: &[u8], n: usize) -> String {
     format!("[{}{more}]", values.join(", "))
 }
 
-/// One line for a column: name, kind, length, first values.
-fn show(name: &str, held: &Held) {
+/// One line for a column: name, kind, length, first values; for a derived column, `derived`
+/// and the expression it is worked out by, too.
+fn show(name: &str, held: &Held, expression: Option<&str>) {
     let w = width(&held.kind);
+    let derived = match expression {
+        Some(expression) => format!("derived = {expression:?}  "),
+        None => String::new(),
+    };
     match &held.offsets {
         None => {
             let count = held.bytes.len() / w;
             println!(
-                "{name:14} {}[{count}]  {}",
+                "{name:14} {}[{count}]  {derived}{}",
                 held.kind,
                 first(&held.kind, &held.bytes, 5)
             );
@@ -47,7 +52,7 @@ fn show(name: &str, held: &Held) {
                 .collect();
             let more = if offsets.len() > 4 { ", ..." } else { "" };
             println!(
-                "{name:14} jagged {}[{}]  [{}{more}]",
+                "{name:14} jagged {}[{}]  {derived}[{}{more}]",
                 held.kind,
                 offsets.len() - 1,
                 lists.join(", ")
@@ -66,7 +71,7 @@ fn width(kind: &str) -> usize {
     }
 }
 
-/// One of the study's texts, or a derived file's source, between two marker lines.
+/// One of the study's texts between two marker lines.
 fn print_source(source: &str, name: &str) {
     println!("##### begin {name} #####");
     print!("{source}");
@@ -91,7 +96,26 @@ fn print_columns(reader: &Reader) -> Result<(), String> {
             .column(name)
             .map_err(|e| e.to_string())?
             .ok_or(format!("no column {name}"))?;
-        show(name, &held);
+        show(name, &held, None);
+    }
+    // The derived columns are worked out together, each column they use read once; when that
+    // fails, one at a time, to say which cannot be.
+    let derived = rowver::rvr::derived::listed(reader.header());
+    let names: Vec<String> = derived.iter().map(|(name, _)| name.clone()).collect();
+    let together = rowver::rvr::derived::columns(reader, &names);
+    for (at, (name, expression)) in derived.iter().enumerate() {
+        let alone;
+        let held = match &together {
+            Ok(held) => Ok(&held[at]),
+            Err(_) => {
+                alone = rowver::rvr::derived::columns(reader, std::slice::from_ref(name));
+                alone.as_ref().map(|held| &held[0])
+            }
+        };
+        match held {
+            Ok(held) => show(name, held, Some(expression)),
+            Err(why) => println!("{name:14} derived = {expression:?}  (not worked out: {why})"),
+        }
     }
     let names: Vec<&str> = data["samples"]
         .as_array()
@@ -158,20 +182,9 @@ pub fn main(file: &str, flags: &[&str]) -> Result<(), String> {
                 .and_then(|r| r.get_mut("text"));
             placed(at, format!("[printed below as {title}]"));
         }
-        let derived = header
-            .get("derived")
-            .and_then(|d| d.get("source"))
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let at = header.get_mut("derived").and_then(|d| d.get_mut("source"));
-        placed(at, "[printed below as derived source]".into());
         println!("{}\n", serde_json::to_string_pretty(&header).unwrap());
         for ((_, _, title), text) in TEXTS.iter().zip(&texts) {
             print_source(text, title);
-            println!();
-        }
-        if let Some(derived) = derived {
-            print_source(&derived, "derived source");
             println!();
         }
         return print_columns(&reader);

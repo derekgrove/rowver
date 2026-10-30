@@ -12,19 +12,16 @@ use std::sync::Arc;
 
 mod arrays;
 mod cancellation;
-mod derived;
+pub mod derived;
 mod facts;
 mod identity;
 mod reader;
 pub(crate) mod samples;
 mod snapshot;
-mod stack;
 
 use arrays::Arrays;
 use cancellation::{CancelReader, Cancellation};
-pub use derived::confirm_parent;
-pub use reader::{column_checksum, Held, Reader};
-pub use stack::{ancestry, Stack};
+pub use reader::{Held, Reader};
 
 const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
 
@@ -70,6 +67,8 @@ pub fn holes(header: &Value) -> Vec<Hole> {
 pub struct CheckpointSummary {
     pub rows: usize,
     pub columns: usize,
+    /// How many derived columns it has, each worked out and checked.
+    pub derived: usize,
     pub header: Value,
 }
 
@@ -109,9 +108,16 @@ fn validate_stream(path: &Path, cancellation: Cancellation<'_>) -> Result<Checkp
     file.read_exact(&mut text)?;
     let header = checked_header(&text)?;
     read_body(&header, Arrays::new(file, size - start, cancellation), drop)?;
+    cancellation.check()?;
+    // Only a file with derived columns is opened again, to work them out.
+    let derived = match derived::agreed(&header)? {
+        0 => 0,
+        _ => derived::checked_while(&Reader::open(path)?, &|| cancellation.check())?,
+    };
     Ok(CheckpointSummary {
         rows: count(object(&header, "data")?, "rows")?,
         columns: list(object(&header, "data")?, "cols")?.len(),
+        derived,
         header,
     })
 }
@@ -156,7 +162,7 @@ fn version(header: &Value) -> Result<()> {
 
 /// Parse a header's text and check every fact it holds that needs no array: its version, its
 /// `made` (the recipe, samples and lock texts and their checksums), the sample records, the
-/// sample columns, `data.sha256`, a derived file's lineage, and the signature, when it has one.
+/// sample columns, `data.sha256`, the derived columns' records, and the signature, when it has one.
 pub fn checked_header(text: &[u8]) -> Result<Value> {
     let header: Value = serde_json::from_slice(text)?;
     version(&header)?;
@@ -171,14 +177,11 @@ pub fn checked_header(text: &[u8]) -> Result<Value> {
     let data = object(&header, "data")?;
     let made = object(&header, "made")?;
     snapshot::validate(made)?;
-    match header.get("derived") {
-        Some(lineage) => {
-            let order = derived::column_order(text)?;
-            derived::validate(lineage, data, made, order.as_deref())?
-        }
-        None => snapshot::columns(made, list(data, "cols")?)?,
-    }
+    snapshot::columns(made, list(data, "cols")?)?;
     samples::columns(data, made)?;
+    if let Some(derived) = header.get("derived") {
+        derived::validate(derived, data)?;
+    }
     identity::records(data, made)?;
     if data_checksum(data)? != checksum(data)? {
         return Err(invalid(
@@ -189,30 +192,17 @@ pub fn checked_header(text: &[u8]) -> Result<Value> {
     Ok(header)
 }
 
-/// Read an existing checkpoint without opening its source ROOT files.
+/// Read a file's stored columns and check them, as `from_bytes` does.
 pub fn load(path: impl AsRef<Path>) -> Result<Arc<Table>> {
     from_bytes(&std::fs::read(path)?)
 }
 
-/// Decode and validate a complete pressed file.
+/// Decode a file's stored columns and check them; `validate_file` works its derived columns out too.
 pub fn from_bytes(bytes: &[u8]) -> Result<Arc<Table>> {
-    let table = decode(bytes)?;
-    if table.header.get("derived").is_some() {
-        return Err(invalid(
-            "This file holds only derived columns; open it together with its parent",
-        ));
-    }
-    Ok(table)
+    decode(bytes)
 }
 
-/// Load a derived file's own columns after confirming the parent on disk is the one it names.
-pub fn load_derived(path: impl AsRef<Path>, parent: impl AsRef<Path>) -> Result<Arc<Table>> {
-    let table = decode(&std::fs::read(path)?)?;
-    confirm_parent(&table.header, &validate_file(parent)?.header)?;
-    Ok(table)
-}
-
-/// Decode and validate one complete container, pressed or derived.
+/// Decode and validate one complete container.
 fn decode(bytes: &[u8]) -> Result<Arc<Table>> {
     let start = header_end(bytes, bytes.len())?;
     let header = checked_header(&bytes[12..start])?;

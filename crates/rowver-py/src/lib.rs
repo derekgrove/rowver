@@ -92,17 +92,23 @@ impl File {
         Ok(values.into_pyarray(py))
     }
 
-    /// The columns of these names, read at once on every core; `None` for a name the file holds
-    /// no column of.
+    /// The columns of these names: the stored ones read at once on every core, then the derived
+    /// ones worked out together; `None` for a name the file holds no column of.
     fn columns<'py>(
         &self,
         py: Python<'py>,
         names: Vec<String>,
     ) -> PyResult<Vec<Option<Column<'py>>>> {
+        let listed = rowver::rvr::derived::listed(self.reader.header());
+        let derived: Vec<String> = listed.into_iter().map(|(name, _)| name).filter(|name| names.contains(name)).collect();
         let read = py.detach(|| {
-            rowver::parallel::map(&names, rowver::parallel::cores(), |name| {
-                self.reader.column(name).map_err(|e| e.to_string())
-            })
+            let stored = rowver::parallel::map(&names, rowver::parallel::cores(), |name| match derived.contains(name) {
+                true => Ok(None),
+                false => self.reader.column(name).map_err(|e| e.to_string()),
+            })?;
+            let worked = rowver::rvr::derived::columns(&self.reader, &derived).map_err(|e| e.to_string())?;
+            let mut worked: std::collections::HashMap<&String, _> = derived.iter().zip(worked).collect();
+            Ok::<_, String>(names.iter().zip(stored).map(|(name, held)| worked.remove(name).or(held)).collect::<Vec<_>>())
         });
         Ok(read
             .map_err(|e| self.located(e))?

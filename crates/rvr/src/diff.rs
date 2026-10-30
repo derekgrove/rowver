@@ -41,8 +41,17 @@ fn find<'a>(list: &[(&str, &'a Value)], name: &str) -> Option<&'a Value> {
     list.iter().find(|(n, _)| *n == name).map(|(_, r)| *r)
 }
 
-/// Every line saying how two data sections differ; none when the headers show no difference.
-fn compare(a: &str, b: &str, first: &Value, second: &Value) -> Vec<String> {
+/// The records two lists both hold, by name, each named `what NAME`.
+fn pairs<'a>(lists: &[Vec<(&str, &'a Value)>; 2], what: &str) -> Vec<(String, &'a Value, &'a Value)> {
+    let first = lists[0].iter();
+    first
+        .filter_map(|(n, r)| Some((format!("{what} {n}"), *r, find(&lists[1], n)?)))
+        .collect()
+}
+
+/// Every line saying how two headers differ; none when they show no difference.
+fn compare(a: &str, b: &str, headers: [&Value; 2]) -> Vec<String> {
+    let (first, second) = (&headers[0]["data"], &headers[1]["data"]);
     let mut said = Vec::new();
     if first["rows"] != second["rows"] {
         said.push(format!(
@@ -58,7 +67,8 @@ fn compare(a: &str, b: &str, first: &Value, second: &Value) -> Vec<String> {
         .filter(|n| find(&samples[1], n).is_some())
         .collect();
     let columns = [named(&first["cols"]), named(&second["cols"])];
-    for (what, lists) in [("sample", &samples), ("column", &columns)] {
+    let derived = [named(&headers[0]["derived"]["columns"]), named(&headers[1]["derived"]["columns"])];
+    for (what, lists) in [("sample", &samples), ("column", &columns), ("derived column", &derived)] {
         for (i, file) in [(0, a), (1, b)] {
             for (name, _) in &lists[i] {
                 if find(&lists[1 - i], name).is_none() {
@@ -82,17 +92,16 @@ fn compare(a: &str, b: &str, first: &Value, second: &Value) -> Vec<String> {
     let differs = |one: &Value, other: &Value, sample: &str| {
         one["by_sample"][index(0, sample)] != other["by_sample"][index(1, sample)]
     };
-    let both: Vec<(&str, &Value, &Value)> = columns[0]
-        .iter()
-        .filter_map(|(n, r)| Some((*n, *r, find(&columns[1], n)?)))
+    let both: Vec<(String, &Value, &Value)> = pairs(&columns, "column")
+        .into_iter()
+        .chain(pairs(&derived, "derived column"))
         .collect();
     for (name, one, other) in &both {
         if kind(one) != kind(other) {
-            said.push(format!(
-                "column {name}: {} in {a}, {} in {b}",
-                kind(one),
-                kind(other)
-            ));
+            said.push(format!("{name}: {} in {a}, {} in {b}", kind(one), kind(other)));
+        }
+        if one["expression"] != other["expression"] {
+            said.push(format!("{name}: its expression is {} in {a}, {} in {b}", one["expression"], other["expression"]));
         }
     }
     for sample in &shared {
@@ -113,9 +122,9 @@ fn compare(a: &str, b: &str, first: &Value, second: &Value) -> Vec<String> {
                 .collect();
             match found.as_slice() {
                 [] => {}
-                ["values"] => said.push(format!("column {name}: differs in sample {sample}")),
+                ["values"] => said.push(format!("{name}: differs in sample {sample}")),
                 found => said.push(format!(
-                    "column {name}: differs in sample {sample} ({})",
+                    "{name}: differs in sample {sample} ({})",
                     found.join(", ")
                 )),
             }
@@ -168,9 +177,9 @@ pub fn main(a: &str, b: &str) -> u8 {
             return 2;
         }
     };
-    let said = compare(a, b, &first["data"], &second["data"]);
+    let said = compare(a, b, [&first, &second]);
     if said.is_empty() {
-        println!("The headers show no difference in rows, samples, columns, by_sample or sample columns.");
+        println!("The headers show no difference in rows, samples, columns, derived columns, by_sample or sample columns.");
         return 0;
     }
     println!("{}", said.join("\n"));

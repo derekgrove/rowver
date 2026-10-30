@@ -66,7 +66,7 @@ fn holes(record: &Value, label: &str, limit: u64) -> Result<Vec<(u64, u64)>> {
 }
 
 /// Require an object to hold exactly these keys, of which `optional` may be left out.
-fn exactly(value: &Value, keys: &[&str], optional: &[&str], label: &str) -> Result<()> {
+pub(super) fn exactly(value: &Value, keys: &[&str], optional: &[&str], label: &str) -> Result<()> {
     let mut held = value.as_object().map(Map::keys).into_iter().flatten();
     if let Some(key) = held.find(|key| !keys.contains(&key.as_str())) {
         // A key this reader does not know may be one a newer rowver writes.

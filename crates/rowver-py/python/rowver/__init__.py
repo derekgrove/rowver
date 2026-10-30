@@ -80,6 +80,12 @@ class File:
         return [c["name"] for c in self.header["data"]["cols"]]
 
     @property
+    def derived(self):
+        """The names of the derived columns: each kept as the expression that computes it from the
+        file's columns, worked out when first asked for, and read as any other column."""
+        return [c["name"] for c in self.header.get("derived", {}).get("columns", [])]
+
+    @property
     def sample_columns(self):
         """Each sample column (one value per sample, from its metadata): name -> values."""
         return {c["name"]: c["values"] for c in self.header["data"].get("sample_cols", [])}
@@ -129,10 +135,11 @@ class File:
         return self.rows
 
     def __contains__(self, name):
-        return name in self.columns or name in ROW
+        return name in self.columns or name in self.derived or name in ROW
 
     def __repr__(self):
-        return f"<rowver.File {self.path!r}: {self.rows} rows, {len(self.columns)} columns, {len(self.samples)} samples>"
+        derived = f", {len(self.derived)} derived" if self.derived else ""
+        return f"<rowver.File {self.path!r}: {self.rows} rows, {len(self.columns)} columns{derived}, {len(self.samples)} samples>"
 
     def __getitem__(self, name):
         """A column by name: a NumPy array, or an Awkward array for a list column. `sample` is
@@ -145,13 +152,13 @@ class File:
         return ak.Array(content)
 
     def read(self, names=None):
-        """Columns by name (all when not given), read at once on every core: name -> (values,
+        """Columns by name (every one, stored and derived, when not given), the stored ones read at once on every core: name -> (values,
         offsets), where `offsets` is None for a one-value-per-row column and otherwise says that
         row r holds values[offsets[r]:offsets[r + 1]]. The arrays are read-only."""
-        names = _names(names, self.columns)
+        names = _names(names, self.columns + self.derived)
         unknown = [n for n in names if n not in self]
         if unknown:
-            raise KeyError(f"{', '.join(map(str, unknown))}: not a column of {self.path}; it has {', '.join(self.columns)}")
+            raise KeyError(f"{', '.join(map(str, unknown))}: not a column of {self.path}; it has {', '.join(self.columns + self.derived)}")
         wanted = [n for n in dict.fromkeys(names) if n not in self._held and n not in ROW]
         for name, (kind, raw, offsets) in zip(wanted, self._file.columns(wanted)):
             if offsets is not None:
@@ -164,10 +171,19 @@ class File:
                 self._held[name] = (values, None)
         return {n: self._held[n] for n in names}
 
+    def forget(self, *names):
+        """Let go of columns held in memory, the ones named or else every one: each is read, or
+        worked out, again when next asked for."""
+        for name in names or list(self._held):
+            self._held.pop(name, None)
+
     def arrays(self, columns=None):
-        """The columns (all when not given) as one Awkward record array, a record per row."""
+        """The columns (every one, stored and derived, when not given) as one Awkward record
+        array, a record per row."""
         ak = _needs("awkward", "arrays()")
-        return ak.zip({n: self[n] for n in _names(columns, self.columns)}, depth_limit=1)
+        names = _names(columns, self.columns + self.derived)
+        self.read(names)  # at once: derived columns that share what they use work it out once
+        return ak.zip({n: self[n] for n in names}, depth_limit=1)
 
     def _arrow(self, name, values, offsets):
         """One column as Arrow: its values, or for a list column a list (64-bit offsets)."""
@@ -179,7 +195,7 @@ class File:
         """The columns (all when not given) as a pyarrow Table, with `sample` (each row's sample
         name) and `entry` first; a list column is an Arrow large list."""
         pa = _needs("pyarrow", "to_arrow()")
-        names = [n for n in _names(columns, self.columns) if n not in ROW]
+        names = [n for n in _names(columns, self.columns + self.derived) if n not in ROW]
         read = self.read([*ROW, *names])
         table = {
             "sample": pa.DictionaryArray.from_arrays(read["sample"][0], pa.array(self.samples)),
@@ -193,7 +209,7 @@ class File:
         and `entry` first. A flat column keeps its NumPy type; a list column needs pyarrow and is
         held as Arrow lists."""
         pd = _needs("pandas", "to_pandas()")
-        names = [n for n in _names(columns, self.columns) if n not in ROW]
+        names = [n for n in _names(columns, self.columns + self.derived) if n not in ROW]
         read = self.read([*ROW, *names])
         frame = {
             "sample": pd.Categorical.from_codes(read["sample"][0], self.samples),

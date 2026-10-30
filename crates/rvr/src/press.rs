@@ -43,6 +43,8 @@ const GAP: u64 = 2_000;
 /// The recipe reference, which lists every function an expression can call.
 const RECIPES: &str = "https://gitlab.cern.ch/dgrove/rowver/-/blob/main/crates/rvr-recipe/README.md";
 
+pub(crate) use rowver::rvr::derived::ADDED;
+
 /// The runs of entries a press reads of entries `[from, to)` of a file, as [first, last): every
 /// `CHUNK` entries, or for a random choice runs around its chosen entries (those in the range),
 /// cut where two are `gap` or more apart.
@@ -320,6 +322,7 @@ struct Shared<'a> {
     carries: bool,
     /// What the bars show.
     counts: &'a crate::progress::Counts,
+    tried: &'a Mutex<Tried>,
 }
 
 /// The branches of one open tree over the entries in hand, read when an expression first names them.
@@ -424,24 +427,7 @@ pub(crate) struct Taken {
     pub(crate) cutflow: Vec<u64>,
 }
 
-/// The metadata fields an expression can read: numbers, text, and truth values.
-pub(crate) fn fields(metadata: &Map<String, Value>) -> BTreeMap<String, Constant> {
-    let read = |value: &Value| match value {
-        Value::Bool(truth) => Some(Constant::Truth(*truth)),
-        Value::String(text) => Some(Constant::Text(text.clone())),
-        Value::Number(number) => match number.as_i64() {
-            Some(whole) if !number.to_string().contains(['.', 'e', 'E']) => {
-                Some(Constant::Whole(whole))
-            }
-            _ => number.as_f64().map(Constant::Float),
-        },
-        _ => None,
-    };
-    metadata
-        .iter()
-        .filter_map(|(name, value)| Some((name.clone(), read(value)?)))
-        .collect()
-}
+pub(crate) use rowver::rvr::derived::fields;
 
 /// Which events one cut lets through: those it does not apply to, and those that pass it.
 fn lets_through(cut: &rvr_recipe::Cut, scope: &Scope, entries: usize) -> Result<Vec<bool>, String> {
@@ -519,6 +505,56 @@ fn gather(held: &mut Gathered, column: Array, keep: &[bool], at: &str) -> Result
         if let Some(counts) = &mut held.counts {
             counts.push(to - from);
         }
+    }
+    Ok(())
+}
+
+/// One run's kept events as an expression reads them: its stored columns, and the derived ones so far.
+struct Run(RefCell<BTreeMap<String, Array>>);
+
+impl Columns for Run {
+    fn column(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
+        Ok(self.0.borrow().get(name).cloned())
+    }
+
+    fn has(&self, name: &str) -> bool {
+        self.0.borrow().contains_key(name)
+    }
+}
+
+/// The samples whose derived columns were worked out over a run of theirs as it was read, and the
+/// kind and shape each derived column had there.
+#[derive(Default)]
+struct Tried {
+    samples: BTreeSet<usize>,
+    seen: BTreeMap<String, Option<(Kind, bool)>>,
+}
+
+/// Work the derived columns out over the `rows` events a run kept, gathered since `before`.
+fn derived_tried(recipe: &Recipe, gathered: &[Option<Gathered>], before: &[Option<(usize, usize)>], sample: &BTreeMap<String, Constant>, rows: usize, seen: &mut BTreeMap<String, Option<(Kind, bool)>>) -> Result<(), String> {
+    let mut held = BTreeMap::new();
+    for (column, from) in gathered.iter().zip(before) {
+        let Some(column) = column else { continue };
+        let (bytes, counts) = from.unwrap_or((0, 0));
+        let values = Values::from_bytes(column.kind, &column.bytes[bytes..]);
+        let array = match &column.counts {
+            None => Array::Event(values),
+            Some(all) => {
+                let mut offsets = vec![0];
+                for count in &all[counts..] {
+                    offsets.push(offsets[offsets.len() - 1] + count);
+                }
+                Array::Object { offsets: Arc::new(offsets), values }
+            }
+        };
+        held.insert(column.name.clone(), array);
+    }
+    let run = Run(RefCell::new(held));
+    for (name, expression) in &recipe.derived {
+        let parsed = rvr_recipe::parse(expression).map_err(|e| format!("derived column {name}: {}", e.0))?;
+        let seen = seen.entry(name.clone()).or_default();
+        let array = rowver::rvr::derived::evaluate(name, &parsed, &run, sample, rows, seen).map_err(|e| e.to_string())?;
+        run.0.borrow_mut().insert(name.clone(), array);
     }
     Ok(())
 }
@@ -1138,6 +1174,7 @@ fn take(
     let mut cutflow = vec![0_u64; recipe.keep.len()];
     let (mut entry, mut rows) = (Vec::new(), 0);
     let mut holes: Vec<(u64, u64, Failed)> = Vec::new();
+    let mut tried = recipe.derived.is_empty();
     // Building on an earlier file, the events kept must be the ones it kept.
     let again = |entry: &[i64], from: usize| {
         match &input.kept {
@@ -1286,6 +1323,16 @@ fn take(
             };
             for (total, kept) in cutflow.iter_mut().zip(counted) {
                 *total += kept;
+            }
+            // The derived columns are worked out over the events one run of each sample kept, so
+            // that a mistake in one stops the press now, not once every file is read.
+            let kept_here = keep.iter().filter(|kept| **kept).count();
+            if !tried && kept_here > 0 {
+                tried = true;
+                let mut held = shared.tried.lock().unwrap_or_else(|e| e.into_inner());
+                if held.samples.insert(input.sample) {
+                    derived_tried(recipe, &gathered, &before, &sample, kept_here, &mut held.seen).map_err(|e| Failed::new(Fault::Mistake, located(e)))?;
+                }
             }
             let before = entry.len();
             entry.extend(
@@ -1643,6 +1690,11 @@ pub fn press(
     if let Some(sample) = lock.sample.iter().find(|s| s.metadata.contains_key("events_missing")) {
         return Err(format!("{} has a key events_missing in samples.toml, a name rvr press gives what a file with holes misses: give it another name, and resolve again.", sample.name));
     }
+    // A derived column has a name no sample column has, before anything is read.
+    let metadata = |name: &str| ADDED.contains(&name) || lock.sample.iter().any(|s| s.metadata.contains_key(name));
+    if let Some((name, _)) = recipe.derived.iter().find(|(name, _)| metadata(name)) {
+        return Err(format!("[derived] {name} has the name of a key of samples.toml, or of one rvr press gives every sample ({}): give the derived column another", ADDED.join(", ")));
+    }
     let outputs: Vec<Output> = recipe.columns.iter().collect();
     let filling = match on {
         On::Holes(kinds) => Some(crate::fill::plan(target, texts, &lock, &asked, kinds)?),
@@ -1864,6 +1916,7 @@ pub fn press(
         journal: &journal,
         carries,
         counts: &display.counts,
+        tried: &Mutex::new(Tried::default()),
     };
     // What was read made durable, and the folder kept when that holds any input.
     let save = || {
@@ -2042,16 +2095,37 @@ pub fn press(
         rowver::sign::sign(&mut header, secret).map_err(|e| stuck(format!("the file could not be signed with your key: {e}")))?;
     }
     // A press of more than a few seconds is on disk before what would pick it up goes.
-    let durable = || match worth {
-        true => std::fs::File::open(&staged_file).and_then(|f| f.sync_all()),
+    let durable = |path: &Path| match worth {
+        true => std::fs::File::open(path).and_then(|f| f.sync_all()),
         false => Ok(()),
     };
+    // The derived columns are worked out from the file written, once, for their records; the
+    // file is then written again with them, its arrays as they were.
+    let with_derived = staged.folder.join("derived.rvr");
+    // A derived column that fails here leaves what was read: the file, without its derived columns.
+    let mut underived = None;
     let written = write::write_laid(&staged_file, &header, laid)
         .map_err(|e| e.to_string())
-        .and_then(|()| durable().map_err(|e| e.to_string()))
-        .and_then(|()| std::fs::rename(&staged_file, target).map_err(|e| e.to_string()));
+        .and_then(|()| match recipe.derived.is_empty() {
+            true => Ok(staged_file.clone()),
+            false => {
+                let attached = crate::derive::attach(&staged_file, &with_derived, &recipe.derived, &mut header, signer.as_ref());
+                if let Err(why) = attached {
+                    crate::derive::without(&staged_file, &with_derived, &mut header, signer.as_ref())
+                        .map_err(|e| format!("{why}; and the file could not be written without its derived columns: {e}"))?;
+                    underived = Some(why);
+                }
+                let _ = std::fs::remove_file(&staged_file);
+                Ok(with_derived.clone())
+            }
+        })
+        .and_then(|path| {
+            durable(&path).map_err(|e| e.to_string())?;
+            std::fs::rename(&path, target).map_err(|e| e.to_string())
+        });
     if let Err(e) = written {
         let _ = std::fs::remove_file(&staged_file);
+        let _ = std::fs::remove_file(&with_derived);
         return Err(stuck(format!("{} could not be written: {e}", target.display())));
     }
     if worth {
@@ -2059,6 +2133,9 @@ pub fn press(
     }
     drop((journal, spool));
     drop(staged);
+    if let Some(why) = underived {
+        return Err(format!("{why}. {} is written without its derived columns, so that what was read is kept: put right what is said above and press again, which, by the same rvr, copies every stored column from it and reads no input.", target.display()));
+    }
     let bytes = std::fs::metadata(target).map_or(0, |m| m.len());
     if !built_on {
         let read = match missing.iter().sum::<u64>() {
@@ -2082,8 +2159,12 @@ pub fn press(
         0 => ".".to_string(),
         n => format!(", with {}:", some(n, "hole", "holes")),
     };
+    let derived = match recipe.derived.len() {
+        0 => String::new(),
+        n => format!(" and {n} derived"),
+    };
     println!(
-        "Wrote {} ({} rows, {}, {:.1} MB) in {:.1} s{with}",
+        "Wrote {} ({} rows, {}{derived}, {:.1} MB) in {:.1} s{with}",
         target.display(),
         count(rows),
         some(outputs.len(), "column", "columns"),

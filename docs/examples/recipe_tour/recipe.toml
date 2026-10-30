@@ -33,3 +33,10 @@ max_mjj = "greatest(pair_mass(Jet_pt[clean_jet], Jet_eta[clean_jet], Jet_phi[cle
 dr_mu_tau = "delta_r(first(Muon_eta[good_muon], 0), first(Muon_phi[good_muon], 0), first(Tau_eta[good_tau], 0), first(Tau_phi[good_tau], 0))"
 b_tagged = "count(Jet_btag[clean_jet] > 0.8)"
 tau_decay_mode = "first(Tau_decayMode[good_tau], -1)"
+
+# Columns kept as their expressions over the stored columns, worked out when they are read: flat,
+# a list, and one that reads the sample's metadata.
+[derived]
+met_over_leading_jet = "MET_pt / max(leading_jet_pt, 1)"
+clean_jet_pt_over_met = "clean_jet_pt / MET_pt"
+vbf_scaled_met = "MET_pt * if(sample.production == 'vbf', 2, 1)"

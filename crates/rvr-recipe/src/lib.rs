@@ -13,7 +13,7 @@ mod kind;
 mod parse;
 
 pub use array::{Array, Constant, Operator, Store, Values};
-pub use document::{names, uses, Cut, Recipe};
+pub use document::{names, plain, reads, uses, Cut, Recipe, RESERVED};
 pub use evaluate::{per_event, Columns, Scope, FUNCTIONS};
 pub use kind::Kind;
 pub use parse::{parse, Expression};

@@ -369,6 +369,124 @@ listed = "list"
 }
 
 #[test]
+fn derived_columns_are_kept_as_expressions_and_changed_by_rvr_derive() {
+    let recipe = r#"format = "rvr-recipe"
+version = 1
+
+[keep]
+jets = "nJet >= 1"
+
+[columns]
+branches = ["nJet", "Jet_pt"]
+ht = "sum(Jet_pt)"
+
+[derived]
+per_jet = "ht / nJet"
+"#;
+    let dir = study("derived", FLAT, recipe);
+    let header = pressed(&dir, &[]);
+    let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let record = &header["derived"]["columns"][0];
+    assert_eq!((record["name"].as_str(), record["expression"].as_str()), (Some("per_jet"), Some("ht / nJet")));
+    assert!(record.get("at").is_none() && record["lim"].is_array(), "{record}");
+    let (_, said) = rvr(&dir, &["dump", &file, "--columns"]);
+    assert!(said.contains("per_jet        f8[4]  derived = \"ht / nJet\"  ["), "{said}");
+    let (code, said) = rvr(&dir, &["validate", &file]);
+    assert!(code == 0 && said.contains("4 rows, 3 columns, 1 derived,"), "{said}");
+    // Added to the file alone: the recipe it carries gains the line.
+    let (code, said) = rvr(&dir, &["derive", &file, "lead = first(Jet_pt, -1)", "twice = per_jet * 2"]);
+    assert!(code == 0 && said.contains("Added lead, twice to") && said.contains("it has 3 derived columns"), "{said}");
+    assert!(said.contains("Its study's recipe.toml is as it was"), "{said}");
+    let (_, header) = rvr(&dir, &["header", &file]);
+    assert!(header.contains("lead = \\\"first(Jet_pt, -1)\\\""), "{header}");
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    // An expression is not changed in place; a derived column another uses goes with it, or after it.
+    let (code, said) = rvr(&dir, &["derive", &file, "lead = 2 * ht"]);
+    assert!(code == 1 && said.contains("drop it, then add it again"), "{said}");
+    let (code, said) = rvr(&dir, &["derive", &file, "--drop", "per_jet"]);
+    assert!(code == 1 && said.contains("twice uses per_jet: drop twice first, or with it"), "{said}");
+    let (code, said) = rvr(&dir, &["derive", &file, "--rename", "per_jet", "mean"]);
+    assert!(code == 1 && said.contains("twice uses per_jet"), "{said}");
+    let (code, said) = rvr(&dir, &["derive", &file, "--rename", "lead", "first_pt"]);
+    assert!(code == 0 && said.contains("Renamed lead to first_pt in"), "{said}");
+    let (code, said) = rvr(&dir, &["derive", &file, "--drop", "per_jet", "twice"]);
+    assert!(code == 0 && said.contains("it has 1 derived column;"), "{said}");
+    let (code, said) = rvr(&dir, &["derive", &file, "bad = weight * 2"]);
+    assert!(code == 1 && said.contains("the file does not store weight"), "{said}");
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    // The study's recipe still asks for per_jet alone: status says so, and a press reads nothing.
+    let (_, said) = rvr(&dir, &["status"]);
+    assert!(said.contains("new derived: per_jet") && said.contains("dropped derived: first_pt"), "{said}");
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains("Nothing to read") && said.contains("3 columns and 1 derived"), "{said}");
+    let (_, header) = rvr(&dir, &["header", &file]);
+    let header: serde_json::Value = serde_json::from_str(&header).unwrap();
+    assert_eq!(header["derived"]["columns"][0]["name"], "per_jet");
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    // A name a sample column has is refused, before a press reads anything, and by rvr derive.
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("per_jet = ", "kind = ")).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert!(code == 1 && said.contains("[derived] kind has the name of a key of samples.toml") && !said.contains("Pressing"), "{said}");
+    std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
+    let (code, said) = rvr(&dir, &["derive", &file, "--rename", "per_jet", "kind"]);
+    assert!(code == 1 && said.contains("kind is already the name of a sample column or metadata key"), "{said}");
+    // So is one a press gives every sample, though this file, with no holes, has no such column.
+    let (code, said) = rvr(&dir, &["derive", &file, "events_missing = nJet"]);
+    assert!(code == 1 && said.contains("or of one rvr press gives every sample"), "{said}");
+    // A name given twice is dropped once; an expression written as recipe.toml writes it is that string.
+    assert_eq!(rvr(&dir, &["derive", &file, "x = \"ht * 2\""]).0, 0);
+    let (_, said) = rvr(&dir, &["dump", &file, "--columns"]);
+    assert!(said.contains("derived = \"ht * 2\""), "{said}");
+    // Single quotes are the recipe's own: 'nJet' is text, not the column nJet.
+    let (code, said) = rvr(&dir, &["derive", &file, "t = 'nJet'"]);
+    assert!(code == 1 && !said.contains("Added t"), "{said}");
+    let (code, said) = rvr(&dir, &["derive", &file, "--drop", "x", "x"]);
+    assert!(code == 0 && said.contains("Dropped x from"), "{said}");
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    // A derived column that names another through branch('…') uses it too.
+    assert_eq!(rvr(&dir, &["derive", &file, "z = branch('per_jet') + 1"]).0, 0);
+    let (code, said) = rvr(&dir, &["derive", &file, "--drop", "per_jet"]);
+    assert!(code == 1 && said.contains("z uses per_jet"), "{said}");
+    let (code, said) = rvr(&dir, &["derive", &file, "--rename", "z", "ht"]);
+    assert!(code == 1 && said.contains("ht is already the name of a stored column"), "{said}");
+    let (code, said) = rvr(&dir, &["derive", &file, "--rename", "z", "a b"]);
+    assert!(code == 1 && said.contains("\"a b\" is not a name a derived column can have"), "{said}");
+    assert_eq!(rvr(&dir, &["derive", &file, "--drop", "z"]).0, 0);
+    // What a press adds to every sample's metadata is no expression's to read.
+    let (code, said) = rvr(&dir, &["derive", &file, "n = sample.events_total"]);
+    assert!(code == 1 && said.contains("A sample field used as a number is missing"), "{said}");
+    // A record that is not what its expression gives is refused when it is worked out.
+    let mut changed = header.clone();
+    changed["derived"]["columns"][0]["lim"][1] = 1e9.into();
+    rowver::write::rewrite(dir.join(&file), dir.join("changed.rvr"), &changed).unwrap();
+    let (code, said) = rvr(&dir, &["validate", "changed.rvr"]);
+    assert!(code == 1 && said.contains("derived column per_jet, worked out here, is not what"), "{said}");
+    // Nor is it changed, and signed again, by rvr derive.
+    let (code, said) = rvr(&dir, &["derive", "changed.rvr", "--rename", "per_jet", "mean"]);
+    assert!(code == 1 && said.contains("is not what the file records"), "{said}");
+    let (_, said) = rvr(&dir, &["dump", "changed.rvr", "--columns"]);
+    assert!(said.contains("per_jet        derived = \"ht / nJet\"  (not worked out: "), "{said}");
+    // Two derived columns that use each other, as an edited header could hold, are refused.
+    let mut looped = header.clone();
+    looped["derived"]["columns"][0]["expression"] = "per_jet + 1".into();
+    rowver::write::rewrite(dir.join(&file), dir.join("looped.rvr"), &looped).unwrap();
+    let (_, said) = rvr(&dir, &["dump", "looped.rvr", "--columns"]);
+    assert!(said.contains("uses itself, directly or through other derived columns"), "{said}");
+    // A header without the derived columns its recipe lists is refused.
+    let mut stripped = header.clone();
+    stripped.as_object_mut().unwrap().shift_remove("derived");
+    rowver::write::rewrite(dir.join(&file), dir.join("stripped.rvr"), &stripped).unwrap();
+    let (code, said) = rvr(&dir, &["validate", "stripped.rvr"]);
+    assert!(code == 1 && said.contains("does not list the derived columns its header records"), "{said}");
+    // A derived column that cannot be worked out stops the press on the first run of a file.
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("per_jet = \"ht / nJet\"", "per_jet = \"ht / (nJet - nJet)\"")).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert!(code == 1 && said.contains("uproot_flat.root: derived column per_jet: some of its values are not finite") && !said.contains("could not be written"), "{said}");
+    std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn a_column_added_to_the_recipe_is_read_alone_and_the_file_is_a_full_press() {
     let recipe = r#"format = "rvr-recipe"
 version = 1
@@ -544,6 +662,45 @@ fn damage(path: &Path, branch: &str) {
         *b ^= 0x5a;
     }
     std::fs::write(path, &bytes).unwrap();
+}
+
+#[test]
+fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_columns() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[derived]\nr = \"if(sample.file == './flat_b.root', weight / (nJet - nJet), weight)\"\n";
+    let dir = twice("late", recipe);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    // One worker reads flat_a.root first, where the trial passes; flat_b.root's values fail at the end.
+    let (code, said) = rvr(&dir, &["press", "--workers", "1"]);
+    assert!(code == 1 && said.contains("derived column r: some of its values are not finite") && said.contains("is written without its derived columns"), "{said}");
+    let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let (code, said) = rvr(&dir, &["validate", &file]);
+    assert!(code == 0 && said.contains("10 rows, 2 columns, read all"), "{said}");
+    // Fixed, the next press reads no input and adds it.
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("weight / (nJet - nJet)", "weight * 2")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains("Nothing to read") && said.contains("2 columns and 1 derived"), "{said}");
+    std::fs::remove_dir_all(&dir).unwrap();
+    // So with derived columns written as an inline table, which cannot be edited a line at a time.
+    let inline = "format = \"rvr-recipe\"\nversion = 1\nderived = { r = \"if(sample.file == './flat_b.root', weight / (nJet - nJet), weight)\" }\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n";
+    let dir = twice("late-inline", inline);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press", "--workers", "1"]);
+    assert!(code == 1 && said.contains("is written without its derived columns"), "{said}");
+    let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_derived_column_of_another_kind_in_another_sample_stops_the_press_as_it_reads() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"nJet\"]\n\n[derived]\nscaled = \"sample.w * nJet\"\n";
+    let dir = twice("kinds", recipe);
+    let samples = "format = \"rvr-samples\"\nversion = 1\n\n[defaults]\ntree = \"analysis\"\n\n[[sample]]\nname = \"a\"\nlabel = \"A\"\nfiles = \"flat_a.root\"\nw = 1\n\n[[sample]]\nname = \"b\"\nlabel = \"B\"\nfiles = \"flat_b.root\"\nw = 0.5\n";
+    std::fs::write(dir.join("samples.toml"), samples).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 1 && said.contains("derived column scaled is not the same kind of column for every sample") && !said.contains("is written without"), "{said}");
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

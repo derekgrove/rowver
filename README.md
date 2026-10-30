@@ -30,8 +30,8 @@ magic (8 bytes) | header length (4 bytes) | JSON header | compressed arrays
 The first bytes of a real file, `higgs_tautau.rvr` from the tutorial below:
 
 ```text
-00000000: 8952 5652 0d0a 1a0a ce32 0000 7b22 726f  .RVR.....2..{"ro
-00000010: 7776 6572 223a 3134 2c22 6461 7461 223a  wver":14,"data":
+00000000: 8952 5652 0d0a 1a0a 8234 0000 7b22 726f  .RVR.....4..{"ro
+00000010: 7776 6572 223a 3135 2c22 6461 7461 223a  wver":15,"data":
 00000020: 7b22 726f 7773 223a 3232 3438 2c22 7361  {"rows":2248,"sa
 ```
 
@@ -40,7 +40,7 @@ marks what was cut, and checksums are shortened.
 
 ```json
 {
-  "rowver": 14,
+  "rowver": 15,
   "data": {
     "rows": 2248,
     "samples": [
@@ -72,10 +72,11 @@ marks what was cut, and checksums are shortened.
   },
   "made": {
     "study": "higgs_tautau",
-    "built": "2026-10-19T01:43:56Z",
-    "by": "rvr 0.1.0",
-    "toolchain": {"rvr": "0.1.0", "rowver": "14", "commit": "cc6ba5d2…", "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
-    "recipe":  {"sha256": "43cbd29c…", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
+    "title": "higgs_tautau",
+    "built": "2026-10-30T19:26:52Z",
+    "by": "rvr 15.0.0",
+    "toolchain": {"rvr": "15.0.0", "rowver": "15", "commit": "e192f78f…", "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
+    "recipe":  {"sha256": "6dabf117…", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
                 "columns": ["run", "luminosityBlock", "event", "PV_npvs", "MET_pt", "MET_phi", "Muon_pt", "Muon_eta", "Tau_pt", "Tau_eta", "Jet_pt"]},
     "samples": {"sha256": "…", "text": "…the whole samples.toml…"},
     "lock":    {"sha256": "…", "text": "…the whole samples.lock…"},
@@ -88,7 +89,7 @@ marks what was cut, and checksums are shortened.
       },
       …
     },
-    "sha256": "2fcd85c2…"
+    "sha256": "a0400d45…"
   }
 }
 ```
@@ -102,6 +103,9 @@ marks what was cut, and checksums are shortened.
   metadata.
 - **`made`** is how the file was made: the three study files word for word, which events of each
   sample were read (all, the first N, or N at random from a seed), and every input file.
+- **`derived`**, when the recipe has derived columns: each kept as the expression that computes it
+  from the file's columns, with the checksums and facts of its values, and no array. A reader
+  works it out when it is asked for.
 - A signed file also has a **`signature`**.
 
 [The format](docs/FORMAT.md) specifies every field.
@@ -158,11 +162,16 @@ a_good_tau = "count(good_tau) >= 1"
 
 [columns]
 branches = ["run", "luminosityBlock", "event", "PV_npvs", "MET_pt", "MET_phi", "Muon_pt", "Muon_eta", "Tau_pt", "Tau_eta", "Jet_pt"]
+
+[derived]
+# ht = "sum(Jet_pt)"
 ```
 
 Each value in quotes is an expression over the event's branches, each named in full. `[define]`
 names the muons and taus that pass their conditions, and the `[keep]` cuts count them. What is
-stored is only what `[columns]` names, so `Muon_pt` holds every muon of each kept event. The
+stored is only what `[columns]` names, so `Muon_pt` holds every muon of each kept event.
+`[derived]` is empty here: a line there would be a column kept as its expression, worked out when
+it is read. The
 [recipe reference](crates/rvr-recipe/README.md) explains every part, with examples.
 
 **3. Find the inputs.** No event is read yet. This writes `samples.lock`, which pins every file.
@@ -172,7 +181,7 @@ $ rvr samples resolve samples.toml
   ok    GluGluToHToTauTau                          1 file    196.5 MB   all 476,963 events
   ok    VBF_HToTauTau                              1 file    231.8 MB   all 491,653 events
 
-2 samples, 2 distinct files, 428.4 MB in 1.7 s.
+2 samples, 2 distinct files, 428.4 MB in 1.9 s.
 …
 Wrote samples.lock (0.0 MB).
 ```
@@ -183,13 +192,13 @@ look. Leave it out to read every event, or add `--random --seed 7` to choose the
 ```text
 $ rvr press --events 50000
 Pressing 2 samples, 2 files, 100,000 entries, 2 at a time:
-  1/2       50,000 entries        948 kept   GluGluToHToTauTau.root
-  2/2       50,000 entries      1,300 kept   VBF_HToTauTau.root
+  1/2       50,000 entries      1,300 kept   VBF_HToTauTau.root
+  2/2       50,000 entries        948 kept   GluGluToHToTauTau.root
 Read 100,000 entries; kept after each cut:
   trigger                                8,590
   a_good_muon                            6,650
   a_good_tau                             2,248
-Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 2.5 s.
+Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 2.8 s.
 ```
 
 **5. Check it, and look inside.**
@@ -235,7 +244,7 @@ $ rvr reproduce higgs_tautau.rvr
 Wrote higgs_tautau.reproduced/ with the recipe.toml, samples.toml and samples.lock higgs_tautau.rvr holds.
 …
 Comparing the two with rvr diff:
-The headers show no difference in rows, samples, columns, by_sample or sample columns.
+The headers show no difference in rows, samples, columns, derived columns, by_sample or sample columns.
 ```
 
 [The introduction](docs/INTRO.md) says what a `.rvr` file is and why it speeds up an

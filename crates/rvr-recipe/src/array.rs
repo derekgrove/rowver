@@ -333,7 +333,7 @@ fn apply(operator: Operator, left: &Values, right: &Values) -> Result<Values> {
                     Divide => a / b,
                     Remainder => remainder(*a, *b),
                     _ if *b == 2.0 => a * a,
-                    _ => a.powf(*b),
+                    _ => libm::pow(*a, *b),
                 };
                 return Ok(Values::float(
                     kind,

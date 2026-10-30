@@ -20,3 +20,5 @@ ruzstd.workspace = true
 ed25519-dalek.workspace = true
 sha2.workspace = true
 zmij.workspace = true
+libm.workspace = true
+rvr-recipe.workspace = true

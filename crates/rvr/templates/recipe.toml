@@ -21,3 +21,8 @@ a_good_tau = "count(good_tau) >= 1"
 # one list per event; a line NAME = "expression" is computed while pressing.
 [columns]
 branches = ["run", "luminosityBlock", "event", "PV_npvs", "MET_pt", "MET_phi", "Muon_pt", "Muon_eta", "Tau_pt", "Tau_eta", "Jet_pt"]
+
+# [derived]: columns kept as their expressions over the stored columns, not as arrays, and worked
+# out when they are read: a smaller file, for the work of computing them each time.
+[derived]
+# ht = "sum(Jet_pt)"
