@@ -8,10 +8,10 @@
 //! only the runs that hold a chosen entry.
 
 use crate::samples::copies::{Datasets, Reader};
-use crate::samples::remote::{HttpsFile, Storage};
+use crate::samples::remote::{patiently, read_again, HttpsFile, Storage, READING, STOPPED};
 use crate::samples::resolve::{self, adler32_file, File, Lock, Locked};
 use crate::samples::spec::Events;
-use crate::samples::Choice;
+use crate::samples::{some, Choice};
 use grid_catalog::GridHttps;
 use hep_root::{ByteSource, RootFile, Tree};
 use rowver::write::{self, Labels};
@@ -37,6 +37,9 @@ const SPOOLED: usize = 16 << 20;
 /// baskets do (measured on CMS Open Data, 2026-10-18).
 const GAP: u64 = 2_000;
 
+/// The recipe reference, which lists every function an expression can call.
+const RECIPES: &str = "https://gitlab.cern.ch/dgrove/rowver/-/blob/main/crates/rvr-recipe/README.md";
+
 /// The runs of entries a press reads of a file, as [first, last): every `CHUNK` entries, or for
 /// a random choice runs around its chosen entries, cut where two are `gap` or more apart.
 fn runs(entries: u64, chosen: Option<&[u64]>, gap: u64) -> Vec<(u64, u64)> {
@@ -55,9 +58,6 @@ fn runs(entries: u64, chosen: Option<&[u64]>, gap: u64) -> Vec<(u64, u64)> {
     }
     runs
 }
-
-/// What an input answers when it stops because another one failed.
-const STOPPED: &str = "Another input failed";
 
 pub const USAGE: &str = "usage:
   rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N] [--full]
@@ -108,21 +108,7 @@ fn run(args: &[&str]) -> Result<(), String> {
             _ => return Err(format!("press takes one study folder.\n{USAGE}")),
         }
     }
-    let dir = dir.unwrap_or_else(|| PathBuf::from("."));
-    let given = dir;
-    let dir = given
-        .canonicalize()
-        .map_err(|e| format!("{}: {e}", given.display()))?;
-    let name = dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("study")
-        .to_string();
-    // Named as the folder was given, so that what is printed is what one would type.
-    let target = out.unwrap_or_else(|| match given.as_os_str() == "." {
-        true => PathBuf::from(format!("{name}.rvr")),
-        false => given.join(format!("{name}.rvr")),
-    });
+    let (dir, name, target) = study(dir, out)?;
     let workers =
         workers.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
     let texts = inputs(&dir)?;
@@ -140,6 +126,37 @@ fn run(args: &[&str]) -> Result<(), String> {
     )
 }
 
+/// A study folder's full path, its name, and the file a press writes (`--out`, or `DIR/<name>.rvr`).
+pub fn study(
+    given: Option<PathBuf>,
+    out: Option<PathBuf>,
+) -> Result<(PathBuf, String, PathBuf), String> {
+    let given = given.unwrap_or_else(|| PathBuf::from("."));
+    let dir = given
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", given.display()))?;
+    let name = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("study")
+        .to_string();
+    let target = out.unwrap_or_else(|| match given.as_os_str() == "." {
+        true => PathBuf::from(format!("{name}.rvr")),
+        false => given.join(format!("{name}.rvr")),
+    });
+    Ok((dir, name, target))
+}
+
+/// The columns a recipe stores, in the order a file holds them: its copies, then its computed columns.
+pub fn outputs(recipe: &Recipe) -> Vec<Output<'_>> {
+    recipe
+        .copy
+        .iter()
+        .map(|(n, e)| (n, e, true))
+        .chain(recipe.columns.iter().map(|(n, e)| (n, e, false)))
+        .collect()
+}
+
 /// The three texts of a study, which the file carries.
 pub struct Texts {
     pub recipe: String,
@@ -149,6 +166,20 @@ pub struct Texts {
 
 /// Read a study's three files and refuse a lock that no longer matches its samples.toml.
 pub fn inputs(dir: &Path) -> Result<Texts, String> {
+    let (texts, lock) = texts(dir)?;
+    if !resolved(&texts, &lock) {
+        return Err(format!("samples.toml has changed since samples.lock was written ({}). Run rvr samples resolve samples.toml, review the new lock, then press.", lock.resolved));
+    }
+    Ok(texts)
+}
+
+/// Whether the lock was resolved from this samples.toml.
+pub fn resolved(texts: &Texts, lock: &Lock) -> bool {
+    crate::samples::sha256(texts.samples.as_bytes()) == lock.samples_toml_sha256
+}
+
+/// A study's three texts and its lock, read as they are (`inputs` also refuses a stale lock).
+pub fn texts(dir: &Path) -> Result<(Texts, Lock), String> {
     let read = |file: &str| {
         std::fs::read_to_string(dir.join(file)).map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound if file == "samples.lock" => format!(
@@ -166,18 +197,30 @@ pub fn inputs(dir: &Path) -> Result<Texts, String> {
     let parsed: Lock =
         toml::from_str(&lock).map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
     let samples = read("samples.toml")?;
-    if crate::samples::sha256(samples.as_bytes()) != parsed.samples_toml_sha256 {
-        return Err(format!("samples.toml has changed since samples.lock was written ({}). Run rvr samples resolve samples.toml, review the new lock, then press.", parsed.resolved));
-    }
-    Ok(Texts {
+    let texts = Texts {
         recipe: read("recipe.toml")?,
         samples,
         lock,
-    })
+    };
+    Ok((texts, parsed))
+}
+
+/// What each sample of the lock reads: `events` of it, written into the lock as a press reads.
+pub fn plan(
+    lock: &mut Lock,
+    events: &dyn Fn(&Locked) -> Result<Events, String>,
+) -> Result<Vec<Events>, String> {
+    let mut asked = Vec::new();
+    for sample in &mut lock.sample {
+        let want = events(sample)?;
+        resolve::planned(sample, want)?;
+        asked.push(want);
+    }
+    Ok(asked)
 }
 
 /// The recipe a press runs, or what stops it.
-fn read_recipe(source: &str) -> Result<Recipe, String> {
+pub fn read_recipe(source: &str) -> Result<Recipe, String> {
     let recipe = Recipe::read(source).map_err(|e| format!("recipe.toml: {}", e.0))?;
     if recipe.copy.is_empty() && recipe.columns.is_empty() {
         return Err("recipe.toml stores nothing: name branches under [copy] or computed columns under [column].".into());
@@ -186,7 +229,7 @@ fn read_recipe(source: &str) -> Result<Recipe, String> {
 }
 
 /// An output column: the name written, the expression it comes from, and whether it is a copy.
-type Output<'a> = (&'a String, &'a Expression, bool);
+pub type Output<'a> = (&'a String, &'a Expression, bool);
 
 /// One file to read, in the lock's order.
 struct Input<'a> {
@@ -199,32 +242,49 @@ struct Input<'a> {
     kept: Option<Vec<u64>>,
 }
 
+/// Where a study's files can be read from: its folder, its storage and its datasets' copies.
+pub(crate) struct Reach<'a> {
+    pub storage: Option<&'a Storage>,
+    /// Where each file of a catalog dataset can be read.
+    pub datasets: Option<&'a Datasets>,
+    /// Why a remote file cannot be read, when there is no storage.
+    pub offline: &'a str,
+    /// The study folder, which a relative path in the lock is relative to.
+    pub dir: &'a Path,
+    /// Set once any input has failed, so the others stop reading, and stop waiting to.
+    pub failed: Arc<AtomicBool>,
+    /// Whether a local file is read whole for its adler32 before it is opened (a press reads it;
+    /// a look at its branches or first events does not).
+    pub whole: bool,
+}
+
 /// What every input of one press shares.
 struct Shared<'a> {
     recipe: &'a Recipe,
     outputs: &'a [Output<'a>],
-    storage: Option<&'a Storage>,
-    /// Where each file of a catalog dataset can be read.
-    datasets: Option<&'a Datasets>,
-    offline: &'a str,
+    reach: Reach<'a>,
     /// Every name the recipe mentions, to choose the branches fetched ahead.
     mentions: &'a BTreeSet<String>,
-    /// The study folder, which a relative path in the lock is relative to.
-    dir: &'a Path,
-    /// Set once any input has failed, so the others stop reading.
-    failed: AtomicBool,
     /// Where each input's kept values go as they are gathered, by output and input.
     spool: &'a write::Spool,
 }
 
 /// The branches of one open tree over the entries in hand, read when an expression first names them.
-struct Branches<'a, S: ByteSource> {
+pub(crate) struct Branches<'a, S: ByteSource> {
     file: &'a RootFile<S>,
     tree: &'a Tree,
     names: &'a [String],
     first: i64,
     last: i64,
     read: RefCell<HashMap<String, Array>>,
+}
+
+impl<'a, S: ByteSource> Branches<'a, S> {
+    /// Entries `first..last` of a tree whose branches are `names`.
+    pub fn over(file: &'a RootFile<S>, tree: &'a Tree, names: &'a [String], first: i64, last: i64) -> Self {
+        let read = RefCell::new(HashMap::new());
+        Branches { file, tree, names, first, last, read }
+    }
 }
 
 /// A hep-root number kind as a `.rvr` kind.
@@ -298,7 +358,7 @@ struct Taken {
 }
 
 /// The metadata fields an expression can read: numbers, text, and truth values.
-fn fields(metadata: &Map<String, Value>) -> BTreeMap<String, Constant> {
+pub(crate) fn fields(metadata: &Map<String, Value>) -> BTreeMap<String, Constant> {
     let read = |value: &Value| match value {
         Value::Bool(truth) => Some(Constant::Truth(*truth)),
         Value::String(text) => Some(Constant::Text(text.clone())),
@@ -359,7 +419,7 @@ fn lets_through(cut: &rvr_recipe::Cut, scope: &Scope, entries: usize) -> Result<
 }
 
 /// Apply the cuts to one run of a file's events, counting what each leaves.
-fn kept(
+pub(crate) fn kept(
     recipe: &Recipe,
     scope: &Scope,
     mut keep: Vec<bool>,
@@ -462,10 +522,15 @@ fn changed(file: &File, bytes: Option<u64>, adler32: Option<String>) -> Result<(
 /// are answered from memory: every basket the recipe may read of a remote file, fetched in a
 /// few requests at once instead of branch after branch. A read that held ranges cover only in
 /// part fetches just the rest.
-struct Held {
+pub(crate) struct Held {
     inner: Box<dyn ByteSource>,
     /// Disjoint ranges, in order of position.
     held: Mutex<Vec<(u64, Vec<u8>)>>,
+    /// For a remote file: how long a read that failed waits to be asked again, and the flag
+    /// that ends the waiting (another input failed). Fetching ahead is never asked again.
+    again: Option<(&'static [u64], Arc<AtomicBool>)>,
+    /// What the file is, for what is printed while a read waits.
+    shown: String,
 }
 
 /// The parts of `offset..offset + len` that no held range covers.
@@ -524,11 +589,29 @@ impl Held {
             .iter()
             .flat_map(|&(at, len)| gaps(&kept, at, len))
             .collect();
-        let fetched = self.inner.read_ranges(&missing)?;
+        let fetched = match self.inner.read_ranges(&missing) {
+            Ok(fetched) => fetched,
+            Err(e) => {
+                *self.held.lock().unwrap() = kept;
+                return Err(e);
+            }
+        };
         kept.extend(missing.iter().map(|r| r.0).zip(fetched));
         kept.sort_unstable_by_key(|(start, _)| *start);
         *self.held.lock().unwrap() = kept;
         Ok(())
+    }
+}
+
+impl Held {
+    /// Read from the file itself, asked again while a remote read fails as a busy storage does.
+    fn fetch(&self, ranges: &[(u64, usize)]) -> hep_root::Result<Vec<Vec<u8>>> {
+        match &self.again {
+            Some((waits, stop)) => {
+                read_again(waits, stop, &self.shown, || self.inner.read_ranges(ranges))
+            }
+            None => self.inner.read_ranges(ranges),
+        }
     }
 }
 
@@ -553,7 +636,7 @@ impl ByteSource for Held {
         let held = self.held.lock().unwrap();
         if held.is_empty() {
             drop(held);
-            return self.inner.read_ranges(ranges);
+            return self.fetch(ranges);
         }
         let mut out: Vec<Vec<u8>> = ranges.iter().map(|&(_, len)| vec![0; len]).collect();
         for (buf, &(offset, _)) in out.iter_mut().zip(ranges) {
@@ -568,7 +651,7 @@ impl ByteSource for Held {
             let fetched: Vec<(u64, Vec<u8>)> = missing
                 .iter()
                 .map(|r| r.0)
-                .zip(self.inner.read_ranges(&missing)?)
+                .zip(self.fetch(&missing)?)
                 .collect();
             for (buf, &(offset, _)) in out.iter_mut().zip(ranges) {
                 copy_from(&fetched, offset, buf);
@@ -625,42 +708,52 @@ fn spans(branches: &[&hep_root::Branch], first: i64, last: i64) -> Vec<(u64, u64
 
 /// Check one input against the lock and open it, local, remote, or from a dataset's copies (with
 /// the reader that says which copy served it).
-fn open(shared: &Shared, file: &File) -> Result<(RootFile<Held>, Option<Reader>), String> {
+pub(crate) fn open(reach: &Reach, file: &File) -> Result<(RootFile<Held>, Option<Reader>), String> {
     let at = &file.at;
     if file.lfn.is_some() {
-        let (Some(datasets), Some(storage)) = (shared.datasets, shared.storage) else {
-            return Err(format!("{at}: {}", shared.offline));
+        let (Some(datasets), Some(storage)) = (reach.datasets, reach.storage) else {
+            return Err(format!("{at}: {}", reach.offline));
         };
-        let reader = datasets.open(storage, file)?;
+        // Every copy failing as a busy storage does is asked again, as a read is.
+        let busy = |(why, busy): &(String, bool)| busy.then(|| why.clone());
+        let name = at.rsplit('/').next().unwrap_or(at);
+        let reader = patiently(READING, &reach.failed, name, busy, || datasets.open(storage, file))
+            .map_err(|(why, _)| match reach.failed.load(Ordering::Acquire) {
+                true => format!("{at}: {STOPPED}"),
+                false => why,
+            })?;
         let handle = reader.handle();
-        return opened(file, Box::new(reader)).map(|root| (root, Some(handle)));
+        let again = Some((READING, reach.failed.clone()));
+        return opened(file, Box::new(reader), again).map(|root| (root, Some(handle)));
     }
     if !at.contains("://") {
         // A relative path is the lock's own: relative to the study folder.
-        let path = shared.dir.join(at);
+        let path = reach.dir.join(at);
         let meta = std::fs::metadata(&path).map_err(|_| {
             format!(
                 "{at} no longer exists. If it moved, run rvr samples resolve samples.toml again."
             )
         })?;
-        // Read whole for its adler32 only when the lock has one to compare with.
+        // Read whole for its adler32 only when the lock has one to compare with, and a press asks.
         let adler32 = match file.adler32 {
-            Some(_) => Some(adler32_file(&path).map_err(|e| format!("{at}: {e}"))?),
-            None => None,
+            Some(_) if reach.whole => Some(adler32_file(&path).map_err(|e| format!("{at}: {e}"))?),
+            _ => None,
         };
         changed(file, Some(meta.len()), adler32)?;
         let local = hep_root::LocalFile::open(&path).map_err(|e| format!("{at}: {e}"))?;
-        return opened(file, Box::new(local)).map(|root| (root, None));
+        return opened(file, Box::new(local), None).map(|root| (root, None));
     }
-    let storage = shared
+    let storage = reach
         .storage
-        .ok_or_else(|| format!("{at}: {}", shared.offline))?;
+        .ok_or_else(|| format!("{at}: {}", reach.offline))?;
     // The storage's size and adler32 are asked while the file is opened at the size the lock
     // gives; a changed file is reported before anything the opening found.
     std::thread::scope(|scope| {
         let digest = scope.spawn(|| storage.digest(at));
-        let root = HttpsFile::new(storage, at, file.bytes)
-            .and_then(|remote| opened(file, Box::new(remote)));
+        let root = HttpsFile::new(storage, at, file.bytes).and_then(|remote| {
+            let again = Some((READING, reach.failed.clone()));
+            opened(file, Box::new(remote), again)
+        });
         let (bytes, adler32) = digest
             .join()
             .map_err(|_| format!("{at}: asking its storage stopped unexpectedly"))??;
@@ -669,20 +762,123 @@ fn open(shared: &Shared, file: &File) -> Result<(RootFile<Held>, Option<Reader>)
     })
 }
 
-/// Open a checked input and refuse one whose ROOT UUID is not the lock's.
-fn opened(file: &File, source: Box<dyn ByteSource>) -> Result<RootFile<Held>, String> {
+/// Where the sample `named` is in the lock (the first sample when none is named).
+pub(crate) fn sample_at(lock: &Lock, named: Option<&str>) -> Result<usize, String> {
+    if lock.sample.is_empty() {
+        return Err("samples.lock has no samples: add one to samples.toml and resolve again".into());
+    }
+    let Some(name) = named else { return Ok(0) };
+    lock.sample.iter().position(|s| s.name == name).ok_or_else(|| {
+        let names: Vec<&str> = lock.sample.iter().map(|s| s.name.as_str()).collect();
+        format!("samples.lock has no sample named {name}; it has {}", names.join(", "))
+    })
+}
+
+/// How many of a sample's files are tried, in the lock's order, for one with a copy on disk.
+const ON_DISK: usize = 10;
+
+/// The first of a sample's files that can be read now, opened, with its entry in the lock. A file
+/// of a dataset with no copy on disk (only on tape) is passed over, as is one with no entries
+/// when `entries` is asked for.
+pub(crate) fn first_readable<'a>(
+    lock: &'a Lock,
+    sample: usize,
+    dir: &Path,
+    entries: bool,
+) -> Result<(RootFile<Held>, &'a File), String> {
+    let s = &lock.sample[sample];
+    let files: Vec<(usize, &File)> = s
+        .file
+        .iter()
+        .filter(|f| !entries || f.entries != Some(0))
+        .take(ON_DISK)
+        .map(|f| (sample, f))
+        .collect();
+    if files.is_empty() {
+        return Err(format!("{} has no file with events", s.name));
+    }
+    // Each file is looked up on its own: Rucio refuses a lookup when any file in it is on tape.
+    let mut tape = None;
+    for &(_, file) in &files {
+        let failed = Arc::new(AtomicBool::new(false));
+        let opened = connect(lock, &[(sample, file)], &failed).and_then(|(storage, datasets, offline)| {
+            let reach = Reach { storage: storage.as_ref(), datasets: datasets.as_ref(), offline: &offline, dir, failed, whole: false };
+            open(&reach, file)
+        });
+        match opened {
+            Ok((root, _)) => return Ok((root, file)),
+            Err(why) if why.contains("has no copy that can be read now") => tape = tape.or(Some(why)),
+            Err(why) => return Err(why),
+        }
+    }
+    let why = tape.unwrap_or_default();
+    Err(match files.len() {
+        1 => why,
+        n => format!("none of the first {n} files of {} has a copy on disk. The first: {why}", s.name),
+    })
+}
+
+/// Open a checked input and refuse one whose ROOT UUID is not the lock's; `again` as `Held`'s.
+fn opened(
+    file: &File,
+    source: Box<dyn ByteSource>,
+    again: Option<(&'static [u64], Arc<AtomicBool>)>,
+) -> Result<RootFile<Held>, String> {
     let at = &file.at;
     let source = Held {
+        shown: source.describe(),
         inner: source,
         held: Mutex::new(Vec::new()),
+        again,
     };
-    let root = RootFile::open(source)
-        .map_err(|e| format!("{at} is not a ROOT file this reader can open: {e}"))?;
+    let root = RootFile::open(source).map_err(|e| match e {
+        hep_root::Error::Remote(_) | hep_root::Error::SourceChanged(_) | hep_root::Error::Io(_) => {
+            format!("{at} could not be read: {e}")
+        }
+        e => format!("{at} is not a ROOT file this reader can open: {e}"),
+    })?;
     let uuid = root.header().uuid_string();
     if file.uuid.as_ref().is_some_and(|locked| *locked != uuid) {
         return Err(format!("{at} is not the file samples.lock recorded: its ROOT UUID was {}, it is now {uuid}. Run rvr samples resolve samples.toml and review the new lock.", file.uuid.as_deref().unwrap_or("?")));
     }
     Ok(root)
+}
+
+/// What to do about a failure reading a file's events: a name that is not a branch, with the
+/// nearest branches; a function that is not one, with the nearest functions and the recipe's
+/// helpers; a damaged file (hep-root says `decompression failed`), whose every copy is damaged
+/// when it is a dataset's.
+pub(crate) fn hint(error: &str, branches: &[String], recipe: &Recipe, dataset: bool) -> String {
+    let missing = ["there is no branch named ", "There is no column named "]
+        .iter()
+        .find_map(|said| error.rsplit_once(said).map(|(_, name)| name.trim()));
+    if let Some(name) = missing {
+        // A collection is named by the prefix of its branches (Jet for Jet_pt), so those count too.
+        let prefixes = branches.iter().filter_map(|b| b.split_once('_').map(|(p, _)| p));
+        let mut names: Vec<&str> = branches.iter().map(String::as_str).chain(prefixes).collect();
+        names.sort();
+        names.dedup();
+        let near = resolve::nearest(name, names.into_iter());
+        let near = match near.is_empty() {
+            true => String::new(),
+            false => format!(" Did you mean: {}?", near.join(", ")),
+        };
+        return format!(".{near} rvr branches lists every branch and collection the file has.");
+    }
+    if let Some((_, name)) = error.rsplit_once("There is no operation or helper named ") {
+        let helpers = recipe.helpers.keys().map(String::as_str);
+        let near = resolve::nearest(name.trim(), rvr_recipe::FUNCTIONS.iter().copied().chain(helpers));
+        let near = match near.is_empty() {
+            true => String::new(),
+            false => format!(" Did you mean: {}?", near.join(", ")),
+        };
+        return format!(".{near} Every function, with an example, is in the recipe reference: {RECIPES}");
+    }
+    match (error.contains("decompression failed"), dataset) {
+        (false, _) => String::new(),
+        (true, true) => ". The file is damaged there, and every copy of a dataset's file holds the same bytes: leave the sample out of samples.toml for now, and report the file to the dataset's owners.".into(),
+        (true, false) => ". The file is damaged there: if another copy of it exists, point samples.toml at that; otherwise leave this file, or this tree, out of samples.toml and resolve again.".into(),
+    }
 }
 
 /// Read one input a run of entries at a time, keeping the events the cuts pass.
@@ -715,7 +911,7 @@ fn take(
             });
         }
     }
-    let (file, served) = open(shared, input.file)?;
+    let (file, served) = open(&shared.reach, input.file)?;
     let tree = file
         .tree_at(input.tree)
         .map_err(|e| located(format!("its tree {:?}: {e}", input.tree)))?;
@@ -757,7 +953,7 @@ fn take(
     };
     let gap = if remote { CHUNK } else { GAP };
     for (first, last) in runs(entries, chosen, gap) {
-        if shared.failed.load(Ordering::Acquire) {
+        if shared.reach.failed.load(Ordering::Acquire) {
             return Err(STOPPED.into());
         }
         let count = (last - first) as usize;
@@ -794,14 +990,7 @@ fn take(
                 .inner()
                 .hold(spans(&wanted, first as i64, last as i64));
         }
-        let branches = Branches {
-            file: &file,
-            tree: &tree,
-            names: &names,
-            first: first as i64,
-            last: last as i64,
-            read: RefCell::new(HashMap::new()),
-        };
+        let branches = Branches::over(&file, &tree, &names, first as i64, last as i64);
         let scope = Scope {
             columns: &branches,
             sample: &sample,
@@ -809,7 +998,17 @@ fn take(
             collections: &recipe.collections,
             helpers: &recipe.helpers,
         };
-        let keep = kept(recipe, &scope, start, &mut cutflow).map_err(located)?;
+        // A failure reading the events says where they are, and what to do when the file is damaged.
+        let within = |error: String| {
+            format!(
+                "{at}, tree {}, entries {} to {}: {error}{}",
+                input.tree,
+                self::count(first),
+                self::count(last - 1),
+                hint(&error, &names, recipe, input.file.lfn.is_some())
+            )
+        };
+        let keep = kept(recipe, &scope, start, &mut cutflow).map_err(within)?;
         for (index, (column, from, plain)) in outputs.iter().enumerate() {
             let array = if *plain {
                 copied(&scope, from)
@@ -822,7 +1021,7 @@ fn take(
             let array = stored(
                 recipe,
                 column,
-                array.map_err(|e| located(format!("{column}: {e}")))?,
+                array.map_err(|e| within(format!("{column}: {e}")))?,
             );
             let (kind, listed) = match &array {
                 Array::Event(values) => (values.kind, false),
@@ -909,7 +1108,7 @@ fn take_all(
             .map(|_| {
                 scope.spawn(|| loop {
                     let at = next.fetch_add(1, Ordering::Relaxed);
-                    if at >= work.len() || shared.failed.load(Ordering::Acquire) {
+                    if at >= work.len() || shared.reach.failed.load(Ordering::Acquire) {
                         break;
                     }
                     let input = &work[at];
@@ -926,7 +1125,7 @@ fn take_all(
                                 w = work.len().to_string().len()
                             );
                         }
-                        Err(_) => shared.failed.store(true, Ordering::Release),
+                        Err(_) => shared.reach.failed.store(true, Ordering::Release),
                     }
                     done.lock().unwrap_or_else(|e| e.into_inner())[at] = Some(taken);
                 })
@@ -942,7 +1141,7 @@ fn take_all(
     }
     let done = done.into_inner().unwrap_or_else(|e| e.into_inner());
     let errors = || done.iter().flatten().filter_map(|t| t.as_ref().err());
-    if let Some(error) = errors().find(|e| *e != STOPPED).or(errors().next()) {
+    if let Some(error) = errors().find(|e| !e.contains(STOPPED)).or(errors().next()) {
         return Err(error.clone());
     }
     done.into_iter()
@@ -992,7 +1191,7 @@ fn joined(
 }
 
 /// A whole number with thousands separated, as rvr prints them.
-fn count(n: u64) -> String {
+pub(crate) fn count(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
@@ -1015,6 +1214,63 @@ pub fn toolchain() -> Value {
     })
 }
 
+/// Connect to what the files need: the storage behind the grid proxy for remote files, and Rucio
+/// for the files of central datasets. With no remote file, nothing; with no usable proxy, the
+/// reason a remote file cannot be read.
+pub(crate) fn connect(
+    lock: &Lock,
+    files: &[(usize, &File)],
+    failed: &Arc<AtomicBool>,
+) -> Result<(Option<Storage>, Option<Datasets>, String), String> {
+    let remote = files
+        .iter()
+        .any(|(_, f)| f.at.contains("://") || f.lfn.is_some());
+    let mut datasets = None;
+    let (storage, offline) = if remote {
+        let proxy = crate::samples::proxy();
+        // Said once, however many times a command connects.
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        if let Some(short) = &proxy.short {
+            WARNED.call_once(|| eprintln!("rvr: {short}"));
+        }
+        let catalog: Vec<(&File, &str)> = files
+            .iter()
+            .filter(|(_, f)| f.lfn.is_some())
+            .map(|&(sample, f)| (f, lock.sample[sample].asked.first().map_or("", String::as_str)))
+            .collect();
+        if let Some((file, _)) = catalog.first() {
+            let path = proxy
+                .path
+                .as_ref()
+                .ok_or_else(|| format!("{} is in a central dataset. {}", file.at, proxy.said))?;
+            let ca = proxy.ca.clone().map(std::path::PathBuf::from);
+            let transport: Arc<dyn grid_catalog::Transport> =
+                Arc::new(GridHttps::new(path.into(), ca));
+            let asked = std::time::Instant::now();
+            datasets = Some(Datasets::ask(
+                &Rucio::new(Server::cms(), transport),
+                &catalog,
+            )?);
+            println!(
+                "Rucio said where the {} can be read in {:.1} s.",
+                some(catalog.len(), "dataset file", "dataset files"),
+                asked.elapsed().as_secs_f64()
+            );
+        }
+        match Storage::new(proxy.path.as_deref(), proxy.ca.as_deref()) {
+            Ok(mut storage) => {
+                storage.waits = READING;
+                storage.stop = failed.clone();
+                (Some(storage), proxy.said)
+            }
+            Err(why) => (None, why),
+        }
+    } else {
+        (None, String::new())
+    };
+    Ok((storage, datasets, offline))
+}
+
 /// Press a study's texts: check, read, keep, write `target` (through a temporary file beside
 /// it). Relative local paths in the lock are read from `base`; `events` says what each sample
 /// reads. With `reuse`, a file already at `target` that the same study, cuts and event choice
@@ -1033,18 +1289,8 @@ pub fn press(
         .map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
     let source = &texts.recipe;
     let recipe = read_recipe(source)?;
-    let mut asked = Vec::new();
-    for sample in &mut lock.sample {
-        let want = events(sample)?;
-        resolve::planned(sample, want)?;
-        asked.push(want);
-    }
-    let outputs: Vec<Output> = recipe
-        .copy
-        .iter()
-        .map(|(n, e)| (n, e, true))
-        .chain(recipe.columns.iter().map(|(n, e)| (n, e, false)))
-        .collect();
+    let asked = plan(&mut lock, events)?;
+    let outputs = outputs(&recipe);
     let mut earlier = match reuse
         .then(|| crate::reuse::earlier(target, texts, &recipe, &lock, &asked, &outputs))
         .flatten()
@@ -1115,54 +1361,9 @@ pub fn press(
             input.kept = Some(earlier.kept.remove(&key).unwrap_or_default());
         }
     }
-    let remote = work
-        .iter()
-        .any(|i| i.file.at.contains("://") || i.file.lfn.is_some());
-    let mut datasets = None;
-    let (storage, offline) = if remote {
-        let proxy = crate::samples::proxy();
-        if let Some(short) = &proxy.short {
-            eprintln!("rvr: {short}");
-        }
-        let catalog: Vec<(&File, &str)> = work
-            .iter()
-            .filter(|i| i.file.lfn.is_some())
-            .map(|i| {
-                (
-                    i.file,
-                    lock.sample[i.sample]
-                        .asked
-                        .first()
-                        .map_or("", String::as_str),
-                )
-            })
-            .collect();
-        if let Some((file, _)) = catalog.first() {
-            let path = proxy
-                .path
-                .as_ref()
-                .ok_or_else(|| format!("{} is in a central dataset. {}", file.at, proxy.said))?;
-            let ca = proxy.ca.clone().map(std::path::PathBuf::from);
-            let transport: Arc<dyn grid_catalog::Transport> =
-                Arc::new(GridHttps::new(path.into(), ca));
-            let asked = std::time::Instant::now();
-            datasets = Some(Datasets::ask(
-                &Rucio::new(Server::cms(), transport),
-                &catalog,
-            )?);
-            println!(
-                "Rucio said where the {} dataset files can be read in {:.1} s.",
-                catalog.len(),
-                asked.elapsed().as_secs_f64()
-            );
-        }
-        match Storage::new(proxy.path.as_deref(), proxy.ca.as_deref()) {
-            Ok(storage) => (Some(storage), proxy.said),
-            Err(why) => (None, why),
-        }
-    } else {
-        (None, String::new())
-    };
+    let failed = Arc::new(AtomicBool::new(false));
+    let files: Vec<(usize, &File)> = work.iter().map(|i| (i.sample, i.file)).collect();
+    let (storage, datasets, offline) = connect(&lock, &files, &failed)?;
     let read: u64 = lock.sample.iter().map(|s| s.events_read).sum();
     match &earlier {
         Some(_) => {
@@ -1177,17 +1378,17 @@ pub fn press(
             match names.is_empty() {
                 true => println!("Nothing to read: every column is copied from it."),
                 false => println!(
-                    "Reading only {} for those events, {} files {} at a time:",
+                    "Reading only {} for those events, {} {} at a time:",
                     names.join(", "),
-                    work.len(),
+                    some(work.len(), "file", "files"),
                     workers.min(work.len()).max(1)
                 ),
             }
         }
         None => println!(
-            "Pressing {} samples, {} files, {} entries, {} at a time:",
-            lock.sample.len(),
-            work.len(),
+            "Pressing {}, {}, {} entries, {} at a time:",
+            some(lock.sample.len(), "sample", "samples"),
+            some(work.len(), "file", "files"),
             count(read),
             workers.min(work.len()).max(1)
         ),
@@ -1199,12 +1400,15 @@ pub fn press(
     let shared = Shared {
         recipe: reader,
         outputs: &reading,
-        storage: storage.as_ref(),
-        datasets: datasets.as_ref(),
-        offline: &offline,
+        reach: Reach {
+            storage: storage.as_ref(),
+            datasets: datasets.as_ref(),
+            offline: &offline,
+            dir: base,
+            failed,
+            whole: true,
+        },
         mentions: &mentions,
-        dir: base,
-        failed: AtomicBool::new(false),
         spool: &spool,
     };
     let mut taken = take_all(&shared, &lock, &work, workers)?.into_iter();
@@ -1334,7 +1538,13 @@ pub fn press(
     }
     let bytes = std::fs::metadata(target).map_or(0, |m| m.len());
     if !built_on {
-        println!("Read {} entries; kept after each cut:", count(tally.read));
+        match recipe.keep.is_empty() {
+            true => println!(
+                "Read {} entries; with no cuts, every one is kept.",
+                count(tally.read)
+            ),
+            false => println!("Read {} entries; kept after each cut:", count(tally.read)),
+        }
         for (cut, kept) in recipe.keep.iter().zip(&tally.cutflow) {
             println!("  {:30} {:>13}", cut.name, count(*kept));
         }
@@ -1344,10 +1554,10 @@ pub fn press(
         println!("Signed with your key {}", crate::key::short(&key));
     }
     println!(
-        "Wrote {} ({} rows, {} columns, {:.1} MB) in {:.1} s.",
+        "Wrote {} ({} rows, {}, {:.1} MB) in {:.1} s.",
         target.display(),
         count(rows),
-        outputs.len(),
+        some(outputs.len(), "column", "columns"),
         bytes as f64 / 1e6,
         started.elapsed().as_secs_f64()
     );
@@ -1384,6 +1594,8 @@ mod tests {
         let held = Held {
             inner: Box::new(Asked(bytes.clone(), log.clone())),
             held: Mutex::new(Vec::new()),
+            again: None,
+            shown: String::new(),
         };
         held.hold(vec![(1_000, 100), (1_200, 100), (100_000, 50)])
             .unwrap();

@@ -8,6 +8,17 @@ use crate::{problem, Result};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+/// Every function an expression can call, as the README lists them.
+pub const FUNCTIONS: &[&str] = &[
+    "count", "sum", "any", "all", "least", "greatest", "least_index", "greatest_index", "first",
+    "nth", "index", "sorted", "order", "take", "listed", "abs", "sign", "sqrt", "exp", "log", "cos",
+    "sin", "cosh", "sinh", "hypot", "min", "max", "clip", "isfinite", "if", "bit_and",
+    "shift_right", "delta_phi", "delta_r", "mass", "dr_nearest", "dr_second_nearest",
+    "dr_farthest", "dr_second_farthest", "nearest_index", "second_nearest_index",
+    "farthest_index", "second_farthest_index", "pair_first", "pair_second", "pair_dr",
+    "pair_mass", "contains", "branch", "stored",
+];
+
 /// Where an expression's columns come from.
 pub trait Columns {
     /// The named column over the events in hand, or `None` when there is no such column.

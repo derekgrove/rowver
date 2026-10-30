@@ -1,23 +1,26 @@
-# The recipe language
+# Recipe language
 
-A `recipe.toml` says which events `rvr press` keeps and what it stores of them. Every value in it
-is one **expression**: a short formula over the event's branches, like `MET_pt > 30` or
-`count(good_muon) >= 1`. This page lists everything a recipe can say, each with an example and
-what it gives.
+Your `recipe.toml` tells `rvr press` two things: which events to keep, and what to store for each
+one. You will write **expressions**, a short formula over the event's branches,
+like `MET_pt > 30` or `count(good_muon) >= 1`. This page is the lookup for all of it: every word,
+operator and function you can use, each with an example and what it actually gives you.
 
-Expressions are not Python. `rvr` parses them when it reads the recipe, so a mistake is reported
-before any file is opened, and evaluates them over whole columns of 50,000 events at a time, so
-nothing loops over events one by one. Their numbers follow NumPy's rules, so a selection keeps
-the same events the same formula would in NumPy or Awkward. Only the branches an expression
-names are read from the file.
+A quick note before we start: expressions look a lot like Python, but they aren't Python. `rvr`
+reads every one of them before it opens a single file, so a typo shows up right away and not an
+hour into a press. It then works on whole columns of 50,000 events at a time (there is no loop
+over events), and the numbers follow NumPy's rules, so a cut keeps exactly the events the same
+formula would keep in NumPy or Awkward. Only the branches you mention are read from the file.
+
+If you already write your selections in Python with Awkward, [the last section](#from-python-to-rvr)
+puts some common ones side by side with how you'd write them here.
 
 ## The example events
 
-Every result on this page comes from evaluating the expression with `rvr`'s recipe code on
-these three events. This page calls a branch with one value per event, such as `MET_pt`, **flat**,
-and a branch with a list of values per event, such as `Jet_pt` (one entry per jet), **jagged**: the
-lists have different lengths. A collection such as `Jet` is the jagged branches that share a
-name and a length per event (`Jet_pt`, `Jet_eta`, …).
+Every result on this page is what `rvr` really gives on the three made-up events below, and a
+test checks each one, so they can't quietly go out of date. Two words we'll use a lot: a **flat**
+branch has one value per event, like `MET_pt`, and a **jagged** branch has a list per event, like
+`Jet_pt` with one entry per jet, so the lists have different lengths. A **collection**, like `Jet`,
+is the jagged branches that share a name and a length (`Jet_pt`, `Jet_eta`, …).
 
 | branch | event 0 | event 1 | event 2 |
 |---|---|---|---|
@@ -35,11 +38,11 @@ name and a length per event (`Jet_pt`, `Jet_eta`, …).
 | `MET_phi` | `-0.5` | `2.0` | `1.0` |
 | `Flags` | `11` (binary 1011) | `4` (0100) | `1` (0001) |
 
-The sample being read has the metadata `era = 3`, `kind = "signal"` and `xsec = 0.386` (from its
-entry in `samples.toml`).
+The sample these events come from has `era = 3`, `kind = "signal"` and `xsec = 0.386` in its
+`samples.toml` entry.
 
-Results are written one per event: `[31.5, 85, 16]` is a flat result, one value for each of the
-three events, and `[[65, 41], [], [120, 35]]` a jagged one, a list for each.
+Results are written one value per event: `[31.5, 85, 16]` is a flat result (a number for each of
+the three events), and `[[65, 41], [], [120, 35]]` is a jagged one (a list for each).
 
 ## The parts of a recipe
 
@@ -64,28 +67,30 @@ ht = "sum(good_jet.pt)"
 
 | table | what it holds |
 |---|---|
-| `[object.NAME]` | `from = "COLLECTION"` and `where = "CONDITION"`: the members of the collection that pass the condition, under a new name. Inside `where`, bare names are the collection's attributes (`pt` is `Jet_pt`). |
-| `[keep]` | the cuts, in order. Each is `name = "condition"`, true or false per event. An event is kept when every cut is true; the counts after each cut are the cutflow `rvr press` prints. |
-| `[copy]` | `branches = [...]`: branches stored as they are, with their own types. `NAME = "BRANCH"` stores a branch under another name, and `NAME = "branch(sample.FIELD)"` a branch that each sample names in its metadata. |
-| `[column]` | `NAME = "expression"`: a computed column, flat or jagged. `NAME = { value = "expression", stored = "f4" }` also sets the type it is stored as. |
-| `[helper.NAME]` | a named expression to reuse: `value = "…"` (or `pass = "…"` for a condition), with `takes = ["a", "b"]` when it takes values, and an optional `about` note. |
-| `[collection.NAME]` | a collection made of branches with any names: `pt = "PT_lep"`, `eta = "Eta_lep"`. |
+| `[object.NAME]` | A new collection: the members of `from` that pass `where`. The two words are borrowed from SQL (`SELECT … FROM Jet WHERE pt > 30`). Inside `where`, a bare name is that member's own branch, so `pt` means `Jet_pt`. It picks jets *inside* each event; it never drops an event. You don't define `Jet`: any branches that share a prefix (`Jet_pt`, `Jet_eta`, …) are a collection, and `rvr branches` lists the ones your file has. |
+| `[keep]` | Your cuts, in order. Each one is `name = "condition"`, true or false for each event, and an event is kept only if all of them are true. `rvr press` prints how many events are left after each cut, so this is your cutflow too. |
+| `[copy]` | `branches = [...]`: branches stored just as the ROOT file has them, types and all. `NAME = "BRANCH"` stores a branch under a new name, and `NAME = "branch(sample.FIELD)"` stores a branch whose name each sample gives in its metadata. |
+| `[column]` | `NAME = "expression"`: a new column you compute, flat or jagged. Write `NAME = { value = "expression", stored = "f4" }` to choose the type it's stored as. |
+| `[helper.NAME]` | An expression you want to reuse, like a small function: `value = "…"`, plus `takes = ["a", "b"]` if it takes inputs, and an optional `about` note. (`pass = "…"` means the same as `value`.) |
+| `[collection.NAME]` | For branches that don't follow the `Jet_pt` naming: build a collection by hand, `pt = "PT_lep"`, `eta = "Eta_lep"`, and use it like any other. |
 
-What is stored is only what `[copy]` and `[column]` name. Objects and helpers are working names;
-a cut on `good_jet` keeps or drops events, but `Jet_pt` in `[copy]` still holds every jet of each
-kept event. To store only the good jets, add a column: `good_jet_pt = "good_jet.pt"`.
+One thing that trips people up: only what `[copy]` and `[column]` name ends up in the file.
+Objects and helpers are just working names. A cut on `good_jet` decides which *events* you keep,
+but `Jet_pt` in `[copy]` still stores every jet of those events. If you want only the good jets,
+store them as a column: `good_jet_pt = "good_jet.pt"`.
 
 ### Cuts for some samples only
 
-A cut written as a table applies only where its `if` is true, and lets every other sample's
-events through:
+Sometimes a cut only makes sense for some samples, like a veto for one era. Write the cut as a
+table with an `if`, and it applies only to the samples where the `if` is true; every other
+sample's events go straight through:
 
 ```toml
 [keep]
 hem = { if = "sample.era == 3", apply = "hem_veto()" }
 ```
 
-A sample whose metadata has no `era` is not cut either.
+A sample that has no `era` at all isn't cut either. (`pass` works in place of `apply` too.)
 
 ## Values
 
@@ -99,17 +104,19 @@ A sample whose metadata has no `era` is not cut either.
 | `sample.kind` | a text field | `"signal"` |
 | `sample.missing` | a field this sample's metadata does not have | missing |
 
-Every comparison with a missing field is false (`!=` too), and arithmetic with it is an error.
+A comparison with a field the sample doesn't have is always false (even `!=`), and doing
+arithmetic with one is an error.
 
-Values written into an expression are numbers (`30`, `2.5`, `1e3`, `1_000`), text in single or
-double quotes (`'signal'`), and `true` or `false`.
+You can write numbers (`30`, `2.5`, `1e3`, `1_000`), text in single or double quotes
+(`'signal'`), and `true` or `false` straight into an expression.
 
 ## Operators
 
-From loosest to tightest binding: `where`; `or`; `and`; `not`; comparisons and `in`; `+ -`;
-`* / %`; unary `-`; `**`; then `.name`, `[...]` and calls. Parentheses group as usual. A flat value
-and a jagged one combine member by member: `Jet_pt - MET_pt` subtracts each event's MET from each
-of its jets.
+These work the way you'd expect. From loosest to tightest binding they are: `where`; `or`; `and`;
+`not`; the comparisons and `in`; `+ -`; `* / %`; unary `-`; `**`; and then `.name`, `[...]` and
+function calls. When in doubt, use parentheses. When you combine a flat value with a jagged one,
+the flat value is used for every member: `Jet_pt - MET_pt` subtracts the event's MET from each of
+its jets.
 
 | expression | result |
 |---|---|
@@ -134,6 +141,9 @@ The comparisons are `==`, `!=`, `<`, `<=`, `>` and `>=`.
 
 ## Choosing members of a list
 
+This is where `where` and `[...]` come in: they pick out the members of a list you care about,
+event by event.
+
 | expression | gives | result |
 |---|---|---|
 | `Jet_pt[Jet_pt > 30]` | the members a true-or-false list of the same shape marks | `[[65, 41], [], [120, 35]]` |
@@ -145,15 +155,16 @@ The comparisons are `==`, `!=`, `<`, `<=`, `>` and `>=`.
 | `count(good_jet)` | how many members passed | `[2, 0, 2]` |
 | `good_muon.pt` | `from = "Muon"`, `where = "tightId and pt > 20"` | `[[44], [25], []]` |
 | `count(good_muon) >= 1` | a cut on it | `[true, true, false]` |
-| `count(lep where pt > 20)` | a `[collection]` (`pt = "PT_lep"`) works the same | `[1, 1, 0]` |
+| `count(lep where pt > 20)` | a hand-built `[collection]` works the same way (here `lep` is the muons: `pt = "Muon_pt"`) | `[1, 1, 0]` |
 
-A collection or object is not a value on its own: use one of its attributes (`good_jet.pt`) or
-count it (`count(good_jet)`). One `where` takes one condition; join conditions with `and`.
+A collection on its own isn't a value you can store or compare: use one of its branches
+(`good_jet.pt`) or count it (`count(good_jet)`). One `where` takes one condition, so join several
+with `and`.
 
 ## Functions
 
-Where a function takes `otherwise`, that value is given for an event whose list is empty (event
-1 has no jets).
+Some functions take an `otherwise`: that's what you get back for an event whose list is empty.
+Event 1 has no jets, so keep an eye on it in the examples.
 
 ### Reducing a jagged list to a flat value
 
@@ -171,7 +182,7 @@ Where a function takes `otherwise`, that value is given for an event whose list 
 | `first(list, otherwise)` | the first member | `first(Jet_pt, -1)` | `[65, -1, 120]` |
 | `nth(list, n, otherwise)` | the member at position `n`, counting from 0 | `nth(Jet_pt, 1, -1)` | `[22, -1, 35]` |
 
-The leading good jet's pt is `nth(good_jet.pt, 0, 0)`: `[65, 0, 120]`.
+For example, the leading good jet's pt is `nth(good_jet.pt, 0, 0)`, which gives `[65, 0, 120]`.
 
 ### Positions and order
 
@@ -184,12 +195,13 @@ The leading good jet's pt is `nth(good_jet.pt, 0, 0)`: `[65, 0, 120]`.
 | `take(list, positions, otherwise)` | the members at those positions; `otherwise` where a position is -1 or past the end | `take(Jet_eta, order(Jet_pt, 'descending'), -9)` | `[[0.5, 1.2, -2.1], [], [-0.2, 0.9]]` |
 | `listed(list, positions)` | for each member, whether its position is among `positions` | `listed(Jet_pt, nearest_index(Muon_eta, Muon_phi, Jet_eta, Jet_phi))` | `[[true, false, true], [], [false, false]]` |
 
-The `take` example gives the jets' eta in order of descending pt; the `listed` example marks the
-jets that are the nearest jet to some muon.
+In words: the `take` example lists the jets' eta from the highest-pt jet down, and the `listed`
+example marks each jet that is the closest jet to some muon.
 
 ### Math, value by value
 
-These work on flat and jagged values alike, and keep the float type they are given.
+These work on flat and jagged values alike, value by value, and keep whatever float type you
+give them.
 
 | function | example | result |
 |---|---|---|
@@ -205,7 +217,8 @@ These work on flat and jagged values alike, and keep the float type they are giv
 | `isfinite(x)` | `isfinite(MET_pt / 0)` | `[false, false, false]` |
 | `if(condition, yes, no)` | `if(MET_pt > 30, MET_pt, 0)` | `[31.5, 85, 0]` |
 
-`min` and `max` compare two values; the smallest member of one list is `least`.
+Careful with `min` and `max`: they compare two values, member by member. To find the smallest
+member *within* a list, use `least` (and `greatest` for the largest).
 
 ### Bits
 
@@ -223,9 +236,10 @@ These work on flat and jagged values alike, and keep the float type they are giv
 | `delta_r(eta1, phi1, eta2, phi2)` | ΔR = √(Δη² + Δφ²) | `delta_r(Jet_eta, Jet_phi, 0.0, 0.0)` | `[[0.50990194, 3.5805027, 1.56205], [], [3.0066593, 3.132092]]` |
 | `mass(pt, eta, phi)`, `mass(pt, eta, phi, mass)` | the invariant mass of each event's list added together (massless without a mass) | `mass(Jet_pt, Jet_eta, Jet_phi, Jet_mass)` | `[229.10867, 0, 78.98824]` |
 
-For each member of one list, its ΔR to a member of another list of the same event, or that
-member's position. They take `eta1, phi1, eta2, phi2`, and an optional fifth value for a member
-with no such partner (otherwise infinity for a ΔR, -1 for a position):
+The next ones are for matching. For each member of one list, they find a member of another list
+in the same event (the nearest, the farthest, …) and give you either the ΔR to it or its
+position. They take `eta1, phi1, eta2, phi2`, plus an optional fifth value for a member with
+nothing to match to (by default infinity for a ΔR and -1 for a position):
 
 | function | example | result |
 |---|---|---|
@@ -236,12 +250,12 @@ with no such partner (otherwise infinity for a ΔR, -1 for a position):
 | `farthest_index` | `farthest_index(Muon_eta, Muon_phi, Jet_eta, Jet_phi)` | `[[1, 1], [-1], []]` |
 
 `dr_second_farthest`, `second_nearest_index` and `second_farthest_index` work the same way.
-Event 1's muon has no jet to measure against, so it gets infinity or -1.
+Notice event 1: its muon has no jet to match to, so it gets infinity or -1.
 
 ### Pairs within a list
 
-Each pair of members of an event's list, in the order (0, 1), (0, 2), …, (1, 2), …: event 0's
-three jets make three pairs.
+These go over every pair of members in each event's list, in the order (0, 1), (0, 2), …, (1, 2),
+…, so event 0's three jets make three pairs.
 
 | function | gives | example | result |
 |---|---|---|---|
@@ -264,6 +278,10 @@ The types are `f4`, `f8` (floats); `i1`, `i2`, `i4`, `i8` (signed whole numbers)
 
 ## Helpers
 
+When you find yourself writing the same thing twice, make it a helper. It's like a small function:
+give it a name, an expression and, if it needs them, the names of its inputs, then call it
+anywhere in the recipe:
+
 ```toml
 [helper.jets_above]
 takes = ["threshold"]
@@ -282,12 +300,206 @@ pass = "count(Jet where eta < -1.3 and phi > 2.5) == 0"
 
 ## Mistakes
 
-A mistake stops `rvr press` before anything is read, with a sentence saying what is wrong:
+If something in the recipe doesn't make sense, `rvr press` stops before it reads anything and
+tells you what's wrong, in plain words:
 
 | expression | `rvr` says |
 |---|---|
-| `Jet_pt >` | Expected a value at the end (column 10) |
+| `Jet_pt >` | Expected a value at the end (column 9) |
 | `count(Jet_pt, 3)` | count takes 1 value, not 2 |
 | `Jet where nJet > 1` | The condition after where says nothing about each Jet |
 | `MET` | This expression needs values, but MET is a collection; name one of its attributes, such as MET.pt |
 | `select = "…"` at the top of the recipe | A recipe has no setting named select; it takes format, version, title, collection, object, helper, keep, copy, column |
+
+## From Python to rvr
+
+If you already make your selections in Python, here are some of the usual ones next to how you'd
+write them in a recipe, starting simple and getting less simple as we go. The Python side is
+Awkward, with the branches read the way uproot reads NanoAOD (`ev = tree.arrays()`, so `ev.Jet_pt`
+and so on). Both sides were run on the example events above and give the result shown; a test
+runs them again every time, so if one ever stopped matching we'd know.
+
+A few things you'll notice: Awkward's `&` becomes `and` (and you don't need the parentheses
+around each condition), `axis=1` goes away because a function on a jagged list always works per
+event, and where Awkward gives you `None` for an empty list, an rvr function asks for the value
+you want instead.
+
+| Python (Awkward) | rvr | result |
+|---|---|---|
+| `ev.MET_pt * 2` | `MET_pt * 2` | `[63, 170, 32]` |
+| `ev.MET_pt > 30` | `MET_pt > 30` | `[true, true, false]` |
+| `ak.num(ev.Jet_pt)` | `count(Jet)` | `[3, 0, 2]` |
+| `ak.sum(ev.Jet_pt > 30, axis=1)` | `count(Jet_pt > 30)` | `[2, 0, 2]` |
+| `ak.sum(ev.Jet_pt, axis=1)` | `sum(Jet_pt)` | `[128, 0, 155]` |
+| `ev.Jet_pt[(ev.Jet_pt > 30) & (abs(ev.Jet_eta) < 2.4)]` | `Jet_pt[Jet_pt > 30 and abs(Jet_eta) < 2.4]` | `[[65, 41], [], [120, 35]]` |
+| `ak.sum(ev.Jet_pt[(ev.Jet_pt > 30) & (abs(ev.Jet_eta) < 2.4)], axis=1)` | `sum(Jet_pt[Jet_pt > 30 and abs(Jet_eta) < 2.4])` | `[106, 0, 155]` |
+| `ak.fill_none(ak.max(ev.Jet_pt, axis=1), -1)` | `greatest(Jet_pt, -1)` | `[65, -1, 120]` |
+| `ak.fill_none(ak.pad_none(ak.sort(ev.Jet_pt, ascending=False), 2)[:, 1], -1)` | `nth(sorted(Jet_pt, 'descending'), 1, -1)` | `[41, -1, 35]` |
+| `(ak.sum((ev.Jet_pt > 30) & (abs(ev.Jet_eta) < 2.4), axis=1) >= 2) & (ev.MET_pt > 30)` | `count(Jet where pt > 30 and abs(eta) < 2.4) >= 2 and MET_pt > 30` | `[true, false, false]` |
+| `ak.sum((ev.Muon_pt > 20) & ev.Muon_tightId & (ev.Muon_charge < 0), axis=1)` | `count(Muon where pt > 20 and tightId and charge < 0)` | `[0, 1, 0]` |
+| `ev.Jet_eta[ak.argsort(ev.Jet_pt, ascending=False)]` | `take(Jet_eta, order(Jet_pt, 'descending'), -9)` | `[[0.5, 1.2, -2.1], [], [-0.2, 0.9]]` |
+
+### Longer ones
+
+Here the Python takes a few lines, and the recipe still takes one. Each is written as it would sit
+in `[column]`.
+
+**Jets that are not near any muon** (ΔR > 0.4), the usual cleaning step. A jet with no muon
+around has an infinite ΔR to the nearest one, so it's kept:
+
+<table>
+<tr><th>Python (Awkward)</th><th>rvr</th></tr>
+<tr><td>
+
+```python
+j_eta, m_eta = ak.unzip(ak.cartesian([ev.Jet_eta, ev.Muon_eta], nested=True))
+j_phi, m_phi = ak.unzip(ak.cartesian([ev.Jet_phi, ev.Muon_phi], nested=True))
+dphi = (j_phi - m_phi + np.pi) % (2 * np.pi) - np.pi
+dr = np.sqrt((j_eta - m_eta) ** 2 + dphi ** 2)
+ev.Jet_pt[ak.all(dr > 0.4, axis=2)]
+```
+
+</td><td>
+
+```toml
+clean_jet_pt = "Jet_pt[dr_nearest(Jet_eta, Jet_phi, Muon_eta, Muon_phi) > 0.4]"
+```
+
+</td></tr>
+</table>
+
+Both give `[[22, 41], [], [120, 35]]`: event 0's first jet sits right on a muon, so it goes.
+
+**The transverse mass of the leading muon and the MET**, with 0 where there is no muon:
+
+<table>
+<tr><th>Python (Awkward)</th><th>rvr</th></tr>
+<tr><td>
+
+```python
+mu_pt = ak.fill_none(ak.firsts(ev.Muon_pt), 0)
+mu_phi = ak.fill_none(ak.firsts(ev.Muon_phi), 0)
+np.sqrt(2 * mu_pt * ev.MET_pt * (1 - np.cos(mu_phi - ev.MET_phi)))
+```
+
+</td><td>
+
+```toml
+mt = "sqrt(2 * first(Muon_pt, 0) * MET_pt * (1 - cos(first(Muon_phi, 0) - MET_phi)))"
+```
+
+</td></tr>
+</table>
+
+Both give `[25.5315, 22.80952, 0]`.
+
+**The largest mass of any two jets**, with -1 for an event with fewer than two:
+
+<table>
+<tr><th>Python (Awkward)</th><th>rvr</th></tr>
+<tr><td>
+
+```python
+jet = ak.zip({"pt": ev.Jet_pt, "eta": ev.Jet_eta, "phi": ev.Jet_phi, "m": ev.Jet_mass})
+px, py = jet.pt * np.cos(jet.phi), jet.pt * np.sin(jet.phi)
+pz, e = jet.pt * np.sinh(jet.eta), np.sqrt((jet.pt * np.cosh(jet.eta)) ** 2 + jet.m ** 2)
+a, b = ak.unzip(ak.combinations(ak.zip({"px": px, "py": py, "pz": pz, "e": e}), 2))
+m = np.sqrt((a.e + b.e) ** 2 - (a.px + b.px) ** 2 - (a.py + b.py) ** 2 - (a.pz + b.pz) ** 2)
+ak.fill_none(ak.max(m, axis=1), -1)
+```
+
+</td><td>
+
+```toml
+max_mjj = "greatest(pair_mass(Jet_pt, Jet_eta, Jet_phi, Jet_mass), -1)"
+```
+
+</td></tr>
+</table>
+
+Both give `[160.95856, -1, 78.98824]`.
+
+## Three ways to pick the jets you want
+
+Say you only want the jets with pt above 30 GeV and |η| below 2.4. There are three ways to write
+that, and all three pick exactly the same jets. Which one you use depends on how often you need
+those jets.
+
+**1. An object, with bare names**
+
+```toml
+[object.good_jet]
+from = "Jet"
+where = "pt > 30 and abs(eta) < 2.4"
+```
+
+`from = "Jet"` says which collection you're picking from, and it's what makes `good_jet` a kind of
+jet: afterwards `good_jet.eta` is the good jets' `Jet_eta`, `good_jet.pt` their `Jet_pt`, and
+`count(good_jet)` counts them. Inside `where`, a bare name like `pt` is the jet's own branch,
+`Jet_pt`.
+
+**2. An object, with full branch names**
+
+```toml
+[object.good_jet]
+from = "Jet"
+where = "Jet_pt > 30 and abs(Jet_eta) < 2.4"
+```
+
+The same jets again. Some people find this easier to read, because you can see exactly which branch
+each cut is on; use whichever you like (you can even mix the two). You still need `from`, though:
+the condition says which jets pass, but `from` is what says `good_jet` *is* jets.
+
+**3. No object at all: a mask**
+
+```toml
+[column]
+good_jet_eta = "Jet_eta[Jet_pt > 30 and abs(Jet_eta) < 2.4]"
+```
+
+The brackets keep the members of `Jet_eta` where the condition is true. No object and no `from`,
+but the condition now lives in this one line only. If you also want the good jets' pt, or how many
+there are, you have to write it out again, and if you ever change the cut you have to change it
+everywhere you wrote it.
+
+**So which one?** Use an object (1 or 2) for anything you'll use more than once: good jets, good
+muons, good electrons. Then the cut lives in one place, and every cut, column and count that says
+`good_jet` means the same jets. A mask (3) is fine for a one-off. On the example events:
+
+| expression | written as | result |
+|---|---|---|
+| `good_jet.eta` | 1 or 2 | `[[0.5, 1.2], [], [-0.2, 0.9]]` |
+| `Jet_eta[Jet_pt > 30 and abs(Jet_eta) < 2.4]` | 3 | `[[0.5, 1.2], [], [-0.2, 0.9]]` |
+| `count(good_jet)` | 1 or 2 | `[2, 0, 2]` |
+| `count(Jet where Jet_pt > 30 and abs(Jet_eta) < 2.4)` | the same count, with no object | `[2, 0, 2]` |
+
+### More than one collection
+
+An object picks from one collection, but you can have as many objects as you like and use them
+together anywhere. Here `good_muon` is a second object: `from = "Muon"`, `where = "tightId and pt > 20"`.
+
+| expression | gives | result |
+|---|---|---|
+| `count(good_jet) + count(good_muon)` | the good jets and good muons of each event, together | `[3, 1, 2]` |
+| `good_jet.pt[dr_nearest(good_jet.eta, good_jet.phi, good_muon.eta, good_muon.phi) > 0.4]` | the good jets that aren't within ΔR 0.4 of a good muon | `[[41], [], [120, 35]]` |
+
+Event 0 shows the cleaning at work: its first jet, at η 0.5 and φ 0.1, sits 0.14 away from the good
+muon at η 0.4 and φ 0.2, so it goes.
+
+You can also do the cleaning inside the object itself, by naming the other collection in its
+`where`:
+
+```toml
+[object.clean_jet]
+from = "Jet"
+where = "pt > 30 and dr_nearest(eta, phi, good_muon.eta, good_muon.phi) > 0.4"
+```
+
+This is where `from` matters most. The condition names both jets and muons, so without `from`
+there would be no way to tell whether `clean_jet` is jets or muons. Inside the `where`, the bare
+names (`pt`, `eta`, `phi`) are the jet's own, and anything else is written in full
+(`good_muon.eta`, or `Muon_eta`).
+
+| expression | gives | result |
+|---|---|---|
+| `count(Jet where pt > 30 and dr_nearest(eta, phi, good_muon.eta, good_muon.phi) > 0.4)` | how many `clean_jet` each event has | `[1, 0, 2]` |

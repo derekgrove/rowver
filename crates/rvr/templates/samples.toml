@@ -1,7 +1,5 @@
 # samples.toml: what this study reads. `rvr samples resolve samples.toml` finds every file and
 # writes samples.lock beside this file; commit both. See the README of rvr for every key.
-format = "rvr-samples"
-version = 1
 
 [places]
 # Short names for long locations, used as {name} inside files = "…".

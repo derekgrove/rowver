@@ -352,9 +352,9 @@ dependencies = [
 
 [[package]]
 name = "grid-trust"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d73bd5ad2ac14839eb3fa8117a3a8e1c342dde4dad92f02419c7ffa4c2122548"
+checksum = "0217bcc0284b68cc01555c52c60a2f96cd1348ecc1f40ebe4a4cd662c73193f1"
 dependencies = [
  "rustls",
  "rustls-pemfile",
@@ -384,9 +384,9 @@ checksum = "820091ef37602f81e2a5175fddb485585ac861182854bedb41e2c7b9660d7fad"
 
 [[package]]
 name = "hep-root"
-version = "0.1.0"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c13bb0c006ce56d3d7d27b20c0c473b6288e1a483252e75aa3e0e5a0707916dc"
+checksum = "cc89f57aa9281e515be4081e16cb9c84f7cae9f564b560da3855279b1d953a8a"
 dependencies = [
  "flate2",
  "lz4_flex",
@@ -888,7 +888,7 @@ dependencies = [
 
 [[package]]
 name = "rowver"
-version = "14.2.0"
+version = "14.3.0"
 dependencies = [
  "ed25519-dalek",
  "ruzstd",
@@ -901,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "rowver-py"
-version = "14.1.0"
+version = "14.3.0"
 dependencies = [
  "numpy",
  "pyo3",
@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "rvr"
-version = "0.2.0"
+version = "14.3.0"
 dependencies = [
  "cms-dbs",
  "grid-catalog",
@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "rvr-recipe"
-version = "0.1.0"
+version = "14.3.0"
 dependencies = [
  "hep-columns",
  "serde_json",

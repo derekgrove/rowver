@@ -7,14 +7,31 @@ look inside the `.rvr` files it makes.
 rvr new DIR                 # start a study
 rvr proxy init              # make a grid proxy from your certificate (for grid storage)
 rvr samples resolve …       # find every file the study reads
+rvr branches                # the branches and collections a sample's file holds
+rvr try "EXPRESSION"        # what an expression gives on the first events, before pressing
 rvr press                   # read them through the recipe into one .rvr file
+rvr status                  # is the .rvr current, and what would press read
 rvr validate / dump / diff  # check and inspect .rvr files
 rvr reproduce FILE          # press a file's own study again and compare
 ```
 
+New to `.rvr` files? [The examples](https://gitlab.cern.ch/dgrove/rowver/-/blob/main/examples/README.md)
+make a first one from a DAS dataset and take it, step by step, to a plot.
+
 ## Install
 
-You need Rust 1.91 or later (`rustup update`).
+Download it from the [releases](https://gitlab.cern.ch/dgrove/rowver/-/releases): one file, no
+Rust needed. The Linux one runs on any x86_64 Linux with glibc 2.28 or later (el8 and el9, so the
+LPC and lxplus; Ubuntu 20.04 on); the macOS one on Apple silicon and Intel. For example on the LPC:
+
+```sh
+mkdir -p ~/bin && cd ~/bin
+curl -sL https://gitlab.cern.ch/api/v4/projects/dgrove%2Frowver/packages/generic/rvr/14.3.0/rvr-14.3.0-x86_64-linux.tar.gz | tar xz
+~/bin/rvr --version     # add ~/bin to PATH in ~/.bashrc to type just rvr
+```
+
+(Downloaded with `curl`, the macOS binary opens as it is; one saved from a browser needs
+`xattr -d com.apple.quarantine rvr` first.) With Rust 1.91 or later (`rustup update`):
 
 ```sh
 cargo install --locked rvr
@@ -68,7 +85,7 @@ Read 100,000 entries; kept after each cut:
 Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 2.6 s.
 
 $ rvr validate higgs_tautau.rvr
-higgs_tautau.rvr: valid, 2248 rows, 11 columns, not signed
+higgs_tautau.rvr: valid, 2248 rows, 11 columns, read 100000 of 968616 entries, not signed
 $ rvr dump higgs_tautau.rvr --columns
 sample         i4[2248]  [0, 0, 0, 0, 0, ...]
 entry          i8[2248]  [29, 45, 140, 157, 162, ...]
@@ -170,7 +187,8 @@ keeps the events that pass every cut of `recipe.toml`, and writes `DIR/<DIR's na
 sample whole, or N chosen at random. `--workers` is how many files are read at once (one per core
 by default). `samples.toml` must be beside the lock, since the file carries both.
 
-**Adding a column you forgot.** Add it to `recipe.toml` and run `rvr press` again. When the
+**Adding a column you forgot.** Add it to `recipe.toml` and run `rvr press` again (`rvr status`
+says beforehand whether the file can be built on, and what would be read). When the
 file is already there and was pressed from the same `samples.toml` and `samples.lock`, with the
 same cuts and the same choice of events, by the same build of rvr, only the columns that are new
 or whose definition changed are read, and only the events the file already kept are stored; every
@@ -190,7 +208,9 @@ Here that reads at most 26.3 MB of baskets (`Jet_pt` and `nJet`) where a full pr
 108.0 MB; on local copies of the two files it takes 0.2 s instead of 0.6 s (2026-10-19).
 A column counts as changed when its expression, its stored kind, or any object, helper or
 collection it uses changed. When the file cannot be built on, `rvr press` says why and presses
-every column; `--full` always does.
+every column; `--full` always does. A sample added or removed, a lock resolved again, other
+`--events`, or another build of rvr all mean a full press, since the file's rows or the code that
+computed them would no longer be the ones it records.
 
 Before anything is read, every file is checked against the lock: its size and adler32, then its
 ROOT UUID and entries. A file that changed, or a `samples.toml` edited since the lock was written,
@@ -221,6 +241,20 @@ still every basket of every file it reads.
 Remote files are read through their storage's HTTPS door, all the baskets the recipe can use of
 each 50,000 entries asked for in one request (`multipart/byteranges`, which EOS answers).
 
+A storage under load refuses requests for minutes at a time (EOS answers `403`; others `429` or
+`503`), and the network drops some. So a read that fails that way is asked again after 5 s, then
+15 s, 30 s, 1, 2, 4 and 5 minutes, about 13 minutes in all, and each wait is printed:
+
+```text
+  waiting 30 s to ask again for WZTo3LNu_UL18.root (3 of 8 tries made): its storage answered 403 Forbidden
+```
+
+The press goes on where it was; only a read that fails all eight times stops it, and the others
+stop waiting as soon as one input has failed for good. A file that is gone (`404`), a `401`, a
+certificate that is not trusted, a host name that does not resolve, or a damaged file stops it at
+once; so does a `403` when there is no grid proxy (it needs one). Fetching ahead is never waited
+for: the read that needs the bytes is.
+
 A file of a central dataset (`dataset = …`) is read from one of its copies. As the press starts,
 Rucio is asked once where every such file can be read over HTTPS. Only copies on disk, available,
 and at a CMS storage door are kept, and Rucio must give the size and adler32 the lock has. Each
@@ -236,20 +270,13 @@ door), and the press says what it read from where:
 ```text
 $ rvr press --events all
 Rucio said where the 18 dataset files can be read in 4.3 s.
-Pressing 1 samples, 18 files, 9,821,283 entries, 10 at a time:
+Pressing 1 sample, 18 files, 9,821,283 entries, 10 at a time:
   …
   read from T2_DE_DESY: 1 file, 24.0 MB
   read from T2_US_Florida: 14 files, 238.3 MB
   read from T2_US_Purdue: 3 files, 28.6 MB
-  passed over T1_RU_JINR_Disk (se-wbdv.jinr-t1.ru:2880) 2 times: could not be asked: invalid peer certificate: UnknownIssuer
   passed over T1_US_FNAL_Disk (cmsdcadisk.fnal.gov:2880) 3 times: could not be asked: invalid peer certificate: UnknownIssuer
-  passed over T2_BE_IIHE (maite.iihe.ac.be:2880) 2 times: could not be asked: invalid peer certificate: UnknownIssuer
-  passed over T2_BE_UCL (ingrid-se02.cism.ucl.ac.be:1094) 2 times: could not be asked: invalid peer certificate: UnknownIssuer
-  passed over T2_DE_RWTH (grid-webdav.physik.rwth-aachen.de:2889) 2 times: could not be asked: invalid peer certificate: UnknownIssuer
-  passed over T2_IT_Legnaro (t2-xrdcms.lnl.infn.it:2880) 1 time: could not be asked: invalid peer certificate: UnknownIssuer
-  passed over T3_KR_KISTI (cms-xrdr.sdfarm.kr:2880) 10 times: could not be asked: invalid peer certificate: UnknownIssuer
-  passed over T3_US_NotreDame (skynet013.crc.nd.edu:1094) 2 times: could not be asked: invalid peer certificate: UnknownIssuer
-  a storage whose authority rvr does not know was passed over; set X509_CERT_DIR to a folder of grid authorities (IGTF) to read from it too
+  …
 Read 9,821,283 entries; kept after each cut:
   three_leptons                      1,234,580
 Wrote wz.rvr (1,234,580 rows, 9 columns, 27.8 MB) in 41.4 s.
@@ -257,16 +284,143 @@ Wrote wz.rvr (1,234,580 rows, 9 columns, 27.8 MB) in 41.4 s.
 
 That is the whole WZTo3LNu UL18 NanoAOD dataset (14.9 GB on storage, of which the recipe's
 branches were 291 MB), read from a laptop in the United States on 2026-10-19. With `--workers 1`
-the same press took 148.8 s. Eight of the dataset's storages were passed over because their
-certificates are signed by grid authorities rvr does not carry (see Grid access); with
-`X509_CERT_DIR` set, FNAL served 7 of the files and the press took 37.5 s.
+the same press took 148.8 s. rvr 0.2.0 passed over eight of the dataset's storages, whose
+certificates are signed by grid authorities it did not carry (given them through `X509_CERT_DIR`,
+FNAL served 7 of the files and the press took 37.5 s). Since 14.3.0 rvr carries them (see Grid
+access): on 2026-10-29 the same dataset, through a recipe reading 419 MB of it, took 29.5 s, FNAL
+serving 5 files.
+
+### `rvr status [DIR] [--out FILE] [--events N|all] [--random] [--seed S]`
+
+Says whether the study's `.rvr` file (the one `rvr press` with the same options would write)
+holds the study as it is now, from the study's three texts and the file alone (no input is read): what changed in
+`recipe.toml` (columns new, changed or dropped; the cuts), whether `samples.toml` was edited or
+the lock resolved again since, and what `rvr press` would read. Exit status 0 when the file holds
+the study as it is, and was pressed with the same `--events`, `--random` and `--seed`, so a script
+or an app can ask before pressing. It asks no storage: whether the
+input files changed since the lock is `rvr samples check samples.lock`.
+
+```text
+$ rvr status
+wz.rvr: pressed 2026-10-29T19:21:36Z by rvr 14.3.0
+  recipe.toml   changed since: new: Jet_pt, ht
+  samples.toml  as the file holds it
+  samples.lock  as the file holds it
+  events        as the file holds it
+rvr press would read only Jet_pt, ht, for the events the file kept, and copy every other column from it.
+```
+
+### `rvr branches [DIR] [--sample NAME] [--find TEXT]`
+
+Lists every branch of the first file of the study's first sample (or of `--sample NAME`), one per
+line with its type and its shape: `flat` (one value per event), `jagged` (a list per event), or `3
+per event` for a fixed array. Branches are grouped by the prefix before their first `_`, and
+a group of jagged branches is a **collection**: under `Jet:`, its counter `nJet` comes first, then
+`Jet_pt` and the rest (write `from = "Jet"`, `count(Jet)`, `Jet where pt > 30`, and `pt` inside its
+`where` for `Jet_pt`). A member of a split object is grouped under its object, the name before its
+first `.`: in MiniAOD and AOD, one EDM product (`recoMuons_muons__RECO`, its count `.obj` first);
+in ATLAS DAOD_PHYSLITE, one container (`AnalysisJetsAuxDyn`). A recipe names those branches through
+a `[collection]` (`pt = "recoMuons_muons__RECO.obj.m_state.p4Polar_.fCoordinates.fPt"`) or
+`branch('…')`. Branches in no group are listed last, under `Other:`, and branches `rvr` cannot read
+(whole objects, strings, nested vectors) under `Not readable by rvr:`, each with why. A dataset's
+file with no copy on disk (only on tape) is passed over for the next one, up to the tenth. It reads
+the file's description only, no events, so it takes as long as opening the file. `--find TEXT`
+shows only the branches whose name holds TEXT, in any case: `rvr branches --find muon`. A name a
+recipe uses that the file does not have is answered with the nearest branches and collections, and
+a pointer here. Groups longer than seven are cut with `…` below:
+
+```text
+$ rvr branches
+GluGluToHToTauTau: GluGluToHToTauTau.root, tree Events, 69 branches
+
+GenPart:
+  nGenPart        uint32  flat
+  GenPart_eta     float   jagged
+  GenPart_mass    float   jagged
+  GenPart_pdgId   int32   jagged
+  GenPart_phi     float   jagged
+  GenPart_pt      float   jagged
+  GenPart_status  int32   jagged
+
+Jet:
+  nJet      uint32  flat
+  Jet_btag  float   jagged
+  Jet_eta   float   jagged
+  Jet_mass  float   jagged
+  Jet_phi   float   jagged
+  Jet_pt    float   jagged
+  Jet_puId  bool    jagged
+
+Muon:
+  nMuon                uint32  flat
+  Muon_charge          int32   jagged
+  Muon_dxy             float   jagged
+  Muon_dxyErr          float   jagged
+  Muon_dz              float   jagged
+  …
+
+Tau:
+  nTau                 uint32  flat
+  Tau_charge           int32   jagged
+  Tau_decayMode        int32   jagged
+  Tau_eta              float   jagged
+  Tau_genPartIdx       int32   jagged
+  …
+
+HLT:
+  HLT_IsoMu17_eta2p1_LooseIsoPFTau20  bool  flat
+  HLT_IsoMu24                         bool  flat
+  HLT_IsoMu24_eta2p1                  bool  flat
+
+MET:
+  MET_CovXX         float  flat
+  MET_CovXY         float  flat
+  MET_CovYY         float  flat
+  MET_phi           float  flat
+  MET_pt            float  flat
+  MET_significance  float  flat
+  MET_sumet         float  flat
+
+PV:
+  PV_npvs  int32  flat
+  PV_x     float  flat
+  PV_y     float  flat
+  PV_z     float  flat
+
+Other:
+  event            uint64  flat
+  luminosityBlock  uint32  flat
+  run              int32   flat
+```
+
+### `rvr try "EXPRESSION" [DIR] [--events N] [--sample NAME] [--kept]`
+
+Shows what one expression gives, event by event, on the first `--events` events (10 unless told)
+of the study's first sample, or of `--sample NAME`. It reads the study's `samples.lock`, so resolve
+first, and its `recipe.toml`, so the recipe's objects, helpers and collections can be used. It
+opens one file and reads only the branches the expression names. `--kept` shows only the events
+the `[keep]` cuts keep, which are the rows `rvr press` would write. A mistake in the expression, or
+a branch the file does not have, is said as `rvr press` would say it.
+
+```text
+$ rvr try "first(pair_mass(good_muon.pt, good_muon.eta, good_muon.phi, good_muon.mass), -1)" --kept --events 5
+Rucio said where the 1 dataset file can be read in 3.2 s.
+DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events (f4, one value per event)
+  entry       14   88.6032
+  entry       25   93.59802
+  entry       35   90.682175
+  entry       43   90.26609
+  entry       52   92.6495
+```
 
 ### `rvr validate FILE... [--parent PARENT]`
 
 Checks each file completely: every array decompresses to its declared length and checksum, every
 per-sample checksum, the column facts, the study's texts and their checksums, that the rows belong
 to the files recorded, and that every row's entry was read (a random choice is made again from its
-seed). One line per file: `valid` and who signed it, or the first problem found. A derived file
+seed). One line per file: `valid`, how many entries the press read of how many its samples hold
+(`read all 968616 entries`, so you can see nothing was left out), and who signed it, or the
+first problem found. A derived file
 (columns computed from another file) is compared with its parent when you name it with `--parent`.
 
 Every reader (rvr, the Python package) refuses a file whose header fails these checks, or whose
@@ -346,9 +500,6 @@ when less than six hours are left.
 ## samples.toml
 
 ```toml
-format = "rvr-samples"
-version = 1
-
 [places]                      # short names for long locations, used as {name}
 lpc = "root://cmseos.fnal.gov//store/user/username/ntuples"
 
@@ -402,7 +553,7 @@ A mass point's label becomes part of the name as CMS dataset names write numbers
 ## recipe.toml
 
 The recipe is TOML, with one expression per value, evaluated over whole columns of events. The
-[recipe reference](https://crates.io/crates/rvr-recipe/0.1.0) lists every table, operator and function, each with an
+[recipe reference](https://crates.io/crates/rvr-recipe/14.3.0) lists every table, operator and function, each with an
 example and its result.
 
 ```toml
@@ -441,14 +592,13 @@ rvr proxy init
 ```
 
 (`voms-proxy-init -voms cms -valid 192:00` makes the same proxy, where it is installed.) `rvr`
-uses `X509_USER_PROXY` when it is set, otherwise `/tmp/x509up_u<your uid>`. It trusts the public
-certificate authorities and CERN's grid authorities, which LPC EOS and CERN EOS are signed by,
-with no setup; `X509_CERT_DIR` adds a folder of others (the IGTF authorities, as grid tools
-install them in `/etc/grid-security/certificates`) for storage signed by someone else, such as
-FNAL's dCache and KISTI. That matters for central datasets: on 2026-10-19, of the 158 CMS storage
-doors rvr knows, 51 completed a TLS connection with the built-in authorities alone and 111 with
-the IGTF folder as well (40 did not answer at all). Without a valid proxy, local files and public storage still resolve, and
-every other sample says what to run.
+uses `X509_USER_PROXY` when it is set, otherwise `/tmp/x509up_u<your uid>`. It trusts, with no
+setup, the public certificate authorities, CERN's, and the grid's: the 83 IGTF accredited
+authorities (release 1.146, the set grid sites install as `ca-policy-lcg`), which sign the
+storage of most CMS sites, FNAL's dCache among them. `X509_CERT_DIR` adds a folder of others (as
+grid tools install them in `/etc/grid-security/certificates`), for an authority newer than rvr.
+Without a valid proxy, local files and public storage still resolve, and every other sample says
+what to run.
 
 ## When something goes wrong
 
@@ -463,7 +613,11 @@ every other sample says what to run.
 | `… holds your private key, and other accounts on this machine can read it` (from `proxy init`) | run the `chmod` given |
 | `…: the passphrase is wrong` (from `proxy init`) | type it again; it is the one you chose when you saved the certificate |
 | `… has no copy that can be read now (T1_…_Tape: on tape; …)` (from `press`) | the file is only on tape: ask for a Rucio rule that puts the dataset on disk |
-| `passed over … invalid peer certificate: UnknownIssuer` (from `press`) | set `X509_CERT_DIR` to a folder of grid authorities to read from that storage too |
+| `passed over … invalid peer certificate: UnknownIssuer` (from `press`) | an authority newer than rvr's: set `X509_CERT_DIR` to the grid authorities folder (`/etc/grid-security/certificates` where grid tools are installed) |
+| `waiting 30 s to ask again for … its storage answered 403 Forbidden` (from `press`) | nothing: the storage is busy and the read is asked again; if all eight tries fail, press again later (or when fewer jobs read that storage) |
+| `… refused the listing (403, 4 tries over 50 s). Either the grid proxy does not give access there, or the storage is refusing requests while it is busy …` | `rvr proxy` shows whether the proxy is valid; if it is, try again later |
+| `…, tree T, entries A to B: X: decompression failed (zlib): …, in basket N of branch X (…)` (from `press`) | the file is damaged at that basket: read it from another copy if there is one, or leave that file or tree out of `samples.toml` |
+| `rvr press would press every column, as it was made by another build of rvr (…)` (from `status` or `press`) | a full press, by design: columns made by another build are not copied |
 | `a name holds only letters, digits, _ and - …` | use the name it suggests, and put the text in `label` |
 | `1 file differs from the lock: …` (from `check`) | the file changed since the lock: resolve again if that is intended, and review the new lock |
 | `samples.toml has changed since the lock was written` | resolve again |

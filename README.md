@@ -111,7 +111,9 @@ marks what was cut, and checksums are shortened.
 This uses two Higgs-to-tau-tau samples from CMS Open Data, which anyone can read without a grid
 proxy. Every output below is from a real run.
 
-**1. Install `rvr`.** You need Rust 1.91 or later (`rustup update`).
+**1. Install `rvr`.** Download it from the [releases](https://gitlab.cern.ch/dgrove/rowver/-/releases)
+(Linux x86_64 with glibc 2.28 or later, so the LPC and lxplus, and macOS), or, with Rust 1.91 or
+later:
 
 ```sh
 cargo install --locked rvr
@@ -198,7 +200,7 @@ Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 2.5 s.
 
 ```text
 $ rvr validate higgs_tautau.rvr
-higgs_tautau.rvr: valid, 2248 rows, 11 columns, not signed
+higgs_tautau.rvr: valid, 2248 rows, 11 columns, read 100000 of 968616 entries, not signed
 $ rvr dump higgs_tautau.rvr --columns
 sample         i4[2248]  [0, 0, 0, 0, 0, ...]
 entry          i8[2248]  [29, 45, 140, 157, 162, ...]
@@ -240,6 +242,12 @@ Comparing the two with rvr diff:
 The headers show no difference in rows, samples, columns, by_sample or sample columns.
 ```
 
+[The introduction](intro/README.md) says what a `.rvr` file is and why it speeds up an
+analysis. [The examples](examples/README.md) take one study from a first file to a finished plot, with
+central datasets from DAS: histograms in Python and ROOT, a column added later, data and
+simulation together, reading more events, sharing and signing, your own ntuples, and what to do
+when something goes wrong, every output from a real run.
+
 To use your own data, edit `samples.toml` and `recipe.toml`, then repeat steps 3 to 5. LPC EOS,
 most CERN EOS areas and central datasets need a grid proxy first: `rvr proxy init` makes one
 from your certificate in `~/.globus`. Run `rvr key new` once to sign every file you press.
@@ -255,6 +263,9 @@ every key of `samples.toml`.
 | [`crates/rvr-recipe`](crates/rvr-recipe/README.md) | the recipe language of `rvr press`: every table, operator and function, each with an example |
 | [`crates/rowver-py`](crates/rowver-py/README.md) | the Python package `rowver`: `.rvr` files as NumPy, Awkward, Arrow, pandas and Parquet, and the `rvr` command |
 | [`crates/rowver`](crates/rowver/README.md) | the Rust library that reads, validates and writes `.rvr` files; the reference builder of the format |
+| [`intro`](intro/README.md) | what a `.rvr` file is, and why it makes an analysis fast |
+| [`setup`](setup/README.md) | install `rvr` and `rowver`, and make a grid proxy on your laptop |
+| [`examples`](examples/README.md) | your first `.rvr` file, step by step, from DAS datasets to plots |
 | [`FORMAT.md`](FORMAT.md) | the `.rvr` specification |
 
 It reads ROOT with [hep-root](https://crates.io/crates/hep-root) and reaches the grid with

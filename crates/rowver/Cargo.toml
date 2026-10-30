@@ -1,7 +1,7 @@
 [package]
 name = "rowver"
 # The crate's major version is the .rvr format version it reads and writes.
-version = "14.2.0"
+version.workspace = true
 description = "Read, validate and write RowVer .rvr files: event columns as zstd arrays behind a JSON header that carries the recipe, the samples and who signed it"
 keywords = ["hep", "physics", "columnar", "rvr", "file-format"]
 categories = ["science", "encoding", "parser-implementations"]

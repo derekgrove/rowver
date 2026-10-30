@@ -155,6 +155,25 @@ fn events_reads_the_first_entries_and_records_where_it_stopped() {
         sample["events"],
         serde_json::json!({"choose": "first", "n": 2})
     );
+    let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let (_, said) = rvr(&dir, &["validate", &file]);
+    assert!(said.contains("read 2 of "), "{said}");
+    // A second file the first N events never reach is not read, and validate counts it all the same.
+    std::fs::copy(dir.join("uproot_flat.root"), dir.join("again.root")).unwrap();
+    let two = FLAT.replace(
+        r#"files = "uproot_flat.root""#,
+        r#"files = ["uproot_flat.root", "again.root"]"#,
+    );
+    std::fs::write(dir.join("samples.toml"), two).unwrap();
+    let header = pressed(&dir, &["--events", "2"]);
+    let entries = header["made"]["files"]["flat"]["metadata"]["events_total"]
+        .as_u64()
+        .unwrap();
+    let (_, said) = rvr(&dir, &["validate", &file]);
+    assert!(
+        said.contains(&format!("read 2 of {entries} entries")),
+        "{said}"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -419,5 +438,196 @@ branches = ["weight", "nJet"]
         "{said}"
     );
     assert!(said.contains("kept after each cut"), "{said}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn status_says_whether_the_file_is_current_and_what_press_would_read() {
+    let recipe = r#"format = "rvr-recipe"
+version = 1
+
+[keep]
+jets = "nJet >= 1"
+
+[copy]
+branches = ["weight", "nJet"]
+"#;
+    let dir = study("status", FLAT, recipe);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["status"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("is not there: rvr press makes it"), "{said}");
+    assert_eq!(rvr(&dir, &["press"]).0, 0);
+    let (code, said) = rvr(&dir, &["status"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(
+        said.contains("It is current: rvr press has nothing to read."),
+        "{said}"
+    );
+
+    let added = recipe.replace(r#""nJet"]"#, r#""nJet", "Jet_pt"]"#);
+    std::fs::write(dir.join("recipe.toml"), &added).unwrap();
+    let (code, said) = rvr(&dir, &["status"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(
+        said.contains("recipe.toml   changed since: new: Jet_pt"),
+        "{said}"
+    );
+    assert!(said.contains("rvr press would read only Jet_pt"), "{said}");
+    let (code, said) = rvr(&dir, &["status", "--events", "10"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(
+        said.contains("would press every column, as it chose other events of flat"),
+        "{said}"
+    );
+    assert!(
+        said.contains("events        the file read others"),
+        "{said}"
+    );
+
+    std::fs::write(
+        dir.join("recipe.toml"),
+        added.replace("nJet >= 1", "nJet >= 2"),
+    )
+    .unwrap();
+    let (_, said) = rvr(&dir, &["status"]);
+    assert!(said.contains("the cuts under [keep] changed"), "{said}");
+    std::fs::write(
+        dir.join("samples.toml"),
+        FLAT.replace("Flat ntuple", "Flat"),
+    )
+    .unwrap();
+    let (code, said) = rvr(&dir, &["status"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(
+        said.contains("samples.toml has changed since samples.lock was written"),
+        "{said}"
+    );
+    assert!(
+        said.contains("rvr press refuses until samples.lock is resolved again"),
+        "{said}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_damaged_basket_is_named_with_its_file_tree_and_entries() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"weight\"]\n";
+    let dir = study("damaged", FLAT, recipe);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let path = dir.join("uproot_flat.root");
+    let (seek, nbytes) = {
+        let file = hep_root::RootFile::open(hep_root::LocalFile::open(&path).unwrap()).unwrap();
+        let tree = file.tree_at("analysis").unwrap();
+        let branch = tree.branch("weight").unwrap();
+        (
+            branch.basket_seek[0] as usize,
+            branch.basket_bytes[0] as usize,
+        )
+    };
+    // Damaged after the lock was written: press checks size and adler32 first, so write a lock
+    // that matches the damaged file.
+    let mut bytes = std::fs::read(&path).unwrap();
+    for b in &mut bytes[seek + nbytes - 12..seek + nbytes] {
+        *b ^= 0x5a;
+    }
+    std::fs::write(&path, &bytes).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(
+        said.contains("uproot_flat.root, tree analysis, entries 0 to "),
+        "{said}"
+    );
+    assert!(
+        said.contains("in basket 0 of branch weight (entries 0 to "),
+        "{said}"
+    );
+    assert!(said.contains("The file is damaged there"), "{said}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn try_shows_what_an_expression_gives_on_the_first_events() {
+    let recipe = r#"format = "rvr-recipe"
+version = 1
+
+[object.hard_jet]
+from = "Jet"
+where = "pt > 30"
+
+[keep]
+jets = "nJet >= 1"
+
+[copy]
+branches = ["nJet"]
+"#;
+    let dir = study("try", FLAT, recipe);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    // nJet is 3, 4, 3, 0, 1.
+    let (code, said) = rvr(&dir, &["try", "nJet", "--events", "4"]);
+    assert_eq!(code, 0, "{said}");
+    let values: Vec<&str> = said.lines().skip(1).map(|l| l.split_whitespace().last().unwrap()).collect();
+    assert_eq!(values, ["3", "4", "3", "0"], "{said}");
+    assert!(said.starts_with("flat: uproot_flat.root, tree analysis ("), "{said}");
+    // The recipe's objects can be used, and --kept passes over the event the cut drops.
+    let (code, said) = rvr(&dir, &["try", "hard_jet.pt", "--kept"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("  entry        0   [65.3125]\n"), "{said}");
+    assert!(!said.contains("entry        3"), "{said}");
+    assert!(said.contains("4 shown of its 5 entries"), "{said}");
+    let (code, said) = rvr(&dir, &["try", "nJett"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("There is no column named nJett. Did you mean: nJet"), "{said}");
+    let (code, said) = rvr(&dir, &["try", "count(Jet_pt"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("the expression: Expected )"), "{said}");
+    // A flag it does not know, or one without its value, is refused; a word that is also a
+    // flag's value is still a word.
+    let (code, said) = rvr(&dir, &["try", "nJet", "--keep"]);
+    assert_eq!(code, 2, "{said}");
+    assert!(said.contains("--keep is not one of its flags"), "{said}");
+    assert_eq!(rvr(&dir, &["try", "nJet", "--events"]).0, 2);
+    let (code, said) = rvr(&dir, &["try", "flat", "--sample", "flat", "--events", "1"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("There is no column named flat"), "{said}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn branches_lists_the_collections_and_values_a_recipe_can_name() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[copy]\nbranches = [\"nJet\"]\n";
+    let dir = study("branches", FLAT, recipe);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["branches"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.starts_with("flat: uproot_flat.root, tree analysis, 17 branches\n"), "{said}");
+    // Each group's counter comes first; every branch says its type and whether it is a list.
+    let jet = "\n\nJet:\n  nJet     int32  flat\n  Jet_eta  float  jagged\n  Jet_pt   float  jagged\n";
+    assert!(said.contains(jet), "{said}");
+    assert!(said.contains("\n  Muon_tight   bool   jagged\n"), "{said}");
+    assert!(said.contains("\n\nOther:\n  event            uint64  flat\n"), "{said}");
+    assert!(said.contains("\n  pv               float   3 per event\n"), "{said}");
+    let (code, said) = rvr(&dir, &["branches", "--find", "JET"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("3 of its 17 branches hold \"jet\""), "{said}");
+    assert!(!said.contains("Muon"), "{said}");
+    // A file whose counted branches have no prefix, and one with branches rvr cannot read.
+    let others = [("codecs-zlib.root", "Events", "\n  pt   float   jagged\n"), ("stl_vectors.root", "ntuple/Events", "\n  label  (string: strings are not read)\n")];
+    for (file, tree, line) in others {
+        let samples = format!("[[sample]]\nname = \"other\"\nfiles = \"{file}\"\ntree = \"{tree}\"\n");
+        std::fs::write(dir.join("samples.toml"), samples).unwrap();
+        assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+        let (code, said) = rvr(&dir, &["branches"]);
+        assert_eq!(code, 0, "{said}");
+        assert!(said.contains(line), "{said}");
+    }
+    std::fs::write(dir.join("samples.toml"), FLAT).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    // A wrong collection name suggests the collection, and says where to look.
+    let (code, said) = rvr(&dir, &["try", "count(Jets where pt > 30)"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("There is no column named Jets. Did you mean: Jet,"), "{said}");
+    assert!(said.contains("rvr branches lists every branch and collection the file has."), "{said}");
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -4,8 +4,10 @@ members = ["crates/*"]
 # The Python package builds with maturin (it needs a Python); cargo test leaves it out.
 default-members = ["crates/rowver", "crates/rvr", "crates/rvr-recipe"]
 
-# Each crate has its own version and is published on its own; these are shared.
+# Every crate and the Python package share one version, released together; its major is the .rvr
+# format version.
 [workspace.package]
+version = "14.3.0"
 authors = ["Derek Grove <derek.william.grove@cern.ch>"]
 repository = "https://gitlab.cern.ch/dgrove/rowver"
 edition = "2021"
@@ -13,14 +15,14 @@ rust-version = "1.91"
 license = "MIT"
 
 [workspace.dependencies]
-rowver = { path = "crates/rowver", version = "14.2.0" }
-rvr-recipe = { path = "crates/rvr-recipe", version = "0.1.0" }
-rvr = { path = "crates/rvr", version = "0.2.0" }
+rowver = { path = "crates/rowver", version = "14.3.0" }
+rvr-recipe = { path = "crates/rvr-recipe", version = "14.3.0" }
+rvr = { path = "crates/rvr", version = "14.3.0" }
 # The shared HEP crates, from crates.io (each in its own repository, gitlab.cern.ch/dgrove/<crate>).
 hep-columns = "0.1.0"
-hep-root = "0.1.0"
+hep-root = "0.1.3"
 grid-catalog = "0.1.0"
-grid-trust = "0.1.0"
+grid-trust = "0.1.2"
 voms-proxy = "0.1.0"
 wlcg-doors = "0.1.0"
 rucio-client = "0.1.0"

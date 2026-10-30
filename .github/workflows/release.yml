@@ -1,0 +1,211 @@
+# A release, on a vX.Y.Z tag that gitlab.cern.ch mirrors here: test, build everything, and
+# only then publish the new crates to crates.io, the Python package to PyPI (conda-forge follows
+# PyPI), and the rvr binaries to the GitLab release. Run by hand, it rehearses on TestPyPI.
+name: release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "vX.Y.Z tag to rehearse (builds it and publishes to TestPyPI only)"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  RUST: "1.91"
+  MATURIN: "1.15.0"
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      crates: ${{ steps.plan.outputs.crates }}
+      python: ${{ steps.plan.outputs.python }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: "${{ env.TAG }}", fetch-depth: 0, persist-credentials: false }
+      - run: rustup toolchain install $RUST --profile minimal && rustup default $RUST
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with: { python-version: "3.11" }
+      - run: pip install maturin==$MATURIN
+      - run: cargo test --workspace --exclude rowver-py --locked
+      - id: plan
+        run: python3 .github/release.py
+
+  wheels:
+    needs: plan
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: x86_64, manylinux: "2_28" }
+          - { os: ubuntu-24.04-arm, target: aarch64, manylinux: "2_28" }
+          - { os: macos-14, target: universal2-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: "${{ env.TAG }}", persist-credentials: false }
+      - uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
+        with:
+          maturin-version: ${{ env.MATURIN }}
+          rust-toolchain: ${{ env.RUST }}
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'off' }}
+          args: --release --locked --out dist -m crates/rowver-py/Cargo.toml
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: "wheel-${{ matrix.os }}", path: dist }
+
+  # Each wheel installed where it is meant to run, on the oldest and newest Python, and tested.
+  test-wheels:
+    needs: wheels
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15-intel]
+        python: ["3.11", "3.14"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: "${{ env.TAG }}", persist-credentials: false }
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with: { python-version: "${{ matrix.python }}" }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { pattern: "wheel-*", path: dist, merge-multiple: true }
+      - run: pip install --no-index --no-deps --find-links dist rowver && pip install numpy awkward pyarrow pandas
+      - run: python -m unittest discover tests
+        working-directory: crates/rowver-py
+      - run: rvr --version
+
+  # The source package conda-forge builds from, checked to build a working wheel on its own.
+  sdist:
+    needs: plan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: "${{ env.TAG }}", persist-credentials: false }
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with: { python-version: "3.11" }
+      - run: rustup toolchain install $RUST --profile minimal && rustup default $RUST
+      - run: pip install maturin==$MATURIN && maturin sdist --out dist
+        working-directory: crates/rowver-py
+      - run: pip install crates/rowver-py/dist/*.tar.gz && rvr --version && python -c "import rowver"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: sdist, path: crates/rowver-py/dist }
+
+  # The rvr binaries. Linux is built on AlmaLinux 8, so it needs glibc 2.28 or later (el8, el9: LPC
+  # and lxplus); a static musl build pressed 3.3 times slower. macOS is one binary for both chips.
+  binaries:
+    needs: plan
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-24.04, container: "almalinux:8", name: x86_64-linux }
+          - { os: macos-14, name: macos }
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    env:
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_STRIP: "true"
+    steps:
+      - if: matrix.container
+        run: dnf install -y -q gcc git tar
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: "${{ env.TAG }}", persist-credentials: false }
+      - run: |
+          if ! command -v rustup; then curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal; fi
+          . "$HOME/.cargo/env"
+          rustup toolchain install $RUST --profile minimal && rustup default $RUST
+          V=${TAG#v}; mkdir -p out
+          if [ "${{ matrix.name }}" = macos ]; then
+            for t in aarch64-apple-darwin x86_64-apple-darwin; do
+              rustup target add $t && cargo build --release --locked -p rvr --target $t
+            done
+            lipo -create -output out/rvr target/aarch64-apple-darwin/release/rvr target/x86_64-apple-darwin/release/rvr
+          else
+            cargo build --release --locked -p rvr && cp target/release/rvr out/
+          fi
+          out/rvr --version
+          tar czf rvr-$V-${{ matrix.name }}.tar.gz -C out rvr
+        shell: bash
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: "binary-${{ matrix.name }}", path: "rvr-*.tar.gz" }
+
+  # Nothing is published until every build and test above has passed. crates.io first, in the order
+  # the crates need each other; a version already there with the same contents was left out by plan.
+  crates-io:
+    needs: [plan, test-wheels, sdist, binaries]
+    if: github.event_name == 'push' && needs.plan.outputs.crates != ''
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: "${{ env.TAG }}", persist-credentials: false }
+      - run: rustup toolchain install $RUST --profile minimal && rustup default $RUST
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
+      # A crate published by an earlier run of this release is passed over, so the job can run again.
+      - run: |
+          for c in ${{ needs.plan.outputs.crates }}; do
+            v=$(cargo metadata --format-version 1 --no-deps --locked | jq -r ".packages[] | select(.name == \"$c\") | .version")
+            if curl -sf -A "rowver-release" "https://crates.io/api/v1/crates/$c/$v" > /dev/null; then
+              echo "$c $v is on crates.io already"; continue
+            fi
+            cargo publish -p $c --locked
+          done
+        env: { CARGO_REGISTRY_TOKEN: "${{ steps.auth.outputs.token }}" }
+
+  # crates-io is skipped when no crate is new, or in a rehearsal; any other job not passing stops it.
+  pypi:
+    needs: [plan, test-wheels, sdist, binaries, crates-io]
+    if: >-
+      always() && needs.plan.outputs.python == 'true' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-24.04
+    environment: ${{ github.event_name == 'push' && 'pypi' || 'testpypi' }}
+    permissions: { id-token: write }
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { pattern: "wheel-*", path: dist, merge-multiple: true }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: sdist, path: dist }
+      - uses: pypa/gh-action-pypi-publish@aef6c9b6e301dc803e1bc9133e9ce67ae9b0906b # v1.14.3
+        with:
+          repository-url: ${{ github.event_name == 'push' && 'https://upload.pypi.org/legacy/' || 'https://test.pypi.org/legacy/' }}
+          skip-existing: true  # files an earlier run of this release uploaded; plan checked they match
+
+  # The binaries, on the tag's release at gitlab.cern.ch. The token is a project access token of
+  # that project (role Developer, scope api), held as this repository's secret GITLAB_TOKEN.
+  gitlab-release:
+    needs: [plan, test-wheels, sdist, binaries, crates-io, pypi]
+    if: >-
+      always() && github.event_name == 'push' && needs.plan.result == 'success' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { pattern: "binary-*", merge-multiple: true }
+      - env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          V: ${{ needs.plan.outputs.version }}
+        run: |
+          api=https://gitlab.cern.ch/api/v4/projects/dgrove%2Frowver
+          packages=$api/packages/generic/rvr/$V
+          if curl -sf --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "$api/releases/$TAG" > /dev/null; then
+            echo "The GitLab release $TAG exists already"; exit 0
+          fi
+          for f in rvr-$V-x86_64-linux.tar.gz rvr-$V-macos.tar.gz; do
+            curl -sSf --header "PRIVATE-TOKEN: $GITLAB_TOKEN" --upload-file $f "$packages/$f"
+          done
+          jq -n --arg tag "$TAG" --arg p "$packages" --arg v "$V" '{
+            tag_name: $tag, name: $tag,
+            description: "rvr for Linux (x86_64, glibc 2.28 or later: el8, el9, LPC, lxplus) and macOS (Apple silicon and Intel). Download, unpack, and put rvr on your PATH; see crates/rvr/README.md. The Python package: pip install rowver.",
+            assets: { links: [
+              { name: "rvr for Linux (x86_64)", url: "\($p)/rvr-\($v)-x86_64-linux.tar.gz", link_type: "package" },
+              { name: "rvr for macOS (Apple silicon and Intel)", url: "\($p)/rvr-\($v)-macos.tar.gz", link_type: "package" } ] } }' |
+          curl -sSf --header "PRIVATE-TOKEN: $GITLAB_TOKEN" --header "Content-Type: application/json" --data @- "$api/releases"

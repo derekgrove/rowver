@@ -3,7 +3,7 @@
 //! An expression is read into a tree once (`parse`) and walked for each run of events
 //! (`Scope::evaluate`); nothing is compiled. Values keep the number kinds and the conversions
 //! that NumPy 2.5.1 and awkward 2.12.0 give the same operations, so a selection keeps the same
-//! events as the Python recipe it replaces. The README of rvr describes the language.
+//! events as the Python recipe it replaces. This crate's README describes the whole language.
 
 mod array;
 mod document;
@@ -14,7 +14,7 @@ mod parse;
 
 pub use array::{Array, Constant, Operator, Store, Values};
 pub use document::{names, Cut, Recipe};
-pub use evaluate::{per_event, Columns, Helper, Scope};
+pub use evaluate::{per_event, Columns, Helper, Scope, FUNCTIONS};
 pub use kind::Kind;
 pub use parse::{parse, Expression};
 

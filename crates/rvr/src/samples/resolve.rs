@@ -451,6 +451,10 @@ pub fn resolve(ctx: &Context, plan: &Plan) -> Result<Locked, String> {
             }
             (list.clone(), files)
         }
+        // DBS counts a file's events in its Events tree, and the lock's entries are DBS's.
+        Source::Dataset(_) if plan.tree != "Events" => {
+            return Err(format!("it reads the tree {:?} of a dataset, but rvr knows a dataset file's entries only from DBS, which counts its Events tree, so a dataset sample reads tree = \"Events\". Set it so; the Runs and LuminosityBlocks trees of a dataset cannot be pressed yet.", plan.tree))
+        }
         Source::Dataset(d) => (vec![d.clone()], dataset_files(ctx, d)?),
     };
     let mut metadata = plan.metadata.clone();

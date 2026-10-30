@@ -4,7 +4,8 @@
 
 use hep_root::ByteSource;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// One file in a listed folder.
 #[derive(Debug, Clone)]
@@ -161,11 +162,115 @@ fn follow(
     (url, answer)
 }
 
+// Storage under load refuses requests for minutes at a time (EOS answers 403), so a press asks
+// again for about 13 minutes before it gives up on a request; resolve and check, for 50 s.
+/// The seconds a press waits between tries of a request that failed at a busy storage.
+pub const READING: &[u64] = &[5, 15, 30, 60, 120, 240, 300];
+/// The seconds `rvr samples` waits between tries of a listing or a digest.
+pub const ASKING: &[u64] = &[5, 15, 30];
+
+/// What a read answers when it stops waiting because another input failed.
+pub const STOPPED: &str = "Another input failed";
+
+/// Why a failed request may succeed when asked again (refused or failed at a busy storage, or
+/// lost on the way), or `None` when it will not: a 401 or 403 without a proxy, a certificate
+/// not trusted, a name that does not resolve, a URL that cannot be asked.
+fn passing(error: &ureq::Error, proxied: bool) -> Option<String> {
+    use ureq::ErrorKind::{BadHeader, BadStatus, ConnectionFailed, Io};
+    match error {
+        ureq::Error::Status(403, _) if !proxied => None,
+        ureq::Error::Status(403 | 408 | 429 | 500..=599, _) => Some(why(error)),
+        ureq::Error::Transport(failure)
+            if grid_trust::tls_error(failure).is_none()
+                && matches!(
+                    failure.kind(),
+                    ConnectionFailed | BadStatus | BadHeader | Io
+                ) =>
+        {
+            Some(why(error))
+        }
+        _ => None,
+    }
+}
+
+/// `ask` until it succeeds, retrying after each of `waits` while `passing` says it may, until `stop`.
+pub fn patiently<T, E>(
+    waits: &[u64],
+    stop: &AtomicBool,
+    what: &str,
+    passing: impl Fn(&E) -> Option<String>,
+    mut ask: impl FnMut() -> Result<T, E>,
+) -> Result<T, E> {
+    let mut left = waits.iter().enumerate();
+    loop {
+        let error = match ask() {
+            Ok(answer) => return Ok(answer),
+            Err(error) => error,
+        };
+        let (Some(why), Some((tried, wait))) = (passing(&error), left.next()) else {
+            return Err(error);
+        };
+        println!(
+            "  waiting {wait} s to ask again for {what} ({} of {} tries made): {why}",
+            tried + 1,
+            waits.len() + 1
+        );
+        for _ in 0..*wait {
+            if stop.load(Ordering::Acquire) {
+                return Err(error);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+}
+
+/// How long `waits` waits in all, in words.
+pub fn waited(waits: &[u64]) -> String {
+    let seconds: u64 = waits.iter().sum();
+    match seconds {
+        0..120 => format!("{} tries over {seconds} s", waits.len() + 1),
+        _ => format!(
+            "{} tries over {} minutes",
+            waits.len() + 1,
+            (seconds + 30) / 60
+        ),
+    }
+}
+
+/// A remote read, retried while it fails with `Error::Remote`; `STOPPED` once `stop` is set.
+pub fn read_again<T>(
+    waits: &[u64],
+    stop: &AtomicBool,
+    shown: &str,
+    read: impl FnMut() -> hep_root::Result<T>,
+) -> hep_root::Result<T> {
+    let name = shown.rsplit('/').next().unwrap_or(shown);
+    let passing = |e: &hep_root::Error| match e {
+        hep_root::Error::Remote(why) => Some(
+            why.strip_prefix(&format!("{shown}: "))
+                .unwrap_or(why)
+                .into(),
+        ),
+        _ => None,
+    };
+    patiently(waits, stop, name, passing, read).map_err(|e| match e {
+        _ if stop.load(Ordering::Acquire) => hep_root::Error::Remote(STOPPED.into()),
+        hep_root::Error::Remote(why) if !waits.is_empty() => {
+            hep_root::Error::Remote(format!("{why} ({})", waited(waits)))
+        }
+        e => e,
+    })
+}
+
 /// HTTPS to storage doors with the grid proxy, when there is one; folder listings are kept.
 pub struct Storage {
     agent: ureq::Agent,
     listed: Mutex<HashMap<String, Result<Vec<Entry>, String>>>,
     pub proxy: Option<String>,
+    /// How long a listing or digest that failed waits before it is asked again (`ASKING`).
+    pub waits: &'static [u64],
+    /// Set to end those waits early (a press sets it when an input fails).
+    pub stop: Arc<AtomicBool>,
 }
 
 impl Storage {
@@ -183,6 +288,8 @@ impl Storage {
             agent,
             listed: Mutex::new(HashMap::new()),
             proxy: proxy.map(str::to_owned),
+            waits: ASKING,
+            stop: Default::default(),
         })
     }
 
@@ -203,13 +310,27 @@ impl Storage {
         let (origin, path) = door(folder)?;
         let path = format!("{}/", path.trim_end_matches('/'));
         let body = r#"<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getcontentlength/><D:getlastmodified/></D:prop></D:propfind>"#;
-        let (_, reply) = follow(&format!("{origin}{path}"), |url| {
-            self.agent
-                .request("PROPFIND", url)
-                .set("Depth", "1")
-                .set("Content-Type", "application/xml")
-                .send_string(body)
-        });
+        let at = format!("{origin}{path}");
+        let proxied = self.proxy.is_some();
+        let reply = patiently(
+            self.waits,
+            &self.stop,
+            folder,
+            |e| passing(e, proxied),
+            || {
+                follow(&at, |url| {
+                    self.agent
+                        .request("PROPFIND", url)
+                        .set("Depth", "1")
+                        .set("Content-Type", "application/xml")
+                        .send_string(body)
+                })
+                .1
+            },
+        );
+        if reply.is_err() && self.stop.load(Ordering::Acquire) {
+            return Err(format!("{folder}: {STOPPED}"));
+        }
         let text = match reply {
             Ok(r) if r.status() / 100 == 2 => r.into_string().map_err(|e| e.to_string())?,
             Ok(r) => {
@@ -225,23 +346,26 @@ impl Storage {
                 return Err(format!("the folder {folder} does not exist"))
             }
             Err(ureq::Error::Status(code @ (401 | 403), _)) => {
-                return Err(format!(
-                    "{folder} refused the listing ({code}). {}",
-                    if self.proxy.is_some() {
-                        "The grid proxy may not give access there."
-                    } else {
-                        "It needs a grid proxy: run rvr proxy init."
-                    }
-                ))
+                return Err(match (&self.proxy, code) {
+                    (None, _) => format!("{folder} refused the listing ({code}). It needs a grid proxy: run rvr proxy init."),
+                    (Some(_), 401) => format!("{folder} refused the listing (401): it did not accept the grid proxy. Check it with rvr proxy, and make a new one with rvr proxy init."),
+                    (Some(_), _) => format!("{folder} refused the listing (403, {}). Either the grid proxy does not give access there, or the storage is refusing requests while it is busy, as EOS does under heavy load: if rvr proxy shows a valid proxy, try again later.", waited(self.waits)),
+                })
             }
-            Err(e) => return Err(format!("{folder} could not be listed: {e}")),
+            Err(e) => return Err(format!("{folder} could not be listed: {}", why(&e))),
         };
         Ok(entries(&text))
     }
 
     /// A storage file's size and adler32 as its storage reports them, without reading it.
     pub fn digest(&self, url: &str) -> Result<(Option<u64>, Option<String>), String> {
-        digest(&self.agent, url)
+        digest(
+            &self.agent,
+            url,
+            self.waits,
+            self.proxy.is_some(),
+            &self.stop,
+        )
     }
 
     /// The connection pool, for readers that outlive this borrow.
@@ -273,12 +397,51 @@ pub fn why(error: &ureq::Error) -> String {
     }
 }
 
-/// A storage file's size and adler32 as its storage reports them, asked with one HEAD.
-pub fn digest(agent: &ureq::Agent, url: &str) -> Result<(Option<u64>, Option<String>), String> {
+/// A storage file's size and adler32 as its storage reports them, asked with one HEAD (asked
+/// again after each of `waits` while it fails at a busy storage).
+pub fn digest(
+    agent: &ureq::Agent,
+    url: &str,
+    waits: &[u64],
+    proxied: bool,
+    stop: &AtomicBool,
+) -> Result<(Option<u64>, Option<String>), String> {
     let (origin, path) = door(url)?;
-    let (_, reply) = follow(&format!("{origin}{path}"), |at| {
+    let at = format!("{origin}{path}");
+    let reply = patiently(waits, stop, url, |e| passing(e, proxied), || head(agent, &at));
+    if reply.is_err() && stop.load(Ordering::Acquire) {
+        return Err(format!("{url}: {STOPPED}"));
+    }
+    digested(url, reply)
+}
+
+/// `digest` asked once with a proxy; a failure says whether it may pass when asked again.
+pub fn digest_once(
+    agent: &ureq::Agent,
+    url: &str,
+) -> Result<(Option<u64>, Option<String>), (String, bool)> {
+    let (origin, path) = door(url).map_err(|why| (why, false))?;
+    let reply = head(agent, &format!("{origin}{path}"));
+    let busy = reply
+        .as_ref()
+        .is_err_and(|e| passing(e, true).is_some());
+    digested(url, reply).map_err(|why| (why, busy))
+}
+
+/// One HEAD asking for the adler32, redirects followed.
+#[allow(clippy::result_large_err)] // ureq's own error, as `follow` returns it
+fn head(agent: &ureq::Agent, at: &str) -> Result<ureq::Response, ureq::Error> {
+    follow(at, |at| {
         agent.head(at).set("Want-Digest", "adler32").call()
-    });
+    })
+    .1
+}
+
+/// The size and adler32 a HEAD's answer gives.
+fn digested(
+    url: &str,
+    reply: Result<ureq::Response, ureq::Error>,
+) -> Result<(Option<u64>, Option<String>), String> {
     let reply = reply.map_err(|e| match e {
         ureq::Error::Status(404, _) => format!("{url} no longer exists"),
         e => format!("{url} could not be asked: {}", why(&e)),
@@ -310,6 +473,8 @@ pub struct HttpsFile {
     multipart: std::sync::atomic::AtomicBool,
     shown: String,
     len: u64,
+    /// Whether a proxy is presented, so that a 403 may be the storage being busy.
+    proxied: bool,
     /// Requests made and bytes read, for the timing the resolver reports.
     pub requests: std::sync::atomic::AtomicUsize,
     pub bytes: std::sync::atomic::AtomicUsize,
@@ -325,6 +490,7 @@ impl HttpsFile {
             url: Mutex::new(format!("{origin}{path}")),
             shown: at.to_string(),
             len,
+            proxied: storage.proxy.is_some(),
             requests: Default::default(),
             bytes: Default::default(),
         })
@@ -380,6 +546,25 @@ pub fn joined(ranges: &[(u64, usize)], gap: u64) -> Vec<(u64, usize)> {
 }
 
 impl HttpsFile {
+    /// A failed request as hep-root takes it: `Remote` when asking again may mend it (see
+    /// `read_again`), the file gone, or any other failure, which waiting does not mend.
+    fn failed(&self, error: &ureq::Error) -> hep_root::Error {
+        match error {
+            ureq::Error::Status(404 | 410, _) => {
+                hep_root::Error::SourceChanged(format!("{} no longer exists", self.shown))
+            }
+            _ if passing(error, self.proxied).is_some() => {
+                hep_root::Error::Remote(format!("{}: {}", self.shown, why(error)))
+            }
+            _ => self.lasting(why(error)),
+        }
+    }
+
+    /// A failure asking again would not mend.
+    fn lasting(&self, why: String) -> hep_root::Error {
+        hep_root::Error::Io(std::io::Error::other(format!("{}: {why}", self.shown)))
+    }
+
     /// Ranges joined across gaps and asked one per request, `FETCHERS` at once.
     fn one_at_a_time(&self, ranges: &[(u64, usize)]) -> hep_root::Result<Vec<Vec<u8>>> {
         let joined = joined(ranges, GAP);
@@ -451,7 +636,7 @@ impl HttpsFile {
             Ok(reply) => reply,
             // A storage that refuses so many ranges at once is asked one at a time.
             Err(ureq::Error::Status(400 | 416, _)) => return Ok(None),
-            Err(e) => return Err(fail(e.to_string())),
+            Err(e) => return Err(self.failed(&e)),
         };
         *self.url.lock().unwrap() = to;
         let boundary = reply
@@ -557,16 +742,15 @@ impl ByteSource for HttpsFile {
             }
             Ok(reply) if (300..400).contains(&reply.status()) => {
                 Err(hep_root::Error::Remote(format!(
-                    "{}: its storage redirected more than four times, or without saying where to. Try again later.",
+                    "{}: its storage redirected more than four times, or without saying where to",
                     self.shown
                 )))
             }
-            Ok(reply) => Err(hep_root::Error::Remote(format!(
-                "{}: asked for bytes {range}, got status {} (the storage ignored the range)",
-                self.shown,
+            Ok(reply) => Err(self.lasting(format!(
+                "asked for bytes {range}, got status {} (the storage ignored the range)",
                 reply.status()
             ))),
-            Err(e) => Err(hep_root::Error::Remote(format!("{}: {e}", self.shown))),
+            Err(e) => Err(self.failed(&e)),
         }
     }
 
@@ -638,6 +822,79 @@ mod tests {
             joined(&[(0, big), (big as u64, big), (2 * big as u64, 1)], 0).len(),
             2
         );
+    }
+
+    /// A read that fails its first `failing` tries with `error`, counting its tries.
+    fn flaky(
+        failing: usize,
+        error: fn() -> hep_root::Error,
+        tries: &std::cell::Cell<usize>,
+    ) -> impl FnMut() -> hep_root::Result<()> + '_ {
+        move || {
+            tries.set(tries.get() + 1);
+            match tries.get() <= failing {
+                true => Err(error()),
+                false => Ok(()),
+            }
+        }
+    }
+
+    static NEVER: AtomicBool = AtomicBool::new(false);
+
+    #[test]
+    fn a_read_refused_by_a_busy_storage_is_asked_again_until_the_waits_run_out() {
+        let shown = "https://door.example/f.root";
+        let busy = || {
+            hep_root::Error::Remote(
+                "https://door.example/f.root: its storage answered 403 Forbidden".into(),
+            )
+        };
+        let tries = std::cell::Cell::new(0);
+        assert!(read_again(&[0, 0, 0], &NEVER, shown, flaky(2, busy, &tries)).is_ok());
+        assert_eq!(tries.get(), 3);
+
+        let tries = std::cell::Cell::new(0);
+        let error = read_again(&[0, 0], &NEVER, shown, flaky(9, busy, &tries)).unwrap_err();
+        assert_eq!(tries.get(), 3);
+        let said = error.to_string();
+        assert!(said.ends_with("403 Forbidden (3 tries over 0 s)"), "{said}");
+
+        // A failure waiting does not mend is not asked again.
+        let lasting = || hep_root::Error::Io(std::io::Error::other("UnknownIssuer"));
+        let tries = std::cell::Cell::new(0);
+        assert!(read_again(&[0, 0], &NEVER, shown, flaky(1, lasting, &tries)).is_err());
+        assert_eq!(tries.get(), 1);
+
+        // Another input failing ends the waiting.
+        let stop = AtomicBool::new(true);
+        let tries = std::cell::Cell::new(0);
+        let error = read_again(&[1, 1], &stop, shown, flaky(9, busy, &tries)).unwrap_err();
+        assert_eq!(
+            (tries.get(), error.to_string().ends_with(STOPPED)),
+            (1, true)
+        );
+    }
+
+    #[test]
+    fn a_refusal_is_asked_again_only_where_it_may_pass() {
+        let refused = |code| ureq::Error::Status(code, ureq::Response::new(code, "", "").unwrap());
+        assert!(passing(&refused(403), true).is_some());
+        assert!(
+            passing(&refused(403), false).is_none(),
+            "no proxy: it needs one"
+        );
+        assert!(passing(&refused(503), false).is_some());
+        assert!(passing(&refused(401), true).is_none());
+        assert!(passing(&refused(404), true).is_none());
+        // A URL that cannot be asked fails before any request is made.
+        let unaskable = ureq::get("https://exa mple/").call().unwrap_err();
+        assert!(passing(&unaskable, true).is_none(), "{unaskable}");
+    }
+
+    #[test]
+    fn waits_are_said_in_seconds_or_minutes() {
+        assert_eq!(waited(ASKING), "4 tries over 50 s");
+        assert_eq!(waited(READING), "8 tries over 13 minutes");
     }
 
     #[test]

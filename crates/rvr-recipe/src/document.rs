@@ -25,8 +25,7 @@
 //! rho = "branch(sample.rho)"
 //! ```
 //!
-//! Every key is described in the README of rvr ("recipe.toml"). The layout is not yet an accepted
-//! contract: it may change while rowver 14 is proposed.
+//! Every table, key and function is described in this crate's README.
 
 use crate::evaluate::Helper;
 use crate::parse::{parse, Expression};

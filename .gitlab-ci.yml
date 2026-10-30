@@ -16,3 +16,6 @@ python:
     - maturin build --release --locked --out dist
     - pip install --quiet dist/*.whl
     - python3 -m unittest discover tests
+    - python3 ../rvr-recipe/tests/readme_python.py  # the Awkward side of the recipe README's translations
+
+# Releases are made from the GitHub mirror, where macOS builds: .github/workflows/release.yml.

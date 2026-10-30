@@ -8,6 +8,7 @@ pub(crate) mod remote;
 pub(crate) mod resolve;
 pub(crate) mod spec;
 
+use crate::press::count;
 use resolve::{Context, Lock, Locked};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,17 +21,9 @@ pub(crate) fn sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// A count with thousands separated: 1,234,567.
-fn count(n: u64) -> String {
-    let digits = n.to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
+/// How many of a thing, singular or plural as the count asks: `1 file`, `3 files`.
+pub fn some(n: usize, one: &str, many: &str) -> String {
+    format!("{} {}", count(n as u64), if n == 1 { one } else { many })
 }
 
 /// "all 1,234 events", or "50,000 of 1,234,567 events (random)".
@@ -129,10 +122,10 @@ fn expand(path: &Path, json: bool) -> Result<(), String> {
     }
     let entries: BTreeSet<usize> = plans.iter().map(|p| p.entry).collect();
     println!(
-        "{} describes {} samples from {} [[sample]] entries:",
+        "{} describes {} from {}:",
         path.display(),
-        plans.len(),
-        entries.len()
+        some(plans.len(), "sample", "samples"),
+        some(entries.len(), "[[sample]] entry", "[[sample]] entries")
     );
     println!("  {:34} {:40} {:18} reads", "name", "label", "tree");
     for p in &plans {
@@ -202,9 +195,9 @@ fn resolve_all(path: &Path) -> Result<(), String> {
         .flat_map(|l| l.file.iter().map(|f| (f.at.as_str(), f.bytes)))
         .collect();
     println!(
-        "\n{} samples, {} distinct files, {} in {:.1} s.",
-        locked.len(),
-        distinct.len(),
+        "\n{}, {}, {} in {:.1} s.",
+        some(locked.len(), "sample", "samples"),
+        some(distinct.len(), "distinct file", "distinct files"),
         size(distinct.values().sum()),
         started.elapsed().as_secs_f64()
     );
@@ -309,7 +302,13 @@ fn check(path: &Path) -> Result<bool, String> {
         }
     }
     let catalog = files.values().filter(|f| f.lfn.is_some()).count();
-    if changed.is_empty() {
+    if changed.is_empty() && catalog > 0 && catalog == files.len() {
+        println!(
+            "The lock ({}) names only the {} of central datasets. Their size and adler32 are checked against what Rucio says of each copy as rvr press reads it.",
+            lock.resolved,
+            some(catalog, "file", "files")
+        );
+    } else if changed.is_empty() {
         println!(
             "All {} storage and local files are as the lock recorded them ({}).{}",
             files.len() - catalog,
