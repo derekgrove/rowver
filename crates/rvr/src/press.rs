@@ -214,27 +214,38 @@ pub fn resolved(texts: &Texts, lock: &Lock) -> bool {
     crate::samples::sha256(texts.samples.as_bytes()) == lock.samples_toml_sha256
 }
 
+/// One of a study's files, as text; one missing says what to do.
+fn study_file(dir: &Path, file: &str) -> Result<String, String> {
+    std::fs::read_to_string(dir.join(file)).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound if file == "samples.lock" => format!(
+            "{} has no samples.lock: run rvr samples resolve samples.toml there first.",
+            dir.display()
+        ),
+        std::io::ErrorKind::NotFound if file == "samples.toml" => format!(
+            "{} has a samples.lock but no samples.toml. A .rvr file carries both, so press needs both: put samples.toml back (git checkout samples.toml).",
+            dir.display()
+        ),
+        std::io::ErrorKind::NotFound if file == "recipe.toml" => format!(
+            "{} has no recipe.toml: write one (the recipe reference, {RECIPES}, says how; rvr new makes a study with one).",
+            dir.display()
+        ),
+        _ => format!("{}: {e}", dir.join(file).display()),
+    })
+}
+
+/// A study's lock, its text and as read.
+pub fn lock(dir: &Path) -> Result<(String, Lock), String> {
+    let text = study_file(dir, "samples.lock")?;
+    let lock = toml::from_str(&text).map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
+    Ok((text, lock))
+}
+
 /// A study's three texts and its lock, read as they are (`inputs` also refuses a stale lock).
 pub fn texts(dir: &Path) -> Result<(Texts, Lock), String> {
-    let read = |file: &str| {
-        std::fs::read_to_string(dir.join(file)).map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound if file == "samples.lock" => format!(
-                "{} has no samples.lock: run rvr samples resolve samples.toml there first.",
-                dir.display()
-            ),
-            std::io::ErrorKind::NotFound if file == "samples.toml" => format!(
-                "{} has a samples.lock but no samples.toml. A .rvr file carries both, so press needs both: put samples.toml back (git checkout samples.toml).",
-                dir.display()
-            ),
-            _ => format!("{}: {e}", dir.join(file).display()),
-        })
-    };
-    let lock = read("samples.lock")?;
-    let parsed: Lock =
-        toml::from_str(&lock).map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
-    let samples = read("samples.toml")?;
+    let (lock, parsed) = self::lock(dir)?;
+    let samples = study_file(dir, "samples.toml")?;
     let texts = Texts {
-        recipe: read("recipe.toml")?,
+        recipe: study_file(dir, "recipe.toml")?,
         samples,
         lock,
     };
@@ -876,7 +887,7 @@ pub(crate) fn open(reach: &Reach, file: &File) -> Result<(RootFile<Held>, Option
             .and_then(|remote| opened(file, Box::new(remote.seeing(&seen)), again, Some(seen), &reach.read));
         let (bytes, adler32) = digest
             .join()
-            .map_err(|_| Failed::from(format!("{at}: asking its storage stopped unexpectedly")))??;
+            .map_err(|_| Failed::new(Fault::Bug, format!("{at}: asking its storage stopped unexpectedly (a bug in rvr: please report it with the command you ran)")))??;
         changed(file, bytes, adler32)?;
         root.map(|root| (root, None))
     })
@@ -1520,7 +1531,7 @@ fn take_all(
     }
     done.into_iter()
         .collect::<Option<Result<Vec<_>, _>>>()
-        .ok_or_else(|| Failed::from("a file was left unread".to_string()))?
+        .ok_or_else(|| Failed::new(Fault::Bug, "a file was left unread (a bug in rvr: please report it with the command you ran)"))?
 }
 
 /// What a press counts over every input.

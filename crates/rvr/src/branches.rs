@@ -38,7 +38,12 @@ fn run(args: &[&str]) -> Result<(), String> {
         [dir] => Path::new(dir),
         _ => return Err(format!("branches takes at most one study folder.\n{USAGE}")),
     };
-    let (_, lock) = press::texts(dir)?;
+    let (_, lock) = press::lock(dir)?;
+    // It needs only the lock, but says when the lock is not of samples.toml as it is now.
+    let samples = std::fs::read_to_string(dir.join("samples.toml")).unwrap_or_default();
+    if crate::samples::sha256(samples.as_bytes()) != lock.samples_toml_sha256 {
+        println!("samples.toml has changed since samples.lock was written: these are the files of the lock ({}).", lock.resolved);
+    }
     let index = press::sample_at(&lock, words.value("--sample"))?;
     let sample = &lock.sample[index];
     let (root, file) = press::first_readable(&lock, index, dir, false)?;

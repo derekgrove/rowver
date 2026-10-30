@@ -931,5 +931,9 @@ fn branches_lists_the_collections_and_values_a_recipe_can_name() {
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("There is no column named Jets. Did you mean: Jet,"), "{said}");
     assert!(said.contains("rvr branches lists every branch and collection the file has."), "{said}");
+    // rvr branches needs only the lock: a study with no recipe yet can look.
+    std::fs::remove_file(dir.join("recipe.toml")).unwrap();
+    let (code, said) = rvr(&dir, &["branches", "--find", "jet"]);
+    assert!(code == 0 && said.contains("Jet_pt"), "{said}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
