@@ -460,7 +460,10 @@ per_jet = "ht / nJet"
     assert_eq!(rvr(&dir, &["derive", &file, "--drop", "z"]).0, 0);
     // What a press adds to every sample's metadata is no expression's to read.
     let (code, said) = rvr(&dir, &["derive", &file, "n = sample.events_total"]);
-    assert!(code == 1 && said.contains("A sample field used as a number is missing"), "{said}");
+    assert!(code == 1 && said.contains("sample flat: derived column n: sample.events_total is used as a number, but events_total is a count rvr press records of each sample, which no expression can read"), "{said}");
+    // A key the sample lacks is named, with where to give it one.
+    let (code, said) = rvr(&dir, &["derive", &file, "n = nJet * sample.xsec"]);
+    assert!(code == 1 && said.contains("sample flat: derived column n: sample.xsec is used as a number, but this sample has no xsec: give it one in samples.toml, or give every sample one under [defaults]"), "{said}");
     // A record that is not what its expression gives is refused when it is worked out.
     let mut changed = header.clone();
     changed["derived"]["columns"][0]["lim"][1] = 1e9.into();
@@ -1011,7 +1014,7 @@ fn a_flag_some_samples_lack_is_compared_or_given_to_all_in_defaults() {
     // A flag on the data sample alone is missing for mc: a condition it cannot be.
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
-    assert!(said.contains("mc.root, tree analysis, ") && said.contains(": [columns] w: if needs a true-or-false condition"), "{said}");
+    assert!(said.contains("mc.root, tree analysis, ") && said.contains(": [columns] w: sample.isData is used as the condition of if, but this sample has no isData: give it one in samples.toml, or give every sample one under [defaults]"), "{said}");
     // Compared, a sample without it is not data; it is in the metadata, but no sample column.
     std::fs::write(dir.join("recipe.toml"), recipe("sample.isData == true")).unwrap();
     assert_eq!(rvr(&dir, &["press"]).0, 0);

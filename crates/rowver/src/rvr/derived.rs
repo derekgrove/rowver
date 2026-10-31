@@ -88,7 +88,7 @@ pub(super) fn validate(derived: &Value, data: &Value) -> Result<()> {
 const RUN: usize = 1 << 20;
 
 /// The metadata a press gives every sample beside the keys of samples.toml, which no expression sees.
-pub const ADDED: [&str; 3] = ["events_read", "events_total", "events_missing"];
+pub use rvr_recipe::ADDED;
 
 /// The metadata fields an expression can read: numbers, text, and truth values.
 pub fn fields(metadata: &Map<String, Value>) -> BTreeMap<String, Constant> {
@@ -241,7 +241,8 @@ impl<'a> Store<'a> {
             metadata.retain(|key, _| !ADDED.contains(&key.as_str()));
             metadata.insert("file".into(), Constant::Text(path.into()));
             let run = Run { store: self, first, last };
-            add(&mut whole, evaluate(name, &parsed, &run, &metadata, last - first, &mut seen)?);
+            let values = evaluate(name, &parsed, &run, &metadata, last - first, &mut seen);
+            add(&mut whole, values.map_err(|e| invalid(format!("sample {sample}: {e}")))?);
         }
         whole.ok_or_else(|| invalid(format!("derived column {name} has no values")))
     }

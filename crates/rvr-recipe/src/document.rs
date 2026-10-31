@@ -92,6 +92,9 @@ fn only(found: &Table, allowed: &[&str], place: &str) -> Result<()> {
 /// its sample's file.
 pub const RESERVED: [&str; 3] = ["sample", "entry", "file"];
 
+/// The metadata a press gives every sample beside the keys of samples.toml, which no expression sees.
+pub const ADDED: [&str; 3] = ["events_read", "events_total", "events_missing"];
+
 /// Whether text is one plain name, as an expression would read it.
 pub fn plain(text: &str) -> bool {
     matches!(parse(text), Ok(Expression::Name(name)) if name == text)

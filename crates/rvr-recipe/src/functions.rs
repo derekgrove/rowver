@@ -15,7 +15,7 @@
 //! NumPy's weak-scalar rule allows. `least` and `greatest` do not look for NaN: a NaN member
 //! is kept only when it comes first.
 
-use crate::array::{together, Array, Constant, Store, Values};
+use crate::array::{lacking, together, Array, Constant, Store, Values};
 use crate::kind::Kind;
 use crate::{problem, Result};
 use std::cmp::Ordering;
@@ -67,6 +67,7 @@ pub(crate) fn same_map(
     Ok(match array {
         Array::Constant(Constant::Whole(value)) => Array::Constant(Constant::Whole(whole(*value))),
         Array::Constant(Constant::Float(value)) => Array::Constant(Constant::Float(float(*value))),
+        Array::Constant(Constant::Missing(key)) => return Err(lacking(key, "a number")),
         Array::Constant(_) => return Err(problem("This function needs a number")),
         Array::Event(values) => Array::Event(map(values)),
         Array::Object { offsets, values } => Array::Object {
@@ -863,6 +864,7 @@ pub(crate) fn choose(condition: &Array, yes: &Array, no: &Array) -> Result<Array
         return match constant {
             Constant::Truth(true) => Ok(yes.clone()),
             Constant::Truth(false) => Ok(no.clone()),
+            Constant::Missing(key) => Err(lacking(key, "the condition of if")),
             _ => Err(problem("if needs a true-or-false condition")),
         };
     }

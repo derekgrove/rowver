@@ -457,7 +457,7 @@ fn lets_through(cut: &rvr_recipe::Cut, scope: &Scope, entries: usize) -> Result<
     let applies = match &cut.when {
         None => None,
         Some(when) => match scope.evaluate(when).map_err(named)? {
-            Array::Constant(Constant::Missing) => return Ok(vec![true; entries]),
+            Array::Constant(Constant::Missing(_)) => return Ok(vec![true; entries]),
             _ => Some(scope.mask(when, entries).map_err(named)?),
         },
     };
@@ -1709,8 +1709,9 @@ pub fn press(
     let source = &texts.recipe;
     let recipe = read_recipe(source)?;
     let asked = plan(&mut lock, events)?;
-    if let Some(sample) = lock.sample.iter().find(|s| s.metadata.contains_key("events_missing")) {
-        return Err(format!("{} has a key events_missing in samples.toml, a name rvr press gives what a file with holes misses: give it another name, and resolve again.", sample.name));
+    let given = lock.sample.iter().find_map(|s| ADDED.iter().find(|key| s.metadata.contains_key(**key)).map(|key| (s, key)));
+    if let Some((sample, key)) = given {
+        return Err(format!("{} has a key {key} in samples.toml, a name rvr press gives every sample ({}): give it another name, and resolve again.", sample.name, ADDED.join(", ")));
     }
     // A derived column has a name no sample column has, before anything is read.
     let metadata = |name: &str| ADDED.contains(&name) || lock.sample.iter().any(|s| s.metadata.contains_key(name));

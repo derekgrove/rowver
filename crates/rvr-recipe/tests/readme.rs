@@ -105,7 +105,7 @@ fn json(array: &Array) -> Value {
         Array::Constant(Constant::Float(x)) => Value::from(*x),
         Array::Constant(Constant::Truth(t)) => Value::Bool(*t),
         Array::Constant(Constant::Text(t)) => Value::from(t.clone()),
-        Array::Constant(Constant::Missing) => Value::from("missing"),
+        Array::Constant(Constant::Missing(_)) => Value::from("missing"),
         Array::Event(values) => (0..values.len()).map(|at| one(values, at)).collect(),
         Array::Object { offsets, values } => offsets
             .windows(2)
@@ -175,7 +175,7 @@ fn every_readme_example_gives_the_result_it_shows() {
         }
         // A line of a recipe (`select = "…"`) is read as one; anything else is an expression.
         let result = match expression.split_once(" = ") {
-            Some(_) => Recipe::read(&format!("format = \"rvr-recipe\"\nversion = 1\n{expression}")).map(|_| Array::Constant(Constant::Missing)),
+            Some(_) => Recipe::read(&format!("format = \"rvr-recipe\"\nversion = 1\n{expression}")).map(|_| Array::Constant(Constant::Missing(String::new()))),
             None => parse(expression).and_then(|e| scope.evaluate(&e)),
         };
         checked += 1;

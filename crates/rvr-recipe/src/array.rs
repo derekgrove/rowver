@@ -35,8 +35,17 @@ pub enum Constant {
     Float(f64),
     Truth(bool),
     Text(String),
-    /// A sample field the sample does not have.
-    Missing,
+    /// A sample field the sample does not have, by its key.
+    Missing(String),
+}
+
+/// What a sample field the sample does not have is refused with, where it is used as `what`.
+pub(crate) fn lacking(key: &str, what: &str) -> crate::Error {
+    let why = match crate::ADDED.contains(&key) {
+        true => format!("{key} is a count rvr press records of each sample, which no expression can read"),
+        false => format!("this sample has no {key}: give it one in samples.toml, or give every sample one under [defaults]"),
+    };
+    problem(format!("sample.{key} is used as {what}, but {why}"))
 }
 
 /// What an expression works on.
@@ -247,11 +256,10 @@ impl Constant {
             (Constant::Whole(_), kind) => kind,
             (Constant::Float(_), kind) if kind.float() => kind,
             (Constant::Float(_), _) => Kind::F8,
-            (Constant::Text(_) | Constant::Missing, _) => {
-                return Err(problem(
-                    "Text and missing sample fields cannot be used as numbers",
-                ))
+            (Constant::Text(text), _) => {
+                return Err(problem(format!("\"{text}\" is text, not a number")))
             }
+            (Constant::Missing(key), _) => return Err(lacking(key, "a number")),
         })
     }
 
@@ -276,7 +284,7 @@ impl Constant {
             Constant::Text(text) => {
                 return Err(problem(format!("\"{text}\" is text, not a number")))
             }
-            Constant::Missing => return Err(problem("A sample field used as a number is missing")),
+            Constant::Missing(key) => return Err(lacking(key, "a number")),
         })
     }
 }
@@ -507,6 +515,7 @@ fn beside_column(operator: Operator, constant: &Constant, beside: &Values) -> Re
     if matches!(operator, Operator::And | Operator::Or) {
         return match constant {
             Constant::Truth(_) => Ok(constant.repeat(Kind::B1, beside.len())),
+            Constant::Missing(key) => Err(lacking(key, "a true-or-false value")),
             _ => Err(problem("and/or needs true-or-false values")),
         };
     }
@@ -543,12 +552,13 @@ fn same(left: usize, right: usize) -> Result<()> {
 /// Apply an operator to two constants.
 fn constants(operator: Operator, left: &Constant, right: &Constant) -> Result<Constant> {
     use Operator::*;
-    if matches!(left, Constant::Missing) || matches!(right, Constant::Missing) {
+    if let (Constant::Missing(key), _) | (_, Constant::Missing(key)) = (left, right) {
         return match operator {
             Less | LessEqual | Greater | GreaterEqual | Equal | NotEqual => {
                 Ok(Constant::Truth(false))
             }
-            _ => Err(problem("A sample field used in arithmetic is missing")),
+            And | Or => Err(lacking(key, "a true-or-false value")),
+            _ => Err(lacking(key, "a number")),
         };
     }
     if let (Constant::Text(a), Constant::Text(b)) = (left, right) {

@@ -401,19 +401,19 @@ Read 300,000 entries; kept after each cut:
   two_muons                             21,257
 Wrote zmumu.rvr (21,257 rows, 5 columns and 1 derived, 0.9 MB) in 12.6 s.
 $ rvr dump zmumu.rvr --columns
-sample         i4[21257]  [0, 0, 0, 0, 0, ...]
-entry          i8[21257]  [24, 57, 81, 94, 105, ...]
-MET_pt         f4[21257]  [32.52266, 43.860973, 21.542166, 29.062634, 9.035394, ...]
-nJet           u4[21257]  [9, 4, 5, 2, 6, ...]
-Muon_pt        jagged f4[21257]  [[44.89497, 42.32862], [62.786877, 25.476637], [49.11254, 43.06757], ...]
-mass           f4[21257]  [91.12758, 94.01117, 87.904205, 99.630455, 90.229675, ...]
-weight         f4[21257]  [1, 1, 1, 1, 1, ...]
+sample          i4[21257]  [0, 0, 0, 0, 0, ...]
+entry           i8[21257]  [24, 57, 81, 94, 105, ...]
+MET_pt          f4[21257]  [32.52266, 43.860973, 21.542166, 29.062634, 9.035394, ...]
+nJet            u4[21257]  [9, 4, 5, 2, 6, ...]
+Muon_pt         jagged f4[21257]  [[44.89497, 42.32862], [62.786877, 25.476637], [49.11254, 43.06757], ...]
+mass            f4[21257]  [91.12758, 94.01117, 87.904205, 99.630455, 90.229675, ...]
+weight          f4[21257]  [1, 1, 1, 1, 1, ...]
 leading_muon_pt f4[21257]  derived = "first(Muon_pt, -1)"  [44.89497, 62.786877, 49.11254, 122.43711, 33.896442, ...]
-kind           text by sample[3]  data: "data", DY: null, TT: null
-lumi           f8 by sample[3]  data: 31.84, DY: 31.84, TT: 31.84
-events_read    i8 by sample[3]  data: 100000, DY: 100000, TT: 100000
-events_total   i8 by sample[3]  data: 513909894, DY: 195510810, TT: 145020000
-xsec           f8 by sample[3]  data: null, DY: 6077.22, TT: 88.29
+lumi            f8 by sample[3]  data: 31.84, DY: 31.84, TT: 31.84
+kind            text by sample[3]  data: "data", DY: null, TT: null
+events_read     i8 by sample[3]  data: 100000, DY: 100000, TT: 100000
+events_total    i8 by sample[3]  data: 513909894, DY: 195510810, TT: 145020000
+xsec            f8 by sample[3]  data: null, DY: 6077.22, TT: 88.29
 ```
 
 The samples are in the order `samples.toml` gives them: `sample` is 0 for data, 1 for DY, 2 for

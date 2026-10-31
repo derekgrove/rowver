@@ -88,9 +88,9 @@ Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 2.6 s.
 $ rvr validate higgs_tautau.rvr
 higgs_tautau.rvr: valid, 2248 rows, 11 columns, read 100000 of 968616 entries, not signed
 $ rvr dump higgs_tautau.rvr --columns
-sample         i4[2248]  [0, 0, 0, 0, 0, ...]
-entry          i8[2248]  [29, 45, 140, 157, 162, ...]
-run            i4[2248]  [1, 1, 1, 1, 1, ...]
+sample          i4[2248]  [0, 0, 0, 0, 0, ...]
+entry           i8[2248]  [29, 45, 140, 157, 162, ...]
+run             i4[2248]  [1, 1, 1, 1, 1, ...]
 …
 ```
 
@@ -780,8 +780,8 @@ isData         b1 by sample[2]  data: true, mc: false
 ```
 
 Set on the data samples alone, the flag stays in the file's metadata but is not a sample column,
-and `if(sample.isData, …)` stops the press at a sample without it (`if needs a true-or-false
-condition`); `if(sample.isData == true, …)` works, taking a sample without it as false. A text field (`kind = "data"` on the data samples,
+and `if(sample.isData, …)` stops the press at a sample without it (`sample.isData is used as the
+condition of if, but this sample has no isData: …`); `if(sample.isData == true, …)` works, taking a sample without it as false. A text field (`kind = "data"` on the data samples,
 read as `sample.kind == 'data'`) needs no default.
 
 ## recipe.toml

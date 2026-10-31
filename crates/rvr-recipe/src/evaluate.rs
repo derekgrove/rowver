@@ -1,6 +1,6 @@
 //! Walk an expression's tree over the columns of one run of events.
 
-use crate::array::{Array, Constant, Operator};
+use crate::array::{lacking, Array, Constant, Operator};
 use crate::functions as f;
 use crate::kind::Kind;
 use crate::parse::Expression;
@@ -71,6 +71,7 @@ impl<'a> Scope<'a> {
     pub fn mask(&self, expression: &Expression, events: usize) -> Result<Vec<bool>> {
         match self.evaluate(expression)? {
             Array::Constant(Constant::Truth(truth)) => Ok(vec![truth; events]),
+            Array::Constant(Constant::Missing(key)) => Err(lacking(&key, "a condition")),
             Array::Event(values) if values.len() == events => Ok(values
                 .truths("A condition")?
                 .iter()
@@ -97,7 +98,7 @@ impl<'a> Scope<'a> {
                 self.sample
                     .get(field)
                     .cloned()
-                    .unwrap_or(crate::Constant::Missing),
+                    .unwrap_or_else(|| crate::Constant::Missing(field.clone())),
             ),
             Negate(inner) => match self.evaluate(inner)? {
                 Array::Constant(crate::Constant::Float(value)) => {
@@ -199,8 +200,8 @@ impl<'a> Scope<'a> {
             |function: fn(f64) -> f64| arity(1).and_then(|_| f::float_map(&arrays[0], function));
         let text = |array: &Array, what: &str| match array {
             Array::Constant(crate::Constant::Text(text)) => Ok(text.clone()),
-            Array::Constant(crate::Constant::Missing) => {
-                Err(problem(format!("{name}: the sample has no such field")))
+            Array::Constant(crate::Constant::Missing(key)) => {
+                Err(lacking(key, &format!("{what} in {name}")))
             }
             _ => Err(problem(format!("{name} needs {what} as text"))),
         };
@@ -332,8 +333,8 @@ impl<'a> Scope<'a> {
                         Array::Constant(crate::Constant::Text(whole)),
                         Array::Constant(crate::Constant::Text(part)),
                     ) => whole.contains(part.as_str()),
-                    (Array::Constant(crate::Constant::Missing), _)
-                    | (_, Array::Constant(crate::Constant::Missing)) => false,
+                    (Array::Constant(crate::Constant::Missing(_)), _)
+                    | (_, Array::Constant(crate::Constant::Missing(_))) => false,
                     _ => return Err(problem("contains needs two pieces of text")),
                 };
                 Array::Constant(crate::Constant::Truth(found))

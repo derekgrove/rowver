@@ -221,7 +221,7 @@ fn mistakes_are_refused_with_a_reason() {
     assert!(message("nothing(3)").contains("There is no function named nothing"));
     assert!(message("sqrt(1, 2)").contains("takes 1 value, not 2"));
     assert!(message("'a' + 1").contains("Text"));
-    assert!(message("sample.absent + 1").contains("missing"));
+    assert!(message("sample.absent + 1").contains("sample.absent is used as a number, but this sample has no absent: give it one in samples.toml"));
     assert!(message(&"(".repeat(500)).contains("Too many nested brackets"));
     assert_eq!(
         per_event(Array::Constant(Constant::Truth(true)), 2).unwrap(),

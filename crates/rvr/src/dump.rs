@@ -27,9 +27,9 @@ fn first(kind: &str, bytes: &[u8], n: usize) -> String {
     format!("[{}{more}]", values.join(", "))
 }
 
-/// One line for a column: name, kind, length, first values; for a derived column, `derived`
-/// and the expression it is worked out by, too.
-fn show(name: &str, held: &Held, expression: Option<&str>) {
+/// One line for a column: name, `wide` characters at least, kind, length, first values; for a
+/// derived column, `derived` and the expression it is worked out by, too.
+fn show(name: &str, wide: usize, held: &Held, expression: Option<&str>) {
     let w = width(&held.kind);
     let derived = match expression {
         Some(expression) => format!("derived = {expression:?}  "),
@@ -39,7 +39,7 @@ fn show(name: &str, held: &Held, expression: Option<&str>) {
         None => {
             let count = held.bytes.len() / w;
             println!(
-                "{name:14} {}[{count}]  {derived}{}",
+                "{name:wide$} {}[{count}]  {derived}{}",
                 held.kind,
                 first(&held.kind, &held.bytes, 5)
             );
@@ -52,7 +52,7 @@ fn show(name: &str, held: &Held, expression: Option<&str>) {
                 .collect();
             let more = if offsets.len() > 4 { ", ..." } else { "" };
             println!(
-                "{name:14} jagged {}[{}]  {derived}[{}{more}]",
+                "{name:wide$} jagged {}[{}]  {derived}[{}{more}]",
                 held.kind,
                 offsets.len() - 1,
                 lists.join(", ")
@@ -92,19 +92,23 @@ fn print_columns(reader: &Reader) -> Result<(), String> {
     let entry = reader.entry().map_err(|e| e.to_string())?;
     let sample: Vec<u8> = sample.iter().flat_map(|x| x.to_le_bytes()).collect();
     let entry: Vec<u8> = entry.iter().flat_map(|x| x.to_le_bytes()).collect();
-    println!("{:14} i4[{rows}]  {}", "sample", first("i4", &sample, 5));
-    println!("{:14} i8[{rows}]  {}", "entry", first("i8", &entry, 5));
+    let derived = rowver::rvr::derived::listed(reader.header());
+    // Names line up in a column as wide as the longest, and never narrower than 14.
+    let named = |key: &str| data[key].as_array().into_iter().flatten().filter_map(|r| r["name"].as_str());
+    let all = named("cols").chain(named("sample_cols")).chain(derived.iter().map(|(n, _)| n.as_str()));
+    let wide = all.map(|name| name.chars().count()).fold(14, usize::max);
+    println!("{:wide$} i4[{rows}]  {}", "sample", first("i4", &sample, 5));
+    println!("{:wide$} i8[{rows}]  {}", "entry", first("i8", &entry, 5));
     for record in data["cols"].as_array().into_iter().flatten() {
         let name = record["name"].as_str().unwrap_or_default();
         let held = reader
             .column(name)
             .map_err(|e| e.to_string())?
             .ok_or(format!("no column {name}"))?;
-        show(name, &held, None);
+        show(name, wide, &held, None);
     }
     // The derived columns are worked out together, each column they use read once; when that
     // fails, one at a time, to say which cannot be.
-    let derived = rowver::rvr::derived::listed(reader.header());
     let names: Vec<String> = derived.iter().map(|(name, _)| name.clone()).collect();
     let together = rowver::rvr::derived::columns(reader, &names);
     for (at, (name, expression)) in derived.iter().enumerate() {
@@ -117,8 +121,8 @@ fn print_columns(reader: &Reader) -> Result<(), String> {
             }
         };
         match held {
-            Ok(held) => show(name, held, Some(expression)),
-            Err(why) => println!("{name:14} derived = {expression:?}  (not worked out: {why})"),
+            Ok(held) => show(name, wide, held, Some(expression)),
+            Err(why) => println!("{name:wide$} derived = {expression:?}  (not worked out: {why})"),
         }
     }
     let names: Vec<&str> = data["samples"]
@@ -134,7 +138,7 @@ fn print_columns(reader: &Reader) -> Result<(), String> {
             .map(|(n, v)| format!("{n}: {v}"))
             .collect();
         println!(
-            "{:14} {} by sample[{}]  {}",
+            "{:wide$} {} by sample[{}]  {}",
             record["name"].as_str().unwrap_or_default(),
             record["kind"].as_str().unwrap_or_default(),
             names.len(),
