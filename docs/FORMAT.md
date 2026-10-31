@@ -5,7 +5,7 @@ and writes all of it and is the reference builder; `rvr press` writes pressed fi
 [The features](FEATURES.md) describe what the tools around the format do.
 
 **The running example.** Every example below is from one real file, `tiny.rvr`, unless it says
-otherwise. It is 6,190 bytes, pressed from two copies of a five-entry test ntuple (one sample
+otherwise. It is 6,202 bytes, pressed from two copies of a five-entry test ntuple (one sample
 each, `signal` and `background`) with this recipe, and signed with a throwaway key:
 
 ```toml
@@ -43,16 +43,16 @@ Checksums are cut to their first 8 hex digits here; a file holds all 64.
 The first bytes of `tiny.rvr`:
 
 ```
-00000000: 8952 5652 0d0a 1a0a d616 0000 7b22 726f  .RVR........{"ro
+00000000: 8952 5652 0d0a 1a0a e216 0000 7b22 726f  .RVR........{"ro
           └──────magic──────┘ └length─┘ └─header…
 ```
 
 - **The magic** is `89 52 56 52 0D 0A 1A 0A` (`\x89RVR\r\n\x1a\n`): a high byte, the letters
   `RVR`, then CR LF, Ctrl-Z and LF. A transfer that strips the eighth bit or rewrites line endings
   therefore breaks the file visibly.
-- **The header length** is `D6 16 00 00`, that is 0x16D6 = 5,846 bytes. A reader parses that many
+- **The header length** is `E2 16 00 00`, that is 0x16E2 = 5,858 bytes. A reader parses that many
   bytes of JSON and has every fact about the file without touching any array.
-- **The arrays** start at byte 12 + 5,846 = 5,858 and fill the rest of the file: 332 bytes here.
+- **The arrays** start at byte 12 + 5,858 = 5,870 and fill the rest of the file: 332 bytes here.
   Each is compressed on its own (§7), so a reader decompresses only the arrays it needs. A program
   that changes only the header writes the new header and copies the arrays byte for byte.
 
@@ -272,14 +272,14 @@ recipe's `[totals]` (§6) adds one more, under its name: the sample's sum of it,
 ```json
 "made": {
   "study": "tiny",
-  "built": "2026-10-31T04:51:46Z",
+  "built": "2026-10-31T07:03:04Z",
   "by": "rvr 15.0.0",
-  "toolchain": {"rvr": "15.0.0", "rowver": "15", "commit": "0a6fad39…",
+  "toolchain": {"rvr": "15.0.0", "rowver": "15", "commit": "ad9d3e6a…",
                 "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
-  "recipe":  {"sha256": "52d0feb3", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
+  "recipe":  {"sha256": "937f05be", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
               "columns": ["nJet", "Jet_pt", "ht"]},
   "samples": {"sha256": "aa22df20", "text": "…the whole samples.toml…"},
-  "lock":    {"sha256": "9e0104f4", "text": "…the whole samples.lock…"},
+  "lock":    {"sha256": "8c29824e", "text": "…the whole samples.lock…"},
   "files": {
     "signal": {
       "events": {"choose": "all"},
@@ -289,7 +289,7 @@ recipe's `[totals]` (§6) adds one more, under its name: the sample's sum of it,
     },
     "background": { … }
   },
-  "sha256": "a68dd0f8"
+  "sha256": "d5e24c11"
 }
 ```
 
@@ -563,7 +563,7 @@ A press signs the file when the person pressing it has a key. A file without a `
 unsigned, and still valid.
 
 ```json
-"signature": {"ed25519": "4ea4283f…", "key": "3c15ecad…", "sha256": "200c89f2…"}
+"signature": {"ed25519": "228e7cf8…", "key": "7c10dc33…", "sha256": "df704d52…"}
 ```
 
 It has exactly these three members:

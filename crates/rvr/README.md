@@ -585,12 +585,12 @@ with your key; with no key, a file that was signed is no longer.
 
 ```text
 $ rvr derive tiny.rvr 'lead = first(Jet_pt, -1)' 'lead_share = lead / ht'
-Added lead, lead_share to tiny.rvr: it has 3 derived columns; signed with your key 3c15ecad160dfe1c…
+Added lead, lead_share to tiny.rvr: it has 3 derived columns; signed with your key 7c10dc33f447eb3a…
 Its study's recipe.toml is as it was: make the same change under [derived] there to keep it when the study is pressed again.
 $ rvr derive tiny.rvr --drop lead
 rvr derive: lead_share uses lead: drop lead_share first, or with it
 $ rvr derive tiny.rvr --rename lead_share lead_fraction
-Renamed lead_share to lead_fraction in tiny.rvr: it has 3 derived columns; signed with your key 3c15ecad160dfe1c…
+Renamed lead_share to lead_fraction in tiny.rvr: it has 3 derived columns; signed with your key 7c10dc33f447eb3a…
 Its study's recipe.toml is as it was: make the same change under [derived] there to keep it when the study is pressed again.
 $ rvr derive tiny.rvr 'pt2 = Muon_pt * 2'
 rvr derive: [derived] pt2 uses Muon_pt, but the file does not store Muon_pt: a derived column uses only the columns the file stores, under [columns], and the derived columns above it
