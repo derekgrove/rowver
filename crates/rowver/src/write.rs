@@ -566,23 +566,62 @@ pub fn write_laid(path: impl AsRef<Path>, header: &Value, laid: Laid) -> Result<
 
 /// Write the file at `from` again at `to` with another header, its arrays copied byte for byte.
 pub fn rewrite(from: impl AsRef<Path>, to: impl AsRef<Path>, header: &Value) -> Result<()> {
-    use std::io::{Read, Seek, SeekFrom};
+    use std::io::{Seek, SeekFrom};
     let (from, to) = (from.as_ref(), to.as_ref());
     if std::fs::canonicalize(to).is_ok_and(|to| std::fs::canonicalize(from).is_ok_and(|from| from == to)) {
         return Err(invalid(format!("{} cannot be written again into itself: write it at another path, then move that over it", from.display())));
     }
+    let (start, _) = header_end(from)?;
     let mut source = std::fs::File::open(from)?;
-    let mut prefix = [0; 12];
-    source.read_exact(&mut prefix)?;
-    if &prefix[..8] != MAGIC {
-        return Err(invalid("The file to write again is not an .rvr file"));
-    }
-    let length = u32::from_le_bytes(prefix[8..12].try_into().unwrap());
-    source.seek(SeekFrom::Start(12 + u64::from(length)))?;
+    source.seek(SeekFrom::Start(start))?;
     let mut out = std::io::BufWriter::new(std::fs::File::create(to)?);
     frame(&mut out, header, &[])?;
     std::io::copy(&mut source, &mut out)?;
     Ok(out.flush()?)
+}
+
+/// Let a file's arrays go, keeping its header byte for byte: how many bytes it gave back.
+pub fn empty(path: impl AsRef<Path>) -> Result<u64> {
+    let (end, size) = header_end(path.as_ref())?;
+    let file = std::fs::OpenOptions::new().write(true).open(path)?;
+    file.set_len(end)?;
+    file.sync_all()?;
+    Ok(size - end)
+}
+
+/// Write at `to` the empty file `shell`'s header, byte for byte, and the arrays of `from`, a file
+/// whose data section is the shell's own.
+pub fn refilled(shell: impl AsRef<Path>, from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let (shell, from, to) = (shell.as_ref(), from.as_ref(), to.as_ref());
+    let same = |a: &Path| std::fs::canonicalize(to).is_ok_and(|to| std::fs::canonicalize(a).is_ok_and(|a| a == to));
+    if same(shell) || same(from) {
+        return Err(invalid(format!("{} cannot be written into a file it is made from: write it at another path, then move that over it", to.display())));
+    }
+    let (end, size) = header_end(shell)?;
+    if end != size {
+        return Err(invalid("The file to refill holds its arrays: it is not empty"));
+    }
+    let mut out = std::io::BufWriter::new(std::fs::File::create(to)?);
+    std::io::copy(&mut std::fs::File::open(shell)?.take(end), &mut out)?;
+    let (start, _) = header_end(from)?;
+    let mut source = std::fs::File::open(from)?;
+    source.seek(SeekFrom::Start(start))?;
+    std::io::copy(&mut source, &mut out)?;
+    Ok(out.flush()?)
+}
+
+/// Where a file's header ends, and how long the file is.
+fn header_end(path: &Path) -> Result<(u64, u64)> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let size = file.metadata()?.len();
+    let mut prefix = vec![0; 12];
+    if file.read_exact(&mut prefix).is_err() {
+        prefix.clear();
+    }
+    let end = crate::rvr::header_end(&prefix, usize::try_from(size).unwrap_or(usize::MAX))?;
+    Ok((end as u64, size))
 }
 
 /// Write one `.rvr` file in place; publish it through a staged path.

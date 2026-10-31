@@ -13,6 +13,36 @@ pub const USAGE: &str = "usage:
                                            relative path in the lock is read from FOLDER
                                            (FILE's folder when not given)";
 
+/// The study texts a file's header carries, and its study's name.
+pub(crate) fn study_texts(header: &serde_json::Value, file: &Path) -> Result<(Texts, String), String> {
+    let made = &header["made"];
+    let text = |name: &str| made[name]["text"].as_str().unwrap_or_default().to_owned();
+    let texts = Texts {
+        recipe: text("recipe"),
+        samples: text("samples"),
+        lock: text("lock"),
+    };
+    let name = made["study"].as_str().unwrap_or_default();
+    if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\']) {
+        return Err(format!("{} names its study {name:?}, which is not a folder name; it cannot be written as one.", file.display()));
+    }
+    Ok((texts, name.to_owned()))
+}
+
+/// The folder a file's lock's relative paths are from: `study`, or else where press wrote the
+/// file, unless it has moved since.
+pub(crate) fn base(file: &Path, study: Option<&Path>) -> Result<PathBuf, String> {
+    match study {
+        Some(folder) => Ok(folder.to_path_buf()),
+        None => Ok(file
+            .canonicalize()
+            .map_err(|e| format!("{}: {e}", file.display()))?
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf()),
+    }
+}
+
 /// Reproduce `file` into `dir`, reading relative inputs from `study` (FILE's folder when `None`).
 fn run(
     file: &Path,
@@ -23,27 +53,9 @@ fn run(
     let shown = file.display();
     let reader = rowver::rvr::Reader::open(file).map_err(|e| format!("{shown}: {e}"))?;
     let made = &reader.header()["made"];
-    let text = |name: &str| made[name]["text"].as_str().unwrap_or_default().to_owned();
-    let texts = Texts {
-        recipe: text("recipe"),
-        samples: text("samples"),
-        lock: text("lock"),
-    };
-    let name = made["study"].as_str().unwrap_or_default();
-    if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\']) {
-        return Err(format!("{shown} names its study {name:?}, which is not a folder name; it cannot be written as one."));
-    }
-    // A relative path in the lock is relative to the study folder: where press wrote the file,
-    // unless it has moved since.
-    let base = match study {
-        Some(folder) => folder,
-        None => file
-            .canonicalize()
-            .map_err(|e| format!("{shown}: {e}"))?
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf(),
-    };
+    let (texts, name) = study_texts(reader.header(), file)?;
+    let name = name.as_str();
+    let base = base(file, study.as_deref())?;
     let lock: Lock = toml::from_str(&texts.lock)
         .map_err(|e| format!("{shown}: its samples.lock does not read: {e}"))?;
     let local = lock.sample.iter().flat_map(|s| &s.file);

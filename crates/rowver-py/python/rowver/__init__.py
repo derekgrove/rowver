@@ -128,8 +128,14 @@ class File:
 
     @property
     def complete(self):
-        """Whether the press read every entry it chose: the file has no holes."""
-        return not self.holes
+        """Whether the file holds every entry its press chose: it has no holes, and is not empty."""
+        return not self.holes and not self.empty
+
+    @property
+    def empty(self):
+        """Whether the file is empty: its header alone, its columns let go by `rvr empty`
+        (`rvr refill` presses them again). Its header reads; its columns raise Error."""
+        return self._file.empty
 
     def __len__(self):
         return self.rows
@@ -139,7 +145,8 @@ class File:
 
     def __repr__(self):
         derived = f", {len(self.derived)} derived" if self.derived else ""
-        return f"<rowver.File {self.path!r}: {self.rows} rows, {len(self.columns)} columns{derived}, {len(self.samples)} samples>"
+        empty = ", empty" if self.empty else ""
+        return f"<rowver.File {self.path!r}: {self.rows} rows, {len(self.columns)} columns{derived}, {len(self.samples)} samples{empty}>"
 
     def __getitem__(self, name):
         """A column by name: a NumPy array, or an Awkward array for a list column. `sample` is
@@ -239,5 +246,5 @@ def open(path):
 
 def validate(path):
     """Check a file completely, as `rvr validate` does: its (rows, columns), or Error saying
-    what is wrong."""
+    what is wrong. An empty file checks out by its header alone; `File.empty` says it is."""
     return _validate(str(path))

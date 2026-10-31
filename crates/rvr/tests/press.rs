@@ -1207,3 +1207,60 @@ fn the_lock_writes_each_number_as_a_number() {
     assert!(code != 0 && said.contains("samples.lock cannot hold xsec: TOML has no such value (nan, inf, or a number past its range). Give it a finite number in samples.toml."), "{said}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn an_emptied_file_keeps_its_header_and_is_refilled_byte_for_byte() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\njets = \"nJet >= 1\"\n\n[columns]\nbranches = [\"weight\", \"nJet\", \"Jet_pt\"]\nht = \"sum(Jet_pt)\"\n\n[derived]\nper_jet = \"ht / nJet\"\n";
+    let dir = study("emptied", FLAT, recipe);
+    assert_eq!(rvr(&dir, &["key", "new", "Tester"]).0, 0);
+    pressed(&dir, &[]);
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let path = dir.join(&name);
+    let whole = std::fs::read(&path).unwrap();
+    let (code, said) = rvr(&dir, &["empty", &name]);
+    assert!(code == 0 && said.contains(&format!("Emptied {name}")) && said.contains("rvr refill"), "{said}");
+    let shell = std::fs::read(&path).unwrap();
+    let end = 12 + u32::from_le_bytes(whole[8..12].try_into().unwrap()) as usize;
+    assert_eq!(shell, whole[..end], "the header, byte for byte, and nothing after it");
+    // Every command reads it as the empty file it is.
+    let (code, said) = rvr(&dir, &["validate", &name]);
+    assert!(code == 0 && said.contains("1 derived (worked out once refilled), read all 5 entries, empty (rvr refill presses its columns again), signed by you"), "{said}");
+    let (code, said) = rvr(&dir, &["validate", &name, "--complete"]);
+    assert!(code == 1 && said.contains("it is empty, and --complete asks for its columns"), "{said}");
+    assert!(rvr(&dir, &["dump", &name, "--columns"]).1.contains("No columns: the file is empty"));
+    let (code, said) = rvr(&dir, &["status"]);
+    assert!(code == 1 && said.contains("as it is empty (rvr refill gives its columns back"), "{said}");
+    assert!(rvr(&dir, &["empty", &name]).1.contains("is empty already"));
+    let (code, said) = rvr(&dir, &["refill", &name]);
+    assert!(code == 0 && said.contains("every column is back, byte for byte as it was; signed by you"), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap(), whole);
+    // An input that is gone: not emptied, unless with --anyway; then not refilled until it is back.
+    std::fs::rename(dir.join("uproot_flat.root"), dir.join("away.root")).unwrap();
+    let (code, said) = rvr(&dir, &["empty", &name]);
+    assert!(code == 1 && said.contains("was not emptied") && said.contains("uproot_flat.root no longer exists"), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap(), whole);
+    assert_eq!(rvr(&dir, &["empty", &name, "--anyway"]).0, 0);
+    let (code, said) = rvr(&dir, &["refill", &name]);
+    assert!(code == 1 && said.contains(&format!("{name} is still empty")), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap(), shell);
+    std::fs::rename(dir.join("away.root"), dir.join("uproot_flat.root")).unwrap();
+    assert_eq!(rvr(&dir, &["refill", &name]).0, 0);
+    assert_eq!(std::fs::read(&path).unwrap(), whole);
+    // A press of the study does not build on an empty file: it presses every column.
+    assert_eq!(rvr(&dir, &["empty", &name]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains("cannot be built on, as it is empty"), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap().len(), whole.len());
+    let left: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| n.contains("refill") || n.contains(".partial")).collect();
+    assert!(left.is_empty(), "{left:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+    // A file with holes is not emptied: a refill could not read what its press read.
+    let dir = twice("empty-holes", recipe);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    std::fs::remove_file(dir.join("flat_b.root")).unwrap();
+    assert_eq!(rvr(&dir, &["press"]).0, 3);
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let (code, said) = rvr(&dir, &["empty", &name]);
+    assert!(code == 1 && said.contains("has 1 hole: a refill reads what its press read"), "{said}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

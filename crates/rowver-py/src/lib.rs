@@ -71,6 +71,12 @@ impl File {
         serde_json::to_string(self.reader.header()).expect("a header read from JSON writes as JSON")
     }
 
+    /// Whether the file is empty: its header alone, its columns let go by `rvr empty`.
+    #[getter]
+    fn empty(&self) -> bool {
+        self.reader.empty()
+    }
+
     #[getter]
     fn rows(&self) -> PyResult<usize> {
         self.reader.rows().map_err(|e| self.located(e))

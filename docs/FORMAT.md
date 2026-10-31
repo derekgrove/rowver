@@ -57,6 +57,15 @@ The first bytes of `tiny.rvr`:
 A reader refuses a file whose first 8 bytes are not the magic, whose `rowver` is not 15, or whose
 arrays do not fill the rest of the file exactly.
 
+**An empty file** is a file's header, byte for byte, with nothing after it: the file ends at byte
+12 + header length, while its records still name every array, its checksums and its signature as
+they were. It keeps the study it was pressed from, which can press the same arrays again, so it
+gives back a file's space and keeps its place (`rvr empty`; `rvr refill` presses the arrays again
+and puts them back once each has the `sha256` its record states). A reader opens it and checks its
+header as for any file, says it is empty, and refuses to read a column of it; nothing else in the
+format marks it. A whole file always has arrays after its header, since even an array of no values
+is a compressed frame of a few bytes.
+
 ## 2. The header at a glance
 
 ```
@@ -632,8 +641,8 @@ the file at the first problem:
 **When it reads a column**, it checks the column against its `sha256`. It can also check then that
 the facts agree with the values, that floats are finite, and that a `b1` holds only 0 and 1.
 
-**Full validation** (`rvr validate`, and `rowver.validate` in Python) checks all of the above and
-every array:
+**Full validation** (`rvr validate`, and `rowver.validate` in Python) checks all of the above and,
+unless the file is empty (§1), every array:
 
 - the arrays fill the file in file order, end to end, and each decompresses to its declared length
   and has its `sha256`;

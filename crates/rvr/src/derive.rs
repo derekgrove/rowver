@@ -58,7 +58,7 @@ pub(crate) fn sealed(header: &mut Value, signer: Option<&[u8; 32]>) -> Result<()
 }
 
 /// Write `from` again at `to` with `header`, sealed.
-fn rewritten(from: &Path, to: &Path, header: &mut Value, signer: Option<&[u8; 32]>) -> Result<(), String> {
+pub(crate) fn rewritten(from: &Path, to: &Path, header: &mut Value, signer: Option<&[u8; 32]>) -> Result<(), String> {
     sealed(header, signer)?;
     rowver::write::rewrite(from, to, header).map_err(|e| e.to_string())
 }

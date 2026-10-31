@@ -253,42 +253,29 @@ fn resolve_all(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn check(path: &Path) -> Result<bool, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("{} cannot be read: {e}", path.display()))?;
-    let lock: Lock = toml::from_str(&text)
-        .map_err(|e| format!("{} is not a samples.lock: {e}", path.display()))?;
-    let mut same = true;
-    let samples = path.with_file_name("samples.toml");
-    if let Ok(now) = std::fs::read(&samples) {
-        if sha256(&now) != lock.samples_toml_sha256 {
-            println!("samples.toml has changed since the lock was written ({}): run resolve to see what it now asks for.", lock.resolved);
-            same = false;
-        }
-    }
+/// How each file a lock names differs from what it recorded, one line each: a local file (its
+/// path relative to `base`) by its size and adler32, a storage file by its digest, and with
+/// `catalog` a dataset file by what Rucio says of it. None when every file is as recorded.
+pub(crate) fn differing(lock: &Lock, base: &Path, catalog: bool) -> Result<Vec<String>, String> {
     let proxy = proxy();
-    let ctx = Context::new(
-        path.parent().map(Path::to_path_buf).unwrap_or_default(),
-        proxy.path,
-        proxy.said,
-        proxy.ca,
-    );
-    let files: BTreeMap<&str, &resolve::File> = lock
+    let ctx = Context::new(base.to_path_buf(), proxy.path, proxy.said, proxy.ca);
+    let files: BTreeMap<&str, (&resolve::File, &str)> = lock
         .sample
         .iter()
-        .flat_map(|s| s.file.iter().map(|f| (f.at.as_str(), f)))
+        .flat_map(|s| s.file.iter().map(move |f| (f.at.as_str(), (f, s.asked.first().map_or("", String::as_str)))))
         .collect();
     let mut changed = Vec::new();
-    for (at, f) in &files {
+    let mut datasets = Vec::new();
+    for (at, (f, dataset)) in &files {
         let now = if at.contains("://") && f.lfn.is_none() {
             ctx.storage
                 .as_ref()
                 .ok_or(ctx.offline.clone())
                 .and_then(|s| s.digest(at))
         } else if f.lfn.is_some() {
+            datasets.push((*f, *dataset));
             continue;
         } else {
-            // A relative path is relative to the lock's folder.
             let local = ctx.base.join(at);
             std::fs::metadata(&local)
                 .map_err(|_| format!("{at} no longer exists"))
@@ -304,6 +291,33 @@ fn check(path: &Path) -> Result<bool, String> {
             Err(why) => changed.push(why),
         }
     }
+    if catalog && !datasets.is_empty() {
+        let (_, rucio) = ctx.catalog.as_ref().ok_or_else(|| format!("{} is in a central dataset, which Rucio is asked of: {}", datasets[0].0.at, ctx.offline))?;
+        let copies = crate::samples::copies::Datasets::ask(rucio, &datasets)?;
+        changed.extend(datasets.iter().filter_map(|(f, _)| copies.problem(f)).map(|failed| failed.why.clone()));
+    }
+    Ok(changed)
+}
+
+fn check(path: &Path) -> Result<bool, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("{} cannot be read: {e}", path.display()))?;
+    let lock: Lock = toml::from_str(&text)
+        .map_err(|e| format!("{} is not a samples.lock: {e}", path.display()))?;
+    let mut same = true;
+    let samples = path.with_file_name("samples.toml");
+    if let Ok(now) = std::fs::read(&samples) {
+        if sha256(&now) != lock.samples_toml_sha256 {
+            println!("samples.toml has changed since the lock was written ({}): run resolve to see what it now asks for.", lock.resolved);
+            same = false;
+        }
+    }
+    let changed = differing(&lock, path.parent().unwrap_or(Path::new("")), false)?;
+    let files: BTreeMap<&str, &resolve::File> = lock
+        .sample
+        .iter()
+        .flat_map(|s| s.file.iter().map(|f| (f.at.as_str(), f)))
+        .collect();
     let catalog = files.values().filter(|f| f.lfn.is_some()).count();
     if changed.is_empty() && catalog > 0 && catalog == files.len() {
         println!(

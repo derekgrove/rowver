@@ -143,6 +143,9 @@ fn read(
     asked: &[Events],
 ) -> Result<Earlier, String> {
     let file = Reader::open(path).map_err(|e| format!("it could not be read ({e})"))?;
+    if file.empty() {
+        return Err("it is empty (rvr refill gives its columns back, checked against its checksums)".into());
+    }
     let header = file.header();
     let made = &header["made"];
     let text = |key: &str| made[key]["text"].as_str();

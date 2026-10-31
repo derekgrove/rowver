@@ -169,6 +169,22 @@ class Pressed(unittest.TestCase):
     def test_a_complete_file_has_no_holes(self):
         self.assertEqual((self.file.complete, self.file.holes), (True, []))
 
+    def test_an_empty_file_reads_its_header_and_says_how_to_fill_it(self):
+        copy = self.dir / "copy.rvr"
+        shutil.copy(self.path, copy)
+        try:
+            whole = copy.read_bytes()
+            self.assertEqual(rvr(["empty", str(copy)]), 0)
+            f = rowver.open(copy)
+            self.assertEqual((f.empty, self.file.empty, f.rows, f.columns), (True, False, self.file.rows, self.file.columns))
+            self.assertIn(", empty>", repr(f))
+            with self.assertRaisesRegex(rowver.Error, "the file is empty: .*rvr refill"):
+                f["weight"]
+            self.assertEqual(rvr(["refill", str(copy)]), 0)
+            self.assertEqual(copy.read_bytes(), whole)
+        finally:
+            copy.unlink()
+
 
 class Holed(unittest.TestCase):
     """A sample of two files, one deleted after the lock was written: a file with one hole."""

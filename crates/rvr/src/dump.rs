@@ -82,6 +82,10 @@ fn print_source(source: &str, name: &str) {
 }
 
 fn print_columns(reader: &Reader) -> Result<(), String> {
+    if reader.empty() {
+        println!("No columns: the file is empty (rvr empty let them go); rvr refill presses them again from the study it carries.");
+        return Ok(());
+    }
     let data = &reader.header()["data"];
     let rows = reader.rows().map_err(|e| e.to_string())?;
     let sample = reader.sample().map_err(|e| e.to_string())?;

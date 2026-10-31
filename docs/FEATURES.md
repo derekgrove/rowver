@@ -219,6 +219,16 @@ A file contains its study, so `rvr reproduce FILE` can write the three texts bac
 with the same event choice, and compare the result with `rvr diff`. Exit status 0 means the
 reproduced file holds the same data.
 
+The same study gives back a file's space without losing the file. `rvr empty FILE` keeps the header
+byte for byte, with the study, every checksum and the signature, and lets the arrays go: on the
+2.1 M-row bench, a 39.3 MB file keeps a 114 kB header (0.29%). It first checks that every input the
+lock names is as the lock recorded it, since only the inputs hold the events. `rvr refill FILE`
+presses the study again and puts the arrays back once each has the checksum its record states.
+Pressed twice, the bench gives byte-identical arrays, whatever the number of workers, so a refill
+by the same rvr gives back the file it was, byte for byte, and its signature still holds; another
+rvr that compresses otherwise gives the same values in other bytes, placed anew and signed again.
+An empty file reads as any other but for its columns, and says it is empty.
+
 ## 5. Describing a study
 
 A study is a folder with two files the analyst writes and one the tool writes:
@@ -463,11 +473,12 @@ press that leaves holes exits 3.
 | command | question it answers |
 |---|---|
 | `rvr status` | Does the study's file hold the study as it is now? It reports what changed in the recipe (columns new, changed or dropped; the cuts), whether `samples.toml` was edited or the lock resolved again, what a press would read, how complete each sample is, and the holes. It exits 0 only when the file is current, was pressed with the same choice, and is complete, so a script can ask before pressing. It reads no input. |
-| `rvr validate` | Does the file check out in full (§4.4)? One line per file: rows, columns, derived columns (each worked out and checked), entries read of the entries the samples hold, holes by kind, and the signer. `--complete` fails a file with holes. |
+| `rvr validate` | Does the file check out in full (§4.4)? One line per file: rows, columns, derived columns (each worked out and checked), entries read of the entries the samples hold, holes by kind, and the signer. `--complete` fails a file with holes, or an empty one. |
 | `rvr dump` | What is inside? The full header, the three study texts, and every column with its kind, length and first values (a derived column worked out, with its expression), or any one of these parts. |
 | `rvr header` | The JSON header exactly as the file holds it, without reading any array. |
 | `rvr diff A B` | Where do two files differ? From the headers alone: rows, samples, columns and derived columns, kinds, expressions, and each (column, sample) pair whose contents changed. |
 | `rvr reproduce` | Does the file's own study, pressed again, give the same data (§4.5)? |
+| `rvr empty`, `rvr refill` | Give back a file's space and keep its study in its place; press its columns again, checked against its checksums (§4.5). |
 
 ## 9. Derived columns
 

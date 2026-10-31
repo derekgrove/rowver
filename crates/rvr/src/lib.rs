@@ -5,6 +5,7 @@ mod branches;
 pub mod derive;
 mod diff;
 mod dump;
+mod empty;
 mod fill;
 mod holes;
 mod journal;
@@ -44,6 +45,10 @@ const USAGE: &str = "usage:
   rvr header FILE                          the JSON header only, as the file holds it
   rvr diff A B                             which column of which sample differs, from the headers
   rvr reproduce FILE [DIR]                 press FILE's own study again and diff the two
+  rvr empty FILE... [--study FOLDER] [--anyway]
+                                           let a file's columns go, keeping its header to refill
+  rvr refill FILE [--study FOLDER] [--workers N]
+                                           press an empty file's columns again from its study
   rvr key new|show|trust ...               the key that signs your files; keys you trust
   rvr proxy [init]                         your grid proxy's state; make one from ~/.globus";
 
@@ -82,6 +87,8 @@ pub fn run(args: &[String]) -> u8 {
         Some(&"try") => return trying::main(&rest),
         Some(&"branches") => return branches::main(&rest),
         Some(&"reproduce") => return reproduce::main(&rest),
+        Some(&"empty") => return empty::empty_main(&rest),
+        Some(&"refill") => return empty::refill_main(&rest),
         Some(&"key") => return key::main(&rest),
         Some(&"proxy") => return proxy::main(&rest),
         _ => {}
@@ -179,17 +186,18 @@ fn header(file: &str) -> Result<(), String> {
 }
 
 /// One line per file: valid, or the first problem found. Every derived column is worked out and
-/// checked against what the file records of it. With `--complete`, a valid file with holes fails
-/// too.
+/// checked against what the file records of it, unless the file is empty. With `--complete`, a
+/// valid file with holes, or an empty one, fails too.
 fn validate(words: &[&str], args: &[String]) -> u8 {
     let complete = args.iter().any(|a| a == "--complete");
     let mut ok = true;
     for file in words {
         let checked = rowver::rvr::validate_file(file).map_err(|e| e.to_string());
         let compared = checked.and_then(|summary| {
-            let derived = match summary.derived {
-                0 => String::new(),
-                n => format!("{n} derived, "),
+            let derived = match (summary.derived, summary.empty) {
+                (0, _) => String::new(),
+                (n, true) => format!("{n} derived (worked out once refilled), "),
+                (n, false) => format!("{n} derived, "),
             };
             let signed = match summary.header.get("signature") {
                 Some(signature) => key::signer(signature["key"].as_str().unwrap_or_default()),
@@ -201,11 +209,16 @@ fn validate(words: &[&str], args: &[String]) -> u8 {
                 None => String::new(),
             };
             let holes = rowver::rvr::holes(&summary.header);
-            let said = derived + &read + &holed(&holes) + &signed;
-            Ok((summary.rows, summary.columns, said, holes.is_empty()))
+            let empty = match summary.empty {
+                true => "empty (rvr refill presses its columns again), ",
+                false => "",
+            };
+            let said = derived + &read + &holed(&holes) + empty + &signed;
+            Ok((summary.rows, summary.columns, said, holes.is_empty(), summary.empty))
         });
-        // With --complete, a file with holes fails, on its one line.
-        let compared = compared.and_then(|(rows, columns, said, whole)| match complete && !whole {
+        // With --complete, a file with holes, or an empty one, fails, on its one line.
+        let compared = compared.and_then(|(rows, columns, said, whole, empty)| match complete && (!whole || empty) {
+            true if empty => Err(format!("it is empty, and --complete asks for its columns ({said}): rvr refill presses them again")),
             true => Err(format!("it has holes, and --complete asks for none ({said}): rvr status lists them, rvr press --fill reads them again")),
             false => Ok((rows, columns, said)),
         });

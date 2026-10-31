@@ -623,6 +623,40 @@ Writes the recipe.toml, samples.toml and samples.lock that FILE holds into DIR (
 `rvr diff` on the two files: exit status 0 when they hold the same data. A relative path in the
 lock is read from FILE's folder, where `rvr press` writes it.
 
+### `rvr empty FILE... [--study FOLDER] [--anyway]`, `rvr refill FILE [--study FOLDER] [--workers N]`
+
+`rvr empty` gives back a file's space and keeps it in its place: it lets the columns go and keeps
+the header byte for byte, with the study it was pressed from, every checksum and its signature. On
+the 2.1 M-row bench, a 39.3 MB file keeps its 114 kB header. `rvr validate`, `rvr dump`, `rvr diff`
+and the Python package read an empty file's header as ever and say it is empty; reading a column
+of it says how to fill it. A refill reads the inputs again, so `rvr empty` first checks that each
+one the lock names is as the lock recorded it (a local file's size and adler32, a storage file's
+digest, what Rucio says of a dataset file), and refuses, saying which is not, unless with
+`--anyway`. A file with holes is not emptied: a hole may read otherwise later, and a refill must
+read what the press read.
+
+`rvr refill` presses the study an empty file carries again, beside it, with the same event
+choice, and puts the columns back once every array has the checksum the header records: with the
+same rvr, the file is the one it was, byte for byte, its signature as it was. An rvr that
+compresses otherwise (another zstd) gives the same values in other bytes; the header then takes
+their new places and is signed again with your key. Values that differ (an input or the rvr that
+reads it has changed) are refused, naming the columns, and the file stays empty. A relative path in
+the lock is read from FILE's folder, or FOLDER.
+
+```text
+$ rvr empty tiny.rvr
+Emptied tiny.rvr: 332 bytes given back; its header (5.9 kB) keeps its study, every checksum and its signature. rvr refill tiny.rvr presses its columns again.
+$ rvr validate tiny.rvr
+tiny.rvr: valid, 8 rows, 3 columns, 1 derived (worked out once refilled), read all 10 entries, empty (rvr refill presses its columns again), signed by you
+$ rvr refill tiny.rvr
+Pressing the study tiny.rvr carries again, into tiny.rvr.refill:
+…
+Refilled tiny.rvr: every column is back, byte for byte as it was; signed by you.
+```
+
+`rvr press` does not build on an empty file: it presses every column. `rvr status` says a file is
+empty, with exit status 1.
+
 ### `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME`
 
 `rvr key new` makes your ed25519 key in `~/.config/rvr/key` (keep it private); from then on every

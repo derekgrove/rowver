@@ -20,7 +20,8 @@ f.sample_columns          # per-sample values: events_read, events_total, metada
 f.recipe                  # the recipe.toml that made it
 f.study                   # {"recipe.toml": …, "samples.toml": …, "samples.lock": …}
 f.signed_by               # the public key that signed it, or None
-f.complete                # whether the press read every entry it chose (no holes)
+f.complete                # whether it holds every entry its press chose (no holes, not empty)
+f.empty                   # whether rvr empty let its columns go (rvr refill presses them again)
 f.holes                   # what it could not read: [{"sample", "file", "entries", "kind", "why"}, …]
 
 f.arrays()                # every column as one Awkward record array

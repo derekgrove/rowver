@@ -66,6 +66,11 @@ impl Reader {
         Ok(Self { path: dir.to_path_buf(), header, parts })
     }
 
+    /// Whether the file is empty: its header alone, its arrays let go by `write::empty`.
+    pub fn empty(&self) -> bool {
+        self.parts.iter().all(|(_, _, length)| *length == 0)
+    }
+
     /// Where the file is.
     pub fn path(&self) -> &Path {
         &self.path
@@ -100,6 +105,9 @@ impl Reader {
 
     /// Where one array's compressed bytes lie: the file that holds them, their offset, their size.
     pub(crate) fn span(&self, record: &Value, label: &str) -> Result<(&Path, u64, u64)> {
+        if self.empty() {
+            return Err(invalid(super::EMPTY));
+        }
         let (mut at, size) = (count(record, "at")? as u64, count(record, "size")? as u64);
         for (path, start, length) in &self.parts {
             if at.checked_add(size).is_some_and(|end| end <= *length) {

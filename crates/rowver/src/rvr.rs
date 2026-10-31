@@ -67,8 +67,10 @@ pub fn holes(header: &Value) -> Vec<Hole> {
 pub struct CheckpointSummary {
     pub rows: usize,
     pub columns: usize,
-    /// How many derived columns it has, each worked out and checked.
+    /// How many derived columns it has, each worked out and checked unless the file is empty.
     pub derived: usize,
+    /// Whether the file is empty: its header alone, every fact of which is checked.
+    pub empty: bool,
     pub header: Value,
 }
 
@@ -107,17 +109,22 @@ fn validate_stream(path: &Path, cancellation: Cancellation<'_>) -> Result<Checkp
     let mut text = vec![0; start - 12];
     file.read_exact(&mut text)?;
     let header = checked_header(&text)?;
-    read_body(&header, Arrays::new(file, size - start, cancellation), drop)?;
+    let empty = size == start;
+    if !empty {
+        read_body(&header, Arrays::new(file, size - start, cancellation), drop)?;
+    }
     cancellation.check()?;
     // Only a file with derived columns is opened again, to work them out.
     let derived = match derived::agreed(&header)? {
         0 => 0,
+        n if empty => n,
         _ => derived::checked_while(&Reader::open(path)?, &|| cancellation.check())?,
     };
     Ok(CheckpointSummary {
         rows: count(object(&header, "data")?, "rows")?,
         columns: list(object(&header, "data")?, "cols")?.len(),
         derived,
+        empty,
         header,
     })
 }
@@ -145,6 +152,9 @@ pub fn read_header(path: impl AsRef<Path>) -> Result<Value> {
     version(&header)?;
     Ok(header)
 }
+
+/// What a reader of an empty file's columns is told.
+const EMPTY: &str = "the file is empty: rvr empty let its columns go, and rvr refill presses them again from the study it carries";
 
 /// What a file that is not an `.rvr` file is told.
 const NOT_RVR: &str = "Input is not an .rvr file (its first bytes are not the .rvr magic)";
@@ -225,7 +235,7 @@ fn decode(bytes: &[u8]) -> Result<Arc<Table>> {
 }
 
 /// Validate the shared magic and JSON framing before allocating header storage.
-fn header_end(prefix: &[u8], size: usize) -> Result<usize> {
+pub(crate) fn header_end(prefix: &[u8], size: usize) -> Result<usize> {
     if prefix.len() < 12 || &prefix[..8] != MAGIC {
         return Err(invalid(NOT_RVR));
     }

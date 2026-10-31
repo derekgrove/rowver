@@ -158,7 +158,9 @@ fn run(args: &[&str]) -> Result<bool, String> {
     let shown = target.display().to_string();
     let fillable = crate::fill::fits(&header, &shown, &texts, &lock, &asked, &kinds).map(drop);
     let complete = completeness(&header, every, fillable);
-    Ok(current && complete)
+    // An empty file was said to be so above, as what keeps rvr press from building on it.
+    let empty = rowver::rvr::Reader::open(&target).is_ok_and(|file| file.empty());
+    Ok(current && complete && !empty)
 }
 
 /// How much of what it chose the file holds, from its header alone: one bar per sample, then its
