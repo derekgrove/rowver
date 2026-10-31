@@ -69,7 +69,8 @@ pub const USAGE: &str = "usage:
                                            press DIR/samples.lock through DIR/recipe.toml into
                                            DIR/<DIR's name>.rvr (DIR is . when not given); when
                                            only stored columns changed since that file was
-                                           pressed, read just those (--full reads everything);
+                                           pressed, read just those, and when only samples were
+                                           added, just those (--full reads everything);
                                            --fill reads only the file's holes (of KINDS, such as
                                            tape,unreachable) and writes it again with them; a
                                            press that stopped part way is picked up where it
@@ -1683,7 +1684,8 @@ pub enum On<'a> {
     /// A full press.
     Nothing,
     /// The file at the target, for its kept events and every column whose definition is the same,
-    /// when the same study, cuts and event choice pressed it.
+    /// when the same study, cuts and event choice pressed it; or, when the lock's samples changed
+    /// but not its columns, for the rows of every sample it holds as they were.
     Earlier,
     /// The file at the target but for its holes of these kinds: a fill.
     Holes(&'a [String]),
@@ -1719,15 +1721,21 @@ pub fn press(
         return Err(format!("[derived] {name} has the name of a key of samples.toml, or of one rvr press gives every sample ({}): give the derived column another", ADDED.join(", ")));
     }
     let outputs: Vec<Output> = recipe.columns.iter().collect();
-    let filling = match on {
+    let mut filling = match on {
         On::Holes(kinds) => Some(crate::fill::plan(target, texts, &lock, &asked, kinds)?),
         _ => None,
     };
+    // A file of other samples is built on as a fill is: its rows of the samples it holds as they
+    // were, and the others' read.
     let mut earlier = match matches!(on, On::Earlier)
         .then(|| crate::reuse::earlier(target, texts, &recipe, &lock, &asked))
         .flatten()
     {
-        Some(Ok(earlier)) => Some(earlier),
+        Some(Ok(crate::reuse::Base::Columns(earlier))) => Some(earlier),
+        Some(Ok(crate::reuse::Base::Samples(rows))) => {
+            filling = Some(rows);
+            None
+        }
         Some(Err(why)) => {
             println!(
                 "Pressing every column: {} cannot be built on, as {why}.",
@@ -1737,6 +1745,7 @@ pub fn press(
         }
         None => None,
     };
+    let adding = filling.as_ref().and_then(|f| f.added.as_deref());
     // With an earlier file, only the columns it cannot give are read, for the events it kept:
     // the cuts are not run again.
     let reading: Vec<Output> = match &earlier {
@@ -1835,6 +1844,7 @@ pub fn press(
         "reading": reading.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
         "on": match (&filling, &earlier, &on) {
             (Some(filling), _, On::Holes(kinds)) => json!({"fill": filling.file.header()["data"]["sha256"], "kinds": kinds}),
+            (Some(filling), _, _) => json!({"samples": filling.file.header()["data"]["sha256"]}),
             (_, Some(earlier), _) => json!({"earlier": earlier.file().header()["data"]["sha256"]}),
             _ => Value::Null,
         },
@@ -1857,7 +1867,23 @@ pub fn press(
     let (storage, datasets, offline) = connect(&lock, &files, &watch)?;
     let (spool, journal) = crate::journal::stage(target, &staged, &identity, picked)?;
     let read: u64 = lock.sample.iter().map(|s| s.events_read).sum();
-    match &earlier {
+    // The samples a press of other samples than the file's reads: "sample c", "samples c, d".
+    let named = |added: &[String]| format!("{} {}", if added.len() == 1 { "sample" } else { "samples" }, added.join(", "));
+    match (&earlier, adding) {
+        (_, Some([])) => println!(
+            "{} holds the rows of every sample as samples.lock has them.\nNothing to read: every row is copied from it.",
+            target.display()
+        ),
+        (_, Some(added)) => println!(
+            "{} holds the rows of {} of the {} as samples.lock has them.\nReading only the new {}, {}, {} entries, {} at a time:",
+            target.display(),
+            lock.sample.len() - added.len(),
+            some(lock.sample.len(), "sample", "samples"),
+            named(added),
+            some(reads.len(), "file", "files"),
+            count(reads.iter().map(chosen_of).sum::<u64>()),
+            workers.min(reads.len()).max(1)
+        ),
         _ if filling.is_some() => {
             let entries = reads.iter().map(chosen_of).sum::<u64>();
             let holes = reads.iter().flat_map(|i| i.ranges.iter().flatten()).count();
@@ -1870,7 +1896,7 @@ pub fn press(
                 workers.min(reads.len()).max(1)
             );
         }
-        Some(_) => {
+        (Some(_), None) => {
             let names: Vec<&str> = reading.iter().map(|(n, _)| n.as_str()).collect();
             println!(
                 "{} has the events this recipe keeps ({}) and {} of its {} columns.",
@@ -1889,7 +1915,7 @@ pub fn press(
                 ),
             }
         }
-        None => println!(
+        (None, None) => println!(
             "Pressing {}, {}, {} entries, {} at a time:",
             some(lock.sample.len(), "sample", "samples"),
             some(work.len(), "file", "files"),
@@ -1973,14 +1999,14 @@ pub fn press(
     let stuck = |why: String| format!("{} Mend it, then {}.", sentence(&why), again(&save(), reads.len()));
     let mut taken = match &filling {
         // A fill that read none of its holes again, each failing as before, leaves the file.
-        Some(filling) if read.iter().map(|t| t.missing).sum::<u64>() == reads.iter().map(chosen_of).sum::<u64>() && crate::fill::same_kinds(filling, &lock, reads, &read) => {
+        Some(filling) if adding.is_none() && read.iter().map(|t| t.missing).sum::<u64>() == reads.iter().map(chosen_of).sum::<u64>() && crate::fill::same_kinds(filling, &lock, reads, &read) => {
             let holes = rowver::rvr::holes(filling.file.header()).len();
             let asked = reads.iter().flat_map(|i| i.ranges.iter().flatten()).count();
             println!("None of the {} could be read: {} is as it was.", some(asked, "hole", "holes"), target.display());
             return Ok(holes);
         }
         Some(filling) => {
-            let old = crate::fill::spool_old(&spool, &filling.file, &reading, &laid).map_err(&stuck)?;
+            let old = crate::fill::spool_old(&spool, &filling.file, &reading, &laid, workers).map_err(&stuck)?;
             crate::fill::merged(&work, &lock, filling, &laid, read, &old)?
         }
         None => read,
@@ -2147,11 +2173,18 @@ pub fn press(
         return Err(format!("{why}. {} is written without its derived columns, so that what was read is kept: put right what is said above and press again, which, by the same rvr, copies every stored column from it and reads no input.", target.display()));
     }
     let bytes = std::fs::metadata(target).map_or(0, |m| m.len());
-    if !built_on {
-        let read = match missing.iter().sum::<u64>() {
-            _ if filling.is_some() => format!("{} entries in the holes", count(tally.read)),
+    // Building on a file of other samples, what was read is the new samples'.
+    let read_now = |name: &String| adding.is_none_or(|added| added.contains(name));
+    if !built_on && adding.is_none_or(|added| !added.is_empty()) {
+        let lacks: u64 = lock.sample.iter().zip(&missing).filter(|(s, _)| read_now(&s.name)).map(|(_, m)| m).sum();
+        let read = match lacks {
+            _ if filling.is_some() && adding.is_none() => format!("{} entries in the holes", count(tally.read)),
             0 => format!("{} entries", count(tally.read)),
             lacks => format!("{} of {} entries", count(tally.read), count(tally.read + lacks)),
+        };
+        let read = match adding {
+            Some(added) => format!("{read} of the new {}", named(added)),
+            None => read,
         };
         match recipe.keep.is_empty() {
             true => println!("Read {read}; with no cuts, every one is kept."),

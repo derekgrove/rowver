@@ -209,10 +209,36 @@ Wrote local.rvr (22,325 rows, 11 columns, 2.4 MB) in 0.2 s.
 Here that reads at most 26.3 MB of baskets (`Jet_pt` and `nJet`) where a full press reads
 108.0 MB; on local copies of the two files it takes 0.2 s instead of 0.6 s (Apple M5, 2026-10-30).
 A column counts as changed when its expression, its stored kind, or any name it uses from
-`[define]` changed. When the file cannot be built on, `rvr press` says why and presses
-every column; `--full` always does. A sample added or removed, a lock resolved again, other
-`--events`, or another build of rvr all mean a full press, since the file's rows or the code that
-computed them would no longer be the ones it records.
+`[define]` changed.
+
+**Adding a sample.** Add it to `samples.toml`, resolve, and run `rvr press` again (`rvr status`
+says what it would read). When the file was pressed with the same cuts and the same columns, by
+the same build of rvr, and every sample it holds is in the new lock as it was (the same files,
+tree, metadata and choice of events), only the new samples are read; the rows of the others are
+the file's own. A sample taken out, or the samples put in another order, reads nothing. The rows
+are laid out again in the lock's order, so every column is packed again: an array is compressed
+whole, and a sample's part of it cannot be copied as it lies; as a fill does, it holds one column
+of the file at a time in memory. The file written is the one a full press writes; a sample it
+holds with holes keeps them (`--fill` reads them).
+
+```text
+$ rvr press
+flat.rvr holds the rows of 2 of the 3 samples as samples.lock has them.
+Reading only the new sample c, 1 file, 5 entries, 1 at a time:
+  1/1            5 entries          4 kept   flat_c.root
+Read 5 entries of the new sample c; kept after each cut:
+  jets                                       4
+Wrote flat.rvr (12 rows, 2 columns, 0.0 MB) in 0.0 s.
+```
+
+On 2.1 M rows (ten samples of 30 links to the TChiWZ skim), adding an eleventh of 30 files took
+1.5 s where a full press takes 4.9 s; taking one out took 0.75 s against 4.5 s, all of it the
+packing again (medians of 9, Apple M5, 2026-10-31).
+
+When the file cannot be built on, `rvr press` says why and presses every column; `--full` always
+does. Other cuts, other `--events`, a sample whose files, tree or metadata changed in the lock, a
+column changed together with the samples, or another build of rvr all mean a full press, since
+the file's rows or the code that computed them would no longer be the ones it records.
 
 Before a file is read, it is checked against the lock: its size and adler32, then its ROOT UUID
 and entries. A file that changed is not read: it is a hole (below), and the file says so. A

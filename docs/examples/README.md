@@ -388,11 +388,11 @@ zmumu.rvr: pressed 2026-10-30T19:29:10Z by rvr 15.0.0
   samples.toml  edited since
   samples.lock  resolved again since
   events        as the file holds it
-rvr press would press every column, as samples.toml has changed since.
+rvr press would press every column, as the cuts under [keep], or what they use, have changed.
 
   DY  ████████████████████████ 100%   2 files
 $ rvr press
-Pressing every column: zmumu.rvr cannot be built on, as samples.toml has changed since.
+Pressing every column: zmumu.rvr cannot be built on, as the cuts under [keep], or what they use, have changed.
 Rucio said where the 4 dataset files can be read in 1.9 s.
 Pressing 3 samples, 4 files, 300,000 entries, 4 at a time:
   …

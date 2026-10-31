@@ -570,6 +570,116 @@ branches = ["weight", "nJet"]
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A file's arrays: every byte after its header.
+fn arrays(path: &Path) -> Vec<u8> {
+    let bytes = std::fs::read(path).unwrap();
+    let header = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    bytes[12 + header..].to_vec()
+}
+
+/// Press `dir`'s study in full into full.rvr with `flags`, and check the study's file is that file
+/// but for when it was built and signed.
+fn same_as_full(dir: &Path, flags: &[&str]) {
+    let (code, said) = rvr(dir, &[&["press", "--full", "--out", "full.rvr"], flags].concat());
+    assert!(code == 0 || code == 3, "{said}");
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let (code, said) = rvr(dir, &["validate", &name]);
+    assert_eq!(code, 0, "{said}");
+    let header = |file: &str| -> Value { serde_json::from_str(&rvr(dir, &["header", file]).1).unwrap() };
+    let (built_on, full) = (header(&name), header("full.rvr"));
+    assert_eq!(built_on["data"], full["data"]);
+    assert_eq!(built_on["derived"], full["derived"]);
+    let made = |header: &Value| {
+        let mut made = header["made"].clone();
+        for key in ["built", "sha256"] {
+            made.as_object_mut().unwrap().remove(key);
+        }
+        made
+    };
+    assert_eq!(made(&built_on), made(&full));
+    assert_eq!(arrays(&dir.join(&name)), arrays(&dir.join("full.rvr")));
+    let (code, said) = rvr(dir, &["diff", &name, "full.rvr"]);
+    assert_eq!(code, 0, "{said}");
+}
+
+/// Samples of FLAT's file, one per name, each with `kind` its name.
+fn samples_of(names: &[&str]) -> String {
+    let mut text = "format = \"rvr-samples\"\nversion = 1\n\n[defaults]\ntree = \"analysis\"\n".to_string();
+    for name in names {
+        text += &format!("\n[[sample]]\nname = \"{name}\"\nlabel = \"{}\"\nfiles = \"flat_{name}.root\"\nkind = \"{name}\"\n", name.to_uppercase());
+    }
+    text
+}
+
+#[test]
+fn a_sample_added_is_read_alone_and_the_file_is_a_full_press() {
+    let recipe = r#"format = "rvr-recipe"
+version = 1
+
+[define]
+
+[keep]
+jets = "nJet >= 1"
+
+[columns]
+branches = ["weight", "nJet", "Jet_pt"]
+ht = "sum(Jet_pt)"
+
+[derived]
+double = "weight * 2"
+"#;
+    let dir = study("samples", &samples_of(&["a", "b"]), recipe);
+    for copy in ["flat_a.root", "flat_b.root", "flat_c.root", "flat_d.root"] {
+        std::fs::copy(dir.join("uproot_flat.root"), dir.join(copy)).unwrap();
+    }
+    pressed(&dir, &[]);
+    // A sample added and resolved: rvr status and rvr press read only its files.
+    std::fs::write(dir.join("samples.toml"), samples_of(&["a", "b", "c"])).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["status"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("rvr press would read only the new sample c (1 file), and copy the rows of every other sample from it."), "{said}");
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("holds the rows of 2 of the 3 samples as samples.lock has them."), "{said}");
+    assert!(said.contains("Reading only the new sample c, 1 file, 5 entries, 1 at a time:"), "{said}");
+    assert!(said.contains("  1/1            5 entries          4 kept   flat_c.root") && !said.contains("/2 "), "{said}");
+    assert!(said.contains("Read 5 entries of the new sample c; kept after each cut:"), "{said}");
+    same_as_full(&dir, &[]);
+    // Taken out and reordered, the samples left are copied and nothing is read.
+    std::fs::write(dir.join("samples.toml"), samples_of(&["c", "a"])).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("holds the rows of every sample as samples.lock has them.\nNothing to read: every row is copied from it."), "{said}");
+    same_as_full(&dir, &[]);
+    // A sample whose metadata changed is another sample: a full press, which says why.
+    std::fs::write(dir.join("samples.toml"), samples_of(&["c", "a", "d"]).replace("kind = \"a\"", "kind = \"A\"")).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("cannot be built on, as a is another sample in samples.lock now (its files, tree or metadata)."), "{said}");
+    assert!(said.contains("Pressing 3 samples, 3 files"), "{said}");
+    // So with a column added as well as a sample.
+    std::fs::write(dir.join("samples.toml"), samples_of(&["c", "a", "d", "b"])).unwrap();
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("ht = ", "n = \"nJet * 2\"\nht = ")).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("as samples.lock has changed since, and so have the columns (n new or changed): a press builds on a file for a change of either, not of both."), "{said}");
+    // A random choice is built on when it is the same, and the derived columns changed with it.
+    let (code, said) = rvr(&dir, &["press", "--events", "3", "--random", "--seed", "7"]);
+    assert_eq!(code, 0, "{said}");
+    std::fs::write(dir.join("samples.toml"), samples_of(&["c", "a", "d", "b", "e"]).replace("flat_e", "flat_*")).unwrap();
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("ht = ", "n = \"nJet * 2\"\nht = ").replace("weight * 2", "weight * 3")).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press", "--events", "3", "--random", "--seed", "7"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("Reading only the new sample e, 4 files, 3 entries"), "{said}");
+    same_as_full(&dir, &["--events", "3", "--random", "--seed", "7"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn status_says_whether_the_file_is_current_and_what_press_would_read() {
     let recipe = r#"format = "rvr-recipe"
@@ -862,6 +972,38 @@ fn a_fill_takes_the_choice_it_was_pressed_with_and_the_file_put_back() {
     assert_eq!(filled["data"]["sha256"], full["data"]["sha256"]);
     let uuid = |at: &str| filled["made"]["files"]["flat"]["files"][at]["uuid"].clone();
     assert_ne!(uuid("./flat_b.root"), uuid("./flat_a.root"), "flat_b is another ROOT file now");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn samples_added_keep_the_holes_of_the_others_and_are_picked_up_when_stopped() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"Jet_pt\"]\n\n[derived]\n";
+    let dir = study("added-holes", &samples_of(&["a", "b"]), recipe);
+    for name in ["a", "b", "c", "d", "e", "f"] {
+        std::fs::copy(dir.join("uproot_flat.root"), dir.join(format!("flat_{name}.root"))).unwrap();
+    }
+    damage(&dir.join("flat_a.root"), "weight");
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    assert_eq!(rvr(&dir, &["press"]).0, 3);
+    // Two samples added, one of whose files is gone: a's hole is the file's, d's is new.
+    std::fs::write(dir.join("samples.toml"), samples_of(&["a", "b", "c", "d"])).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    std::fs::rename(dir.join("flat_d.root"), dir.join("away.root")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 3, "{said}");
+    assert!(said.contains("Reading only the new samples c, d, 2 files, 10 entries"), "{said}");
+    assert!(said.contains("Read 5 of 10 entries of the new samples c, d;") && said.contains("with 2 holes:"), "{said}");
+    same_as_full(&dir, &[]);
+    // A press of samples added (and d taken out) that stopped part way is picked up where it stopped.
+    if cfg!(debug_assertions) {
+        std::fs::write(dir.join("samples.toml"), samples_of(&["a", "b", "c", "e", "f"])).unwrap();
+        assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+        stopped_after(&dir, 1, &[]);
+        let (code, said) = rvr(&dir, &["press"]);
+        assert_eq!(code, 3, "{said}");
+        assert!(said.contains("where it stopped: 1 of 2 files done") && said.contains("  2/2 ") && !said.contains("  1/2 "), "{said}");
+        same_as_full(&dir, &[]);
+    }
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

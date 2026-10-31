@@ -129,7 +129,20 @@ fn run(args: &[&str]) -> Result<bool, String> {
     }
     let new = press::read_recipe(&texts.recipe)?;
     let said = match reuse::earlier(&target, &texts, &new, &lock, &asked) {
-        Some(Ok(earlier)) => {
+        Some(Ok(reuse::Base::Samples(rows))) => {
+            let added = rows.added.unwrap_or_default();
+            let files: usize = lock.sample.iter().filter(|s| added.contains(&s.name)).map(|s| s.file.iter().filter(|f| f.stop != Some(0)).count()).sum();
+            match added.is_empty() {
+                true => "rvr press would read nothing: the rows of every sample are copied from it into a file that holds the study as it is now.".into(),
+                false => format!(
+                    "rvr press would read only the new {} {} ({}), and copy the rows of every other sample from it.",
+                    if added.len() == 1 { "sample" } else { "samples" },
+                    added.join(", "),
+                    some(files, "file", "files")
+                ),
+            }
+        }
+        Some(Ok(reuse::Base::Columns(earlier))) => {
             let reading: Vec<&str> = new
                 .columns
                 .iter()

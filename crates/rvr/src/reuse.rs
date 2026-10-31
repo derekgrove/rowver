@@ -1,17 +1,30 @@
-//! Pressing a study again when only its stored columns changed. A file `rvr press` wrote already
-//! says which events its cuts kept (`data.files` and `entry`), so when the study, its cuts, its
-//! event choice and the build of rvr are the same, only the columns that are new or whose
-//! definition changed are computed, over the entries a full press reads, keeping the events the
-//! earlier file kept; every other column is copied from it as it lies, compressed. The file
-//! written is the one a full press of the recipe writes.
+//! Pressing a study again on the file a press of it wrote, which says which events its cuts kept
+//! (`data.files` and `entry`). With the same cuts and the same build of rvr:
+//! - with the same samples and event choice, only the columns that are new or whose definition
+//!   changed are computed, over the entries a full press reads, keeping the events the earlier
+//!   file kept; every other column is copied from it as it lies, compressed;
+//! - with samples added, removed or reordered and the same columns, the rows of every sample the
+//!   lock holds as it did are the file's, and only the other samples are read (as a fill reads
+//!   holes: each column is packed again, since it is compressed whole).
+//!
+//! The file written is the one a full press of the recipe writes.
 
+use crate::fill::{unplanned, Fill, Plan};
 use crate::samples::resolve::Lock;
 use crate::samples::spec::Events;
 use rowver::rvr::Reader;
 use rvr_recipe::{uses, Cut, Expression, Recipe};
 use serde_json::Value;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
+
+/// What an earlier file gives a press.
+pub enum Base {
+    /// Its rows, and the columns it holds as the recipe defines them.
+    Columns(Earlier),
+    /// When the lock's samples changed: the rows of those it holds as they were.
+    Samples(Fill),
+}
 
 /// What an earlier press gives a new one.
 pub struct Earlier {
@@ -130,7 +143,7 @@ pub fn earlier(
     recipe: &Recipe,
     lock: &Lock,
     asked: &[Events],
-) -> Option<Result<Earlier, String>> {
+) -> Option<Result<Base, String>> {
     path.exists()
         .then(|| read(path, texts, recipe, lock, asked))
 }
@@ -141,7 +154,7 @@ fn read(
     recipe: &Recipe,
     lock: &Lock,
     asked: &[Events],
-) -> Result<Earlier, String> {
+) -> Result<Base, String> {
     let file = Reader::open(path).map_err(|e| format!("it could not be read ({e})"))?;
     if file.empty() {
         return Err("it is empty (rvr refill gives its columns back, checked against its checksums)".into());
@@ -149,15 +162,23 @@ fn read(
     let header = file.header();
     let made = &header["made"];
     let text = |key: &str| made[key]["text"].as_str();
-    pressed_alike(header, texts, lock)?;
-    if text("lock") != Some(texts.lock.as_str()) {
-        return Err("samples.lock has changed since".into());
-    }
+    same_build(made)?;
     let old = Recipe::read(text("recipe").unwrap_or_default())
         .map_err(|e| format!("its recipe cannot be read ({})", e.0))?;
     if cuts(&old) != cuts(recipe) {
         return Err("the cuts under [keep], or what they use, have changed".into());
     }
+    let reused: Vec<bool> = recipe
+        .columns
+        .iter()
+        .map(|(name, _)| {
+            file.record(name).is_some() && only(&old, &[name]) == only(recipe, &[name])
+        })
+        .collect();
+    if text("samples") != Some(texts.samples.as_str()) || text("lock") != Some(texts.lock.as_str()) {
+        return samples(file, recipe, &reused, lock, asked).map(Base::Samples);
+    }
+    pressed_alike(header, texts, lock)?;
     let files = made["files"].as_object().ok_or("it records no files")?;
     for (sample, want) in lock.sample.iter().zip(asked) {
         if files.get(&sample.name).map(|s| &s["events"]) != Some(&want.record()) {
@@ -193,14 +214,47 @@ fn read(
         }
         at += n;
     }
-    let reused = recipe
-        .columns
-        .iter()
-        .map(|(name, _)| {
-            file.record(name).is_some() && only(&old, &[name]) == only(recipe, &[name])
-        })
-        .collect();
-    Ok(Earlier { file, reused, kept })
+    Ok(Base::Columns(Earlier { file, reused, kept }))
+}
+
+/// When the lock's samples changed since the file was pressed, its rows of the samples the lock
+/// holds as it did (the same files, tree, metadata and event choice); the others are read whole.
+/// Its columns must be the recipe's.
+fn samples(file: Reader, recipe: &Recipe, reused: &[bool], lock: &Lock, asked: &[Events]) -> Result<Fill, String> {
+    let changed: Vec<&str> = recipe.columns.iter().zip(reused).filter(|(_, same)| !**same).map(|((n, _), _)| n.as_str()).collect();
+    if !changed.is_empty() {
+        return Err(format!("samples.lock has changed since, and so have the columns ({} new or changed): a press builds on a file for a change of either, not of both", changed.join(", ")));
+    }
+    let made = &file.header()["made"];
+    let old: Lock = toml::from_str(made["lock"]["text"].as_str().unwrap_or_default())
+        .map_err(|e| format!("its samples.lock cannot be read ({e})"))?;
+    let names = |samples: &Value| -> Vec<String> { samples.as_array().into_iter().flatten().filter_map(|s| s["name"].as_str().map(str::to_owned)).collect() };
+    if names(&file.header()["data"]["samples"]) != old.sample.iter().map(|s| s.name.clone()).collect::<Vec<_>>() {
+        return Err("its samples are not its own lock's".into());
+    }
+    let (mut added, mut plans) = (Vec::new(), Vec::new());
+    for (sample, want) in lock.sample.iter().zip(asked) {
+        let Some(was) = old.sample.iter().find(|s| s.name == sample.name) else {
+            for f in &sample.file {
+                let read = vec![(0, f.stop.or(f.entries).unwrap_or(0))];
+                let plan = Plan { rows: 0..0, read, kept: Vec::new(), record: Value::Null, unread: true };
+                plans.push(((sample.name.clone(), f.at.clone()), plan));
+            }
+            added.push(sample.name.clone());
+            continue;
+        };
+        let files = |s: &crate::samples::resolve::Locked| s.file.iter().map(unplanned).collect::<Vec<_>>();
+        if was.tree != sample.tree || was.metadata != sample.metadata || files(was) != files(sample) {
+            return Err(format!("{} is another sample in samples.lock now (its files, tree or metadata)", sample.name));
+        }
+        if made["files"][&sample.name]["events"] != want.record() {
+            return Err(format!("it chose other events of {} (another --events, --random or --seed)", sample.name));
+        }
+    }
+    let mut fill = crate::fill::rows(file, &[], &HashSet::new())?;
+    fill.files.extend(plans);
+    fill.added = Some(added);
+    Ok(fill)
 }
 
 #[cfg(test)]

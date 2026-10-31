@@ -380,9 +380,17 @@ columns that are new or whose definition changed (their expression, their stored
 defined name they use), and only for the events the file already kept. Every
 other column is copied over, and the cuts are not run again. The result is the same file a full
 press writes, as `rvr diff` confirms. Adding one jagged column to a two-sample study read 26.3 MB
-of baskets instead of 108.0 MB, in 0.2 s instead of 0.6 s. Any change to the rows, or to the code
-that computed them, means a full press, and the press says why. Such changes include adding a
-sample, resolving the lock again, choosing other events, or using another build.
+of baskets instead of 108.0 MB, in 0.2 s instead of 0.6 s.
+
+Adding a sample works the same way. When the columns and cuts are the same, and every sample the
+file holds is in the new lock as it was (its files, tree, metadata and event choice), only the new
+samples are read, and the others' rows are taken from the file. A sample taken out, or the samples
+reordered, reads nothing. The rows are laid out again, so every column is packed again: an array
+is compressed whole, so a sample's part of it cannot be copied as it lies. On 2.1 M rows, adding a
+sample of 30 files to ten of 30 took 1.5 s, against 4.9 s for a full press; taking one out took
+0.75 s against 4.5 s. Any other change to the rows, or to the code that computed them, means a
+full press, and the press says why. Such changes include a sample whose files changed, other
+cuts, other events, or another build.
 
 ### 7.4 Holes
 
@@ -586,7 +594,8 @@ passed over them; it carries them now, and on 2026-10-29 Fermilab served 5 of th
   `std::vector`), in every codec ROOT writes (zlib, LZ4, zstd, LZMA). `rvr` reads neither
   RNTuple, nor whole objects, strings or nested vectors; `rvr branches` lists such branches as
   unreadable.
-- Incremental pressing covers changes to stored columns only. Adding a sample means a full press.
+- Incremental pressing covers stored columns added or changed, and samples added, taken out or
+  reordered, one kind of change at a time: a column added with a sample means a full press.
 - Catalog datasets are read from their `Events` tree. A dataset's `Runs` tree (for generator
   weight sums, say) cannot be pressed yet. Since a file stores only the events it kept, a sum over
   every event read currently needs a second study with no cuts.
