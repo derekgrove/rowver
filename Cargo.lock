@@ -387,9 +387,9 @@ dependencies = [
 
 [[package]]
 name = "hep-root"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc89f57aa9281e515be4081e16cb9c84f7cae9f564b560da3855279b1d953a8a"
+checksum = "45ff5d76e8a92e1be7be0e28d06bca1401b87364e6e47e2153829d93766498a4"
 dependencies = [
  "flate2",
  "lz4_flex",
