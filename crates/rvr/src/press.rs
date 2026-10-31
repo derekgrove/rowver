@@ -144,7 +144,7 @@ fn run(args: &[&str]) -> Result<usize, String> {
         .map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
     choice.check(&lock.sample)?;
     // A fill takes the recipe the file was pressed from, as it was: it is not offered tables.
-    if fill.is_none() && crate::tables::offer(&dir, &texts.recipe, "press")? {
+    if fill.is_none() && crate::tables::offer(&dir, &texts.recipe, "press", "continue pressing")? {
         texts = inputs(&dir)?;
     }
     if restart {

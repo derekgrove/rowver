@@ -21,21 +21,28 @@ pub fn refusal(missing: &[&str]) -> String {
     format!("{} {add}", lacks(missing))
 }
 
-/// At a terminal, offer to write in the tables `source`, recipe.toml in `dir`, lacks: whether it did.
-pub fn offer(dir: &Path, source: &str, then: &str) -> Result<bool, String> {
+/// At a terminal, offer to write in the tables `source`, recipe.toml in `dir`, lacks, before
+/// `going` on (as "continue pressing") with the command `then` ("press"): whether it did.
+pub fn offer(dir: &Path, source: &str, then: &str, going: &str) -> Result<bool, String> {
     let Ok(root) = source.parse() else { return Ok(false) };
     let missing = lacking(&root);
     let asking = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
     // A recipe whose [columns] stores nothing, which no press takes, is the user's to write.
-    let stores = rvr_recipe::Recipe::read(source).is_ok_and(|recipe| !recipe.columns.is_empty());
-    if missing.is_empty() || !asking || !stores {
+    let stores = || rvr_recipe::Recipe::read(source).is_ok_and(|recipe| !recipe.columns.is_empty());
+    if missing.is_empty() || !asking || !stores() {
         return Ok(false);
     }
     // Placed before asking, so that a yes is not refused after.
-    let Ok(text) = written(source, &root, &missing) else { return Ok(false) };
+    let text = match written(source, &root, &missing) {
+        Ok(text) => text,
+        Err(why) => {
+            eprintln!("{why}");
+            return Ok(false);
+        }
+    };
     let named = listed(&missing, "and");
     let unchanged = |why: String| Err(format!("{why}, so recipe.toml is as it was: add {named} to it, then {then} again."));
-    eprint!("{}\nAdd {named} to recipe.toml, empty and in {}, then {then}? [y/N] ", lacks(&missing), place(&missing));
+    eprint!("{}", asked(&missing, &named, going));
     let mut answer = String::new();
     if let Err(e) = std::io::stdin().read_line(&mut answer) {
         return unchanged(format!("the answer could not be read ({e})"));
@@ -140,6 +147,11 @@ fn unkeyed(comment: &str) -> bool {
     })
 }
 
+/// What a recipe lacking `missing` (`named`) is asked before `going` on: the same for any.
+fn asked(missing: &[&str], named: &str, going: &str) -> String {
+    format!("{}\nAdd {named} to recipe.toml, empty and in {}, then {going}? [y/N] ", lacks(missing), place(missing))
+}
+
 /// Where `missing` go: "its place", or "their places".
 fn place(missing: &[&str]) -> &'static str {
     if missing.len() == 1 { "its place" } else { "their places" }
@@ -201,5 +213,11 @@ mod tests {
         let refused = written(source, &source.parse().unwrap(), &["totals"]).unwrap_err();
         assert_eq!(refused, "[totals] could not be written into recipe.toml in its place, so it is as it was: add it by hand.");
         assert_eq!(refusal(&["keep"]), "recipe.toml has no [keep] table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty. Add the line [keep].");
+    }
+
+    #[test]
+    fn the_offer_asks_alike_whatever_is_missing() {
+        assert_eq!(asked(&["keep"], "[keep]", "continue pressing"), "recipe.toml has no [keep] table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty.\nAdd [keep] to recipe.toml, empty and in its place, then continue pressing? [y/N] ");
+        assert_eq!(asked(&["define", "keep", "derived"], "[define], [keep] and [derived]", "go on with the try"), "recipe.toml has no [define], [keep] or [derived] table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty.\nAdd [define], [keep] and [derived] to recipe.toml, empty and in their places, then go on with the try? [y/N] ");
     }
 }
