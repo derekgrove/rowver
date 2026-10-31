@@ -18,6 +18,7 @@ mod reproduce;
 mod reuse;
 mod samples;
 mod status;
+mod tables;
 mod trying;
 
 /// The recipe a press runs, read from its text, or what is wrong with it.

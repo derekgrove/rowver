@@ -46,7 +46,10 @@ fn run(args: &[&str]) -> Result<(), String> {
     let only_kept = words.has("--kept");
     let expression = parse(text).map_err(|e| format!("the expression: {}", e.0))?;
     let dir = Path::new(dir);
-    let (texts, lock) = press::texts(dir)?;
+    let (mut texts, mut lock) = press::texts(dir)?;
+    if crate::tables::offer(dir, &texts.recipe, "try")? {
+        (texts, lock) = press::texts(dir)?;
+    }
     let recipe = press::study_recipe(&texts.recipe)?;
     let index = press::sample_at(&lock, words.value("--sample"))?;
     let sample = &lock.sample[index];
@@ -58,7 +61,9 @@ fn run(args: &[&str]) -> Result<(), String> {
     metadata.insert("file".into(), Constant::Text(at.clone()));
     // A total is known once every event is read: here it stands in as 1, as in a press's trial.
     for total in &recipe.totals {
-        if text.contains(&format!("sample.{}", total.name)) {
+        let named = format!("sample.{}", total.name);
+        let reads = text.match_indices(&named).any(|(at, _)| !text[at + named.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'));
+        if reads {
             println!("sample.{} is a total of [totals], known once every event is read: it stands in as 1 here.", total.name);
         }
         metadata.entry(total.name.clone()).or_insert(Constant::Float(1.0));

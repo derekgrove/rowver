@@ -299,7 +299,9 @@ names above it, and may not be the name of a branch, so each name means one thin
 name is not a plain word, such as a member of a split object in MiniAOD or ATLAS DAOD_PHYSLITE, is
 named through `branch('…')`. A cut can apply to some samples only: with `{ if = "sample.era ==
 3", apply = "hem_veto" }`, every other sample passes the cut. Every recipe writes all five tables,
-even empty: one that leaves a table out is refused, so that each says what it does not use.
+even empty: one that leaves a table out is refused, so that each says what it does not use. At a
+terminal, `rvr press` and `rvr try` offer to write the missing tables in, empty, and go on, once
+`[columns]` stores something.
 
 A file keeps only the events that pass the cuts, yet normalizing simulation needs a sum over every
 event: each event's weight is `xsec * lumi * genWeight / sum(genWeight)`, the sum over all the

@@ -139,10 +139,14 @@ fn run(args: &[&str]) -> Result<usize, String> {
     let (dir, name, target) = study(dir, out)?;
     let workers =
         workers.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
-    let texts = inputs(&dir)?;
+    let mut texts = inputs(&dir)?;
     let lock: Lock = toml::from_str(&texts.lock)
         .map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
     choice.check(&lock.sample)?;
+    // A fill takes the recipe the file was pressed from, as it was: it is not offered tables.
+    if fill.is_none() && crate::tables::offer(&dir, &texts.recipe, "press")? {
+        texts = inputs(&dir)?;
+    }
     if restart {
         let stopped = crate::journal::Staged::lock(&target)?;
         if stopped.keep.get() {
@@ -264,21 +268,11 @@ pub fn plan(
 pub fn study_recipe(source: &str) -> Result<Recipe, String> {
     let recipe = Recipe::read(source).map_err(|e| format!("recipe.toml: {}", e.0))?;
     let root: toml::Table = source.parse().map_err(|e: toml::de::Error| format!("recipe.toml: {e}"))?;
-    let missing: Vec<String> = ["define", "keep", "columns", "totals", "derived"]
-        .iter()
-        .filter(|table| !root.contains_key(**table))
-        .map(|table| format!("[{table}]"))
-        .collect();
-    let joined = |word: &str| match missing.split_last() {
-        Some((last, rest)) if !rest.is_empty() => format!("{} {word} {last}", rest.join(", ")),
-        _ => missing.concat(),
-    };
-    let add = match missing.len() {
-        0 => return Ok(recipe),
-        1 => format!("Add the line {}.", missing[0]),
-        _ => format!("Add {}, each on a line of its own.", joined("and")),
-    };
-    Err(format!("recipe.toml has no {} table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty. {add}", joined("or")))
+    let missing = crate::tables::lacking(&root);
+    match missing.is_empty() {
+        true => Ok(recipe),
+        false => Err(crate::tables::refusal(&missing)),
+    }
 }
 
 /// The recipe a press runs, or what stops it.

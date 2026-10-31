@@ -850,7 +850,11 @@ its metadata, a sample column a derived column reads as `sample.NAME`. `{ value 
 tree = "Runs" }` sums over every entry of another tree of each file instead, for a skim whose
 events were filtered before, and is refused for a sample that reads only part of its files. A
 change to `[totals]` presses every event again. Every recipe writes all five tables, even the
-ones it leaves empty; one that leaves a table out is refused.
+ones it leaves empty; one that leaves a table out is refused. At a terminal, `rvr press` and
+`rvr try` ask first: answered y, they write the missing tables in, empty and in their places,
+check that the recipe reads as before, and go on. (Not when `[columns]` is missing or stores nothing,
+which only the recipe can fix, nor for `--fill`, which takes the recipe the file was pressed
+from.)
 
 ## Grid access
 

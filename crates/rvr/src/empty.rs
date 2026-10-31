@@ -107,7 +107,7 @@ fn amount(bytes: u64) -> String {
 }
 
 /// `path` with `suffix` added to its name.
-fn beside(path: &Path, suffix: &str) -> PathBuf {
+pub(crate) fn beside(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(suffix);
     PathBuf::from(name)

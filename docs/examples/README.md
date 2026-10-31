@@ -100,7 +100,7 @@ named in full, as the file spells it.
   of them, and `first(…, -1)` the first pair's mass, or -1 for an event with no pair.
 - `[totals]` and `[derived]` are empty for now (a later step puts a column under `[derived]`).
   Every recipe writes its five tables, even the empty ones: `rvr press` refuses a recipe that
-  leaves one out.
+  leaves one out, or, at a terminal, offers to write it in.
 
 **How do you know the file has `Muon_pt`?** You don't have to guess. Once the samples are resolved
 (just below), `rvr branches` lists every branch of the sample's file, and `--find` narrows the

@@ -80,8 +80,10 @@ weight = "genWeight / sample.sumw"  # a total, read as sample.NAME
 
 Every recipe writes all five tables, even the ones it leaves empty, so that it says at a glance
 what it does and does not use: an empty `[define]` defines nothing, an empty `[keep]` keeps every
-event, an empty `[totals]` sums nothing, and an empty `[derived]` adds nothing. `rvr press`, `rvr try` and `rvr status` refuse a
-`recipe.toml` that leaves one out, and say the line to add.
+event, an empty `[totals]` sums nothing, and an empty `[derived]` adds nothing. `rvr press`,
+`rvr try` and `rvr status` refuse a `recipe.toml` that leaves one out, and say the line to add; at
+a terminal, `rvr press` and `rvr try` first ask whether to write the missing tables in, empty and
+in their places, and go on (unless `[columns]` stores nothing, which only the recipe can fix).
 
 Only what `[columns]` names ends up in the file; a defined name is a working name. A cut on
 `good_jet` decides which *events* you keep, but `Jet_pt` in `branches` still stores every jet of
