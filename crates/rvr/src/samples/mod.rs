@@ -238,7 +238,10 @@ fn resolve_all(path: &Path) -> Result<(), String> {
         sample: locked,
     };
     let out = path.with_file_name("samples.lock");
-    let body = toml::to_string(&lock).map_err(|e| e.to_string())?;
+    let body = serde_json::to_value(&lock)
+        .map_err(|e| e.to_string())
+        .and_then(|lock| resolve::toml_value(&lock, "the lock"))
+        .and_then(|lock| toml::to_string(&lock).map_err(|e| e.to_string()))?;
     let header = "# samples.lock: what samples.toml resolved to, file by file. Written by `rvr samples resolve`;\n# do not edit it. Review a change to it like a change to code: a changed line is a changed input.\n\n";
     std::fs::write(&out, format!("{header}{body}"))
         .map_err(|e| format!("{} cannot be written: {e}", out.display()))?;

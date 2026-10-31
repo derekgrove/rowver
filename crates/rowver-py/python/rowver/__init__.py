@@ -55,8 +55,8 @@ def _needs(module, what):
 
 
 class File:
-    """An open .rvr file. Its header is read and checked when it opens; each column is read when
-    it is first asked for, and kept."""
+    """An open .rvr file. Its header is read and checked when it opens; each column, stored or
+    derived, is read when it is first asked for, and kept until `forget` lets it go."""
 
     def __init__(self, path):
         self.path = str(path)

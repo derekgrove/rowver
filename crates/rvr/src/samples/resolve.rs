@@ -49,6 +49,28 @@ pub struct Locked {
     pub file: Vec<File>,
 }
 
+/// A lock's value as TOML writes it, each number a TOML number: rowver keeps serde_json's numbers
+/// exact (for .rvr headers), which TOML would write as tables. `name` is its key, to say which
+/// value TOML cannot hold.
+pub fn toml_value(value: &Value, name: &str) -> Result<toml::Value, String> {
+    let cannot = || format!("samples.lock cannot hold {name}: TOML has no such value (nan, inf, or a number past its range). Give it a finite number in samples.toml.");
+    Ok(match value {
+        Value::Number(number) => match (number.as_i64(), number.as_f64()) {
+            (Some(whole), _) => toml::Value::Integer(whole),
+            (None, Some(float)) if number.is_f64() && float.is_finite() => toml::Value::Float(float),
+            _ => return Err(cannot()),
+        },
+        Value::String(text) => toml::Value::String(text.clone()),
+        Value::Bool(truth) => toml::Value::Boolean(*truth),
+        Value::Array(items) => toml::Value::Array(items.iter().map(|item| toml_value(item, name)).collect::<Result<_, _>>()?),
+        Value::Object(fields) => {
+            let fields = fields.iter().map(|(key, value)| Ok((key.clone(), toml_value(value, key)?)));
+            toml::Value::Table(fields.collect::<Result<_, String>>()?)
+        }
+        Value::Null => return Err(cannot()),
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct File {
     /// Where to open it: a local path or a root:// URL.
@@ -567,5 +589,15 @@ mod tests {
         std::fs::write(&path, b"Wikipedia").unwrap();
         assert_eq!(adler32_file(&path).unwrap(), "11e60398");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_number_is_written_as_toml_holds_it_or_refused_by_name() {
+        assert_eq!(toml_value(&serde_json::json!(3), "era").unwrap(), toml::Value::Integer(3));
+        assert_eq!(toml_value(&serde_json::json!(2.5), "xsec").unwrap(), toml::Value::Float(2.5));
+        assert_eq!(toml_value(&serde_json::json!(3.0), "scale").unwrap(), toml::Value::Float(3.0));
+        // A whole number past TOML's range is refused, not written as a float that reads back otherwise.
+        assert!(toml_value(&serde_json::json!(u64::MAX), "seed").unwrap_err().starts_with("samples.lock cannot hold seed:"));
+        assert!(toml_value(&serde_json::json!({"a": null}), "metadata").unwrap_err().starts_with("samples.lock cannot hold a:"));
     }
 }

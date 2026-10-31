@@ -14,7 +14,7 @@ f["Muon_pt"]              # Awkward array, a list per row
 f["sample"], f["entry"]   # each row's sample index, and its entry in its file's tree
 f.derived                 # the derived columns: kept as expressions, worked out when first asked for
 f["mean_jet_pt"]          # a derived column, read as any other, checked against what the file records
-f.forget("mean_jet_pt")   # let columns go from memory (every one when none is named)
+f.forget("mean_jet_pt")   # let it go from memory (f.forget(), every one); f holds each until then
 f.labels                  # each sample's label, what a plot shows
 f.sample_columns          # per-sample values: events_read, events_total, metadata
 f.recipe                  # the recipe.toml that made it

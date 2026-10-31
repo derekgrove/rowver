@@ -4,7 +4,7 @@
 
 use crate::press::{self, count, fields, hint, kept, Branches};
 use crate::Words;
-use rvr_recipe::{parse, per_event, Array, Constant, Kind, Recipe, Scope, Store, Values};
+use rvr_recipe::{parse, per_event, Array, Constant, Kind, Scope, Store, Values};
 use std::path::Path;
 
 const USAGE: &str = "usage:
@@ -47,7 +47,7 @@ fn run(args: &[&str]) -> Result<(), String> {
     let expression = parse(text).map_err(|e| format!("the expression: {}", e.0))?;
     let dir = Path::new(dir);
     let (texts, lock) = press::texts(dir)?;
-    let recipe = Recipe::read(&texts.recipe).map_err(|e| format!("recipe.toml: {}", e.0))?;
+    let recipe = press::study_recipe(&texts.recipe)?;
     let index = press::sample_at(&lock, words.value("--sample"))?;
     let sample = &lock.sample[index];
     let (root, file) = press::first_readable(&lock, index, dir, true)?;

@@ -26,16 +26,16 @@ pub(crate) fn attach(laid: &Laid, derived: &[(String, String)], header: &mut Val
     sealed(header, None)
 }
 
-/// Take the derived columns out of a press's header, and their `[derived]` lines out of the
+/// Take the derived columns out of a press's header, and empty the `[derived]` table of the
 /// recipe it carries: what a press read, kept when its derived columns failed.
 pub(crate) fn without(header: &mut Value) -> Result<(), String> {
     let text = header["made"]["recipe"]["text"].as_str().unwrap_or_default().to_owned();
     let names = Recipe::read(&text).map_err(|e| e.0)?.derived.into_iter().map(|(name, _)| name).collect();
-    // A [derived] table not written a line per column is dropped from the recipe's TOML instead,
-    // which loses its comments and layout.
+    // A [derived] table not written a line per column is emptied in the recipe's TOML instead,
+    // written again whole: the recipe loses its comments and layout.
     let text = edited(&text, &dropping(names), &[]).or_else(|_| {
         let mut table: toml::Table = text.parse().map_err(|e: toml::de::Error| e.to_string())?;
-        table.remove("derived");
+        table.insert("derived".into(), toml::Table::new().into());
         toml::to_string(&table).map_err(|e| e.to_string())
     })?;
     let made = &mut header["made"];
@@ -121,7 +121,7 @@ pub fn main(args: &[&str]) -> u8 {
 fn line_of(lines: &[&str], table: (usize, usize), name: &str) -> Option<usize> {
     (table.0 + 1..table.1).find(|&at| {
         let key = lines[at].split_once('=').map(|(key, _)| key.trim());
-        key == Some(name) || key == Some(&format!("\"{name}\""))
+        key == Some(name) || key == Some(&format!("\"{name}\"")) || key == Some(&format!("'{name}'"))
     })
 }
 
@@ -148,6 +148,9 @@ fn edited(text: &str, change: &Change, expected: &[(String, String)]) -> Result<
     let mut owned: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
     let table = match table(&lines) {
         Some(table) => table,
+        None if text.parse::<toml::Table>().is_ok_and(|root| root.contains_key("derived")) => {
+            return Err("rvr derive changes the [derived] table of the recipe a file carries a line at a time, under a heading written [derived], and this one is written otherwise (inline, derived = { … }, or as another heading): write it so in recipe.toml, a line per column, and press again".into());
+        }
         None => {
             if owned.last().is_some_and(|line| !line.trim().is_empty()) {
                 owned.push(String::new());

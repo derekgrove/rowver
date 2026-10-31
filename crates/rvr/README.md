@@ -223,19 +223,20 @@ whole, or not at all.
 #### Derived columns
 
 A column under `[derived]` in `recipe.toml` is kept in the file as its expression, not as an array:
-a reader (`rvr dump`, the Python package) works it out from the file's columns when it is asked
-for, and lets it go when it is done. Its expression uses the columns the file stores, the derived
-columns above it, and `sample.KEY` (the keys of `samples.toml`; not what the press adds to them,
-`events_read`, `events_total` and `events_missing`). While it reads, the press works each one out
-over the events one run of each sample kept, so that a mistake in one (a division by zero, a type
-that differs between samples) stops it then, not once every file is read; this costs nothing
-measurable on the bench. It works each one out once more, from the arrays it has packed for the
-file (holding the columns they use in memory), to record its kind, its checksums and its facts, so
-that a reader can check what it works out and `rvr diff` can compare it, and then writes the file
-with those records. Should one fail there, the file is written without its derived columns, and
-the press says so: fix `[derived]`, and the next press reads no input. Changing only `[derived]`
-reads no ROOT file: every stored column is copied from the file, and the derived ones are worked
-out from it. `rvr derive` changes them in a pressed file alone.
+a reader (`rvr dump`, the Python package) works it out from the file's columns when it is asked for.
+The Python package then holds it as it holds every column it has read, until `f.forget(...)` lets it
+go or the file object goes; asked for again, it is worked out again. Its expression uses the columns
+the file stores, the derived columns above it, and `sample.KEY` (the keys of `samples.toml`; not
+what the press adds to them, `events_read`, `events_total` and `events_missing`). While it reads,
+the press works each one out over the events one run of each sample kept, so that a mistake in one
+(a division by zero, a type that differs between samples) stops it then, not once every file is
+read; this costs nothing measurable on the bench. It works each one out once more, from the arrays
+it has packed for the file (holding the columns they use in memory), to record its kind, its
+checksums and its facts, so that a reader can check what it works out and `rvr diff` can compare it,
+and then writes the file with those records. Should one fail there, the file is written without its
+derived columns, and the press says so: fix `[derived]`, and the next press reads no input. Changing
+only `[derived]` reads no ROOT file: every stored column is copied from the file, and the derived
+ones are worked out from it. `rvr derive` changes them in a pressed file alone.
 
 Which columns to store and which to derive is a choice of space against time. On 2.1 M rows (300
 copies of the TChiWZ skim, Apple M5, 2026-10-30), seven typical computed columns (a sum, a count, a
@@ -777,7 +778,8 @@ met_over_ht = "MET_pt / ht"
 Every branch is named in full. A defined name may use the names above it, and may not be a
 branch's name. A derived column uses only what the file holds: the stored columns and the derived
 columns above it. A cut can apply to some samples only: `hem = { if = "sample.era == 3", apply =
-"hem_veto" }`, where `sample.NAME` is a sample's metadata. Each table may be empty, or left out.
+"hem_veto" }`, where `sample.NAME` is a sample's metadata. Every recipe writes all four tables,
+even the ones it leaves empty; one that leaves a table out is refused.
 
 ## Grid access
 

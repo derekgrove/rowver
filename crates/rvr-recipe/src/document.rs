@@ -16,6 +16,9 @@
 //! branches = ["Muon_pt", "MET"]
 //! ht = "sum(Jet_pt)"
 //! rho = "branch(sample.rho)"
+//!
+//! [derived]
+//! met_over_ht = "MET / ht"
 //! ```
 //!
 //! Every table, key and function is described in this crate's README.

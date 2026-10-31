@@ -187,7 +187,7 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
     let length = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
     let arrays = vec![bytes[12 + length..].to_vec()];
     let mut header: Value = serde_json::from_slice(&bytes[12..12 + length]).unwrap();
-    let text = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"MET\"]\n\n[derived]\ntwice = \"MET * 2\"\n";
+    let text = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET\"]\n\n[derived]\ntwice = \"MET * 2\"\n";
     header["made"]["recipe"]["text"] = text.into();
     header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(text).into();
     header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();

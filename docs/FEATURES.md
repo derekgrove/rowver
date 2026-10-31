@@ -287,8 +287,8 @@ good muons' pt, and the same mask picks from every other muon branch. A defined 
 names above it, and may not be the name of a branch, so each name means one thing. A branch whose
 name is not a plain word, such as a member of a split object in MiniAOD or ATLAS DAOD_PHYSLITE, is
 named through `branch('…')`. A cut can apply to some samples only: with `{ if = "sample.era ==
-3", apply = "hem_veto" }`, every other sample passes the cut. Each table may be left empty, or
-out.
+3", apply = "hem_veto" }`, every other sample passes the cut. Every recipe writes all four tables,
+even empty: one that leaves a table out is refused, so that each says what it does not use.
 
 ### 6.2 Semantics
 
@@ -473,18 +473,19 @@ press that leaves holes exits 3.
 
 A column can be stored, an array in the file, or **derived**: kept as the expression that computes
 it from the file's own columns, `ht_over_met = "ht / MET_pt"` under the recipe's `[derived]`. A
-reader works a derived column out when it is first asked for, holds it as long as it is needed,
-and lets it go. The file holds no array of it, only its expression and what the press measured of
-its values when it worked it out, once: its kind, its checksums (whole and per sample) and its
-facts (`lim`, `nice`, `vals`). A reader that works one out checks it against that record, so a
-derived column is as trustworthy as a stored one; `rvr diff` compares it from the headers alone,
-and a plot gets its axis from `nice` without computing anything. The reference reader does the
-work (`Reader::column` in `rowver`), and every function of the recipe language gives the same bits
-on every platform: `exp`, `log`, `cos`, `sin`, `cosh`, `sinh`, `hypot` and `**` come from the
-`libm` crate, as the platforms' own math libraries do not agree. Measured, Apple's and musl's
-disagree in the last bit of 2 to 26% of double results over the ranges physics columns take, and
-on the bench every one of twelve such columns came out different; the `libm` crate costs 1.6% of
-a press of all twelve (6.93 s against 6.82 s, within the run-to-run spread).
+reader works a derived column out when it is first asked for; the Python package then holds it, as
+it holds every column read, until `f.forget(...)` lets it go or the file object goes. The file holds
+no array of it, only its expression and what the press measured of its values when it worked it out,
+once: its kind, its checksums (whole and per sample) and its facts (`lim`, `nice`, `vals`). A reader
+that works one out checks it against that record, so a derived column is as trustworthy as a stored
+one; `rvr diff` compares it from the headers alone, and a plot gets its axis from `nice` without
+computing anything. The reference reader does the work (`Reader::column` in `rowver`), and every
+function of the recipe language gives the same bits on every platform: `exp`, `log`, `cos`, `sin`,
+`cosh`, `sinh`, `hypot` and `**` come from the `libm` crate, as the platforms' own math libraries do
+not agree. Measured, Apple's and musl's disagree in the last bit of 2 to 26% of double results over
+the ranges physics columns take, and on the bench every one of twelve such columns came out
+different; the `libm` crate costs 1.6% of a press of all twelve (6.93 s against 6.82 s, within the
+run-to-run spread).
 
 A derived expression uses only what the file holds: the stored columns, the derived columns above
 it, and the sample's metadata. `Recipe::read` checks that before anything is pressed. Derived
@@ -503,16 +504,16 @@ Python, against 0.06 s to read them stored; a simple one such as `sum(PT_jet)` t
 
 ## 10. Reading files from programs
 
-The Python package `rowver` reads files through the same Rust reader as the `rvr` command, which
-it also installs. Opening a file checks its header, and each column is read when first asked for
-and then kept. A flat column comes back as a read-only NumPy array without a copy, and a jagged
-column as an Awkward array. Several columns asked for together are read in parallel. A whole file
-converts to an Awkward record array, a pyarrow table, a pandas data frame (with the sample as a
-categorical) or Parquet. The package also exposes what the header says: the samples and their
-labels, the sample columns, the recipe and study texts, the signer, and the holes with a
-`complete` flag. A derived column is read as any other, `f["name"]`, worked out when first asked
-for; `f.derived` names them, and `f.forget(...)` lets columns go from memory. Only NumPy is
-required; Awkward, pandas and pyarrow are used when installed.
+The Python package `rowver` reads files through the same Rust reader as the `rvr` command, which it
+also installs. Opening a file checks its header, and each column is read when first asked for and
+then kept. A flat column comes back as a read-only NumPy array without a copy, and a jagged column
+as an Awkward array. Several columns asked for together are read in parallel. A whole file converts
+to an Awkward record array, a pyarrow table, a pandas data frame (with the sample as a categorical)
+or Parquet. The package also exposes what the header says: the samples and their labels, the sample
+columns, the recipe and study texts, the signer, and the holes with a `complete` flag. A derived
+column is read as any other, `f["name"]`, worked out when first asked for and held from then on;
+`f.derived` names them, and `f.forget(...)` lets columns go from memory. Only NumPy is required;
+Awkward, pandas and pyarrow are used when installed.
 
 The Rust crate `rowver` is the reference implementation of the format. `rowver::rvr` reads and
 validates files, `rowver::write` builds them in memory or through a spool on disk (and measures a

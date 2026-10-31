@@ -78,6 +78,8 @@ two_muons = "count(good_muon) == 2"
 [columns]
 branches = ["MET_pt", "nJet"]
 mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
+
+[derived]
 ```
 
 **Reading the recipe.** Every value in quotes is an expression over the event's branches, each
@@ -95,6 +97,8 @@ named in full, as the file spells it.
   events kept. `mass` is computed for each event kept: `Muon_pt[good_muon]` is the good muons'
   pt (the brackets keep the members where `good_muon` is true), `pair_mass` the mass of each pair
   of them, and `first(…, -1)` the first pair's mass, or -1 for an event with no pair.
+- `[derived]` is empty for now (step 5 puts a column there). Every recipe writes its four tables,
+  even the empty ones: `rvr press` refuses a recipe that leaves one out.
 
 **How do you know the file has `Muon_pt`?** You don't have to guess. Once the samples are resolved
 (just below), `rvr branches` lists every branch of the sample's file, and `--find` narrows the
@@ -432,6 +436,8 @@ version = 1
 
 [columns]
 branches = ["genWeight"]
+
+[derived]
 ```
 
 ```text

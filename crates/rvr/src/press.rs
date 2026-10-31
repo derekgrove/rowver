@@ -258,9 +258,31 @@ pub fn plan(
     Ok(asked)
 }
 
+/// A study's recipe.toml, refused unless it writes all four tables, even empty, so that it says
+/// what it does not use.
+pub fn study_recipe(source: &str) -> Result<Recipe, String> {
+    let recipe = Recipe::read(source).map_err(|e| format!("recipe.toml: {}", e.0))?;
+    let root: toml::Table = source.parse().map_err(|e: toml::de::Error| format!("recipe.toml: {e}"))?;
+    let missing: Vec<String> = ["define", "keep", "columns", "derived"]
+        .iter()
+        .filter(|table| !root.contains_key(**table))
+        .map(|table| format!("[{table}]"))
+        .collect();
+    let joined = |word: &str| match missing.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} {word} {last}", rest.join(", ")),
+        _ => missing.concat(),
+    };
+    let add = match missing.len() {
+        0 => return Ok(recipe),
+        1 => format!("Add the line {}.", missing[0]),
+        _ => format!("Add {}, each on a line of its own.", joined("and")),
+    };
+    Err(format!("recipe.toml has no {} table: every recipe has its four tables, [define], [keep], [columns] and [derived], each written even when it is empty. {add}", joined("or")))
+}
+
 /// The recipe a press runs, or what stops it.
 pub fn read_recipe(source: &str) -> Result<Recipe, String> {
-    let recipe = Recipe::read(source).map_err(|e| format!("recipe.toml: {}", e.0))?;
+    let recipe = study_recipe(source)?;
     if recipe.columns.is_empty() {
         return Err("recipe.toml stores nothing: under [columns], list branches (branches = [\"MET_pt\"]) or name computed columns (ht = \"sum(Jet_pt)\").".into());
     }

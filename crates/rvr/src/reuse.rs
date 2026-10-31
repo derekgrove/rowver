@@ -220,6 +220,8 @@ one_hard = "count(Jet_pt > 50) >= 1"
 MET = "MET_pt"
 n_jet = "count(good_jet)"
 n_hard = "count(hard_jet)"
+
+[derived]
 "#;
 
     fn same(old: &str, new: &str, column: &str) -> bool {

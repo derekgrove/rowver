@@ -564,8 +564,8 @@ someone the reader trusts is for the reader to decide.
 ## 10. Derived columns
 
 A derived column is kept as the expression that computes it, not as an array. A reader works it
-out from the file's own columns when it is asked for, holds it as long as it needs it, and lets it
-go. It is listed in `derived.columns`, in the order the recipe's `[derived]` table gives:
+out from the file's own columns when it is asked for; how long it keeps the values is the reader's
+choice. It is listed in `derived.columns`, in the order the recipe's `[derived]` table gives:
 
 ```json
 "derived": {"columns": [
