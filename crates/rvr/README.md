@@ -365,12 +365,13 @@ mend (a mistake in the recipe).
 A press that loses the network stops and keeps what it read, instead of making a hole of every
 file it could not reach. While a read waits for a storage, once no storage has answered for 2
 minutes, rvr tries for 5 seconds to connect to the hosts that answered earlier in the press and
-are not failing now (another storage, or Rucio), or, when every one fails, to all of them if they
-are at two sites or more. One that connects shows the network works: only the failing storage is down, and
-its files become `unreachable` holes after their waits. If none connects, twice 15 seconds apart,
-the network is gone: the press stops and says so, and pressing again once it is back carries on.
-A name that does not resolve is waited on the same way. A press that reads one site and no
-dataset has nothing to tell the two apart by, and a file that keeps failing is a hole.
+are not failing now (another storage, or Rucio), or, when every one fails, to all of them, and
+then, when they are all at one site, to CERN's Rucio server for CMS as well
+(`cms-rucio.cern.ch`, asked only to take a connection). One that connects shows the network works: only the failing storage is
+down, and its files become `unreachable` holes after their waits. If none connects, twice 15
+seconds apart, the network is gone: the press stops and says so, and pressing again once it is
+back carries on. A name that does not resolve is waited on the same way. (A press of one site at
+CERN cannot tell CERN down from the network gone; it stops and keeps what it read.)
 
 ```text
 $ rvr press --workers 1

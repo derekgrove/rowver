@@ -461,10 +461,10 @@ Retries alone cannot tell one storage being down from the local network being lo
 case, retrying would end up making every file an `unreachable` hole. The press therefore applies
 an *outage rule*. Once no storage has answered for 2 minutes, it tries for 5 s to connect to the
 hosts that answered earlier in the press and are not failing now. If every one of them is failing,
-it tries all of them, provided they are at two or more sites. One connection shows the network
-works and only the storage is down. No connection, twice 15 s apart, means the network is gone:
-the press stops, keeps what it read, and carries on when pressed again. A press that reads one
-site and no dataset has no independent host to ask, so it falls back to holes.
+it tries all of them, and then, when they are all at one site, CERN's Rucio server for CMS as
+well (only to see that it takes a connection; nothing is sent). One connection shows the network works
+and only the storage is down. No connection, twice 15 s apart, means the network is gone: the
+press stops, keeps what it read, and carries on when pressed again.
 
 ### 7.7 Feedback
 
@@ -596,11 +596,11 @@ passed over them; it carries them now, and on 2026-10-29 Fermilab served 5 of th
   unreadable.
 - Incremental pressing covers stored columns added or changed, and samples added, taken out or
   reordered, one kind of change at a time: a column added with a sample means a full press.
-- Catalog datasets are read from their `Events` tree. A dataset's `Runs` tree (for generator
-  weight sums, say) cannot be pressed yet. Since a file stores only the events it kept, a sum over
-  every event read currently needs a second study with no cuts.
-- The outage rule needs a host independent of the failing storage. A press of one site and no
-  dataset cannot tell a network outage from a storage failure.
+- Catalog datasets are pressed from their `Events` tree; another tree of each file (`Runs`) is
+  read only for a total. A total sums one number per event: the per-index sums of a list (such as
+  NanoAOD's `LHEScaleSumw`) are not a total yet.
+- The outage rule asks CERN's Rucio server when a press reads one site, so a press of one site
+  at CERN cannot tell CERN down from its own network gone; it stops and keeps what it read.
 - A signature proves the header has not changed and which key signed it. Whether that key's holder
   is trusted remains a local decision.
 

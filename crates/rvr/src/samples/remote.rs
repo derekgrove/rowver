@@ -180,6 +180,11 @@ pub const QUIET: Duration = Duration::from_secs(120);
 pub const AGAIN: Duration = Duration::from_secs(15);
 /// How long the doors asked are given to take a connection.
 const REACH: Duration = Duration::from_secs(5);
+/// What a press reading from one site asks too, to tell the network gone from that site down:
+/// CERN's Rucio server for CMS (`host:port`), asked only to take a connection.
+pub fn beacon() -> String {
+    format!("{}:443", rucio_client::Server::cms().host())
+}
 
 /// What the reads of one press share while they wait: `stop` ends every wait.
 #[derive(Default)]
@@ -195,6 +200,7 @@ pub struct Watch {
 struct Heard {
     quiet: Duration,
     again: Duration,
+    beacon: String,
     began: Instant,
     answer: std::sync::atomic::AtomicU64,
     answers: std::sync::atomic::AtomicU64,
@@ -213,11 +219,13 @@ struct Last {
 }
 
 impl Watch {
-    /// A press's watch: the network asked about after `quiet` with no answer, and again after `again`.
-    pub fn press(quiet: Duration, again: Duration) -> Self {
+    /// A press's watch: the network asked about after `quiet` with no answer, and again after
+    /// `again`; when the doors that answered are of one site, `beacon` (`host:port`) is asked too.
+    pub fn press(quiet: Duration, again: Duration, beacon: &str) -> Self {
         let heard = Heard {
             quiet,
             again,
+            beacon: beacon.to_owned(),
             began: Instant::now(),
             answer: Default::default(),
             answers: Default::default(),
@@ -296,16 +304,16 @@ impl Watch {
     }
 
     /// Once no storage has answered for `quiet`, the doors that answered are asked: those whose
-    /// last reply was an answer or, when every one fails, all of them if they are in two domains
-    /// or more (one site down cannot be told from the network gone). The network is gone when
-    /// none takes a connection twice, `again` apart, with no answer meanwhile.
+    /// last reply was an answer or, when every one fails, all of them, and with them the beacon
+    /// when they are of one site (which would not tell that site down from the network gone). The
+    /// network is gone when none takes a connection twice, `again` apart, with no answer meanwhile.
     fn ask(&self, heard: &Heard) -> bool {
         let now = || heard.began.elapsed().as_millis() as u64;
         let answers = heard.answers.load(Ordering::Relaxed);
         if now().saturating_sub(heard.answer.load(Ordering::Relaxed)) < heard.quiet.as_millis() as u64 {
             return false;
         }
-        let (names, addresses): (Vec<String>, Vec<std::net::SocketAddr>) = {
+        let (names, addresses, one_site): (Vec<String>, Vec<std::net::SocketAddr>, bool) = {
             let last = heard.last.lock().unwrap_or_else(|e| e.into_inner());
             // A doubt stands only while nothing has answered since.
             let doubt = last.doubt.filter(|(_, then)| *then == answers);
@@ -315,13 +323,18 @@ impl Watch {
             let known: Vec<_> = last.doors.iter().filter(|(_, (_, addresses))| addresses.is_some()).collect();
             let up: Vec<_> = known.iter().copied().filter(|(_, (up, _))| *up).collect();
             let sites: BTreeSet<&str> = known.iter().map(|(door, _)| domain(door)).collect();
-            let asked = match (up.is_empty(), sites.len()) {
+            let one_site = up.is_empty() && sites.len() == 1;
+            let asked = match (up.is_empty(), known.is_empty()) {
                 (false, _) => up,
-                (true, 2..) => known,
-                (true, _) => return false,
+                (true, false) => known,
+                (true, true) => return false,
             };
-            let names = asked.iter().map(|(door, _)| (*door).clone()).collect();
-            (names, asked.iter().flat_map(|(_, (_, addresses))| addresses.iter().flatten().copied()).collect())
+            let mut names: Vec<String> = asked.iter().map(|(door, _)| (*door).clone()).collect();
+            if one_site && !names.contains(&heard.beacon) {
+                names.push(heard.beacon.clone());
+            }
+            let addresses = asked.iter().flat_map(|(_, (_, addresses))| addresses.iter().flatten().copied()).collect();
+            (names, addresses, one_site)
         };
         let found = reachable(&names, &addresses, REACH);
         let mut last = heard.last.lock().unwrap_or_else(|e| e.into_inner());
@@ -335,10 +348,19 @@ impl Watch {
             last.doubt = Some((now(), answers));
             return false;
         }
-        let _ = heard.gone.set(format!(
-            "no storage has answered, and none that answered earlier in this press takes a connection now ({}): the network seems to be gone",
-            names.join(", ")
-        ));
+        let doors: Vec<&str> = names.iter().map(String::as_str).filter(|door| *door != heard.beacon).collect();
+        let said = match one_site {
+            true => format!(
+                "no storage has answered, the one site this press reads takes no connection ({}), and neither does {}, asked to tell the network gone from that site down: the network seems to be gone",
+                doors.join(", "),
+                heard.beacon
+            ),
+            false => format!(
+                "no storage has answered, and none that answered earlier in this press takes a connection now ({}): the network seems to be gone",
+                names.join(", ")
+            ),
+        };
+        let _ = heard.gone.set(said);
         self.stop.store(true, Ordering::Release);
         true
     }
@@ -1221,20 +1243,30 @@ mod tests {
         let unanswered = ureq::get("https://exa mple/").call();
         let busy = || hep_root::Error::Remote("https://door.example/f.root: its storage answered 503".into());
         let shown = "https://door.example/f.root";
-        let watch = |quiet| Watch::press(quiet, Duration::ZERO);
+        let watch = |quiet| Watch::press(quiet, Duration::ZERO, &door);
         // Something answered moments ago: the network is not asked about.
         let recent = watch(Duration::from_secs(60));
         recent.heard_from(&door);
         assert!(!recent.lost());
-        // No door that answered, or only the one that fails: no telling the network from one
-        // storage down, and the files become holes after their waits.
+        // No door that answered: no telling the network from one storage down, and the files
+        // become holes after their waits.
         let (silent, tries) = (watch(Duration::ZERO), std::cell::Cell::new(0));
         assert!(read_again(&[0, 0], &silent, shown, flaky(9, busy, &tries)).is_err());
         assert!(!silent.lost() && silent.gone().is_none() && tries.get() == 3);
+        // One site whose doors all fail, and the beacon takes a connection: the site is down, not
+        // the network, and the files become holes after their waits.
         let alone = watch(Duration::ZERO);
         alone.heard_from(closed);
         alone.note(Some(closed), &unanswered);
         assert!(!alone.lost() && !alone.lost() && alone.gone().is_none());
+        // The same, and the beacon takes no connection either, twice: the network is gone.
+        let cut = Watch::press(Duration::ZERO, Duration::ZERO, shut);
+        cut.heard_from(closed);
+        cut.note(Some(closed), &unanswered);
+        assert!(!cut.lost(), "a first probe that finds none is asked again");
+        assert!(cut.lost());
+        let why = cut.gone().unwrap();
+        assert!(why.contains("the one site this press reads takes no connection (127.0.0.1:0), and neither does [::1]:0"), "{why}");
         // Doors that never answered have no addresses to ask: no telling either.
         let never = watch(Duration::ZERO);
         never.note(Some(closed), &unanswered);
@@ -1245,7 +1277,7 @@ mod tests {
         works.heard_from(&door);
         works.note(Some(closed), &unanswered);
         assert!(!works.lost() && !works.stop.load(Ordering::Acquire));
-        // Two doors of one site, both failing: no telling the site down from the network gone.
+        // Two doors of one site whose names do not resolve: nothing to ask, so no telling.
         let site = watch(Duration::ZERO);
         for door in ["a.site.example:0", "b.site.example:0"] {
             site.heard_from(door);

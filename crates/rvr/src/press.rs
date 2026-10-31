@@ -1857,7 +1857,7 @@ pub fn press(
     let mut picked = (!matches!(on, On::Once)).then(|| crate::journal::pick_up(&staged, &identity)).flatten();
     let resumed = picked.as_mut().map(|p| std::mem::take(&mut p.taken)).unwrap_or_default();
     let picked_up = !resumed.is_empty();
-    let watch = Arc::new(Watch::press(crate::samples::remote::QUIET, crate::samples::remote::AGAIN));
+    let watch = Arc::new(Watch::press(crate::samples::remote::QUIET, crate::samples::remote::AGAIN, &crate::samples::remote::beacon()));
     let files: Vec<(usize, &File)> = reads
         .iter()
         .enumerate()
