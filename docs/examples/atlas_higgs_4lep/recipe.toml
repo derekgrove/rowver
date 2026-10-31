@@ -1,0 +1,27 @@
+# A selection after ATLAS's H → ZZ* → 4ℓ open-data analysis: exactly four leptons, of total
+# charge zero, two or four of each flavour (lep_type is 11 for an electron and 13 for a muon, so
+# the sum is 44, 48 or 52; as in ATLAS's notebook, the charge of each flavour is not checked). The four-lepton mass is in GeV, the leptons taken as massless. The
+# weight scales each simulated event to the data's luminosity; the files carry every factor it
+# needs, the sum of weights included, so [totals] has nothing to add.
+format = "rvr-recipe"
+version = 1
+title = "H → ZZ* → 4ℓ"
+
+[define]
+scale_factors = "scaleFactor_PILEUP * scaleFactor_ELE * scaleFactor_MUON * scaleFactor_LepTRIGGER"
+
+[keep]
+four_leptons = "lep_n == 4"
+zero_charge = "sum(lep_charge) == 0"
+same_flavour_pairs = "sum(lep_type) in [44, 48, 52]"
+
+[columns]
+branches = ["lep_pt", "lep_eta", "lep_phi", "lep_type", "met_et"]
+m4l = "mass(lep_pt, lep_eta, lep_phi) / 1000"
+weight = "if(sample.kind == 'data', 0 * met_et + 1, mcWeight * scale_factors * XSection * 1000 * sample.lumi / SumWeights)"
+
+[totals]
+
+# Worked out from the stored leptons when it is read: the four-lepton system's pt, in GeV.
+[derived]
+pt4l = "pt(lep_pt, lep_eta, lep_phi) / 1000"

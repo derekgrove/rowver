@@ -71,8 +71,9 @@ fn every_example_study_presses() {
         let scratch = Scratch(
             std::env::temp_dir().join(format!("rvr-example-{}-{name}", std::process::id())),
         );
-        let dir = &scratch.0;
-        let _ = std::fs::remove_dir_all(dir);
+        // The study's own folder name, so that the press writes {name}.rvr.
+        let dir = &scratch.0.join(name);
+        let _ = std::fs::remove_dir_all(&scratch.0);
         std::fs::create_dir_all(dir).unwrap();
         for file in ["samples.toml", "recipe.toml"] {
             std::fs::copy(study.join(file), dir.join(file)).unwrap();

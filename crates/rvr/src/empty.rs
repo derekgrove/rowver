@@ -12,23 +12,31 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 pub const USAGE: &str = "usage:
-  rvr empty FILE... [--study FOLDER] [--anyway]
+  rvr empty FILE... [--study FOLDER] [--anyway] [--force | -f]
       let each file's columns go, keeping its header: its study, every checksum, its signature;
-      refused unless every input its lock names is as the lock recorded it, or with --anyway
+      refused unless every input its lock names is as the lock recorded it, or with --anyway;
+      asks first at a terminal, and needs --force (-f) elsewhere, or to empty without asking
   rvr refill FILE [--study FOLDER] [--workers N]
       press an empty file's columns again from the study it carries, checked against its
       checksums; a relative path in the lock is read from FOLDER (FILE's folder when not given)";
 
 /// `rvr empty …` with the words after `empty`: the exit status.
 pub fn empty_main(args: &[&str]) -> u8 {
-    let words = match Words::read(args, &["--study"], &["--anyway"], USAGE) {
+    let words = match Words::read(args, &["--study"], &["--anyway", "--force", "-f"], USAGE) {
         Ok(words) if !words.plain.is_empty() => words,
         Ok(_) => return said(Err(format!("empty takes the files to empty.\n{USAGE}")), "empty"),
         Err(why) => return said(Err(why), "empty"),
     };
+    if let Some(flag) = words.plain.iter().find(|word| crate::short(word)) {
+        return said(Err(format!("{flag} is not one of its flags.\n{USAGE}")), "empty");
+    }
+    let force = words.has("--force") || words.has("-f");
+    if !force && !crate::at_terminal() {
+        return said(Err("nothing was emptied: rvr empty asks before it lets a file's columns go, and no one is at a terminal to answer. Give --force (or -f) to empty without asking.".into()), "empty");
+    }
     let mut code = 0;
     for file in &words.plain {
-        code = code.max(said(empty(Path::new(file), words.value("--study").map(Path::new), words.has("--anyway")), "empty"));
+        code = code.max(said(empty(Path::new(file), words.value("--study").map(Path::new), words.has("--anyway"), force), "empty"));
     }
     code
 }
@@ -36,6 +44,9 @@ pub fn empty_main(args: &[&str]) -> u8 {
 /// `rvr refill …` with the words after `refill`: the exit status.
 pub fn refill_main(args: &[&str]) -> u8 {
     let refilled = Words::read(args, &["--study", "--workers"], &[], USAGE).and_then(|words| {
+        if let Some(flag) = words.plain.iter().find(|word| crate::short(word)) {
+            return Err(format!("{flag} is not one of its flags.\n{USAGE}"));
+        }
         let [file] = words.plain.as_slice() else {
             return Err(format!("refill takes one file.\n{USAGE}"));
         };
@@ -59,11 +70,10 @@ fn said(result: Result<(), String>, command: &str) -> u8 {
     }
 }
 
-/// Empty `file`, unless it has holes or, without `anyway`, an input differs from its lock.
-fn empty(file: &Path, study: Option<&Path>, anyway: bool) -> Result<(), String> {
+/// Empty `file`, unless it has holes or, without `anyway`, an input differs from its lock; asked
+/// first unless `force`.
+fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result<(), String> {
     let shown = file.display();
-    // No press of the file reads or writes it while it is emptied.
-    let held = crate::journal::Staged::lock(file)?;
     let reader = Reader::open(file).map_err(|e| format!("{shown}: {e}"))?;
     if reader.empty() {
         println!("{shown} is empty already.");
@@ -87,6 +97,22 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool) -> Result<(), String> 
             let lines: String = changed.iter().map(|line| format!("\n  {line}")).collect();
             return Err(format!("{shown} was not emptied: rvr refill reads its inputs again, and {} as its lock recorded:{lines}\nWith --anyway it is emptied all the same, and cannot be refilled until they are back.", some(changed.len(), "is not", "are not")));
         }
+    }
+    if !force {
+        let rows = reader.rows().map_err(|e| format!("{shown}: {e}"))?;
+        let columns = reader.header()["data"]["cols"].as_array().map_or(0, Vec::len);
+        let size = std::fs::metadata(file).map_or(0, |m| m.len());
+        let question = format!("Empty {shown} ({}, {}, {})? Its columns go and its header stays; rvr refill presses them again from the study it carries, reading its inputs again. [y/N] ", some(rows, "row", "rows"), some(columns, "column", "columns"), amount(size));
+        let yes = crate::yes(&question).map_err(|why| format!("{shown} is as it was: {why}. Give --force (or -f) to empty it without asking."))?;
+        if !yes {
+            return Err(format!("{shown} is as it was: not emptied."));
+        }
+    }
+    // Asked with no lock held: then no press reads or writes it while it is emptied, and one that
+    // changed it while rvr asked stops this.
+    let held = crate::journal::Staged::lock(file)?;
+    if Reader::open(file).ok().as_ref().map(Reader::header) != Some(reader.header()) {
+        return Err(format!("{shown} changed while rvr asked: run rvr empty again."));
     }
     drop(reader);
     let freed = rowver::write::empty(file).map_err(|e| format!("{shown}: {e}"))?;

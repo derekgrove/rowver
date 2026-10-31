@@ -222,7 +222,8 @@ reproduced file holds the same data.
 The same study gives back a file's space without losing the file. `rvr empty FILE` keeps the header
 byte for byte, with the study, every checksum and the signature, and lets the arrays go: on the
 2.1 M-row bench, a 39.3 MB file keeps a 114 kB header (0.29%). It first checks that every input the
-lock names is as the lock recorded it, since only the inputs hold the events. `rvr refill FILE`
+lock names is as the lock recorded it, since only the inputs hold the events, and asks before it
+empties (`--force`, or `-f`, does not ask). `rvr refill FILE`
 presses the study again and puts the arrays back once each has the checksum its record states.
 Pressed twice, the bench gives byte-identical arrays, whatever the number of workers, so a refill
 by the same rvr gives back the file it was, byte for byte, and its signature still holds; another
@@ -344,9 +345,9 @@ and a defined name is worked out once per run of events, however often it is use
 | value-by-value mathematics | `abs`, `sign`, `sqrt`, `exp`, `log`, `log10`, `cos`, `sin`, `tan`, `acos`, `asin`, `atan`, `atan2`, `cosh`, `sinh`, `tanh`, `hypot`, `floor`, `ceil`, `round`, `min`, `max`, `clip`, `isfinite`, `if` |
 | bits | `bit_and`, `shift_right` |
 | kinematics | `delta_phi`, `delta_r`, value by value |
-| a list's sum of four-momenta | `mass`, `pt`, `eta`, `phi`, `rapidity` |
+| a list's sum of four-momenta | `mass`, `pt`, `eta` (the pseudorapidity), `phi`, `rapidity` |
 | matching between two lists | `dr_nearest`, `dr_second_nearest`, `dr_farthest`, `dr_second_farthest`, `nearest_index`, `second_nearest_index`, `farthest_index`, `second_farthest_index` |
-| pairs within a list | `pair_first`, `pair_second`, `pair_dr`, `pair_mass`, `pair_pt`, `pair_eta`, `pair_phi`, `pair_rapidity` |
+| pairs within a list | `pair_first`, `pair_second`, `pair_dr`, `pair_mass`, `pair_pt`, `pair_eta` (pseudorapidity), `pair_phi`, `pair_rapidity` |
 | text, branches, types | `contains`, `branch`, `stored` |
 
 A reduction that may meet an empty list takes an explicit `otherwise` value, so it never gives a
@@ -468,8 +469,10 @@ needs the bytes is.
 
 For catalog datasets, the press asks Rucio once where every file can be read over HTTPS. It keeps
 only copies that are on disk, available, behind a CMS storage door, and whose size and adler32
-match the lock. Each file's first request goes at once to the fastest storage so far and to two
-storages not yet measured. The first to answer with the right file is used, so every storage of
+match the lock. The three storages that answered fastest for the sample when its lock was written
+(its `sites`, which ride in every file pressed from it) are tried first, and are read from, at
+CMS storage doors only, when Rucio is unreachable. Each file's first request goes at once to the fastest storage so far and to
+two storages not yet measured. The first to answer with the right file is used, so every storage of
 the dataset gets timed as files open. A storage that has failed twice since it last served a whole
 file is tried last, and a failed read moves to another copy. The file records which storage
 element served each file. The press reports how many bytes it read from each site, and every
@@ -534,10 +537,12 @@ Changing only `[derived]` in a study reads no ROOT file: the press copies every 
 the earlier file and works the derived columns out from it.
 
 The trade is space for time, the analyst's to choose column by column. On the 2.1 M-row bench (300
-copies of the TChiWZ skim, Apple M5), seven typical computed columns take 55 bytes per row when
-stored, 54% more than the ten columns they are computed from. Kept as derived columns they cost
-nothing in the file, 0.9 s more at press time to measure them, and 0.97 s to work all seven out in
-Python, against 0.06 s to read them stored; a simple one such as `sum(PT_jet)` takes 0.08 s.
+copies of the TChiWZ skim, Apple M5, 2026-10-31), seven typical computed columns take 70 bytes per
+row stored (uncompressed; the bench's copies compress far better than real data would), 35% more
+than the ten columns they are computed from. Kept as derived columns they cost nothing in the
+file, 0.54 s more at press time to measure them (4.0 s against 3.5 s); a whole Python run that
+works all seven out takes 0.98 s, where one that reads them stored takes 0.10 s and one that only
+opens the file 0.05 s, and a simple one such as `sum(PT_jet)` takes 0.11 s.
 
 ## 10. Reading files from programs
 
@@ -595,7 +600,7 @@ above 150 GeV and two leptons, and stores 7 branches.
 | `--fill` of one file's hole in the 30-file study | 0.16 s, against 0.39 s for a full press |
 | journal and checkpoints | at most 1.5% (0.395 s with, 0.397 s without; 90 files on one worker: 5.655 s with, 5.609 s without) |
 | progress display | under 1% (0.397 s with, 0.394 s without) |
-| seven computed columns on the 2.1 M-row bench: stored, or kept as derived columns | stored: 55 bytes per row, read in 0.06 s; derived: no bytes, 0.9 s more to press, worked out in 0.97 s |
+| seven computed columns on the 2.1 M-row bench: stored, or kept as derived columns | stored: 70 bytes per row (uncompressed), a Python run that reads them 0.10 s; derived: no bytes, 0.54 s more to press, a Python run that works them out 0.98 s |
 | 12 M rows of 31 columns, 1.5 GB output, 4 workers | 0.3 GB peak memory, against 4.9 GB when holding every row |
 | resolving 307 files of a 353-sample study | about 8 s |
 | the whole WZTo3LNu UL18 NanoAOD dataset (9.8 M entries, 18 files, 14.9 GB on storage), read over the wide-area network | 41.4 s with 10 workers and 148.8 s with one (2026-10-19, 291 MB of branches); 29.5 s with 10 workers (2026-10-29, 419 MB of branches) |

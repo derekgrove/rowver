@@ -182,6 +182,9 @@ fn resolve_all(path: &Path) -> Result<(), String> {
                     size(bytes),
                     reading(&l)
                 );
+                if l.sites.is_empty() && l.file.iter().any(|f| f.lfn.is_some()) {
+                    println!("        {}: the lock records no sites for it (no storage holding its first files on disk answered within 3 s, or Rucio could not be asked); a press asks Rucio alone.", l.name);
+                }
                 locked.push(l);
             }
             Err(why) => {
@@ -242,7 +245,7 @@ fn resolve_all(path: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
         .and_then(|lock| resolve::toml_value(&lock, "the lock"))
         .and_then(|lock| toml::to_string(&lock).map_err(|e| e.to_string()))?;
-    let header = "# samples.lock: what samples.toml resolved to, file by file. Written by `rvr samples resolve`;\n# do not edit it. Review a change to it like a change to code: a changed line is a changed input.\n\n";
+    let header = "# samples.lock: what samples.toml resolved to, file by file. Written by `rvr samples resolve`;\n# do not edit it. Review a change to it like a change to code: a changed line is a changed input,\n# but for a dataset's `sites`, the storages that answered fastest when it was written.\n\n";
     std::fs::write(&out, format!("{header}{body}"))
         .map_err(|e| format!("{} cannot be written: {e}", out.display()))?;
     println!(
@@ -273,7 +276,8 @@ pub(crate) fn differing(lock: &Lock, base: &Path, catalog: bool) -> Result<Vec<S
                 .ok_or(ctx.offline.clone())
                 .and_then(|s| s.digest(at))
         } else if f.lfn.is_some() {
-            datasets.push((*f, *dataset));
+            // No recorded site stands in for Rucio here: what is checked is what Rucio says.
+            datasets.push((*f, *dataset, &[][..]));
             continue;
         } else {
             let local = ctx.base.join(at);
@@ -294,7 +298,7 @@ pub(crate) fn differing(lock: &Lock, base: &Path, catalog: bool) -> Result<Vec<S
     if catalog && !datasets.is_empty() {
         let (_, rucio) = ctx.catalog.as_ref().ok_or_else(|| format!("{} is in a central dataset, which Rucio is asked of: {}", datasets[0].0.at, ctx.offline))?;
         let copies = crate::samples::copies::Datasets::ask(rucio, &datasets)?;
-        changed.extend(datasets.iter().filter_map(|(f, _)| copies.problem(f)).map(|failed| failed.why.clone()));
+        changed.extend(datasets.iter().filter_map(|(f, _, _)| copies.problem(f)).map(|failed| failed.why.clone()));
     }
     Ok(changed)
 }

@@ -1374,7 +1374,13 @@ fn an_emptied_file_keeps_its_header_and_is_refilled_byte_for_byte() {
     let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     let path = dir.join(&name);
     let whole = std::fs::read(&path).unwrap();
+    // Not at a terminal, it is not emptied without --force (or -f): no one can be asked.
     let (code, said) = rvr(&dir, &["empty", &name]);
+    assert!(code == 1 && said.contains("nothing was emptied: rvr empty asks before it lets a file's columns go, and no one is at a terminal to answer. Give --force (or -f) to empty without asking"), "{said}");
+    let (code, said) = rvr(&dir, &["empty", &name, "-y"]);
+    assert!(code == 2 && said.contains("-y is not one of its flags"), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap(), whole);
+    let (code, said) = rvr(&dir, &["empty", &name, "-f"]);
     assert!(code == 0 && said.contains(&format!("Emptied {name}")) && said.contains("rvr refill"), "{said}");
     let shell = std::fs::read(&path).unwrap();
     let end = 12 + u32::from_le_bytes(whole[8..12].try_into().unwrap()) as usize;
@@ -1387,16 +1393,16 @@ fn an_emptied_file_keeps_its_header_and_is_refilled_byte_for_byte() {
     assert!(rvr(&dir, &["dump", &name, "--columns"]).1.contains("No columns: the file is empty"));
     let (code, said) = rvr(&dir, &["status"]);
     assert!(code == 1 && said.contains("as it is empty (rvr refill gives its columns back"), "{said}");
-    assert!(rvr(&dir, &["empty", &name]).1.contains("is empty already"));
+    assert!(rvr(&dir, &["empty", &name, "--force"]).1.contains("is empty already"));
     let (code, said) = rvr(&dir, &["refill", &name]);
     assert!(code == 0 && said.contains("every column is back, byte for byte as it was; signed by you"), "{said}");
     assert_eq!(std::fs::read(&path).unwrap(), whole);
     // An input that is gone: not emptied, unless with --anyway; then not refilled until it is back.
     std::fs::rename(dir.join("uproot_flat.root"), dir.join("away.root")).unwrap();
-    let (code, said) = rvr(&dir, &["empty", &name]);
+    let (code, said) = rvr(&dir, &["empty", &name, "--force"]);
     assert!(code == 1 && said.contains("was not emptied") && said.contains("uproot_flat.root no longer exists"), "{said}");
     assert_eq!(std::fs::read(&path).unwrap(), whole);
-    assert_eq!(rvr(&dir, &["empty", &name, "--anyway"]).0, 0);
+    assert_eq!(rvr(&dir, &["empty", &name, "--anyway", "--force"]).0, 0);
     let (code, said) = rvr(&dir, &["refill", &name]);
     assert!(code == 1 && said.contains(&format!("{name} is still empty")), "{said}");
     assert_eq!(std::fs::read(&path).unwrap(), shell);
@@ -1404,7 +1410,7 @@ fn an_emptied_file_keeps_its_header_and_is_refilled_byte_for_byte() {
     assert_eq!(rvr(&dir, &["refill", &name]).0, 0);
     assert_eq!(std::fs::read(&path).unwrap(), whole);
     // A press of the study does not build on an empty file: it presses every column.
-    assert_eq!(rvr(&dir, &["empty", &name]).0, 0);
+    assert_eq!(rvr(&dir, &["empty", &name, "-f"]).0, 0);
     let (code, said) = rvr(&dir, &["press"]);
     assert!(code == 0 && said.contains("cannot be built on, as it is empty"), "{said}");
     assert_eq!(std::fs::read(&path).unwrap().len(), whole.len());
@@ -1417,7 +1423,7 @@ fn an_emptied_file_keeps_its_header_and_is_refilled_byte_for_byte() {
     std::fs::remove_file(dir.join("flat_b.root")).unwrap();
     assert_eq!(rvr(&dir, &["press"]).0, 3);
     let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
-    let (code, said) = rvr(&dir, &["empty", &name]);
+    let (code, said) = rvr(&dir, &["empty", &name, "--force"]);
     assert!(code == 1 && said.contains("has 1 hole: a refill reads what its press read"), "{said}");
     std::fs::remove_dir_all(&dir).unwrap();
 }

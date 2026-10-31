@@ -146,7 +146,7 @@ of source it asks:
 
 | source | written as | asked of |
 |---|---|---|
-| a central CMS dataset | `dataset = "/Primary/Processed/TIER"` | DBS (files, bytes, adler32, events) and Rucio (which sites hold them on disk) |
+| a central CMS dataset | `dataset = "/Primary/Processed/TIER"` | DBS (files, bytes, adler32, events), Rucio (which sites hold them on disk), and the three sites that answered its first file fastest |
 | storage: LPC EOS, CERN EOS, any grid site | `files = "root://host//path/file.root"` (or `davs://`, `https://`) | the storage's WebDAV door: one listing per folder, one checksum request per file, and three small reads of each file for its UUID and entries |
 | this computer | `files = "~/data/…/file.root"` (or a path relative to `samples.toml`) | the file itself |
 
@@ -265,11 +265,12 @@ only `[derived]` reads no ROOT file: every stored column is copied from the file
 ones are worked out from it. `rvr derive` changes them in a pressed file alone.
 
 Which columns to store and which to derive is a choice of space against time. On 2.1 M rows (300
-copies of the TChiWZ skim, Apple M5, 2026-10-30), seven typical computed columns (a sum, a count, a
-ratio, a transverse mass, the largest jet-pair mass, jets cleaned of leptons) take 55 bytes per row
-stored, 54% more than the ten columns they use; derived, they add 0.9 s to the press (6.9 s
-against 6.0 s), and the Python package works all seven out in 0.97 s, where reading them stored
-takes 0.06 s. A simple one, `sum(PT_jet)`, takes 0.08 s.
+copies of the TChiWZ skim, Apple M5, 2026-10-31), seven typical computed columns (a sum, a count, the
+leading lepton's pt, a ratio, a transverse mass, the largest jet-pair mass, jets cleaned of leptons) take 70 bytes per row
+stored, uncompressed, 35% more than the ten columns they use; derived, they add 0.54 s to the press
+(4.0 s against 3.5 s), and a Python run that works all seven out takes 0.98 s, where one that reads
+them stored takes 0.10 s and one that only opens the file 0.05 s. A simple one, `sum(PT_jet)`, takes
+0.11 s.
 
 #### While it reads
 
@@ -437,9 +438,20 @@ needs the bytes is.
 
 A file of a central dataset (`dataset = …`) is read from one of its copies. As the press starts,
 Rucio is asked once where every such file can be read over HTTPS. Only copies on disk, available,
-and at a CMS storage door are kept, and Rucio must give the size and adler32 the lock has. Each
-file's first question (its size and adler32) goes at once to the storage that answered fastest so
-far and to two not yet measured. The first to answer with the file the lock names (its size, and
+and at a CMS storage door are kept, and Rucio must give the size and adler32 the lock has. The
+sample's `sites` in the lock come first: when `rvr samples resolve` wrote the lock, it asked the
+sample's first file with copies on disk once at every storage that held it, all at once, and
+recorded the three that answered first, within 3 s, with its size (and adler32, when the storage
+gives one), each with the address its files' logical names follow (about 310 bytes of the lock
+per sample). The lock rides in every file pressed from
+it, so a refill or a reproduction years later tries the same sites first. When Rucio is
+unreachable but a recorded site is not, a press reads each file from the recorded sites the lock
+says hold it (only at CMS storage doors, as with Rucio's answers), and a file none of them holds
+is a hole of kind `unreachable`, for `rvr press --fill unreachable` once Rucio answers; one not
+where its site's address says is the hole its storage's answer makes, saying where the address
+came from. Any other answer of Rucio's, such as a proxy it refuses,
+or no network at all, stops the press as before. Each file's first question (its size and adler32) goes at once to the storage that
+answered fastest so far and to two not yet measured. The first to answer with the file the lock names (its size, and
 its adler32 when the storage gives one) is read, so every storage of the dataset gets timed as its
 files open. A storage that failed twice since it last served a whole file is tried last. A read
 that fails is tried at the other copies, since every copy holds the same bytes: the copies it
@@ -650,7 +662,7 @@ Writes the recipe.toml, samples.toml and samples.lock that FILE holds into DIR (
 `rvr diff` on the two files: exit status 0 when they hold the same data. A relative path in the
 lock is read from FILE's folder, where `rvr press` writes it.
 
-### `rvr empty FILE... [--study FOLDER] [--anyway]`, `rvr refill FILE [--study FOLDER] [--workers N]`
+### `rvr empty FILE... [--study FOLDER] [--anyway] [--force | -f]`, `rvr refill FILE [--study FOLDER] [--workers N]`
 
 `rvr empty` gives back a file's space and keeps it in its place: it lets the columns go and keeps
 the header byte for byte, with the study it was pressed from, every checksum and its signature. On
@@ -660,7 +672,9 @@ of it says how to fill it. A refill reads the inputs again, so `rvr empty` first
 one the lock names is as the lock recorded it (a local file's size and adler32, a storage file's
 digest, what Rucio says of a dataset file), and refuses, saying which is not, unless with
 `--anyway`. A file with holes is not emptied: a hole may read otherwise later, and a refill must
-read what the press read.
+read what the press read. At a terminal it asks first, naming the file's rows, columns and size,
+and empties it only on a yes; `--force` (or `-f`) empties without asking, and is needed where no
+one is at a terminal to answer, as in a script.
 
 `rvr refill` presses the study an empty file carries again, beside it, with the same event
 choice, and puts the columns back once every array has the checksum the header records: with the
@@ -672,6 +686,7 @@ the lock is read from FILE's folder, or FOLDER.
 
 ```text
 $ rvr empty tiny.rvr
+Empty tiny.rvr (8 rows, 3 columns, 6.2 kB)? Its columns go and its header stays; rvr refill presses them again from the study it carries, reading its inputs again. [y/N] y
 Emptied tiny.rvr: 332 bytes given back; its header (5.9 kB) keeps its study, every checksum and its signature. rvr refill tiny.rvr presses its columns again.
 $ rvr validate tiny.rvr
 tiny.rvr: valid, 8 rows, 3 columns, 1 derived (worked out once refilled), read all 10 entries, empty (rvr refill presses its columns again), signed by you

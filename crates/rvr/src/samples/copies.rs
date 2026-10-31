@@ -1,6 +1,7 @@
 //! Read a file of a catalog dataset from whichever of its copies answers. Rucio is asked once,
 //! as a press starts, where every dataset file can be read; `rucio-client` keeps only copies at
-//! CMS storage doors. Rucio's order is not a ranking by speed (CMS's runs by host name), so speed
+//! CMS storage doors. The storages the lock recorded for a sample come first, and when Rucio is
+//! unreachable the files are read from them alone. Rucio's order is not a ranking by speed (CMS's runs by host name), so speed
 //! is measured: a file's first question (a HEAD for its size and adler32) goes at once to the
 //! storage that answered fastest so far and to up to two never measured, and the first to answer
 //! with the lock's size (and adler32, when the storage gives one) is read; every answer is
@@ -10,7 +11,7 @@
 //! serves it, and a read that every copy fails is the read's own.
 
 use super::remote::{digest_once, Digest, HttpsFile, Refusal, Storage};
-use super::resolve::{self, File};
+use super::resolve::{self, File, Site};
 use crate::holes::{Failed, Fault, Seen};
 use grid_catalog::Did;
 use hep_root::ByteSource;
@@ -36,8 +37,8 @@ struct Learnt {
 }
 
 impl Learnt {
-    /// The copies in the order to try them: fastest measured first, then the unmeasured in
-    /// Rucio's order, then those that failed twice running.
+    /// The copies in the order to try them: fastest measured first, then the unmeasured in the
+    /// order given (the sample's recorded sites, then Rucio's), then those that failed twice running.
     fn order(&self, copies: &[Location]) -> Vec<Location> {
         let mut order = copies.to_vec();
         order.sort_by_key(|copy| {
@@ -82,31 +83,73 @@ fn held(learnt: &Mutex<Learnt>) -> MutexGuard<'_, Learnt> {
 /// Where a press's dataset files can be read, and what it has learnt of their storages.
 pub struct Datasets {
     copies: HashMap<String, Vec<Location>>,
-    /// Why a file cannot be read at all: only on tape, not listed, or not the lock's file.
+    /// Why a file cannot be read at all: only on tape, not listed, not the lock's file, or, with
+    /// Rucio unreachable, at no recorded site.
     problems: HashMap<String, Failed>,
     learnt: Arc<Mutex<Learnt>>,
+    /// Why Rucio did not answer, when the files are read from the sites the lock recorded.
+    pub unasked: Option<String>,
+}
+
+/// A dataset file to read: the file, the dataset it is of, and its sample's recorded sites.
+pub type Wanted<'a> = (&'a File, &'a str, &'a [Site]);
+
+/// Whether a storage's answer to a file's first question (`digest`) says it holds the lock's file:
+/// its size said and the lock's, and its adler32 the lock's when the storage gives one.
+pub(crate) fn holding(file: &File, digest: Result<Digest, Refusal>) -> Result<(), Refusal> {
+    let (bytes, adler32) = digest?;
+    if bytes.is_none() {
+        return Err(Refusal::lasting(Fault::Unreachable, "its storage did not say how big the file is"));
+    }
+    match resolve::differs(file, bytes, adler32.as_deref()) {
+        Some(how) => Err(Refusal::lasting(Fault::Changed, format!("it is not the file the lock names ({how})"))),
+        None => Ok(()),
+    }
+}
+
+/// Whether a press reads around Rucio failing with `code`, from the recorded sites: only when
+/// Rucio could not be reached, and some file has them. Any other answer stops it with its words.
+fn reads_around(code: &str, files: &[Wanted]) -> bool {
+    code == "network" && files.iter().any(|(_, _, sites)| !sites.is_empty())
+}
+
+/// A file's copies with those at its sample's recorded sites first, in their order, then the
+/// rest in Rucio's.
+fn recorded_first(mut copies: Vec<Location>, sites: &[Site]) -> Vec<Location> {
+    copies.sort_by_key(|copy| sites.iter().position(|site| site.rse == copy.rse).unwrap_or(sites.len()));
+    copies
 }
 
 impl Datasets {
-    /// Ask Rucio once where each file (with the dataset it is of) can be read, and check what it
-    /// says against the lock: the same size and adler32, and at least one copy on disk. A file
-    /// that fails these is kept with why, and fails when it is opened.
-    pub fn ask(rucio: &rucio_client::Rucio, files: &[(&File, &str)]) -> Result<Self, String> {
+    /// Where each file can be read, as Rucio says it, or as the lock's recorded sites do.
+    pub fn ask(rucio: &rucio_client::Rucio, files: &[Wanted]) -> Result<Self, String> {
         let mut dids: Vec<Did> = files
             .iter()
-            .filter_map(|(file, _)| file.lfn.clone())
+            .filter_map(|(file, _, _)| file.lfn.clone())
             .map(Did::cms)
             .collect();
         dids.sort_by(|a, b| a.name.cmp(&b.name));
         dids.dedup();
-        let found = rucio.copies(&dids).map_err(|e| {
-            format!(
-                "Rucio could not say where the dataset files are: {}",
-                e.message
-            )
-        })?;
+        // Each file is checked against what Rucio says: the same size and adler32, and a copy on
+        // disk; a file that fails is kept with why, and fails when it is opened.
+        let rucio_failed = |why: &str| format!("Rucio could not say where the dataset files are: {why}");
+        let found = match rucio.copies(&dids) {
+            Ok(found) => found,
+            Err(e) if reads_around(&e.code, files) => {
+                let around = Datasets::recorded(files, e.message.clone())?;
+                // A Rucio out of reach is read around, a network gone is not: a recorded door answers.
+                let mut doors: Vec<String> = around.copies.values().flatten().map(|copy| copy.door.clone()).collect();
+                doors.sort();
+                doors.dedup();
+                return match super::remote::any_door_answers(&doors) {
+                    true => Ok(around),
+                    false => Err(rucio_failed(&e.message)),
+                };
+            }
+            Err(e) => return Err(rucio_failed(&e.message)),
+        };
         let (mut copies, mut problems) = (HashMap::new(), HashMap::new());
-        for (file, dataset) in files {
+        for (file, dataset, sites) in files {
             let lfn = file.lfn.as_deref().unwrap_or_default();
             let problem = match found.get(lfn) {
                 None => Failed::new(Fault::Gone, format!("{lfn}: Rucio listed no copy of it. If the dataset has changed, run rvr samples resolve samples.toml and review the new lock.")),
@@ -119,7 +162,7 @@ impl Datasets {
                         said.left_out.join("; ")
                     )),
                     None => {
-                        copies.insert(lfn.to_owned(), said.copies.clone());
+                        copies.insert(lfn.to_owned(), recorded_first(said.copies.clone(), sites));
                         continue;
                     }
                 },
@@ -130,7 +173,46 @@ impl Datasets {
             copies,
             problems,
             learnt: Default::default(),
+            unasked: None,
         })
+    }
+
+    /// The files read from the sites their samples recorded, as Rucio was unreachable (`why`):
+    /// each from those of them its lock says hold it on disk; a file none holds is a hole of its
+    /// own, filled once Rucio answers. Refused when no file is at such a site.
+    fn recorded(files: &[Wanted], why: String) -> Result<Self, String> {
+        let (mut copies, mut problems) = (HashMap::new(), HashMap::new());
+        for (file, _, sites) in files {
+            let lfn = file.lfn.as_deref().unwrap_or_default();
+            let held: Vec<Location> = sites
+                .iter()
+                .filter(|site| file.disk.as_ref().is_none_or(|disk| disk.contains(&site.rse)))
+                .filter_map(|site| site.copy(lfn))
+                .collect();
+            let tape = file.disk.as_ref().is_some_and(Vec::is_empty);
+            match (held.is_empty(), tape) {
+                (false, _) => {
+                    copies.insert(lfn.to_owned(), held);
+                }
+                (true, true) => {
+                    let said = format!("{lfn} had no copy on disk when samples.lock was written, only on tape: ask for a Rucio rule that puts its dataset on a disk storage, then resolve again.");
+                    problems.insert(lfn.to_owned(), Failed::new(Fault::Tape, said));
+                }
+                (true, false) => {
+                    let said = format!("{lfn}: Rucio did not answer, and no storage samples.lock recorded holds it at a CMS storage door. Once Rucio answers, rvr press --fill unreachable reads it.");
+                    problems.insert(lfn.to_owned(), Failed::new(Fault::Unreachable, said));
+                }
+            }
+        }
+        // A file two samples name is read wherever one of their recorded sites holds it.
+        problems.retain(|lfn, _| !copies.contains_key(lfn));
+        if copies.is_empty() && problems.values().all(|problem| problem.fault == Fault::Tape) {
+            return Err(format!("Rucio could not say where the dataset files are ({why}), and when samples.lock was written each was on tape only: ask for a Rucio rule that puts its dataset on a disk storage, then resolve again."));
+        }
+        if copies.is_empty() {
+            return Err(format!("Rucio could not say where the dataset files are ({why}), and none of them is at a storage samples.lock recorded. Try again once Rucio answers."));
+        }
+        Ok(Datasets { copies, problems, learnt: Default::default(), unasked: Some(why) })
     }
 
     /// Why a file cannot be read at all, when Rucio's answer said so.
@@ -163,7 +245,16 @@ impl Datasets {
         }
         let (agent, watch) = (storage.agent(), storage.watch.clone());
         let ask: Ask = Arc::new(move |url: &str| digest_once(&agent, url, &watch));
-        Copies::open(file, order, readers, ask, self.learnt.clone(), first, seen.clone())
+        let opened = Copies::open(file, order, readers, ask, self.learnt.clone(), first, seen.clone());
+        // An address taken from the recorded sites is said to be one: its storage's answer keeps its
+        // kind, so that a fill keeps the kinds of the holes it reads.
+        match &self.unasked {
+            Some(_) => opened.map_err(|refused| Refusal {
+                why: format!("{} (at an address samples.lock's recorded storages give, as Rucio could not be reached)", refused.why),
+                ..refused
+            }),
+            None => opened,
+        }
     }
 }
 
@@ -267,14 +358,7 @@ impl Copies {
     /// Whether a copy holds the file the lock names, by its storage's size and adler32 (the
     /// adler32 only when the storage gives one); why not, when it does not.
     fn holds(ask: &Ask, file: &File, copy: &Location) -> Result<(), Refusal> {
-        let (bytes, adler32) = ask(&copy.url)?;
-        if bytes.is_none() {
-            return Err(Refusal::lasting(Fault::Unreachable, "its storage did not say how big the file is"));
-        }
-        match resolve::differs(file, bytes, adler32.as_deref()) {
-            Some(how) => Err(Refusal::lasting(Fault::Changed, format!("it is not the file the lock names ({how})"))),
-            None => Ok(()),
-        }
+        holding(file, ask(&copy.url))
     }
 
     /// Leave a copy for good, counting the failure against its storage.
@@ -497,6 +581,60 @@ fn failed(learnt: &Mutex<Learnt>, copy: &Location, why: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_samples_recorded_sites_come_first_and_stand_in_when_rucio_does_not_answer() {
+        let lfn = "/store/f.root";
+        let at = |rse: &str, door: &str| Location { url: format!("https://{door}/prefix{lfn}"), door: door.into(), rse: rse.into(), priority: 0 };
+        let (cern, fnal) = (at("T2_CH_CERN", "eoscms.cern.ch:443"), at("T1_US_FNAL_Disk", "cmsdcadisk.fnal.gov:2880"));
+        let sites: Vec<Site> = [&fnal, &cern].iter().map(|copy| Site::of(copy, lfn).unwrap()).collect();
+        assert_eq!(sites[0], Site { rse: "T1_US_FNAL_Disk".into(), prefix: "https://cmsdcadisk.fnal.gov:2880/prefix".into() });
+        assert_eq!(sites[0].copy(lfn), Some(fnal.clone()));
+        // An address that is not a prefix and the file's name gives no site; a door that is no CMS
+        // storage door, as a lock from elsewhere might name, is never asked.
+        assert!(Site::of(&cern, "/store/other.root").is_none());
+        let elsewhere = Site { rse: "T2_US_Purdue".into(), prefix: "https://example.org:443/store".into() };
+        assert_eq!(elsewhere.copy(lfn), None);
+        let order = recorded_first(vec![copy("A", "a"), cern.clone(), fnal.clone(), copy("D", "d")], &sites);
+        assert_eq!(order.iter().map(|c| c.rse.as_str()).collect::<Vec<_>>(), ["T1_US_FNAL_Disk", "T2_CH_CERN", "A", "D"]);
+        // Rucio unreachable: each file from the recorded sites its lock says hold it.
+        let file = |lfn: &str, disk: &[&str]| File {
+            at: format!("root://cms-xrd-global.cern.ch/{lfn}"),
+            bytes: 1,
+            adler32: None,
+            modified: None,
+            lfn: Some(lfn.into()),
+            events: Some(1),
+            disk: Some(disk.iter().map(|rse| rse.to_string()).collect()),
+            uuid: None,
+            entries: Some(1),
+            stop: None,
+            take: None,
+        };
+        let (held, other) = (file(lfn, &["A", "T2_CH_CERN"]), file("/store/g.root", &["A"]));
+        let dataset = "/Primary/Processed/NANOAODSIM";
+        let tape = file("/store/t.root", &[]);
+        let found = Datasets::recorded(&[(&held, dataset, &sites), (&other, dataset, &sites), (&tape, dataset, &sites)], "it did not answer".into()).unwrap();
+        assert_eq!(found.problem(&tape).unwrap().fault, Fault::Tape);
+        // A file two samples name: one sample's recorded site holds it, so it is read there.
+        let both = Datasets::recorded(&[(&held, dataset, &[]), (&held, dataset, &sites)], "it did not answer".into()).unwrap();
+        assert!(both.problem(&held).is_none() && both.copies.contains_key(lfn));
+        assert_eq!(found.copies[lfn], [cern]);
+        let hole = found.problem(&other).unwrap();
+        assert!(hole.fault == Fault::Unreachable && hole.why.contains("rvr press --fill unreachable") && !hole.why.contains("it did not answer"), "{}", hole.why);
+        assert_eq!(found.unasked.as_deref(), Some("it did not answer"));
+        // Only Rucio out of reach is read around, and only with recorded sites.
+        assert!(reads_around("network", &[(&held, dataset, &sites)]));
+        assert!(!reads_around("network", &[(&held, dataset, &[])]));
+        for code in ["proxy_refused", "catalog_unavailable", "catalog_error", "ca_untrusted"] {
+            assert!(!reads_around(code, &[(&held, dataset, &sites)]), "{code}");
+        }
+        // A name that is not a path, which could change the host it is asked of, has no copy.
+        assert_eq!(sites[0].copy("@example.org/store/f.root"), None);
+        // With no file at a recorded site, the press stops, saying why.
+        let refused = Datasets::recorded(&[(&other, dataset, &sites)], "it did not answer".into()).err().unwrap();
+        assert!(refused.contains("(it did not answer), and none of them is at a storage samples.lock recorded"), "{refused}");
+    }
 
     fn copy(rse: &str, host: &str) -> Location {
         Location {

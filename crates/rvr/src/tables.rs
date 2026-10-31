@@ -1,7 +1,6 @@
 //! A recipe's five tables: which ones a recipe.toml leaves out, and, asked at a terminal, writing
 //! them in, empty and in their place.
 
-use std::io::IsTerminal;
 use std::path::Path;
 
 /// The tables every study's recipe.toml writes, in their order.
@@ -26,7 +25,7 @@ pub fn refusal(missing: &[&str]) -> String {
 pub fn offer(dir: &Path, source: &str, then: &str, going: &str) -> Result<bool, String> {
     let Ok(root) = source.parse() else { return Ok(false) };
     let missing = lacking(&root);
-    let asking = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    let asking = crate::at_terminal();
     // A recipe whose [columns] stores nothing, which no press takes, is the user's to write.
     let stores = || rvr_recipe::Recipe::read(source).is_ok_and(|recipe| !recipe.columns.is_empty());
     if missing.is_empty() || !asking || !stores() {
@@ -42,13 +41,10 @@ pub fn offer(dir: &Path, source: &str, then: &str, going: &str) -> Result<bool, 
     };
     let named = listed(&missing, "and");
     let unchanged = |why: String| Err(format!("{why}, so recipe.toml is as it was: add {named} to it, then {then} again."));
-    eprint!("{}", asked(&missing, &named, going));
-    let mut answer = String::new();
-    if let Err(e) = std::io::stdin().read_line(&mut answer) {
-        return unchanged(format!("the answer could not be read ({e})"));
-    }
-    if !["y", "yes"].iter().any(|yes| answer.trim().eq_ignore_ascii_case(yes)) {
-        return unchanged("not added".into());
+    match crate::yes(&asked(&missing, &named, going)) {
+        Err(why) => return unchanged(why),
+        Ok(false) => return unchanged("not added".into()),
+        Ok(true) => {}
     }
     // Written beside the file (the one a link names) and renamed over it, so that a failed write
     // leaves it as it was; and not over an edit saved while rvr asked.

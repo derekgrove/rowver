@@ -179,7 +179,7 @@ class Pressed(unittest.TestCase):
         shutil.copy(self.path, copy)
         try:
             whole = copy.read_bytes()
-            self.assertEqual(rvr(["empty", str(copy)]), 0)
+            self.assertEqual(rvr(["empty", str(copy), "--force"]), 0)
             f = rowver.open(copy)
             self.assertEqual((f.empty, self.file.empty, f.rows, f.columns), (True, False, self.file.rows, self.file.columns))
             self.assertIn(", empty>", repr(f))

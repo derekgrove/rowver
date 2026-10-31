@@ -3,15 +3,18 @@
 //! without reading the events). Written by `resolve`, reviewed like code, never edited.
 
 use super::plan::plan;
-use super::remote::{HttpsFile, Storage};
+use super::copies::holding;
+use super::remote::{digest_once, host_port, HttpsFile, Storage};
 use super::spec::{Events, Plan, Source};
 use cms_dbs::{DbsCatalog, DbsInstance};
 use grid_catalog::{Catalog, CatalogFile, Did, GridHttps, Replicas, Resolver};
-use rucio_client::{Rucio, Server};
+use rucio_client::{Location, Rucio, Server};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Lock {
@@ -46,7 +49,91 @@ pub struct Locked {
     pub events_total: u64,
     pub events_read: u64,
     pub metadata: Map<String, Value>,
+    /// For a dataset: the storages that answered fastest when it was resolved, fastest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sites: Vec<Site>,
     pub file: Vec<File>,
+}
+
+/// A storage a dataset sample is read from first, and when Rucio cannot be reached.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Site {
+    /// The storage element, as T2_US_Purdue.
+    pub rse: String,
+    /// The address, `https://host:port/path`, its files' logical names follow.
+    pub prefix: String,
+}
+
+impl Site {
+    /// The site of a copy of the file `lfn`, when its address is a prefix and that name.
+    pub fn of(copy: &Location, lfn: &str) -> Option<Site> {
+        let prefix = copy.url.strip_suffix(lfn).filter(|prefix| prefix.starts_with("https://"))?;
+        Some(Site { rse: copy.rse.clone(), prefix: prefix.to_owned() })
+    }
+
+    /// The copy of the file `lfn` this site holds, only at a CMS storage door.
+    pub fn copy(&self, lfn: &str) -> Option<Location> {
+        // The address itself is held to the doors Rucio's answers are held to, so that a lock from
+        // elsewhere sends the proxy to no other host, whatever its prefix and names say.
+        let url = format!("{}{lfn}", self.prefix);
+        let door = host_port(&url).filter(|_| lfn.starts_with('/'))?;
+        let (host, port) = door.rsplit_once(':')?;
+        let known = cms_doors().contains(&(host.to_owned(), port.parse().ok()?));
+        known.then(|| Location { url, door: door.clone(), rse: self.rse.clone(), priority: 0 })
+    }
+}
+
+/// CMS's storage doors, as `(host, port)`.
+fn cms_doors() -> &'static HashSet<(String, u16)> {
+    static DOORS: OnceLock<HashSet<(String, u16)>> = OnceLock::new();
+    DOORS.get_or_init(|| rucio_client::copies::doors("cms"))
+}
+
+/// How many storages a dataset sample records.
+const SITES: usize = 3;
+
+/// How long resolve waits for storages to answer: those that answer later are not recorded.
+const PROBED: Duration = Duration::from_secs(3);
+
+/// How many of a sample's files with copies on disk are asked of Rucio for one it can be read from.
+const ASKED: usize = 3;
+
+/// The storages a dataset sample is read from first: the first of its files that Rucio says can be
+/// read over HTTPS asked at every storage that holds it, all at once, and the first three storages
+/// to answer that they hold it, as a press asks. None when the storages or Rucio cannot be asked:
+/// a press then asks Rucio alone.
+fn best_sites(ctx: &Context, files: &[File]) -> Vec<Site> {
+    let (Some(storage), Some((_, rucio))) = (&ctx.storage, &ctx.catalog) else {
+        return Vec::new();
+    };
+    let on_disk = files.iter().filter(|f| f.disk.as_ref().is_some_and(|disk| !disk.is_empty()));
+    let Some((file, lfn, said)) = on_disk.take(ASKED).find_map(|f| {
+        let lfn = f.lfn.clone()?;
+        let said = rucio.copies(&[Did::cms(lfn.clone())]).ok()?.remove(&lfn).filter(|said| !said.copies.is_empty())?;
+        Some((f, lfn, said))
+    }) else {
+        return Vec::new();
+    };
+    let (tell, heard) = mpsc::channel();
+    for copy in said.copies.into_iter().filter_map(|copy| Site::of(&copy, &lfn).map(|site| (copy, site))) {
+        let (agent, watch, tell, file) = (storage.agent(), storage.watch.clone(), tell.clone(), (*file).clone());
+        // Each asks once, and the ones answering after the first three are not waited for.
+        std::thread::spawn(move || {
+            let right = holding(&file, digest_once(&agent, &copy.0.url, &watch)).is_ok();
+            let _ = tell.send(right.then_some(copy.1));
+        });
+    }
+    drop(tell);
+    let (mut sites, until) = (Vec::new(), Instant::now() + PROBED);
+    while sites.len() < SITES {
+        match heard.recv_timeout(until.saturating_duration_since(Instant::now())) {
+            // One storage, given twice (its davs and https addresses), takes one place.
+            Ok(Some(site)) if sites.iter().all(|kept: &Site| kept.rse != site.rse) => sites.push(site),
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    sites
 }
 
 /// A lock's value as TOML writes it, each number a TOML number: rowver keeps serde_json's numbers
@@ -503,6 +590,10 @@ pub fn resolve(ctx: &Context, plan: &Plan) -> Result<Locked, String> {
         }
         Source::Dataset(d) => (vec![d.clone()], dataset_files(ctx, d)?),
     };
+    let sites = match &plan.source {
+        Source::Dataset(_) => best_sites(ctx, &files),
+        Source::Files(_) => Vec::new(),
+    };
     let mut metadata = plan.metadata.clone();
     for (key, value) in metadata.iter_mut() {
         if let Value::String(s) = value {
@@ -526,6 +617,7 @@ pub fn resolve(ctx: &Context, plan: &Plan) -> Result<Locked, String> {
         events_total: 0,
         events_read: 0,
         metadata,
+        sites,
         file: files,
     };
     planned(&mut locked, plan.events)?;

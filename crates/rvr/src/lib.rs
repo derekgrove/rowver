@@ -46,7 +46,7 @@ const USAGE: &str = "usage:
   rvr header FILE                          the JSON header only, as the file holds it
   rvr diff A B                             which column of which sample differs, from the headers
   rvr reproduce FILE [DIR]                 press FILE's own study again and diff the two
-  rvr empty FILE... [--study FOLDER] [--anyway]
+  rvr empty FILE... [--study FOLDER] [--anyway] [--force | -f]
                                            let a file's columns go, keeping its header to refill
   rvr refill FILE [--study FOLDER] [--workers N]
                                            press an empty file's columns again from its study
@@ -167,6 +167,26 @@ impl<'a> Words<'a> {
     pub fn has(&self, flag: &str) -> bool {
         self.flags.iter().any(|(f, _)| *f == flag)
     }
+}
+
+/// Whether a word reads as a short flag, as `-y`: a dash, then letters alone (an expression given
+/// to rvr try, as `-MET`, may too, so only commands that take files refuse one).
+pub(crate) fn short(word: &str) -> bool {
+    word.strip_prefix('-').is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphabetic()))
+}
+
+/// Whether someone is at a terminal to answer a question: stdin and stderr both are one.
+pub(crate) fn at_terminal() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+/// Ask `question`, which ends "[y/N] ", at the terminal: whether the answer was yes.
+pub(crate) fn yes(question: &str) -> Result<bool, String> {
+    eprint!("{question}");
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).map_err(|e| format!("the answer could not be read ({e})"))?;
+    Ok(["y", "yes"].iter().any(|yes| answer.trim().eq_ignore_ascii_case(yes)))
 }
 
 /// Print an error and give the exit status of the command.
@@ -291,4 +311,13 @@ fn said(file: &str, verdict: &Result<(usize, usize, String), String>) -> bool {
         Err(why) => println!("{file}: INVALID: {why}"),
     }
     verdict.is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_short_flag_is_a_dash_and_letters_and_an_expression_is_not() {
+        assert!(super::short("-y") && super::short("-F"));
+        assert!(!super::short("-MET_pt") && !super::short("-1") && !super::short("-") && !super::short("x"));
+    }
 }

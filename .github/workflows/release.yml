@@ -179,7 +179,8 @@ jobs:
           skip-existing: true  # files an earlier run of this release uploaded; plan checked they match
 
   # The binaries, on the tag's release at gitlab.cern.ch. The token is a project access token of
-  # that project (role Developer, scope api), held as this repository's secret GITLAB_TOKEN.
+  # that project (role Maintainer, as v* tags are protected; scope api), held as the secret
+  # GITLAB_TOKEN of this repository's environment release.
   gitlab-release:
     needs: [plan, test-wheels, sdist, binaries, crates-io, pypi]
     if: >-

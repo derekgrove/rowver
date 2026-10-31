@@ -1,0 +1,39 @@
+# ATLAS Open Data (13 TeV, the 2020 release for education): H → ZZ* → 4ℓ. The data (periods A to
+# D, 10 fb⁻¹) and the main simulated samples, skimmed to four leptons, so small that the whole study
+# presses in a minute. No grid proxy needed. The tree is "mini", and momenta are in MeV.
+
+[places]
+atlas = "root://eospublic.cern.ch//eos/opendata/atlas/OutreachDatasets/2020-01-22/4lep"
+
+[defaults]
+tree = "mini"
+kind = "background"
+lumi = 10                     # fb⁻¹: data periods A to D
+
+[[sample]]
+name = "data"
+label = "Data, periods A to D"
+files = "{atlas}/Data/data_?.4lep.root"         # a pattern: periods A, B, C and D
+kind = "data"
+
+[[sample]]
+name = "ggH"
+label = "gg → H → ZZ* → 4ℓ"
+files = "{atlas}/MC/mc_345060.ggH125_ZZ4lep.4lep.root"
+kind = "signal"
+
+[[sample]]
+name = "VBFH"
+label = "VBF H → ZZ* → 4ℓ"
+files = "{atlas}/MC/mc_344235.VBFH125_ZZ4lep.4lep.root"
+kind = "signal"
+
+[[sample]]
+name = "ZZ"
+label = "ZZ* → 4ℓ"
+files = "{atlas}/MC/mc_363490.llll.4lep.root"
+
+[[sample]]
+name = "Z_ttbar"
+label = "Z + jets, tt̄"
+files = ["{atlas}/MC/mc_361106.Zee.4lep.root", "{atlas}/MC/mc_361107.Zmumu.4lep.root", "{atlas}/MC/mc_410000.ttbar_lep.4lep.root"]

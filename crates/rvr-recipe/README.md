@@ -288,12 +288,15 @@ member *within* a list, use `least` (and `greatest` for the largest).
 | `delta_r(eta1, phi1, eta2, phi2)` | ΔR = √(Δη² + Δφ²) | `delta_r(Jet_eta, Jet_phi, 0.0, 0.0)` | `[[0.50990194, 3.5805027, 1.56205], [], [3.0066593, 3.132092]]` |
 | `mass(pt, eta, phi)`, `mass(pt, eta, phi, mass)` | the invariant mass of each event's list added together (massless without a mass) | `mass(Jet_pt, Jet_eta, Jet_phi, Jet_mass)` | `[229.10867, 0, 78.98824]` |
 | `pt(pt, eta, phi)`, `pt(pt, eta, phi, mass)` | the pt of the same sum: of two muons, the dimuon's | `pt(Muon_pt, Muon_eta, Muon_phi)` | `[32.1647, 25, 0]` |
-| `eta(…)`, `phi(…)` | its η and φ, each 0 for an event with nothing in the list | `eta(Muon_pt, Muon_eta, Muon_phi)` | `[1.3412633, -0.3, 0]` |
+| `eta(…)`, `phi(…)` | its pseudorapidity η and its φ, each 0 for an event with nothing in the list | `eta(Muon_pt, Muon_eta, Muon_phi)` | `[1.3412633, -0.3, 0]` |
 | | | `phi(Muon_pt, Muon_eta, Muon_phi)` | `[0.1473266, 1.5, 0]` |
 | `rapidity(…)` | its rapidity, ½ ln((E + pz) / (E − pz)), NaN for an event with nothing in the list | `rapidity(Jet_pt, Jet_eta, Jet_phi, Jet_mass)` | `[0.030402305, nan, 0.067968756]` |
 
-`pt`, `eta`, `phi` and `rapidity` take the same values as `mass`, and give what the `vector`
-library gives for `ak.sum` of the event's four-vectors: an event with none has a sum of zero,
+`eta` is the pseudorapidity, −ln tan(θ/2), which depends on the direction alone; `rapidity` uses
+the energy too, and the two agree only where the sum is massless (a sum of massless particles
+generally is not). `pt`, `eta`, `phi` and `rapidity`
+take the same values as `mass`, and give what the `vector` library gives for `ak.sum` of the
+event's four-vectors: an event with none has a sum of zero,
 whose η and φ are 0 and whose rapidity is NaN, as there. A file holds only finite numbers, so a
 rapidity over a list that can be empty is stored with a value for those events, such as
 `if(count(Jet_pt) > 0, rapidity(Jet_pt, Jet_eta, Jet_phi, Jet_mass), -9)`. In a cut, NaN is
@@ -327,7 +330,7 @@ These go over every pair of members in each event's list, in the order (0, 1), (
 | `pair_dr(eta, phi)` | ΔR between the two | `pair_dr(Jet_eta, Jet_phi)` | `[[3.8209946, 1.3038405, 4.070574], [], [1.135867]]` |
 | `pair_mass(pt, eta, phi)`, `pair_mass(pt, eta, phi, mass)` | the invariant mass of each pair | `pair_mass(Jet_pt, Jet_eta, Jet_phi, Jet_mass)` | `[[149.08528, 66.87832, 160.95856], [], [78.98824]]` |
 | `pair_pt(…)` | the pt of each pair, as `pt` of the two | `pair_pt(Jet_pt, Jet_eta, Jet_phi, Jet_mass)` | `[[44.88033, 91.23413, 29.247534], [], [153.91696]]` |
-| `pair_eta(…)`, `pair_phi(…)`, `pair_rapidity(…)` | its η, φ and rapidity | `pair_eta(Jet_pt, Jet_eta, Jet_phi, Jet_mass)` | `[[-1.0266734, 0.91601306, -0.8157165], [], [0.07638098]]` |
+| `pair_eta(…)`, `pair_phi(…)`, `pair_rapidity(…)` | its pseudorapidity η, φ and rapidity | `pair_eta(Jet_pt, Jet_eta, Jet_phi, Jet_mass)` | `[[-1.0266734, 0.91601306, -0.8157165], [], [0.07638098]]` |
 | | | `pair_phi(Jet_pt, Jet_eta, Jet_phi, Jet_mass)` | `[[0.2649557, -0.3120652, -1.5437373], [], [3.0635805]]` |
 | | | `pair_rapidity(Jet_pt, Jet_eta, Jet_phi, Jet_mass)` | `[[-0.34392893, 0.7685827, -0.16184664], [], [0.067968756]]` |
 

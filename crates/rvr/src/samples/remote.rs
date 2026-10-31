@@ -397,6 +397,11 @@ fn domain(door: &str) -> &str {
     }
 }
 
+/// Whether any of `doors` (`host:port`) takes a connection within a few seconds.
+pub fn any_door_answers(doors: &[String]) -> bool {
+    reachable(doors, &[], REACH)
+}
+
 /// Whether any of `addresses`, or of the addresses `names` (`host:port`) have now, takes a TCP
 /// connection within `within`, every one asked at once.
 fn reachable(names: &[String], addresses: &[std::net::SocketAddr], within: Duration) -> bool {

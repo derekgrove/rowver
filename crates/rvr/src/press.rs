@@ -948,12 +948,12 @@ pub(crate) fn sample_at(lock: &Lock, named: Option<&str>) -> Result<usize, Strin
     })
 }
 
-/// How many of a sample's files are tried, in the lock's order, for one with a copy on disk.
+/// How many of a sample's files are tried, in the lock's order, for one that can be read now.
 const ON_DISK: usize = 10;
 
 /// The first of a sample's files that can be read now, opened, with its entry in the lock. A file
-/// of a dataset with no copy on disk (only on tape) is passed over, as is one with no entries
-/// when `entries` is asked for.
+/// of a dataset with no copy on disk (only on tape), or none at a recorded storage when Rucio
+/// cannot be reached, is passed over, as is one with no entries when `entries` is asked for.
 pub(crate) fn first_readable<'a>(
     lock: &'a Lock,
     sample: usize,
@@ -975,18 +975,22 @@ pub(crate) fn first_readable<'a>(
     let (storage, datasets, offline) = connect(lock, &files, &watch)?;
     let read = Default::default();
     let reach = Reach { storage: storage.as_ref(), datasets: datasets.as_ref(), offline: &offline, dir, watch, whole: false, read };
-    let mut tape = None;
+    // Passed over at once, with no storage asked: a file only on tape, and, while Rucio cannot be
+    // reached, one no recorded storage holds. A storage failing is waited for, and said, as is a
+    // lock Rucio says is out of date.
+    let mut passed = None;
     for &(_, file) in &files {
+        let unheld = reach.datasets.and_then(|d| d.problem(file)).is_some_and(|p| p.fault == Fault::Unreachable);
         match open(&reach, file) {
             Ok((root, _)) => return Ok((root, file)),
-            Err(failed) if failed.fault == Fault::Tape => tape = tape.or(Some(failed.why)),
+            Err(failed) if failed.fault == Fault::Tape || unheld => passed = passed.or(Some(failed.why)),
             Err(failed) => return Err(failed.why),
         }
     }
-    let why = tape.unwrap_or_default();
+    let why = passed.unwrap_or_default();
     Err(match files.len() {
         1 => why,
-        n => format!("none of the first {n} files of {} has a copy on disk. The first: {why}", s.name),
+        n => format!("none of the first {n} files of {} can be read now. The first: {why}", s.name),
     })
 }
 
@@ -1714,12 +1718,12 @@ pub(crate) fn connect(
         if let Some(short) = &proxy.short {
             WARNED.call_once(|| eprintln!("rvr: {short}"));
         }
-        let catalog: Vec<(&File, &str)> = files
+        let catalog: Vec<crate::samples::copies::Wanted> = files
             .iter()
             .filter(|(_, f)| f.lfn.is_some())
-            .map(|&(sample, f)| (f, lock.sample[sample].asked.first().map_or("", String::as_str)))
+            .map(|&(sample, f)| (f, lock.sample[sample].asked.first().map_or("", String::as_str), lock.sample[sample].sites.as_slice()))
             .collect();
-        if let Some((file, _)) = catalog.first() {
+        if let Some((file, _, _)) = catalog.first() {
             let path = proxy
                 .path
                 .as_ref()
@@ -1729,13 +1733,22 @@ pub(crate) fn connect(
                 Arc::new(GridHttps::new(path.into(), ca));
             let asked = std::time::Instant::now();
             let server = Server::cms();
-            datasets = Some(Datasets::ask(&Rucio::new(server.clone(), transport), &catalog)?);
-            watch.heard_from(&format!("{}:443", server.host()));
-            println!(
-                "Rucio said where the {} can be read in {:.1} s.",
-                some(catalog.len(), "dataset file", "dataset files"),
-                asked.elapsed().as_secs_f64()
-            );
+            let found = Datasets::ask(&Rucio::new(server.clone(), transport), &catalog)?;
+            match &found.unasked {
+                Some(why) => println!(
+                    "Rucio could not be reached ({why}), but storages samples.lock recorded can: each of the {} is read from those of its sample, and one none of them holds is left as a hole for rvr press --fill unreachable once Rucio answers.",
+                    some(catalog.len(), "dataset file", "dataset files")
+                ),
+                None => {
+                    watch.heard_from(&format!("{}:443", server.host()));
+                    println!(
+                        "Rucio said where the {} can be read in {:.1} s.",
+                        some(catalog.len(), "dataset file", "dataset files"),
+                        asked.elapsed().as_secs_f64()
+                    );
+                }
+            }
+            datasets = Some(found);
         }
         match Storage::new(proxy.path.as_deref(), proxy.ca.as_deref()) {
             Ok(mut storage) => {
