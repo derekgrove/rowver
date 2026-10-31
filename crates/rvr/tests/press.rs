@@ -669,12 +669,13 @@ fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_co
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[derived]\nr = \"if(sample.file == './flat_b.root', weight / (nJet - nJet), weight)\"\n";
     let dir = twice("late", recipe);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    assert_eq!(rvr(&dir, &["key", "new", "Tester"]).0, 0);
     // One worker reads flat_a.root first, where the trial passes; flat_b.root's values fail at the end.
     let (code, said) = rvr(&dir, &["press", "--workers", "1"]);
     assert!(code == 1 && said.contains("derived column r: some of its values are not finite") && said.contains("is written without its derived columns"), "{said}");
     let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     let (code, said) = rvr(&dir, &["validate", &file]);
-    assert!(code == 0 && said.contains("10 rows, 2 columns, read all"), "{said}");
+    assert!(code == 0 && said.contains("10 rows, 2 columns, read all") && said.contains("signed by you"), "{said}");
     // Fixed, the next press reads no input and adds it.
     std::fs::write(dir.join("recipe.toml"), recipe.replace("weight / (nJet - nJet)", "weight * 2")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);

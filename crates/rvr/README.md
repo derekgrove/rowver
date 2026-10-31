@@ -229,14 +229,13 @@ columns above it, and `sample.KEY` (the keys of `samples.toml`; not what the pre
 `events_read`, `events_total` and `events_missing`). While it reads, the press works each one out
 over the events one run of each sample kept, so that a mistake in one (a division by zero, a type
 that differs between samples) stops it then, not once every file is read; this costs nothing
-measurable on the bench. It works each one out once more, from the file it has written (holding
-the columns they use in memory), to record its kind, its checksums and its facts, so that a reader
-can check what it works out and `rvr diff` can compare it, and writes the file again with those
-records, its arrays copied as they are: a press with derived columns writes its file twice. Should one fail there, the file is
-written without its derived columns, and the press says so: fix `[derived]`, and the next press
-reads no input. Changing only `[derived]` reads no ROOT file: every stored column
-is copied from the file, and the derived ones are worked out from it. `rvr derive` changes them in
-a pressed file alone.
+measurable on the bench. It works each one out once more, from the arrays it has packed for the
+file (holding the columns they use in memory), to record its kind, its checksums and its facts, so
+that a reader can check what it works out and `rvr diff` can compare it, and then writes the file
+with those records. Should one fail there, the file is written without its derived columns, and
+the press says so: fix `[derived]`, and the next press reads no input. Changing only `[derived]`
+reads no ROOT file: every stored column is copied from the file, and the derived ones are worked
+out from it. `rvr derive` changes them in a pressed file alone.
 
 Which columns to store and which to derive is a choice of space against time. On 2.1 M rows (300
 copies of the TChiWZ skim, Apple M5, 2026-10-30), seven typical computed columns (a sum, a count, a

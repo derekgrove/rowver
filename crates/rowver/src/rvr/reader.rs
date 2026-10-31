@@ -17,9 +17,8 @@ use std::path::{Path, PathBuf};
 pub struct Reader {
     path: PathBuf,
     header: Value,
-    /// Where the arrays begin, and how many bytes they fill.
-    start: u64,
-    length: u64,
+    /// The files that hold the arrays, in order: each with where its bytes begin, and how many.
+    parts: Vec<(PathBuf, u64, u64)>,
 }
 
 /// One column as the file holds it: little-endian values, and for a list column each row's bounds.
@@ -53,13 +52,18 @@ impl Reader {
         file.read_exact(&mut text)?;
         let header: Value = serde_json::from_slice(&text)?;
         let checked = checked_header(&text).map(drop);
-        let reader = Self {
-            path,
-            header,
-            start: start as u64,
-            length: size - start as u64,
-        };
-        Ok((reader, checked))
+        let parts = vec![(path.clone(), start as u64, size - start as u64)];
+        Ok((Self { path, header, parts }, checked))
+    }
+
+    /// Read the arrays laid in `files` under `header`, checked as `open` checks it, before they are written.
+    pub(crate) fn laid(dir: &Path, files: &[PathBuf], header: Value) -> Result<Self> {
+        checked_header(&serde_json::to_vec(&header)?)?;
+        let mut parts = Vec::new();
+        for file in files {
+            parts.push((file.clone(), 0, std::fs::metadata(file)?.len()));
+        }
+        Ok(Self { path: dir.to_path_buf(), header, parts })
     }
 
     /// Where the file is.
@@ -94,15 +98,20 @@ impl Reader {
         columns.iter().find(|column| column["name"] == name)
     }
 
-    /// Where one array's compressed bytes lie: their offset in the file, and their size.
-    pub(crate) fn span(&self, record: &Value, label: &str) -> Result<(u64, u64)> {
-        let (at, size) = (count(record, "at")? as u64, count(record, "size")? as u64);
-        if at.checked_add(size).is_none_or(|end| end > self.length) {
-            return Err(invalid(format!(
-                "{label}: compressed span exceeds the file"
-            )));
+    /// Where one array's compressed bytes lie: the file that holds them, their offset, their size.
+    pub(crate) fn span(&self, record: &Value, label: &str) -> Result<(&Path, u64, u64)> {
+        let (mut at, size) = (count(record, "at")? as u64, count(record, "size")? as u64);
+        for (path, start, length) in &self.parts {
+            if at.checked_add(size).is_some_and(|end| end <= *length) {
+                return Ok((path, start + at, size));
+            }
+            // An array lies whole in one part: one past this part's end is in a later one.
+            match at.checked_sub(*length) {
+                Some(rest) => at = rest,
+                None => break,
+            }
         }
-        Ok((self.start + at, size))
+        Err(invalid(format!("{label}: compressed span exceeds the file")))
     }
 
     /// Decompress one array and refuse it unless its bytes have the checksum its record states.
@@ -111,8 +120,8 @@ impl Reader {
         let expected = values
             .checked_mul(w)
             .ok_or_else(|| invalid(format!("{label}: byte count overflows")))?;
-        let (at, size) = self.span(record, label)?;
-        let mut file = std::fs::File::open(&self.path)?;
+        let (path, at, size) = self.span(record, label)?;
+        let mut file = std::fs::File::open(path)?;
         file.seek(SeekFrom::Start(at))?;
         let mut packed = vec![0; size as usize];
         file.read_exact(&mut packed)?;

@@ -2091,41 +2091,28 @@ pub fn press(
     let rows = data["rows"].as_u64().unwrap_or(0);
     let mut header = json!({"rowver": rowver::VERSION, "data": data, "made": made});
     let signer = crate::key::secret().map_err(&stuck)?;
-    if let Some(secret) = &signer {
-        rowver::sign::sign(&mut header, secret).map_err(|e| stuck(format!("the file could not be signed with your key: {e}")))?;
+    // The derived columns are worked out once, from the arrays laid for the file, for their
+    // records. One that fails leaves what was read: the file, without its derived columns.
+    let mut underived = None;
+    if !recipe.derived.is_empty() {
+        if let Err(why) = crate::derive::attach(&laid, &recipe.derived, &mut header) {
+            crate::derive::without(&mut header).map_err(|e| {
+                stuck(format!("{} could not be written: {why}; and its [derived] lines could not be taken out of the recipe it carries, to write it without them: {e}", target.display()))
+            })?;
+            underived = Some(why);
+        }
     }
     // A press of more than a few seconds is on disk before what would pick it up goes.
     let durable = |path: &Path| match worth {
         true => std::fs::File::open(path).and_then(|f| f.sync_all()),
         false => Ok(()),
     };
-    // The derived columns are worked out from the file written, once, for their records; the
-    // file is then written again with them, its arrays as they were.
-    let with_derived = staged.folder.join("derived.rvr");
-    // A derived column that fails here leaves what was read: the file, without its derived columns.
-    let mut underived = None;
-    let written = write::write_laid(&staged_file, &header, laid)
-        .map_err(|e| e.to_string())
-        .and_then(|()| match recipe.derived.is_empty() {
-            true => Ok(staged_file.clone()),
-            false => {
-                let attached = crate::derive::attach(&staged_file, &with_derived, &recipe.derived, &mut header, signer.as_ref());
-                if let Err(why) = attached {
-                    crate::derive::without(&staged_file, &with_derived, &mut header, signer.as_ref())
-                        .map_err(|e| format!("{why}; and the file could not be written without its derived columns: {e}"))?;
-                    underived = Some(why);
-                }
-                let _ = std::fs::remove_file(&staged_file);
-                Ok(with_derived.clone())
-            }
-        })
-        .and_then(|path| {
-            durable(&path).map_err(|e| e.to_string())?;
-            std::fs::rename(&path, target).map_err(|e| e.to_string())
-        });
+    let written = crate::derive::sealed(&mut header, signer.as_ref())
+        .and_then(|()| write::write_laid(&staged_file, &header, laid).map_err(|e| e.to_string()))
+        .and_then(|()| durable(&staged_file).map_err(|e| e.to_string()))
+        .and_then(|()| std::fs::rename(&staged_file, target).map_err(|e| e.to_string()));
     if let Err(e) = written {
         let _ = std::fs::remove_file(&staged_file);
-        let _ = std::fs::remove_file(&with_derived);
         return Err(stuck(format!("{} could not be written: {e}", target.display())));
     }
     if worth {

@@ -4,6 +4,7 @@
 use crate::Words;
 use rowver::rvr::derived::records;
 use rowver::rvr::Reader;
+use rowver::write::Laid;
 use rvr_recipe::{parse, plain, reads, Recipe, RESERVED};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -17,23 +18,17 @@ const USAGE: &str = "usage:
   rvr derive FILE --rename OLD NEW
       give a derived column another name; its expression stays as it is";
 
-/// Write `staged` again at `out` with the records of `derived` in its header, signed again.
-pub(crate) fn attach(
-    staged: &Path,
-    out: &Path,
-    derived: &[(String, String)],
-    header: &mut Value,
-    signer: Option<&[u8; 32]>,
-) -> Result<(), String> {
-    let file = Reader::open(staged).map_err(|e| e.to_string())?;
-    let records = records(&file, derived, &[]).map_err(|e| e.to_string())?;
+/// Put the records of `derived`, worked out from the arrays `laid` for a press, in its header,
+/// refused unless every reader would open it.
+pub(crate) fn attach(laid: &Laid, derived: &[(String, String)], header: &mut Value) -> Result<(), String> {
+    let records = laid.derived(header, derived).map_err(|e| e.to_string())?;
     header["derived"] = json!({ "columns": records });
-    rewritten(staged, out, header, signer)
+    sealed(header, None)
 }
 
-/// Write `staged` again at `out` with no derived columns, the recipe it carries without its
-/// `[derived]` lines, signed again: what a press read, kept when its derived columns failed.
-pub(crate) fn without(staged: &Path, out: &Path, header: &mut Value, signer: Option<&[u8; 32]>) -> Result<(), String> {
+/// Take the derived columns out of a press's header, and their `[derived]` lines out of the
+/// recipe it carries: what a press read, kept when its derived columns failed.
+pub(crate) fn without(header: &mut Value) -> Result<(), String> {
     let text = header["made"]["recipe"]["text"].as_str().unwrap_or_default().to_owned();
     let names = Recipe::read(&text).map_err(|e| e.0)?.derived.into_iter().map(|(name, _)| name).collect();
     // A [derived] table not written a line per column is dropped from the recipe's TOML instead,
@@ -50,17 +45,21 @@ pub(crate) fn without(staged: &Path, out: &Path, header: &mut Value, signer: Opt
     if let Some(root) = header.as_object_mut() {
         root.shift_remove("derived");
     }
-    rewritten(staged, out, header, signer)
+    Ok(())
 }
 
-/// Write `from` again at `to` with `header`, signed when there is a key, refused unless every
-/// reader would open it.
-fn rewritten(from: &Path, to: &Path, header: &mut Value, signer: Option<&[u8; 32]>) -> Result<(), String> {
+/// Sign `header` when there is a key, and refuse it unless every reader would open it.
+pub(crate) fn sealed(header: &mut Value, signer: Option<&[u8; 32]>) -> Result<(), String> {
     if let Some(secret) = signer {
-        rowver::sign::sign(header, secret).map_err(|e| e.to_string())?;
+        rowver::sign::sign(header, secret).map_err(|e| format!("the file could not be signed with your key: {e}"))?;
     }
     let text = serde_json::to_vec(header).map_err(|e| e.to_string())?;
-    rowver::rvr::checked_header(&text).map_err(|e| format!("the file would not be valid: {e}"))?;
+    rowver::rvr::checked_header(&text).map(drop).map_err(|e| format!("the file would not be valid: {e}"))
+}
+
+/// Write `from` again at `to` with `header`, sealed.
+fn rewritten(from: &Path, to: &Path, header: &mut Value, signer: Option<&[u8; 32]>) -> Result<(), String> {
+    sealed(header, signer)?;
     rowver::write::rewrite(from, to, header).map_err(|e| e.to_string())
 }
 

@@ -345,6 +345,12 @@ impl Laid {
             files: Vec::new(),
         })
     }
+
+    /// The records of `derived` under `header`, worked out from these arrays before they are written.
+    pub fn derived(&self, header: &Value, derived: &[(String, String)]) -> Result<Vec<Value>> {
+        let file = crate::rvr::Reader::laid(&self.dir, &self.files, header.clone())?;
+        crate::rvr::derived::records(&file, derived, &[])
+    }
 }
 
 impl Drop for Laid {

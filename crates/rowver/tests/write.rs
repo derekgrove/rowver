@@ -252,7 +252,13 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
         data["sample_cols"] = whole["sample_cols"].clone();
         let mut written = header.clone();
         written["data"] = data;
+        // Derived columns worked out from the arrays laid, before the file is written, are
+        // those worked out from the file.
+        let derived = [("twice".to_owned(), "MET * 2".to_owned()), ("lead".to_owned(), "first(Muon_pt, -1) + nlep".to_owned())];
+        let early = laid.derived(&written, &derived).unwrap();
         write_laid(file(name), &written, laid).unwrap();
+        let reader = rowver::rvr::Reader::open(file(name)).unwrap();
+        assert_eq!(early, rowver::rvr::derived::records(&reader, &derived, &[]).unwrap(), "{name}");
         assert_eq!(
             std::fs::read(file(name)).unwrap(),
             to_bytes(&header, &arrays).unwrap(),

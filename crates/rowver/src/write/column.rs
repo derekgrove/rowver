@@ -817,12 +817,12 @@ fn decoded(
             copy.reader.path().display()
         ))
     };
-    let (at, size) = copy.reader.span(held, copy.name)?;
+    let (path, at, size) = copy.reader.span(held, copy.name)?;
     let expected = values.checked_mul(width(kind)?).ok_or_else(damaged)?;
     if expected > crate::codec::most(size as usize) {
         return Err(damaged());
     }
-    let mut file = std::fs::File::open(copy.reader.path())?;
+    let mut file = std::fs::File::open(path)?;
     file.seek(SeekFrom::Start(at))?;
     let mut tee = Tee {
         from: file.take(size),
