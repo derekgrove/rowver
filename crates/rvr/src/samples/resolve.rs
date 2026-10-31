@@ -131,24 +131,48 @@ fn pattern(text: &str) -> bool {
 /// adler32 of a file, read once.
 pub fn adler32_file(path: &Path) -> std::io::Result<String> {
     use std::io::Read;
-    let (mut a, mut b) = (1u32, 0u32);
     let mut f = std::fs::File::open(path)?;
     let mut buf = vec![0u8; 1 << 20];
+    let mut sum = 1;
     loop {
         let n = f.read(&mut buf)?;
         if n == 0 {
-            break;
+            return Ok(format!("{sum:08x}"));
         }
-        for chunk in buf[..n].chunks(5552) {
-            for &byte in chunk {
-                a += byte as u32;
-                b += a;
-            }
-            a %= 65521;
-            b %= 65521;
-        }
+        sum = adler32(sum, &buf[..n]);
     }
-    Ok(format!("{:08x}", (b << 16) | a))
+}
+
+/// adler32 `sum` carried on over `data`, in sixteen lanes that LLVM vectorizes; never inlined,
+/// so its code does not change with its callers.
+#[inline(never)]
+fn adler32(sum: u32, data: &[u8]) -> u32 {
+    const MOD: u64 = 65521;
+    let (mut a, mut b) = (u64::from(sum & 0xffff), u64::from(sum >> 16));
+    // 256 words of 16 bytes a block, so a lane of `ones` (at most 255 * 256) fits a u16.
+    for block in data.chunks(4096) {
+        let (mut ones, mut twos) = ([0u16; 16], [0u32; 16]);
+        let words = block.chunks_exact(16);
+        let rest = words.remainder();
+        for word in words {
+            for j in 0..16 {
+                ones[j] += u16::from(word[j]);
+                twos[j] += u32::from(ones[j]);
+            }
+        }
+        // Byte j of word t of n is added to b 16 * (n - t) - j times.
+        b += (block.len() - rest.len()) as u64 * a;
+        for j in 0..16 {
+            a += u64::from(ones[j]);
+            b += 16 * u64::from(twos[j]) - j as u64 * u64::from(ones[j]);
+        }
+        for &byte in rest {
+            a += u64::from(byte);
+            b += a;
+        }
+        (a, b) = (a % MOD, b % MOD);
+    }
+    ((b << 16) | a) as u32
 }
 
 fn local(text: &str, base: &Path) -> PathBuf {
@@ -589,6 +613,30 @@ mod tests {
         std::fs::write(&path, b"Wikipedia").unwrap();
         assert_eq!(adler32_file(&path).unwrap(), "11e60398");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn adler32_lanes_agree_with_the_plain_sum() {
+        let plain = |sum: u32, data: &[u8]| {
+            let (mut a, mut b) = (sum & 0xffff, sum >> 16);
+            for &byte in data {
+                a = (a + u32::from(byte)) % 65521;
+                b = (b + a) % 65521;
+            }
+            (b << 16) | a
+        };
+        let mixed: Vec<u8> = (0..30_011u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        for data in [vec![0xff; 30_011], mixed] {
+            for len in [0, 1, 15, 16, 17, 4095, 4096, 4097, 5552, 5553, 11_111, 30_011] {
+                assert_eq!(adler32(1, &data[..len]), plain(1, &data[..len]), "{len} bytes");
+            }
+            // Carried on across calls of uneven lengths, from sums as high as they go.
+            let (head, tail) = data.split_at(7_777);
+            assert_eq!(adler32(adler32(1, head), tail), plain(1, &data));
+            assert_eq!(adler32(0xfff0_fff0, &data), plain(0xfff0_fff0, &data));
+        }
     }
 
     #[test]
