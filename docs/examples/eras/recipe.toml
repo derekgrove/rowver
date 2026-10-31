@@ -16,6 +16,8 @@ branches = ["MET_pt", "nJet"]
 mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
 weight = "genWeight * sample.xsec * 1000 * sample.lumi"
 
+[totals]
+
 # Whether the pair is within 15 GeV of the Z, worked out when it is read.
 [derived]
 z_window = "abs(mass - 91.19) < 15"

@@ -311,6 +311,7 @@ pub(crate) fn merged(
     laid: &[Laid],
     read: Vec<Taken>,
     kinds: &[(Kind, bool)],
+    recipe: &rvr_recipe::Recipe,
 ) -> Result<Vec<Taken>, String> {
     let mut out = Vec::new();
     for (input, laid) in work.iter().zip(laid) {
@@ -340,6 +341,27 @@ pub(crate) fn merged(
             }
             if let Some(served) = taken.record.get("served") {
                 record["served"] = served.clone();
+            }
+            // The events read now add to the file's totals over them; one over another tree,
+            // read with the whole file, is the one it had, if it had one.
+            // (A file the old file did not read is its read alone, and one not read now keeps what it had.)
+            if !recipe.totals.is_empty() && !plan.record.is_null() && taken.record.get("totals").is_some() {
+                let (was, now) = (record["totals"].clone(), &taken.record["totals"]);
+                let mut sums = serde_json::Map::new();
+                for total in &recipe.totals {
+                    let (was, now) = (was[&total.name].as_f64(), now[&total.name].as_f64());
+                    let sum = match (&total.tree, was, now) {
+                        (Some(_), Some(was), _) => was,
+                        (Some(_), None, Some(now)) => now,
+                        (Some(_), None, None) => return Err(format!("{}: [totals] {} is not in its record, and a fill of some of its entries does not read the tree it sums: press with --full", input.file.at, total.name)),
+                        (None, ..) => was.unwrap_or(0.0) + now.unwrap_or(0.0),
+                    };
+                    if !sum.is_finite() {
+                        return Err(format!("{}: [totals] {}: its sum is not a finite number: give those events a finite value, as with if(…)", input.file.at, total.name));
+                    }
+                    sums.insert(total.name.clone(), sum.into());
+                }
+                record["totals"] = Value::Object(sums);
             }
         }
         holes.sort_by_key(|hole| hole["entries"][0].as_u64());

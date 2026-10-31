@@ -215,14 +215,18 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
         count(file, "rows")?;
     }
     let mut holed = false;
+    // The totals the recipe it carries asks for, which every file the press read holds.
+    let text = made["recipe"]["text"].as_str().unwrap_or_default();
+    // (A recipe this build cannot read leaves its totals unchecked against it.)
+    let asked: Option<Vec<String>> = rvr_recipe::Recipe::read(text).ok().map(|r| r.totals.into_iter().map(|t| t.name).collect());
     for (name, source) in sources {
         let label = format!("made.files[{name:?}]");
         exactly(source, &["events", "files", "metadata"], &[], &label)?;
         object(source, "metadata")?;
         for (path, record) in object(source, "files")?.as_object().unwrap() {
             let label = format!("{label}.files[{path:?}]");
-            let fields = ["tree", "uuid", "entries", "stop", "take", "served", "holes"];
-            exactly(record, &fields, &["stop", "take", "served", "holes"], &label)?;
+            let fields = ["tree", "uuid", "entries", "stop", "take", "served", "holes", "totals"];
+            exactly(record, &fields, &["stop", "take", "served", "holes", "totals"], &label)?;
             let limit = match record.get("stop") {
                 Some(_) => count(record, "stop")?,
                 None => count(record, "entries")?,
@@ -234,6 +238,10 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
             let unread = (limit > 0 && holes == [(0, limit)]) || limit == 0 || record.get("take") == Some(&0.into());
             if record["uuid"].is_null() && !unread {
                 return Err(invalid(format!("{label}: only a file the press could not open (one hole of every entry it chose, or a file it chose none of) may have no uuid")));
+            }
+            let held: Vec<&String> = record.get("totals").and_then(Value::as_object).map(|t| t.keys().collect()).unwrap_or_default();
+            if let Some(asked) = asked.as_ref().filter(|asked| !unread && (held.len() != asked.len() || asked.iter().any(|name| !held.contains(&name)))) {
+                return Err(invalid(format!("{label}: a file the press read holds every total of the recipe's [totals] ({}), and this one holds {}", asked.join(", "), if held.is_empty() { "none".into() } else { held.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ") })));
             }
             if let Some(served) = record.get("served") {
                 exactly(served, &["rse", "host"], &[], &format!("{label}.served"))?;
@@ -259,12 +267,42 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
         }
         let files = ordered(data, made, name)?;
         reads(&files, object(source, "events")?, name, false)?;
+        totals(source, &label, asked.as_deref().unwrap_or_default())?;
     }
     // A pressed file (whose samples say what was read) with holes says what each sample misses.
     for (name, source) in sources {
         let metadata = &source["metadata"];
         if holed && metadata.get("events_read").is_some() && metadata.get("events_missing").is_none() {
             return Err(invalid(format!("made.files[{name:?}].metadata has no events_missing, though the file has holes")));
+        }
+    }
+    Ok(())
+}
+
+/// Check a sample's totals: each file's are numbers, and its metadata holds their sum, in the
+/// order of its files, under the name of each total `asked` (0 when no file was read).
+fn totals(source: &Value, label: &str, asked: &[String]) -> Result<()> {
+    let mut sums: Vec<(&String, f64)> = Vec::new();
+    for record in object(source, "files")?.as_object().unwrap().values() {
+        let Some(totals) = record.get("totals") else { continue };
+        for (name, value) in totals.as_object().ok_or_else(|| invalid(format!("{label}: a file's totals must be an object")))? {
+            let value = value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| invalid(format!("{label}: a file's total {name} must be a finite number")))?;
+            match sums.iter_mut().find(|(n, _)| *n == name) {
+                Some((_, sum)) => *sum += value,
+                None => sums.push((name, value)),
+            }
+        }
+    }
+    if let Some(name) = asked.iter().find(|name| source["metadata"][name.as_str()].as_f64().is_none()) {
+        return Err(invalid(format!("{label}.metadata has no total {name}, which the recipe's [totals] asks for")));
+    }
+    // A total no file of the sample holds (none was read) is 0.
+    if let Some(name) = asked.iter().find(|name| !sums.iter().any(|(n, _)| n == name) && source["metadata"][name.as_str()].as_f64() != Some(0.0)) {
+        return Err(invalid(format!("{label}.metadata.{name} is not 0, though no file of the sample holds that total")));
+    }
+    for (name, sum) in sums {
+        if source["metadata"][name].as_f64() != Some(sum) {
+            return Err(invalid(format!("{label}.metadata.{name} is not the sum of its files' totals of {name}")));
         }
     }
     Ok(())

@@ -34,6 +34,8 @@ dr_mu_tau = "delta_r(first(Muon_eta[good_muon], 0), first(Muon_phi[good_muon], 0
 b_tagged = "count(Jet_btag[clean_jet] > 0.8)"
 tau_decay_mode = "first(Tau_decayMode[good_tau], -1)"
 
+[totals]
+
 # Columns kept as their expressions over the stored columns, worked out when they are read: flat,
 # a list, and one that reads the sample's metadata.
 [derived]

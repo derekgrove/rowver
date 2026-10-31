@@ -38,6 +38,9 @@ jets = "nJet >= 1"
 branches = ["weight", "nJet", "Jet_pt", "isGood"]
 ht = "sum(Jet_pt)"
 
+[totals]
+sumw = "weight"
+
 [derived]
 ht_per_jet = "ht / nJet"
 hard_pt = "Jet_pt[Jet_pt > 30]"
@@ -78,6 +81,8 @@ class Pressed(unittest.TestCase):
         self.assertEqual((f.rows, len(f), f.samples), (4, 4, ["flat"]))
         self.assertEqual(f.columns, ["weight", "nJet", "Jet_pt", "isGood", "ht"])
         self.assertEqual(f.sample_columns["xsec"], [1.5])
+        # A total: the sum of weight over every event read, before the cut.
+        self.assertEqual(f.sample_columns["sumw"], [5.5])
         self.assertNotIn("label", f.sample_columns)
         self.assertEqual(f.labels, ["Flat ntuple"])
         self.assertEqual(f.recipe, RECIPE)

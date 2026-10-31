@@ -21,6 +21,8 @@ jets = "nJet >= 1"
 branches = ["nJet", "Jet_pt"]
 ht = "sum(Jet_pt)"
 
+[totals]
+
 [derived]
 mean_jet_pt = "ht / nJet"
 ```
@@ -262,7 +264,8 @@ For `tiny.rvr`, `xsec` is the SHA-256 of `2.5` as 8 bytes followed by `00 00 00 
 `events_read` (the entries it read of the sample, before any cut) and `events_total` (the entries
 its files hold). A file with holes (§6.2) adds a third to every sample: `events_missing`, the
 entries chosen that lie in holes (0 for a sample with none). `events_read + events_missing` is
-then what the event choice chose. A file with no hole has no `events_missing`.
+then what the event choice chose. A file with no hole has no `events_missing`. Each total of the
+recipe's `[totals]` (§6) adds one more, under its name: the sample's sum of it, a number.
 
 ## 6. The study: `made`
 
@@ -330,8 +333,13 @@ Each file record holds:
 | `stop` or `take` | how much of it the event choice read (§6.1) |
 | `served` | for a file of a catalog dataset, the copy it was read from: exactly `rse` (the storage element, `T2_US_Purdue`) and `host` (its HTTPS door, `eos.cms.rcac.purdue.edu:9000`), both nonempty |
 | `holes` | only when the press could not read some of the entries it chose (§6.2) |
+| `totals` | only when the recipe has `[totals]` and the press read the file: each total by name, a finite number, its expression added up over the entries the press read of this file before any cut, one at a time in entry order (or over every entry of the other tree it names); a `--fill` adds the sum of the entries it read |
 
 When a read moved to another copy part way, `served` names the copy that served the last read.
+A sample's metadata holds each total as the sum of its files' `totals`, added in the order of
+`made.files`, so that it does not depend on how many files were read at once; a reader checks
+that it does. A total is what a file of kept events cannot give afterwards, such as the sum of
+`genWeight` over every event read, which normalizes simulation.
 Every copy holds the same bytes: each is checked against the lock's size, and its adler32 when the
 storage gives one, before it is read.
 
@@ -596,8 +604,8 @@ its array (§8): the press works each derived column out once, to record them. I
 
 An expression uses only what the file holds: its stored columns, the derived columns above it,
 and `sample.KEY` (the metadata of the row's sample, as a press gives it to an expression: without
-`events_read`, `events_total` and `events_missing`, and with `sample.file` the path of the row's
-file in the lock). It is worked out a file's rows at a time, as the press reads
+`events_read`, `events_total` and `events_missing`, with its totals, and with `sample.file` the
+path of the row's file in the lock). It is worked out a file's rows at a time, as the press reads
 them, and every function of the recipe language computes the same bits on every platform (none
 calls the platform's own math library), so it has the same values whoever works it out. A reader
 that works one out checks its values against the record, and refuses the column when they differ.
@@ -628,6 +636,7 @@ the file at the first problem:
 - each file's `holes`: their fields, a kind from the list, in order and apart, and within what the
   choice read. `uuid: null` only on a file that is one whole hole or that the choice took nothing
   of. In a file with holes whose samples carry `events_read`, `events_missing` on every sample;
+- each file's `totals`, finite numbers, and each sample's metadata holding their sums, in order;
 - that `data.cols` names exactly `made.recipe.columns`, in order;
 - each derived column's record: its fields, a name no other column has, a nonempty expression,
   a kind the format defines, one checksum per sample, and its facts;
@@ -663,7 +672,9 @@ unless the file is empty (§1), every array:
 The file stores no weights. A weight is an ordinary column the recipe declares, such as the
 ntuple's `weight` branch or an expression that multiplies several factors. A factor that is one
 number per sample, such as a cross-section, can stay in the metadata and be read as a sample
-column. Whoever reads the file decides which columns weight events, and how.
+column, and a sum over every event read, such as of `genWeight`, is a total (`[totals]`, §6),
+which a derived column can divide by. Whoever reads the file decides which columns weight events,
+and how.
 
 Not in the file, on purpose:
 

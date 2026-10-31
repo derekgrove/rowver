@@ -280,13 +280,14 @@ entries. The press refuses to run at all if `samples.toml` was edited after the 
 ### 6.1 Structure
 
 `recipe.toml` is TOML, and its values are expressions. It names the language and its version
-(`format = "rvr-recipe"`, `version = 1`) and has four tables:
+(`format = "rvr-recipe"`, `version = 1`) and has five tables:
 
 | table | role |
 |---|---|
 | `[define]` | names for expressions, which the lines below use as if they were branches; none is stored |
 | `[keep]` | the cuts, in order; an event is kept when every one is true, and the press reports the count after each (a cutflow) |
 | `[columns]` | what the file stores: `branches = [...]` copied as they are, and `NAME = "expression"` computed while pressing, optionally with a declared storage kind |
+| `[totals]` | `NAME = "expression"` summed over every event read, before the cuts, one number per sample (or over another tree of each file, `{ value = "...", tree = "Runs" }`) |
 | `[derived]` | `NAME = "expression"` over the stored columns: kept in the file as its expression and computed when it is read (§9) |
 
 Every branch is named in full, as the file spells it, so the language makes no guess about how an
@@ -297,8 +298,21 @@ good muons' pt, and the same mask picks from every other muon branch. A defined 
 names above it, and may not be the name of a branch, so each name means one thing. A branch whose
 name is not a plain word, such as a member of a split object in MiniAOD or ATLAS DAOD_PHYSLITE, is
 named through `branch('…')`. A cut can apply to some samples only: with `{ if = "sample.era ==
-3", apply = "hem_veto" }`, every other sample passes the cut. Every recipe writes all four tables,
+3", apply = "hem_veto" }`, every other sample passes the cut. Every recipe writes all five tables,
 even empty: one that leaves a table out is refused, so that each says what it does not use.
+
+A file keeps only the events that pass the cuts, yet normalizing simulation needs a sum over every
+event: each event's weight is `xsec * lumi * genWeight / sum(genWeight)`, the sum over all the
+events the sample read. A **total** is that sum, taken by the press as it reads, before the cuts:
+`sumw = "genWeight"` under `[totals]`. Each file's total is kept in its record and each sample's
+in its metadata, so it is a sample column, and a derived column can divide by it:
+`weight = "genWeight * sample.xsec * sample.lumi / sample.sumw"`. A skim whose events were filtered
+before cannot give the sum itself; a total can then read another tree of each file, as NanoAOD's
+`Runs` with `genEventSumw`, for a sample that reads its files whole. A file's total is one running
+sum over its events in entry order, and a sample's adds its files' in the lock's order, so neither
+depends on how many files were read at once, or how; building on a file keeps its totals, and a
+`--fill` adds the sum of the entries it read to the file's, which can differ from a full press in
+the last bits.
 
 ### 6.2 Semantics
 

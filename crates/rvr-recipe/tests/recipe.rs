@@ -573,7 +573,7 @@ n_negative = "count(negative)"
         .contains("[define] good must be an expression in quotes"));
     assert_eq!(
         refused("[object.good]\nfrom = \"lep\"\n"),
-        "A recipe has no [object] table: write it as a line of [define], a mask: good_muon = \"Muon_pt > 20 and Muon_tightId\", used as Muon_pt[good_muon]. A recipe's tables are [define], [keep], [columns] and [derived]."
+        "A recipe has no [object] table: write it as a line of [define], a mask: good_muon = \"Muon_pt > 20 and Muon_tightId\", used as Muon_pt[good_muon]. A recipe's tables are [define], [keep], [columns], [totals] and [derived]."
     );
     for (table, became) in [
         ("copy", "branches = [...]"),
@@ -583,7 +583,7 @@ n_negative = "count(negative)"
     ] {
         assert!(refused(&format!("[{table}]\n")).contains(became), "{table}");
     }
-    assert!(refused("[derive]\n").contains("A recipe has no setting named derive; it takes format, version, title, define, keep, columns, derived"));
+    assert!(refused("[derive]\n").contains("A recipe has no setting named derive; it takes format, version, title, define, keep, columns, totals, derived"));
     assert!(
         refused("[keep]\nx = { if = \"sample.y == 1\", pass = \"PT_lep\" }\n").contains(
             "[keep] x: a cut for some samples says what it applies with apply = \"…\", not pass"
@@ -614,8 +614,8 @@ n_negative = "count(negative)"
         ("x = \"good\"", "x uses good, but good is a line of [define], which the file does not keep"),
         ("x = \"Eta_lep\"", "x uses Eta_lep, but the file does not store Eta_lep"),
         ("x = \"y\"\ny = \"n\"", "x uses y, but y is a derived column below it"),
-        ("n = \"PT_lep\"", "n is already the name of a column or of a line of [define]"),
-        ("good = \"n\"", "good is already the name of a column or of a line of [define]"),
+        ("n = \"PT_lep\"", "n is already the name of a column, a total or a line of [define]"),
+        ("good = \"n\"", "good is already the name of a column, a total or a line of [define]"),
         ("entry = \"n\"", "a derived column is named with one plain name"),
         ("x = \"branch('Eta_lep')\"", "x uses Eta_lep, but the file does not store Eta_lep"),
         ("x = \"branch('y') + 1\"\ny = \"n\"", "x uses y, but y is a derived column below it"),
@@ -776,4 +776,30 @@ fn mass_preserves_nan_instead_of_clipping_it_to_zero() {
     assert!(masses.number(1).is_nan());
     assert_eq!(masses.number(2), 0.0);
     assert!((masses.number(3) - 4.0).abs() < 1e-12);
+}
+
+/// `[totals]` sums an expression over every event read, before the cuts, or over another tree of
+/// each file; only a derived column may use one, as `sample.NAME`.
+#[test]
+fn totals_are_sums_only_derived_columns_use() {
+    let head = "format = \"rvr-recipe\"\nversion = 1\n";
+    let text = format!("{head}[columns]\nbranches = [\"w\"]\n[totals]\nsumw = \"genWeight\"\nruns = {{ value = \"genEventSumw\", tree = \"Runs\" }}\n[derived]\nweight = \"w / sample.sumw\"\n");
+    let read = Recipe::read(&text).unwrap();
+    let totals: Vec<(&str, Option<&str>)> = read.totals.iter().map(|t| (t.name.as_str(), t.tree.as_deref())).collect();
+    assert_eq!(totals, [("sumw", None), ("runs", Some("Runs"))]);
+    assert_eq!(read.derived, [("weight".to_owned(), "w / sample.sumw".to_owned())]);
+    let refused = |body: &str| Recipe::read(&format!("{head}{body}")).unwrap_err().0;
+    for (body, said) in [
+        ("[keep]\nx = \"sample.sumw > 0\"\n[totals]\nsumw = \"w\"\n", "[keep] x uses sample.sumw, a total of [totals], known only once every event is read: use it under [derived]"),
+        ("[columns]\ny = \"w / sample.sumw\"\n[totals]\nsumw = \"w\"\n", "[columns] y uses sample.sumw"),
+        ("[totals]\nsumw = \"w\"\n[derived]\nsumw = \"w\"\n", "[derived] sumw: sumw is already the name of a column, a total or a line of [define]"),
+        ("[columns]\nbranches = [\"w\"]\n[totals]\nw = \"w\"\n", "[totals] w: w is already the name of a column, a total or a line of [define]"),
+        ("[totals]\nevents_read = \"1\"\n", "[totals] events_read: a total is named with one plain name"),
+        ("[define]\ng = \"w > 1\"\n[totals]\nt = { value = \"g\", tree = \"Runs\" }\n", "[totals] t reads the tree Runs, and g is a line of [define]"),
+        ("[totals]\nt = { tree = \"Runs\" }\n", "[totals] t needs a value"),
+        ("[totals]\nt = { value = \"1\", tree = \"\" }\n", "[totals] t tree must name a tree of each file"),
+    ] {
+        let wrong = refused(body);
+        assert!(wrong.contains(said), "{body}: {wrong}");
+    }
 }

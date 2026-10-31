@@ -272,6 +272,9 @@ fn changes(old: &str, now: &str) -> String {
     if reuse::cuts(&old) != reuse::cuts(&now) {
         said.push("the cuts under [keep] changed".into());
     }
+    if reuse::totaled(&old) != reuse::totaled(&now) {
+        said.push("the totals under [totals] changed".into());
+    }
     // A derived column is its name and expression: one with another expression is changed.
     let derived = |recipe: &Recipe| -> Vec<String> { recipe.derived.iter().map(|(n, _)| n.clone()).collect() };
     let (was, is) = (derived(&old), derived(&now));

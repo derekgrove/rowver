@@ -259,12 +259,12 @@ pub fn plan(
     Ok(asked)
 }
 
-/// A study's recipe.toml, refused unless it writes all four tables, even empty, so that it says
+/// A study's recipe.toml, refused unless it writes all five tables, even empty, so that it says
 /// what it does not use.
 pub fn study_recipe(source: &str) -> Result<Recipe, String> {
     let recipe = Recipe::read(source).map_err(|e| format!("recipe.toml: {}", e.0))?;
     let root: toml::Table = source.parse().map_err(|e: toml::de::Error| format!("recipe.toml: {e}"))?;
-    let missing: Vec<String> = ["define", "keep", "columns", "derived"]
+    let missing: Vec<String> = ["define", "keep", "columns", "totals", "derived"]
         .iter()
         .filter(|table| !root.contains_key(**table))
         .map(|table| format!("[{table}]"))
@@ -278,7 +278,7 @@ pub fn study_recipe(source: &str) -> Result<Recipe, String> {
         1 => format!("Add the line {}.", missing[0]),
         _ => format!("Add {}, each on a line of its own.", joined("and")),
     };
-    Err(format!("recipe.toml has no {} table: every recipe has its four tables, [define], [keep], [columns] and [derived], each written even when it is empty. {add}", joined("or")))
+    Err(format!("recipe.toml has no {} table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty. {add}", joined("or")))
 }
 
 /// The recipe a press runs, or what stops it.
@@ -492,6 +492,28 @@ pub(crate) fn kept(
     Ok(keep)
 }
 
+/// Add a run to each total of `[totals]` over the tree read: its value at each entry `read` marks,
+/// before any cut, one at a time in entry order, so a file's sum does not depend on its runs.
+fn summed(recipe: &Recipe, scope: &Scope, read: &[bool], totals: &mut [f64]) -> Result<(), String> {
+    let lines = recipe.totals.iter().filter(|total| total.tree.is_none());
+    for (total, sum) in lines.zip(totals) {
+        add_to(sum, &total.name, scope.evaluate(&total.value).and_then(|v| rvr_recipe::per_event(v, read.len())), read)?;
+    }
+    Ok(())
+}
+
+/// Add to `sum` the values `read` marks, in order: one number per entry.
+fn add_to(sum: &mut f64, name: &str, array: rvr_recipe::Result<Array>, read: &[bool]) -> Result<(), String> {
+    let values = match array.map_err(|e| format!("[totals] {name}: {}", e.0))? {
+        Array::Event(values) => values,
+        _ => return Err(format!("[totals] {name}: a total sums one number per event, and this gives a list for each: sum the list, as sum(...)")),
+    };
+    for (index, _) in read.iter().enumerate().filter(|(_, read)| **read) {
+        *sum += values.number(index);
+    }
+    Ok(())
+}
+
 /// Give an output column the kind the recipe asks it to be stored as.
 fn stored(recipe: &Recipe, column: &str, array: Array) -> Array {
     match (recipe.stored.get(column), array) {
@@ -573,6 +595,12 @@ fn derived_tried(recipe: &Recipe, gathered: &[Option<Gathered>], before: &[Optio
         held.insert(column.name.clone(), array);
     }
     let run = Run(RefCell::new(held));
+    // A total is known only once every event is read: the trial gives it a stand-in.
+    let mut sample = sample.clone();
+    for total in &recipe.totals {
+        sample.entry(total.name.clone()).or_insert(Constant::Float(1.0));
+    }
+    let sample = &sample;
     for (name, expression) in &recipe.derived {
         let parsed = rvr_recipe::parse(expression).map_err(|e| format!("derived column {name}: {}", e.0))?;
         let seen = seen.entry(name.clone()).or_default();
@@ -1172,14 +1200,38 @@ fn take(
         return unread(Failed::new(Fault::Changed, located(format!("its tree {} has {total} entries, not the {} samples.lock recorded. Run rvr samples resolve samples.toml and review the new lock.", input.tree, input.file.entries.unwrap()))));
     }
     let entries = input.file.stop.map_or(total, |stop| stop.min(total));
+    let mut sample = sample.clone();
+    sample.insert("file".into(), Constant::Text(at.clone()));
+    // Totals over another tree of the file, read before its events (so that one that fails makes
+    // the whole file a hole), when it is read whole: not when building on an earlier file, nor
+    // for a fill of only some of its entries, whose record has them.
+    let whole = input.kept.is_none() && input.ranges.as_ref().is_none_or(|r| matches!(r[..], [(0, to, _)] if to >= entries));
+    let mut others = Vec::new();
+    for total in recipe.totals.iter().filter(|_| whole) {
+        let Some(name) = &total.tree else { continue };
+        let failed = |e: hep_root::Error| Failed::new(fault_of(&e, file.source().inner().seen()), located(format!("[totals] {}: its tree {name:?}: {e}", total.name)));
+        let other = match file.tree_at(name) {
+            Ok(other) => other,
+            Err(e) => return unread(failed(e)),
+        };
+        let n = other.entries.max(0);
+        let branches = Branches::over(&file, &other, 0, n);
+        let defines = BTreeMap::new();
+        let scope = Scope::new(&branches, &sample, &defines);
+        let mut sum = 0.0;
+        let array = scope.evaluate(&total.value).and_then(|v| rvr_recipe::per_event(v, n as usize));
+        if let Err(why) = add_to(&mut sum, &total.name, array, &vec![true; n as usize]) {
+            let fault = branches.failure().map_or(Fault::Mistake, |e| fault_of(&e, file.source().inner().seen()));
+            return unread(Failed::new(fault, located(why)));
+        }
+        others.push((total.name.clone(), sum));
+    }
     let chosen = input.chosen.as_deref();
     let names: Vec<String> = tree
         .walk()
         .into_iter()
         .map(|(_, b)| b.name.clone())
         .collect();
-    let mut sample = sample.clone();
-    sample.insert("file".into(), Constant::Text(at.clone()));
     let remote = at.contains("://") || input.file.lfn.is_some();
     let wanted: Vec<&hep_root::Branch> = if remote {
         tree.walk()
@@ -1198,6 +1250,7 @@ fn take(
     let (mut entry, mut rows) = (Vec::new(), 0);
     let mut holes: Vec<(u64, u64, Failed)> = Vec::new();
     let mut tried = recipe.derived.is_empty();
+    let mut totals = vec![0.0_f64; recipe.totals.iter().filter(|t| t.tree.is_none()).count()];
     // Building on an earlier file, the events kept must be the ones it kept.
     let again = |entry: &[i64], from: usize| {
         match &input.kept {
@@ -1274,7 +1327,8 @@ fn take(
                 .map(|g| g.as_ref().map(|g| (g.bytes.len(), g.counts.as_ref().map_or(0, Vec::len))))
                 .collect();
             let mut counted = vec![0_u64; recipe.keep.len()];
-            let read = kept(recipe, &scope, start, &mut counted).and_then(|keep| {
+            let mut sums = totals.clone();
+            let read = summed(recipe, &scope, &start, &mut sums).and_then(|()| kept(recipe, &scope, start, &mut counted)).and_then(|keep| {
                 for (index, (column, from)) in outputs.iter().enumerate() {
                     let array = scope
                         .evaluate(from)
@@ -1303,7 +1357,10 @@ fn take(
                 Ok(keep)
             });
             let keep = match read {
-                Ok(keep) => keep,
+                Ok(keep) => {
+                    totals = sums;
+                    keep
+                }
                 Err(error) => {
                     for (held, before) in gathered.iter_mut().zip(&before) {
                         match (held.as_mut(), before) {
@@ -1404,6 +1461,27 @@ fn take(
     }
     if let Some((rse, host)) = served.and_then(|reader| reader.served()) {
         record["served"] = json!({"rse": rse, "host": host});
+    }
+    // Its totals: over its events read, and over every entry of another tree of it; building on
+    // an earlier file, which reads only the events it kept, the earlier file's.
+    let earlier = input.before.as_ref().filter(|_| input.kept.is_some()).map(|before| before["totals"].clone());
+    if let Some(totals) = earlier.filter(|totals| !totals.is_null()) {
+        record["totals"] = totals;
+    } else if !recipe.totals.is_empty() && input.kept.is_none() {
+        let mut sums = Map::new();
+        let mut events = totals.iter();
+        for total in &recipe.totals {
+            let sum = match &total.tree {
+                None => events.next().copied(),
+                Some(_) => others.iter().find(|(name, _)| *name == total.name).map(|(_, sum)| *sum),
+            };
+            let Some(sum) = sum else { continue };
+            if !sum.is_finite() {
+                return Err(Failed::new(Fault::Mistake, located(format!("[totals] {}: its sum is not a finite number (a NaN or an infinity among its values, as a division by zero gives), and a file holds only finite ones: give those events a finite value, as with if(…)", total.name))));
+            }
+            sums.insert(total.name.clone(), sum.into());
+        }
+        record["totals"] = Value::Object(sums);
     }
     // Building on an earlier file, its holes are this file's: what it kept was read around them.
     let missing = match input.before.as_ref().filter(|_| !carried.is_empty()) {
@@ -1717,8 +1795,21 @@ pub fn press(
     }
     // A derived column has a name no sample column has, before anything is read.
     let metadata = |name: &str| ADDED.contains(&name) || lock.sample.iter().any(|s| s.metadata.contains_key(name));
+    if let Some(total) = recipe.totals.iter().find(|total| metadata(&total.name)) {
+        return Err(format!("[totals] {} has the name of a key of samples.toml, or of one rvr press gives every sample ({}): give the total another", total.name, ADDED.join(", ")));
+    }
     if let Some((name, _)) = recipe.derived.iter().find(|(name, _)| metadata(name)) {
         return Err(format!("[derived] {name} has the name of a key of samples.toml, or of one rvr press gives every sample ({}): give the derived column another", ADDED.join(", ")));
+    }
+    for total in &recipe.totals {
+        if let Some(sample) = lock.sample.iter().find(|sample| total.tree.as_deref() == Some(sample.tree.as_str())) {
+            return Err(format!("[totals] {} names the tree {}, the one {} reads its events from: a total over the events read is written without tree, as {} = \"…\"", total.name, sample.tree, sample.name, total.name));
+        }
+    }
+    if let Some(total) = recipe.totals.iter().find(|total| total.tree.is_some()) {
+        if let Some((sample, _)) = lock.sample.iter().zip(&asked).find(|(_, want)| !matches!(want, Events::All)) {
+            return Err(format!("[totals] {} sums the tree {}, whose entries count every event of a file, and {} reads only some of its events: read its files whole (events = \"all\"), or total a branch of the events read", total.name, total.tree.as_deref().unwrap_or_default(), sample.name));
+        }
     }
     let outputs: Vec<Output> = recipe.columns.iter().collect();
     let mut filling = match on {
@@ -1930,6 +2021,7 @@ pub fn press(
         .iter()
         .flat_map(rvr_recipe::Cut::expressions)
         .chain(reading.iter().map(|(_, e)| e))
+        .chain(reader.totals.iter().filter(|total| total.tree.is_none()).map(|total| &total.value))
         .collect();
     let defined = crate::reuse::reached(reader, &roots);
     let mut mentions = BTreeSet::new();
@@ -2007,7 +2099,7 @@ pub fn press(
         }
         Some(filling) => {
             let old = crate::fill::spool_old(&spool, &filling.file, &reading, &laid, workers).map_err(&stuck)?;
-            crate::fill::merged(&work, &lock, filling, &laid, read, &old)?
+            crate::fill::merged(&work, &lock, filling, &laid, read, &old, &recipe)?
         }
         None => read,
     }
@@ -2034,6 +2126,15 @@ pub fn press(
         let mut metadata = sample.metadata.clone();
         metadata.insert("events_read".into(), (sample.events_read - lacks).into());
         metadata.insert("events_total".into(), sample.events_total.into());
+        // A sample's totals are its files' totals summed, in their order.
+        for total in &recipe.totals {
+            // Added from 0, as a sample no file of which was read has 0 (a float sum starts at -0).
+            let sum = records.values().filter_map(|record| record["totals"][&total.name].as_f64()).fold(0.0, |sum, more| sum + more);
+            if !sum.is_finite() {
+                return Err(format!("[totals] {}: its sum over sample {} is not a finite number, as its files' totals add up past what a double holds: give its events smaller values", total.name, sample.name));
+            }
+            metadata.insert(total.name.clone(), sum.into());
+        }
         missing.push(lacks);
         made_files.insert(
             sample.name.clone(),

@@ -14,6 +14,8 @@ opposite_charge = "sum(Muon_charge) == 0"
 branches = ["Muon_pt", "Muon_eta"]
 mass = "first(pair_mass(Muon_pt, Muon_eta, Muon_phi, Muon_mass), -1)"
 
+[totals]
+
 # The mass on a log scale, as the spectrum is drawn, worked out when it is read.
 [derived]
 log_mass = "log(mass)"

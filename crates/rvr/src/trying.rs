@@ -56,6 +56,13 @@ fn run(args: &[&str]) -> Result<(), String> {
     let names: Vec<String> = tree.walk().into_iter().map(|(_, b)| b.name.clone()).collect();
     let mut metadata = fields(&sample.metadata);
     metadata.insert("file".into(), Constant::Text(at.clone()));
+    // A total is known once every event is read: here it stands in as 1, as in a press's trial.
+    for total in &recipe.totals {
+        if text.contains(&format!("sample.{}", total.name)) {
+            println!("sample.{} is a total of [totals], known once every event is read: it stands in as 1 here.", total.name);
+        }
+        metadata.entry(total.name.clone()).or_insert(Constant::Float(1.0));
+    }
     let total = tree.entries.max(0) as u64;
     let shown_name = at.rsplit('/').next().unwrap_or(at);
     let (mut shown, mut first, mut kind) = (0, 0, None);

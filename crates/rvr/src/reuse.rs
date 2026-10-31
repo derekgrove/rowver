@@ -97,6 +97,15 @@ pub fn cuts(recipe: &Recipe) -> Recipe {
     }
 }
 
+/// The recipe cut down to its totals and the defined names they reach.
+pub fn totaled(recipe: &Recipe) -> Recipe {
+    let roots: Vec<&Expression> = recipe.totals.iter().map(|total| &total.value).collect();
+    Recipe {
+        totals: recipe.totals.clone(),
+        ..reaching(recipe, &roots)
+    }
+}
+
 impl Earlier {
     /// The earlier file, which the columns it gives are copied from.
     pub fn file(&self) -> &Reader {
@@ -167,6 +176,9 @@ fn read(
         .map_err(|e| format!("its recipe cannot be read ({})", e.0))?;
     if cuts(&old) != cuts(recipe) {
         return Err("the cuts under [keep], or what they use, have changed".into());
+    }
+    if totaled(&old) != totaled(recipe) {
+        return Err("the totals under [totals] have changed, which count every event read".into());
     }
     let reused: Vec<bool> = recipe
         .columns

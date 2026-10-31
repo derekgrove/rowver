@@ -59,11 +59,15 @@ good_jet = "Jet_pt > 30 and abs(Jet_eta) < 2.4"
 two_jets = "count(good_jet) >= 2"
 
 [columns]                           # what the file stores
-branches = ["MET_pt", "Jet_pt"]     # branches stored as they are
+branches = ["MET_pt", "Jet_pt", "genWeight"]   # branches stored as they are
 ht = "sum(Jet_pt[good_jet])"        # a column computed while pressing
+
+[totals]                            # sums over every event read, before the cuts, per sample
+sumw = "genWeight"
 
 [derived]                           # columns kept as expressions, worked out when read
 met_over_ht = "MET_pt / ht"
+weight = "genWeight / sample.sumw"  # a total, read as sample.NAME
 ```
 
 | table | what it holds |
@@ -71,11 +75,12 @@ met_over_ht = "MET_pt / ht"
 | `[define]` | `NAME = "expression"`: a name for an expression, which the lines below it can use, like `good_jet` above: the jets of each event that pass, as a true-or-false list beside `Jet_pt`. A name may use the names defined above it, and may not be the name of a branch. Nothing here is stored. |
 | `[keep]` | Your cuts, in order. Each one is `name = "condition"`, true or false for each event, and an event is kept only if all of them are true. `rvr press` prints how many events are left after each cut, so this is your cutflow too. |
 | `[columns]` | What the file stores. `branches = [...]` stores branches just as the ROOT file has them, types and all. `NAME = "expression"` stores a column you compute, flat or jagged; a branch's name alone (`npv = "PV_npvs"`) stores that branch under a new name, and `NAME = "branch(sample.FIELD)"` a branch whose name each sample gives in its metadata. Write `NAME = { value = "expression", stored = "f4" }` to choose the type it's stored as. |
+| `[totals]` | `NAME = "expression"`: the expression summed over every event read, before the cuts, one number for each sample, such as `sumw = "genWeight"` to normalize simulation, which needs the sum over every event, not only those kept. `NAME = { value = "expression", tree = "Runs" }` sums over every entry of another tree of each file instead (NanoAOD's `genEventSumw`, for a skim whose events were filtered before), for a sample that reads its files whole. A total is stored as a sample column, and only `[derived]` can use it, as `sample.NAME`: it is known once every event is read. |
 | `[derived]` | `NAME = "expression"`: a column the file keeps as its expression, not as an array, worked out when it is read. It uses only what the file holds: the columns under `[columns]`, the derived columns above it, and `sample.KEY`. A stored column costs space in the file; a derived one costs a moment each time it is worked out. |
 
-Every recipe writes all four tables, even the ones it leaves empty, so that it says at a glance
+Every recipe writes all five tables, even the ones it leaves empty, so that it says at a glance
 what it does and does not use: an empty `[define]` defines nothing, an empty `[keep]` keeps every
-event, and an empty `[derived]` adds nothing. `rvr press`, `rvr try` and `rvr status` refuse a
+event, an empty `[totals]` sums nothing, and an empty `[derived]` adds nothing. `rvr press`, `rvr try` and `rvr status` refuse a
 `recipe.toml` that leaves one out, and say the line to add.
 
 Only what `[columns]` names ends up in the file; a defined name is a working name. A cut on
@@ -322,7 +327,7 @@ tells you what's wrong, in plain words:
 | `count(Jet where pt > 30)` | where is not part of an expression (column 11): to keep some members of each list, use a mask, such as Jet_pt[Jet_pt > 30] |
 | `Jet.pt` | Only sample has a field after a dot, as in sample.era (the dot at column 4). Name a branch in full, such as Jet_pt, and keep some members of it with a mask, such as Jet_pt[good_jet]; a branch whose name holds a dot is written branch('Jet.pt') |
 | `good_jet()` | good_jet is a defined name, not a function: write it without brackets, as good_jet |
-| `select = "…"` at the top of the recipe | A recipe has no setting named select; it takes format, version, title, define, keep, columns, derived |
+| `select = "…"` at the top of the recipe | A recipe has no setting named select; it takes format, version, title, define, keep, columns, totals, derived |
 
 ## From Python to rvr
 

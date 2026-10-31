@@ -13,12 +13,16 @@
 //! hem = { if = "sample.year == 2018", apply = "count(Jet_pt[Jet_eta < -1.3] > 30) == 0" }
 //!
 //! [columns]
-//! branches = ["Muon_pt", "MET"]
+//! branches = ["Muon_pt", "MET", "genWeight"]
 //! ht = "sum(Jet_pt)"
 //! rho = "branch(sample.rho)"
 //!
+//! [totals]
+//! sumw = "genWeight"
+//!
 //! [derived]
 //! met_over_ht = "MET / ht"
+//! weight = "genWeight / sample.sumw"
 //! ```
 //!
 //! Every table, key and function is described in this crate's README.
@@ -44,6 +48,15 @@ impl Cut {
     }
 }
 
+/// One line of `[totals]`: an expression summed over every event read, before the cuts, for each
+/// sample; over the entries of another tree of each file when `tree` names one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Total {
+    pub name: String,
+    pub value: Expression,
+    pub tree: Option<String>,
+}
+
 /// A parsed recipe.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Recipe {
@@ -56,6 +69,8 @@ pub struct Recipe {
     pub columns: Vec<(String, Expression)>,
     /// The number kind a column is stored as, where it is not the kind it is computed in.
     pub stored: BTreeMap<String, crate::Kind>,
+    /// The totals in the order written.
+    pub totals: Vec<Total>,
     /// The derived columns in the order written, each with its expression as written.
     pub derived: Vec<(String, String)>,
 }
@@ -149,6 +164,27 @@ fn gather(expression: &Expression, found: &mut BTreeSet<String>, text: bool, bra
     }
 }
 
+/// The sample fields an expression reads, `sample.KEY`, by key.
+fn fields_of(expression: &Expression, found: &mut BTreeSet<String>) {
+    use Expression::*;
+    match expression {
+        Sample(field) => {
+            found.insert(field.clone());
+        }
+        Call(_, arguments) => arguments.iter().for_each(|a| fields_of(a, found)),
+        In(left, list) => {
+            fields_of(left, found);
+            list.iter().for_each(|e| fields_of(e, found));
+        }
+        Negate(inner) | Not(inner) => fields_of(inner, found),
+        Binary(_, left, right) | Pick(left, right) => {
+            fields_of(left, found);
+            fields_of(right, found);
+        }
+        Constant(_) | Name(_) => {}
+    }
+}
+
 /// Whether an expression names a branch by anything but text, as `branch(sample.KEY)`.
 fn by_sample(expression: &Expression) -> bool {
     use Expression::*;
@@ -205,12 +241,12 @@ impl Recipe {
         ];
         if let Some((table, how)) = became.iter().find(|(table, _)| root.contains_key(*table)) {
             return Err(problem(format!(
-                "A recipe has no [{table}] table: {how}. A recipe's tables are [define], [keep], [columns] and [derived]."
+                "A recipe has no [{table}] table: {how}. A recipe's tables are [define], [keep], [columns], [totals] and [derived]."
             )));
         }
         only(
             &root,
-            &["format", "version", "title", "define", "keep", "columns", "derived"],
+            &["format", "version", "title", "define", "keep", "columns", "totals", "derived"],
             "A recipe",
         )?;
         let mut recipe = Self {
@@ -323,6 +359,48 @@ impl Recipe {
         if let Some(pair) = names.windows(2).find(|pair| pair[0] == pair[1]) {
             return Err(problem(format!("Two columns are named {}", pair[0])));
         }
+        for (name, value) in table(&root, "totals")?.into_iter().flatten() {
+            let place = format!("[totals] {name}");
+            if !plain(name) || RESERVED.contains(&name.as_str()) || ADDED.contains(&name.as_str()) {
+                return Err(problem(format!("{place}: a total is named with one plain name, such as sumw")));
+            }
+            if recipe.columns.iter().any(|(n, _)| n == name) || recipe.defines.contains_key(name) || recipe.totals.iter().any(|t| &t.name == name) {
+                return Err(problem(format!("{place}: {name} is already the name of a column, a total or a line of [define]; give the total another")));
+            }
+            let (value, tree) = match value {
+                Value::Table(line) => {
+                    only(line, &["value", "tree"], &place)?;
+                    let value = line.get("value").ok_or_else(|| problem(format!("{place} needs a value: what is summed")))?;
+                    let tree = line.get("tree").map(|tree| {
+                        let tree = tree.as_str().filter(|tree| !tree.is_empty());
+                        tree.map(str::to_owned).ok_or_else(|| problem(format!("{place} tree must name a tree of each file, such as \"Runs\"")))
+                    });
+                    (expression(value, &place)?, tree.transpose()?)
+                }
+                plain => (expression(plain, &place)?, None),
+            };
+            let mut used = BTreeSet::new();
+            uses(&value, &mut used);
+            if let (Some(tree), Some(defined)) = (&tree, used.iter().find(|used| recipe.defines.contains_key(*used))) {
+                return Err(problem(format!("{place} reads the tree {tree}, and {defined} is a line of [define], over the events read: name that tree's branches")));
+            }
+            recipe.totals.push(Total { name: name.clone(), value, tree });
+        }
+        // A total is known once every event is read: only a derived column may use one.
+        let total = |expression: &Expression| {
+            let mut fields = BTreeSet::new();
+            fields_of(expression, &mut fields);
+            fields.into_iter().find(|field| recipe.totals.iter().any(|t| &t.name == field))
+        };
+        let places = recipe.defines.iter().map(|(name, e)| (format!("[define] {name}"), e))
+            .chain(recipe.keep.iter().flat_map(|cut| cut.expressions().map(move |e| (format!("[keep] {}", cut.name), e))))
+            .chain(recipe.columns.iter().map(|(name, e)| (format!("[columns] {name}"), e)))
+            .chain(recipe.totals.iter().map(|t| (format!("[totals] {}", t.name), &t.value)));
+        for (place, expression) in places {
+            if let Some(field) = total(expression) {
+                return Err(problem(format!("{place} uses sample.{field}, a total of [totals], known only once every event is read: use it under [derived]")));
+            }
+        }
         // A derived column is computed from what the file holds: the stored columns and the
         // derived columns above it.
         let mut held: BTreeSet<String> = recipe.columns.iter().map(|(name, _)| name.clone()).collect();
@@ -335,8 +413,8 @@ impl Recipe {
                     "{place}: a derived column is named with one plain name, such as ht_over_met"
                 )));
             }
-            if held.contains(name) || recipe.defines.contains_key(name) {
-                return Err(problem(format!("{place}: {name} is already the name of a column or of a line of [define]; give the derived column another")));
+            if held.contains(name) || recipe.defines.contains_key(name) || recipe.totals.iter().any(|t| &t.name == name) {
+                return Err(problem(format!("{place}: {name} is already the name of a column, a total or a line of [define]; give the derived column another")));
             }
             let parsed = expression(value, &place)?;
             if by_sample(&parsed) {

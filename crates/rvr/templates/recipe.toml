@@ -22,6 +22,11 @@ a_good_tau = "count(good_tau) >= 1"
 [columns]
 branches = ["run", "luminosityBlock", "event", "PV_npvs", "MET_pt", "MET_phi", "Muon_pt", "Muon_eta", "Tau_pt", "Tau_eta", "Jet_pt"]
 
+# [totals]: sums over every event read, before the cuts, one value per sample: the sum of
+# genWeight, say, to normalize simulation (a derived column can then divide by sample.sumw).
+[totals]
+# sumw = "genWeight"
+
 # [derived]: columns kept as their expressions over the stored columns, not as arrays, and worked
 # out when they are read: a smaller file, for the work of computing them each time.
 [derived]

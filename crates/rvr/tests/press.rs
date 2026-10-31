@@ -78,6 +78,8 @@ jets = "nJet >= 1"
 branches = ["weight", "nJet", "Jet_pt", "Muon_charge"]
 ht = "sum(Jet_pt)"
 
+[totals]
+
 [derived]
 "#;
     let dir = study("keep", FLAT, recipe);
@@ -146,7 +148,7 @@ ht = "sum(Jet_pt)"
 
 #[test]
 fn events_reads_the_first_entries_and_records_where_it_stopped() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
     let dir = study("first", FLAT, recipe);
     let header = pressed(&dir, &["--events", "2"]);
     assert_eq!(header["data"]["rows"], 2);
@@ -181,7 +183,7 @@ fn events_reads_the_first_entries_and_records_where_it_stopped() {
 
 #[test]
 fn a_random_choice_is_recorded_checked_and_reproduced() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
     let dir = study("random", FLAT, recipe);
     let header = pressed(&dir, &["--events", "3", "--random", "--seed", "5"]);
     let sample = &header["made"]["files"]["flat"];
@@ -224,7 +226,7 @@ fn a_random_choice_is_recorded_checked_and_reproduced() {
 
 #[test]
 fn a_file_is_signed_once_there_is_a_key() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
     let dir = study("signed", FLAT, recipe);
     let (code, said) = rvr(&dir, &["key", "new", "Tester"]);
     assert_eq!(code, 0, "{said}");
@@ -253,7 +255,7 @@ fn std_vectors_in_a_folder_are_pressed() {
     let samples = FLAT
         .replace("uproot_flat.root", "stl_vectors.root")
         .replace("\"analysis\"", "\"ntuple/Events\"");
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\ntwo = \"count(jet_pt) >= 2\"\n\n[columns]\nbranches = [\"evt\", \"jet_pt\", \"u16\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\ntwo = \"count(jet_pt) >= 2\"\n\n[columns]\nbranches = [\"evt\", \"jet_pt\", \"u16\"]\n\n[totals]\n\n[derived]\n";
     let dir = study("vectors", &samples, recipe);
     let header = pressed(&dir, &[]);
     assert_eq!(header["data"]["rows"], 2);
@@ -268,7 +270,7 @@ fn std_vectors_in_a_folder_are_pressed() {
 
 #[test]
 fn presses_that_cannot_be_trusted_are_refused() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
     let dir = study("refused", FLAT, recipe);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
 
@@ -348,7 +350,7 @@ tree = "Empty"
 flat = "x"
 listed = "list"
 "#;
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nvalue = \"branch(sample.flat)\"\nvalues = \"branch(sample.listed)\"\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nvalue = \"branch(sample.flat)\"\nvalues = \"branch(sample.listed)\"\n\n[totals]\n\n[derived]\n";
     let dir = study("empty", samples, recipe);
     let header = pressed(&dir, &[]);
     let rows: Vec<u64> = header["data"]["samples"]
@@ -385,6 +387,8 @@ jets = "nJet >= 1"
 [columns]
 branches = ["nJet", "Jet_pt"]
 ht = "sum(Jet_pt)"
+
+[totals]
 
 [derived]
 per_jet = "ht / nJet"
@@ -508,6 +512,8 @@ jets = "nJet >= 1"
 [columns]
 branches = ["weight", "nJet"]
 
+[totals]
+
 [derived]
 "#;
     let dir = study("add", FLAT, recipe);
@@ -625,6 +631,8 @@ jets = "nJet >= 1"
 branches = ["weight", "nJet", "Jet_pt"]
 ht = "sum(Jet_pt)"
 
+[totals]
+
 [derived]
 double = "weight * 2"
 "#;
@@ -692,6 +700,8 @@ jets = "nJet >= 1"
 
 [columns]
 branches = ["weight", "nJet"]
+
+[totals]
 
 [derived]
 "#;
@@ -793,7 +803,7 @@ fn damage(path: &Path, branch: &str) {
 
 #[test]
 fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_columns() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[derived]\nr = \"if(sample.file == './flat_b.root', weight / (nJet - nJet), weight)\"\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[totals]\n\n[derived]\nr = \"if(sample.file == './flat_b.root', weight / (nJet - nJet), weight)\"\n";
     let dir = twice("late", recipe);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     assert_eq!(rvr(&dir, &["key", "new", "Tester"]).0, 0);
@@ -809,7 +819,7 @@ fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_co
     assert!(code == 0 && said.contains("Nothing to read") && said.contains("2 columns and 1 derived"), "{said}");
     std::fs::remove_dir_all(&dir).unwrap();
     // So with derived columns written as an inline table, which cannot be edited a line at a time.
-    let inline = "format = \"rvr-recipe\"\nversion = 1\nderived = { r = \"if(sample.file == './flat_b.root', weight / (nJet - nJet), weight)\" }\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n";
+    let inline = "format = \"rvr-recipe\"\nversion = 1\nderived = { r = \"if(sample.file == './flat_b.root', weight / (nJet - nJet), weight)\" }\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[totals]\n";
     let dir = twice("late-inline", inline);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     let (code, said) = rvr(&dir, &["press", "--workers", "1"]);
@@ -828,7 +838,7 @@ fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_co
 
 #[test]
 fn a_derived_column_of_another_kind_in_another_sample_stops_the_press_as_it_reads() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[derived]\nscaled = \"sample.w * nJet\"\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[totals]\n\n[derived]\nscaled = \"sample.w * nJet\"\n";
     let dir = twice("kinds", recipe);
     let samples = "format = \"rvr-samples\"\nversion = 1\n\n[defaults]\ntree = \"analysis\"\n\n[[sample]]\nname = \"a\"\nlabel = \"A\"\nfiles = \"flat_a.root\"\nw = 1\n\n[[sample]]\nname = \"b\"\nlabel = \"B\"\nfiles = \"flat_b.root\"\nw = 0.5\n";
     std::fs::write(dir.join("samples.toml"), samples).unwrap();
@@ -840,7 +850,7 @@ fn a_derived_column_of_another_kind_in_another_sample_stops_the_press_as_it_read
 
 #[test]
 fn a_damaged_basket_is_a_hole_named_with_its_file_tree_and_entries() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
     let dir = twice("damaged", recipe);
     // Damaged before the lock is written: press checks size and adler32 first.
     damage(&dir.join("flat_b.root"), "weight");
@@ -878,7 +888,7 @@ fn a_damaged_basket_is_a_hole_named_with_its_file_tree_and_entries() {
     assert_eq!(code, 3, "{said}");
     assert!(said.contains("with 1 hole: rvr press --fill reads them again"), "{said}");
     // A column added is read for the events kept; the hole stays a hole.
-    let more = recipe.replace("\n\n[derived]", "\ndouble = \"weight * 2\"\n\n[derived]");
+    let more = recipe.replace("\n\n[totals]", "\ndouble = \"weight * 2\"\n\n[totals]");
     std::fs::write(dir.join("recipe.toml"), more).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 3, "{said}");
@@ -910,7 +920,7 @@ fn a_damaged_basket_is_a_hole_named_with_its_file_tree_and_entries() {
 
 #[test]
 fn a_file_gone_or_changed_since_the_lock_is_a_hole_of_its_own() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
     let dir = twice("gone", recipe);
     std::fs::copy(dir.join("uproot_flat.root"), dir.join("flat_c.root")).unwrap();
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
@@ -942,7 +952,7 @@ fn a_file_gone_or_changed_since_the_lock_is_a_hole_of_its_own() {
 
 #[test]
 fn a_fill_takes_the_choice_it_was_pressed_with_and_the_file_put_back() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
     let dir = twice("refill", recipe);
     let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
@@ -977,7 +987,7 @@ fn a_fill_takes_the_choice_it_was_pressed_with_and_the_file_put_back() {
 
 #[test]
 fn samples_added_keep_the_holes_of_the_others_and_are_picked_up_when_stopped() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"Jet_pt\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"Jet_pt\"]\n\n[totals]\n\n[derived]\n";
     let dir = study("added-holes", &samples_of(&["a", "b"]), recipe);
     for name in ["a", "b", "c", "d", "e", "f"] {
         std::fs::copy(dir.join("uproot_flat.root"), dir.join(format!("flat_{name}.root"))).unwrap();
@@ -1035,7 +1045,7 @@ fn a_press_stopped_part_way_is_picked_up_where_it_stopped() {
     if !cfg!(debug_assertions) {
         return;
     }
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\njets = \"nJet >= 1\"\n\n[columns]\nbranches = [\"weight\", \"Jet_pt\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\njets = \"nJet >= 1\"\n\n[columns]\nbranches = [\"weight\", \"Jet_pt\"]\n\n[totals]\n\n[derived]\n";
     let dir = twice("resume", recipe);
     std::fs::copy(dir.join("uproot_flat.root"), dir.join("flat_c.root")).unwrap();
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
@@ -1112,7 +1122,7 @@ fn a_press_stopped_part_way_is_picked_up_where_it_stopped() {
 #[test]
 fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
     let samples = "format = \"rvr-samples\"\nversion = 1\n\n[[sample]]\nname = \"flat\"\nlabel = \"Flat\"\nfiles = [\"a/flat.root\", \"b/flat.root\"]\ntree = \"analysis\"\n";
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
     let dir = study("unmounted", samples, recipe);
     for folder in ["a", "b"] {
         std::fs::create_dir_all(dir.join(folder)).unwrap();
@@ -1147,7 +1157,7 @@ fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
 #[test]
 fn a_flag_some_samples_lack_is_compared_or_given_to_all_in_defaults() {
     let samples = |defaults: &str| format!("format = \"rvr-samples\"\nversion = 1\n\n[defaults]\ntree = \"analysis\"\n{defaults}\n[[sample]]\nname = \"data\"\nfiles = \"data.root\"\nisData = true\n\n[[sample]]\nname = \"mc\"\nfiles = \"mc.root\"\nxsec = 88.29\n");
-    let recipe = |condition: &str| format!("format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\nw = \"if({condition}, 0 * weight + 1, weight * sample.xsec)\"\n\n[derived]\n");
+    let recipe = |condition: &str| format!("format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\nw = \"if({condition}, 0 * weight + 1, weight * sample.xsec)\"\n\n[totals]\n\n[derived]\n");
     let dir = study("flag", &samples(""), &recipe("sample.isData"));
     for name in ["data.root", "mc.root"] {
         std::fs::copy(dir.join("uproot_flat.root"), dir.join(name)).unwrap();
@@ -1174,7 +1184,7 @@ fn a_flag_some_samples_lack_is_compared_or_given_to_all_in_defaults() {
 
 #[test]
 fn a_mistake_in_the_recipe_stops_the_press_with_no_file_and_no_holes() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nht = \"sum(Jet_ptt)\"\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nht = \"sum(Jet_ptt)\"\n\n[totals]\n\n[derived]\n";
     let dir = twice("mistake", recipe);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     let (code, said) = rvr(&dir, &["press"]);
@@ -1183,13 +1193,13 @@ fn a_mistake_in_the_recipe_stops_the_press_with_no_file_and_no_holes() {
     assert!(!said.contains("hole"), "{said}");
     assert!(!dir.join(format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap())).exists());
     // A column naming a branch the file does not have says which column, and which branch.
-    let renamed = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nnpv = \"PV_npvs\"\n\n[derived]\n";
+    let renamed = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nnpv = \"PV_npvs\"\n\n[totals]\n\n[derived]\n";
     std::fs::write(dir.join("recipe.toml"), renamed).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("[columns] npv: There is no column named PV_npvs."), "{said}");
     // A defined name the press uses that is also a branch is refused: a name means one thing.
-    let both = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\nweight = \"nJet > 1\"\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\nheavy = \"weight\"\n\n[derived]\n";
+    let both = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\nweight = \"nJet > 1\"\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\nheavy = \"weight\"\n\n[totals]\n\n[derived]\n";
     std::fs::write(dir.join("recipe.toml"), both).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
@@ -1199,21 +1209,21 @@ fn a_mistake_in_the_recipe_stops_the_press_with_no_file_and_no_holes() {
     std::fs::write(dir.join("recipe.toml"), both.replace("heavy = \"weight\"\n", "")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 0, "{said}");
-    // A recipe.toml writes its four tables, even empty; one left out is refused by press and try.
+    // A recipe.toml writes its five tables, even empty; one left out is refused by press and try.
     std::fs::write(dir.join("recipe.toml"), both.replace("\n[keep]\n", "")).unwrap();
     for args in [&["press"][..], &["try", "nJet"]] {
         let (code, said) = rvr(&dir, args);
-        assert!(code == 1 && said.contains("recipe.toml has no [keep] table: every recipe has its four tables, [define], [keep], [columns] and [derived], each written even when it is empty. Add the line [keep]."), "{said}");
+        assert!(code == 1 && said.contains("recipe.toml has no [keep] table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty. Add the line [keep]."), "{said}");
     }
-    std::fs::write(dir.join("recipe.toml"), "format = \"rvr-recipe\"\nversion = 1\n\n[columns]\nbranches = [\"nJet\"]\n").unwrap();
+    std::fs::write(dir.join("recipe.toml"), "version = 1\nformat = \"rvr-recipe\"\n\n[columns]\nbranches = [\"nJet\"]\n").unwrap();
     let (code, said) = rvr(&dir, &["status"]);
-    assert!(code == 1 && said.contains("recipe.toml has no [define], [keep] or [derived] table") && said.contains("Add [define], [keep] and [derived], each on a line of its own."), "{said}");
+    assert!(code == 1 && said.contains("recipe.toml has no [define], [keep], [totals] or [derived] table") && said.contains("Add [define], [keep], [totals] and [derived], each on a line of its own."), "{said}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn a_press_that_can_read_nothing_writes_nothing() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
     let dir = study("damaged-only", FLAT, recipe);
     damage(&dir.join("uproot_flat.root"), "weight");
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
@@ -1238,6 +1248,8 @@ jets = "nJet >= 1"
 
 [columns]
 branches = ["nJet"]
+
+[totals]
 
 [derived]
 "#;
@@ -1285,7 +1297,7 @@ branches = ["nJet"]
 
 #[test]
 fn branches_lists_every_branch_with_its_type_and_shape() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[totals]\n\n[derived]\n";
     let dir = study("branches", FLAT, recipe);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     let (code, said) = rvr(&dir, &["branches"]);
@@ -1325,7 +1337,7 @@ fn branches_lists_every_branch_with_its_type_and_shape() {
 #[test]
 fn the_lock_writes_each_number_as_a_number() {
     let samples = FLAT.replace("kind = \"test\"\n", "kind = \"test\"\nevents = 4\nxsec = 2.5\nera = 3\nscale = 3.0\n");
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[derived]\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
     let dir = study("numbers", &samples, recipe);
     let header = pressed(&dir, &[]);
     let lock = std::fs::read_to_string(dir.join("samples.lock")).unwrap();
@@ -1355,7 +1367,7 @@ fn the_lock_writes_each_number_as_a_number() {
 
 #[test]
 fn an_emptied_file_keeps_its_header_and_is_refilled_byte_for_byte() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\njets = \"nJet >= 1\"\n\n[columns]\nbranches = [\"weight\", \"nJet\", \"Jet_pt\"]\nht = \"sum(Jet_pt)\"\n\n[derived]\nper_jet = \"ht / nJet\"\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\njets = \"nJet >= 1\"\n\n[columns]\nbranches = [\"weight\", \"nJet\", \"Jet_pt\"]\nht = \"sum(Jet_pt)\"\n\n[totals]\n\n[derived]\nper_jet = \"ht / nJet\"\n";
     let dir = study("emptied", FLAT, recipe);
     assert_eq!(rvr(&dir, &["key", "new", "Tester"]).0, 0);
     pressed(&dir, &[]);
@@ -1407,5 +1419,82 @@ fn an_emptied_file_keeps_its_header_and_is_refilled_byte_for_byte() {
     let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     let (code, said) = rvr(&dir, &["empty", &name]);
     assert!(code == 1 && said.contains("has 1 hole: a refill reads what its press read"), "{said}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn totals_sum_every_event_read_before_the_cuts_and_a_derived_column_uses_them() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\njets = \"nJet >= 1\"\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\nsumw = \"weight\"\nn = \"1\"\nx = { value = \"x\", tree = \"other\" }\n\n[derived]\nw = \"weight / sample.sumw\"\n";
+    let dir = twice("totals", recipe);
+    let header = pressed(&dir, &[]);
+    let flat = &header["made"]["files"]["flat"];
+    // Each copy: weights 1, 0.5, 2.25, 1, 0.75 of five events, the cut keeping four; x is 0, 1, 2 in its other tree.
+    for file in ["./flat_a.root", "./flat_b.root"] {
+        let totals = &flat["files"][file]["totals"];
+        assert_eq!((totals["sumw"].as_f64(), totals["n"].as_f64(), totals["x"].as_f64()), (Some(5.5), Some(5.0), Some(3.0)), "{file}");
+    }
+    let given = |key: &str| flat["metadata"][key].as_f64();
+    assert_eq!((given("sumw"), given("n"), given("x"), &header["data"]["rows"]), (Some(11.0), Some(10.0), Some(6.0), &8.into()));
+    // Each is a sample column, and the derived column works out with it.
+    let shown = columns(&dir);
+    assert!(shown.contains("sumw") && shown.contains("derived = \"weight / sample.sumw\""), "{shown}");
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let (code, said) = rvr(&dir, &["validate", &name]);
+    assert!(code == 0 && said.contains("1 derived"), "{said}");
+    // A column added is read for the events kept, and the totals are the file's.
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("[\"weight\"]", "[\"weight\", \"nJet\"]")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains("Reading only nJet"), "{said}");
+    let header: Value = serde_json::from_str(&rvr(&dir, &["header", &name]).1).unwrap();
+    assert_eq!(header["made"]["files"]["flat"]["metadata"]["sumw"].as_f64(), Some(11.0));
+    // Totals changed: rvr status says so, and every event is read again.
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("n = \"1\"\n", "")).unwrap();
+    assert!(rvr(&dir, &["status"]).1.contains("the totals under [totals] changed"));
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains("the totals under [totals] have changed"), "{said}");
+    // The first events only: the totals over them; a total of another tree counts a whole file, and is refused.
+    let first = recipe.replace("x = { value = \"x\", tree = \"other\" }\n", "");
+    std::fs::write(dir.join("recipe.toml"), &first).unwrap();
+    let header = pressed(&dir, &["--events", "2", "--full"]);
+    assert_eq!(header["made"]["files"]["flat"]["metadata"]["sumw"].as_f64(), Some(1.5));
+    std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--events", "2"]);
+    assert!(code == 1 && said.contains("[totals] x sums the tree other, whose entries count every event of a file, and flat reads only some of its events"), "{said}");
+    // The events' own tree is not another tree.
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("tree = \"other\"", "tree = \"analysis\"")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 1 && said.contains("[totals] x names the tree analysis, the one flat reads its events from"), "{said}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn totals_hold_when_a_sample_is_added_and_name_their_mistakes() {
+    let one = "format = \"rvr-samples\"\nversion = 1\n\n[defaults]\ntree = \"analysis\"\n\n[[sample]]\nname = \"a\"\nfiles = \"flat_a.root\"\nnorm = 2\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\nw = \"weight\"\n\n[keep]\njets = \"nJet >= 1\"\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\nsumw = \"w\"\n\n[derived]\n";
+    let dir = twice("totals-added", recipe);
+    std::fs::write(dir.join("samples.toml"), one).unwrap();
+    pressed(&dir, &[]);
+    // A sample added is read alone, and each sample's total is its own events' sum, once.
+    std::fs::write(dir.join("samples.toml"), format!("{one}\n[[sample]]\nname = \"b\"\nfiles = \"flat_b.root\"\n")).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains("the new sample b"), "{said}");
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let header: Value = serde_json::from_str(&rvr(&dir, &["header", &name]).1).unwrap();
+    let sumw = |sample: &str| header["made"]["files"][sample]["metadata"]["sumw"].as_f64();
+    assert_eq!((sumw("a"), sumw("b")), (Some(5.5), Some(5.5)));
+    // A defined name a total reaches, changed: every event is read again.
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("w = \"weight\"", "w = \"weight * 2\"")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains("the totals under [totals] have changed"), "{said}");
+    let header: Value = serde_json::from_str(&rvr(&dir, &["header", &name]).1).unwrap();
+    assert_eq!(header["made"]["files"]["b"]["metadata"]["sumw"].as_f64(), Some(11.0));
+    // A sum that is not a finite number, and a total named like a key of samples.toml, are refused by name.
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("sumw = \"w\"", "sumw = \"w / (nJet - nJet)\"")).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert!(code == 1 && said.contains("[totals] sumw: its sum is not a finite number"), "{said}");
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("sumw = \"w\"", "norm = \"w\"")).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert!(code == 1 && said.contains("[totals] norm has the name of a key of samples.toml"), "{said}");
     std::fs::remove_dir_all(&dir).unwrap();
 }

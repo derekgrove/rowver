@@ -275,3 +275,40 @@ fn holes_are_ranges_no_row_lies_in_and_the_counts_hold() {
     untaken["made"]["files"]["B"]["files"]["fixture-b.root"]["uuid"] = Value::Null;
     assert!(!opens(&sealed(untaken)).unwrap_err().contains("no uuid"), "take 0 may lack it");
 }
+
+/// A sample's totals are its files' totals, finite numbers, summed in their order into its
+/// metadata, and every file the press read holds each total the recipe asks for; anything else is
+/// refused.
+#[test]
+fn a_samples_totals_are_its_files_totals_summed() {
+    let totaled = |total: Value, said: Value, asked: &str| {
+        let (mut header, _) = rebuilt(10.);
+        let text = format!("format = \"rvr-recipe\"\nversion = 1\n[totals]\n{asked}\n");
+        header["made"]["recipe"]["text"] = text.as_str().into();
+        header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(&text).into();
+        for sample in ["A", "B"] {
+            let files: Vec<String> = header["made"]["files"][sample]["files"].as_object().unwrap().keys().cloned().collect();
+            for file in &files {
+                header["made"]["files"][sample]["files"][file]["totals"] = json!({ "sumw": 1.0 });
+            }
+            header["made"]["files"][sample]["metadata"]["sumw"] = (files.len() as f64).into();
+        }
+        header["made"]["files"]["B"]["files"]["fixture-b.root"]["totals"] = json!({ "sumw": total });
+        header["made"]["files"]["B"]["metadata"]["sumw"] = said;
+        let names: Vec<String> = header["made"]["recipe"]["columns"].as_array().unwrap().iter().map(|n| n.as_str().unwrap().to_owned()).collect();
+        let taken: Vec<&str> = names.iter().map(String::as_str).collect();
+        header["data"]["sample_cols"] = rowver::write::sample_cols(&["A", "B"], &header["made"]["files"], &taken).unwrap().into();
+        opens(&sealed(header))
+    };
+    let asked = "sumw = \"w\"";
+    assert_eq!(totaled(2.5.into(), 2.5.into(), asked), Ok(()));
+    let wrong = totaled(2.5.into(), 3.0.into(), asked).unwrap_err();
+    assert!(wrong.contains("made.files[\"B\"].metadata.sumw is not the sum of its files' totals of sumw"), "{wrong}");
+    let text = totaled("2.5".into(), 2.5.into(), asked).unwrap_err();
+    assert!(text.contains("a file's total sumw must be a finite number"), "{text}");
+    // A total the recipe does not ask for, or one it asks for that a file read does not hold.
+    let more = totaled(2.5.into(), 2.5.into(), "").unwrap_err();
+    assert!(more.contains("holds every total of the recipe's [totals] (), and this one holds sumw"), "{more}");
+    let less = totaled(2.5.into(), 2.5.into(), "sumw = \"w\"\nn = \"1\"").unwrap_err();
+    assert!(less.contains("holds every total of the recipe's [totals] (sumw, n), and this one holds sumw"), "{less}");
+}

@@ -17,6 +17,10 @@ branches = ["MET_pt", "nJet", "Muon_pt"]
 mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
 weight = "if(sample.kind == 'data', 0 * MET_pt + 1, genWeight * sample.xsec * 1000 * sample.lumi)"
 
+[totals]
+sumw = "if(sample.kind == 'data', 0, genWeight)"
+
 # Worked out from the stored muons when it is read.
 [derived]
 leading_muon_pt = "first(Muon_pt, -1)"
+scaled = "if(sample.kind == 'data', weight, weight / sample.sumw)"

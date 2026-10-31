@@ -27,7 +27,7 @@ You write two short text files, and `rvr` does the rest:
 | `zmumu.rvr` | the events, with the three texts above inside it | `rvr press` |
 
 The study here is Z → μμ: Drell-Yan simulation first, then data and tt̄ beside it. Its files, as
-they are at step 6, are in [`zmumu`](zmumu), and the study of step 7 is in [`sumw`](sumw).
+they are at step 7, are in [`zmumu`](zmumu).
 
 ### The example studies
 
@@ -42,8 +42,7 @@ checks that every one still reads.
 | [`higgs_tautau`](higgs_tautau) | every sample of the CMS Open Data H → ττ study: the data from two files by a pattern, signals and backgrounds, a muon and a tau of opposite charge | no |
 | [`lhcb_b_to_kkk`](lhcb_b_to_kkk) | LHCb Open Data: B± → K± K+ K− from three tracks' flat branches, the B mass from defined names, the two magnet polarities written as eras | no |
 | [`recipe_tour`](recipe_tour) | every table of a recipe: defined names that use one another, jets cleaned of muons and taus, a trigger named by each sample, a cut for one sample only, a renamed branch, a stored type; events chosen at random | no |
-| [`zmumu`](zmumu) | this page's study: data, Drell-Yan and tt̄ from DAS, with a weight per event | yes |
-| [`sumw`](sumw) | the sum of generator weights over the events `zmumu` read (step 7) | yes |
+| [`zmumu`](zmumu) | this page's study: data, Drell-Yan and tt̄ from DAS, with a weight per event and the sum of generator weights over every event read | yes |
 | [`eras`](eras) | one sample per era (UL17, UL18), an era's values in dataset names and metadata, a cut for 2018 only | yes |
 
 ## 2. Make your first file
@@ -79,6 +78,8 @@ two_muons = "count(good_muon) == 2"
 branches = ["MET_pt", "nJet"]
 mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
 
+[totals]
+
 [derived]
 ```
 
@@ -97,8 +98,9 @@ named in full, as the file spells it.
   events kept. `mass` is computed for each event kept: `Muon_pt[good_muon]` is the good muons'
   pt (the brackets keep the members where `good_muon` is true), `pair_mass` the mass of each pair
   of them, and `first(…, -1)` the first pair's mass, or -1 for an event with no pair.
-- `[derived]` is empty for now (step 5 puts a column there). Every recipe writes its four tables,
-  even the empty ones: `rvr press` refuses a recipe that leaves one out.
+- `[totals]` and `[derived]` are empty for now (a later step puts a column under `[derived]`).
+  Every recipe writes its five tables, even the empty ones: `rvr press` refuses a recipe that
+  leaves one out.
 
 **How do you know the file has `Muon_pt`?** You don't have to guess. Once the samples are resolved
 (just below), `rvr branches` lists every branch of the sample's file, and `--find` narrows the
@@ -421,40 +423,43 @@ TT. (The cross sections here are for illustration; take yours from XSDB.)
 
 ## 7. Data against simulation
 
-A simulated sample's weights must be divided by the sum of `genWeight` over the events it read.
-The file has only the events that passed the cuts, so that sum comes from a second, tiny study in
-a folder `sumw` beside `zmumu`. Its `samples.toml` is `zmumu`'s without the data sample, so it
-reads the same events, and its recipe has no cuts and stores only `genWeight`:
+A simulated sample's weights must be divided by the sum of `genWeight` over every event it read,
+before the cuts. The file keeps only the events that passed them, so the recipe asks the press for
+that sum as it reads, under `[totals]` (one number per sample, 0 for the data, which has no
+`genWeight`), and a derived column divides by it:
 
 ```toml
-format = "rvr-recipe"
-version = 1
+[totals]
+sumw = "if(sample.kind == 'data', 0, genWeight)"
 
-[define]
-
-[keep]
-
-[columns]
-branches = ["genWeight"]
-
+# Worked out from the stored muons when it is read.
 [derived]
+leading_muon_pt = "first(Muon_pt, -1)"
+scaled = "if(sample.kind == 'data', weight, weight / sample.sumw)"
 ```
+
+A total counts every event read, so changing `[totals]` presses every event again:
 
 ```text
-$ rvr samples resolve samples.toml
-  ok    DY                                       204 files   257.3 GB   100,000 of 195,510,810 events
-  ok    TT                                       155 files   309.0 GB   100,000 of 145,020,000 events
-
-2 samples, 359 distinct files, 566.3 GB in 3.7 s.
-Wrote samples.lock (0.3 MB).
 $ rvr press
+Pressing every column: zmumu.rvr cannot be built on, as the totals under [totals] have changed, which count every event read.
+Rucio said where the 4 dataset files can be read in 1.4 s.
+Pressing 3 samples, 4 files, 300,000 entries, 4 at a time:
 …
-Read 200,000 entries; with no cuts, every one is kept.
-Wrote sumw.rvr (200,000 rows, 1 column, 0.3 MB) in 4.6 s.
+Read 300,000 entries; kept after each cut:
+  trigger                              144,360
+  two_muons                             21,257
+Wrote zmumu.rvr (21,257 rows, 5 columns and 2 derived, 0.9 MB) in 5.6 s.
+$ rvr dump zmumu.rvr --columns
+…
+sumw            f8 by sample[3]  data: 0.0, DY: 1700834877.5429688, TT: 7213125.645751953
+…
 ```
 
-Then, from `zmumu`, the data against the stacked simulation, with the simulation scaled to the
-share of the data that was read (100,000 of its 514 million events):
+Each total is the sum, in the files' order, of `genWeight` over the 100,000 events each sample
+read: a study that stores `genWeight` for every event, with no cuts, gives the same sums to the
+last bit. Then the data against the stacked simulation, with the simulation scaled to the share of
+the data that was read (100,000 of its 514 million events):
 
 ```python
 import matplotlib.pyplot as plt
@@ -462,21 +467,17 @@ import numpy as np
 import rowver
 
 f = rowver.open("zmumu.rvr")
-sums = rowver.open("../sumw/sumw.rvr")
-
-# The sum of genWeight over the events each simulated sample read.
-sumw = {name: sums["genWeight"][sums["sample"] == i].sum(dtype=np.float64) for i, name in enumerate(sums.samples)}
 
 # Only part of the data was read: scale the simulation to the same share of its luminosity.
 read, total = f.sample_columns["events_read"], f.sample_columns["events_total"]
 share = read[0] / total[0]
 
 bins = np.linspace(60, 120, 31)
-mass, weight, sample = f["mass"], f["weight"], f["sample"]
+mass, scaled, sample = f["mass"], f["scaled"], f["sample"]
 counts, _ = np.histogram(mass[sample == 0], bins)
 plt.errorbar((bins[1:] + bins[:-1]) / 2, counts, yerr=np.sqrt(counts), fmt="ko", label="data")
 plt.hist([mass[sample == 2], mass[sample == 1]], bins, stacked=True, label=["TT", "DY"],
-         weights=[weight[sample == 2] * share / sumw["TT"], weight[sample == 1] * share / sumw["DY"]])
+         weights=[scaled[sample == 2] * share, scaled[sample == 1] * share])
 plt.xlabel("dimuon mass [GeV]")
 plt.ylabel("events")
 plt.legend()

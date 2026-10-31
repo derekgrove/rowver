@@ -829,18 +829,28 @@ trigger = "HLT_IsoMu24"
 one_muon = "count(good_muon) >= 1"
 
 [columns]                     # what the file stores
-branches = ["MET_pt", "Muon_pt", "Jet_pt"]    # branches stored as they are
+branches = ["MET_pt", "Muon_pt", "Jet_pt", "genWeight"]    # branches stored as they are
 ht = "sum(Jet_pt)"            # computed while pressing, one number per event
+
+[totals]                      # summed over every event read, before the cuts, per sample
+sumw = "genWeight"
 
 [derived]                     # kept as expressions, worked out when read
 met_over_ht = "MET_pt / ht"
+scaled = "genWeight / sample.sumw"
 ```
 
 Every branch is named in full. A defined name may use the names above it, and may not be a
 branch's name. A derived column uses only what the file holds: the stored columns and the derived
 columns above it. A cut can apply to some samples only: `hem = { if = "sample.era == 3", apply =
-"hem_veto" }`, where `sample.NAME` is a sample's metadata. Every recipe writes all four tables,
-even the ones it leaves empty; one that leaves a table out is refused.
+"hem_veto" }`, where `sample.NAME` is a sample's metadata. A total is the sum over every event a
+sample read, before the cuts, which a file of the events kept cannot give afterwards: the sum of
+`genWeight` that normalizes simulation. Each file's total is in its record, and each sample's in
+its metadata, a sample column a derived column reads as `sample.NAME`. `{ value = "genEventSumw",
+tree = "Runs" }` sums over every entry of another tree of each file instead, for a skim whose
+events were filtered before, and is refused for a sample that reads only part of its files. A
+change to `[totals]` presses every event again. Every recipe writes all five tables, even the
+ones it leaves empty; one that leaves a table out is refused.
 
 ## Grid access
 
