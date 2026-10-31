@@ -214,6 +214,61 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
     let refused = rowver::rvr::validate_file(&path).unwrap_err().to_string();
     std::fs::remove_file(path).unwrap();
     assert!(refused.contains("derived column twice, worked out here, is not what the file records"), "{refused}");
+    // A newer rvr's record that this rowver works out otherwise is not replaced: it says to update.
+    let made = header["made"]["toolchain"]["rvr"].clone();
+    header["made"]["toolchain"]["rvr"] = "99.1.0".into();
+    header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
+    let path = written(&header, "derived-changed-newer");
+    let refused = rowver::rvr::validate_file(&path).unwrap_err().to_string();
+    std::fs::remove_file(path).unwrap();
+    assert!(refused.contains("is not what the file records") && refused.contains("newer than this one") && !refused.contains("rvr derive"), "{refused}");
+    header["made"]["toolchain"]["rvr"] = made;
+    // A newer rvr's derived column, with a function this rowver does not know, says to update;
+    // its stored columns still read.
+    header["derived"]["columns"][0]["lim"][1] = records[0]["lim"][1].clone();
+    let later = text.replace("MET * 2", "later(MET)");
+    header["made"]["recipe"]["text"] = later.as_str().into();
+    header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(&later).into();
+    header["derived"]["columns"][0]["expression"] = "later(MET)".into();
+    let this = env!("CARGO_PKG_VERSION");
+    let tagged = format!("{this}-rc.1");
+    // A second derived column that uses the first: the hint is said once, not at each level.
+    let both = format!("{later}again = \"twice * 2\"\n");
+    header["made"]["recipe"]["text"] = both.as_str().into();
+    header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(&both).into();
+    let mut again = header["derived"]["columns"][0].clone();
+    again["name"] = "again".into();
+    again["expression"] = "twice * 2".into();
+    header["derived"]["columns"] = serde_json::json!([header["derived"]["columns"][0].clone(), again]);
+    for (made, newer) in [("99.1.0", true), (this, false), (&tagged, false)] {
+        header["made"]["toolchain"]["rvr"] = made.into();
+        header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
+        let path = written(&header, "derived-newer");
+        let reader = rowver::rvr::Reader::open(&path).unwrap();
+        let stored = reader.column("MET").unwrap().is_some();
+        let said = [reader.column("again").unwrap_err().to_string(), rowver::rvr::validate_file(&path).unwrap_err().to_string()];
+        // Emptied, it fails for that, and says nothing of updating.
+        rowver::write::empty(&path).unwrap();
+        let emptied = rowver::rvr::Reader::open(&path).unwrap().column("again").unwrap_err().to_string();
+        std::fs::remove_file(path).unwrap();
+        assert!(stored && emptied.contains("empty") && !emptied.contains("newer"), "{emptied}");
+        for refused in said {
+            let updates = refused.matches("The file was made by rvr 99.1.0, newer than this one").count();
+            assert!(refused.contains("There is no function named later") && updates == usize::from(newer), "{refused}");
+        }
+    }
+    // Syntax a newer rvr's recipe holds that this one cannot read says to update too.
+    header["derived"]["columns"] = serde_json::json!([header["derived"]["columns"][0].clone()]);
+    let unread = later.replace("later(MET)", "MET ?? 2");
+    header["made"]["recipe"]["text"] = unread.as_str().into();
+    header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(&unread).into();
+    header["derived"]["columns"][0]["expression"] = "MET ?? 2".into();
+    header["made"]["toolchain"]["rvr"] = "99.1.0".into();
+    header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
+    let path = written(&header, "derived-unread");
+    let refused = rowver::rvr::validate_file(&path).unwrap_err().to_string();
+    std::fs::remove_file(path).unwrap();
+    assert!(refused.contains("cannot be read") && refused.contains("newer than this one"), "{refused}");
 }
 
 #[test]

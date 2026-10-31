@@ -178,7 +178,7 @@ fn run(args: &[&str]) -> Result<(), String> {
     rowver::rvr::derived::checked(&file).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut header = file.header().clone();
     let text = header["made"]["recipe"]["text"].as_str().unwrap_or_default().to_owned();
-    let recipe = Recipe::read(&text).map_err(|e| format!("{}: the recipe it carries cannot be read by this rvr ({}): press its study again", path.display(), e.0))?;
+    let recipe = Recipe::read(&text).map_err(|e| format!("{}: the recipe it carries cannot be read by this rvr ({}). {}", path.display(), e.0, rowver::rvr::derived::remedy(&header)))?;
     let before: Vec<Value> = header["derived"]["columns"].as_array().cloned().unwrap_or_default();
     let mut derived = recipe.derived.clone();
     let users = |name: &str, derived: &[(String, String)]| -> Option<String> {

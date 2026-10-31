@@ -2,8 +2,10 @@
 //! kinematics.
 //!
 //! Ported from: awkward 2.12.0 `sum`, `any`, `all`, `min`, `max`, `num`, `firsts`,
-//! `fill_none`, `local_index`, and `where`; NumPy 2.5.1 `abs`, `sqrt`, `minimum`, `maximum`,
-//! `sign`, `isfinite`, `hypot`, and the trigonometric functions; and the recipe helpers
+//! `fill_none`, `local_index`, `concatenate` (`join`), and `where`; NumPy 2.5.1 `abs`, `sqrt`,
+//! `minimum`, `maximum`, `sign`, `isfinite`, `hypot`, `arctan2`, `floor`, `ceil`, `round`,
+//! `log10`, and the trigonometric functions; vector 1.8.1's `pt`, `eta`, `phi` and `rapidity`
+//! of a sum of four-momenta, through hep-columns; and the recipe helpers
 //! `nearest`, `is_sjet`, and `dimuon` of the Python RowVer's studies (tag `v13.0.1`), which
 //! they generalise.
 //! Documentation: <https://awkward-array.org/doc/main/reference/>;
@@ -18,6 +20,7 @@
 use crate::array::{lacking, together, Array, Constant, Store, Values};
 use crate::kind::Kind;
 use crate::{problem, Result};
+use hep_columns::vectors::Momentum;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -75,6 +78,28 @@ pub(crate) fn same_map(
             values: map(values),
         },
     })
+}
+
+/// Every value rounded down or up by `function` in its own kind: whole numbers and true-or-false
+/// values are kept as they are.
+pub(crate) fn kept_whole(array: &Array, function: fn(f64) -> f64) -> Result<Array> {
+    match array {
+        Array::Constant(Constant::Truth(_)) => Ok(array.clone()),
+        _ => same_map(array, |v| v, function),
+    }
+}
+
+/// Every value rounded to the nearest whole number, halves to even, in its own kind: whole numbers
+/// are whole already. True-or-false values are refused: NumPy makes them 16-bit floats to round.
+pub(crate) fn rounded(array: &Array) -> Result<Array> {
+    let truth = match array {
+        Array::Event(values) | Array::Object { values, .. } => values.kind == Kind::B1,
+        Array::Constant(constant) => matches!(constant, Constant::Truth(_)),
+    };
+    if truth {
+        return Err(problem("round rounds numbers, not true-or-false values: leave round out for a true-or-false one, or round a number"));
+    }
+    same_map(array, |v| v, libm::rint)
 }
 
 /// Say for every value whether it is a finite number.
@@ -165,8 +190,8 @@ pub(crate) fn pairwise(left: &Array, right: &Array, which: Extreme) -> Result<Ar
     )
 }
 
-/// The length of the hypotenuse of two arrays value by value, in their common float kind.
-pub(crate) fn hypot(left: &Array, right: &Array) -> Result<Array> {
+/// A float function of two arrays (hypot, atan2), value by value, in their common float kind.
+pub(crate) fn float_pair(left: &Array, right: &Array, function: fn(f64, f64) -> f64) -> Result<Array> {
     let apply = |a: &Values, b: &Values| -> Result<Values> {
         let (a, b) = together(a, b);
         let kind = a.kind.floating();
@@ -174,7 +199,7 @@ pub(crate) fn hypot(left: &Array, right: &Array) -> Result<Array> {
             .numbers()
             .into_iter()
             .zip(b.numbers())
-            .map(|(x, y)| kind.round(libm::hypot(x, y)));
+            .map(|(x, y)| kind.round(function(x, y)));
         Ok(Values::float(kind, values.collect()))
     };
     left.zip(
@@ -182,7 +207,7 @@ pub(crate) fn hypot(left: &Array, right: &Array) -> Result<Array> {
         &|constant, beside| Ok(constant.repeat(constant.beside(beside.kind)?, beside.len())),
         &|a, b| {
             Ok(Constant::Float(
-                libm::hypot(a.alone(1)?.number(0), b.alone(1)?.number(0)),
+                function(a.alone(1)?.number(0), b.alone(1)?.number(0)),
             ))
         },
         &apply,
@@ -540,21 +565,15 @@ fn particles<'a>(
     Ok((offsets, held))
 }
 
-/// The invariant mass of each event's list of particles added together, from pt, eta, phi,
-/// and a mass column when given; massless without one.
-pub(crate) fn mass(arguments: &[Array]) -> Result<Array> {
-    let (offsets, held) = particles(arguments, "mass")?;
+/// What `of` measures (the mass, pt, eta, phi or rapidity) of each event's list of particles
+/// added together, from pt, eta, phi, and a mass column when given; massless without one.
+pub(crate) fn summed(arguments: &[Array], name: &str, of: fn(Momentum) -> f64) -> Result<Array> {
+    let (offsets, held) = particles(arguments, name)?;
     let kind = float_kind(&held);
     let numbers: Vec<Vec<f64>> = held.iter().map(|values| values.numbers()).collect();
-    let masses = hep_columns::vectors::mass_per_event(
-        offsets,
-        &numbers[0],
-        &numbers[1],
-        &numbers[2],
-        numbers.get(3).map(Vec::as_slice),
-    );
-    let masses = masses.into_iter().map(|m| kind.round(m));
-    Ok(Array::Event(Values::float(kind, masses.collect())))
+    let mass = numbers.get(3).map(Vec::as_slice);
+    let sums = hep_columns::vectors::sum_per_event(offsets, &numbers[0], &numbers[1], &numbers[2], mass);
+    Ok(Array::Event(Values::float(kind, sums.map(|sum| kind.round(of(sum))).collect())))
 }
 
 /// How many pairs the lists of one run of events may make before they are refused.
@@ -584,24 +603,17 @@ pub(crate) fn pair_member(array: &Array, second: bool) -> Result<Array> {
     })
 }
 
-/// The invariant mass of each pair of particles in each event's list.
-pub(crate) fn pair_mass(arguments: &[Array]) -> Result<Array> {
-    let (offsets, held) = particles(arguments, "pair_mass")?;
-    let (first, second) = pairs_of(offsets, "pair_mass")?;
+/// What `of` measures of each pair of particles in each event's list added together.
+pub(crate) fn pair_summed(arguments: &[Array], name: &str, of: fn(Momentum) -> f64) -> Result<Array> {
+    let (offsets, held) = particles(arguments, name)?;
+    let (first, second) = pairs_of(offsets, name)?;
     let kind = float_kind(&held);
     let numbers: Vec<Vec<f64>> = held.iter().map(|values| values.numbers()).collect();
-    let masses = hep_columns::vectors::pair_mass(
-        &first.values,
-        &second,
-        &numbers[0],
-        &numbers[1],
-        &numbers[2],
-        numbers.get(3).map(Vec::as_slice),
-    );
-    let masses = masses.into_iter().map(|m| kind.round(m));
+    let mass = numbers.get(3).map(Vec::as_slice);
+    let sums = hep_columns::vectors::pair_sum(&first.values, &second, &numbers[0], &numbers[1], &numbers[2], mass);
     Ok(Array::Object {
         offsets: Arc::new(first.offsets),
-        values: Values::float(kind, masses.collect()),
+        values: Values::float(kind, sums.map(|sum| kind.round(of(sum))).collect()),
     })
 }
 
@@ -712,6 +724,31 @@ pub(crate) fn take(array: &Array, positions: &Array, otherwise: &Array) -> Resul
     Ok(Array::Object {
         offsets: position_offsets.clone(),
         values: filled(values, &taken.values, otherwise, "take")?,
+    })
+}
+
+/// For each event, the members of several lists one after another, in the order given, in the
+/// kind they combine in.
+pub(crate) fn join(arguments: &[Array]) -> Result<Array> {
+    if arguments.len() < 2 {
+        return Err(problem("join takes two lists or more"));
+    }
+    let lists = arguments.iter().map(|argument| lists(argument, "join")).collect::<Result<Vec<_>>>()?;
+    let kind = lists.iter().map(|(_, values)| values.kind).fold(lists[0].1.kind, Kind::with);
+    // Each list in that kind (itself when it is already): floats or whole numbers, as it holds.
+    let cast: Vec<Values> = lists.iter().map(|(_, values)| values.cast(kind)).collect();
+    let offsets = lists.iter().map(|(offsets, _)| offsets.as_slice());
+    let joined = if kind.float() {
+        let parts: Option<Vec<(&[usize], &[f64])>> = offsets.zip(&cast).map(|(o, v)| v.floats().map(|held| (o, held))).collect();
+        parts.and_then(|parts| hep_columns::lists::join(&parts)).map(|j| (j.offsets, Values::float(kind, j.values)))
+    } else {
+        let parts: Option<Vec<(&[usize], &[i64])>> = offsets.zip(&cast).map(|(o, v)| v.wholes().map(|held| (o, held))).collect();
+        parts.and_then(|parts| hep_columns::lists::join(&parts)).map(|j| (j.offsets, Values::whole(kind, j.values)))
+    };
+    let (offsets, values) = joined.ok_or_else(|| problem("join needs lists over the same events"))?;
+    Ok(Array::Object {
+        offsets: Arc::new(offsets),
+        values,
     })
 }
 

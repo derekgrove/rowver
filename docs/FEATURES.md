@@ -340,11 +340,13 @@ and a defined name is worked out once per run of events, however often it is use
 |---|---|
 | reductions over a list | `count`, `sum`, `any`, `all`, `least`, `greatest`, `least_index`, `greatest_index`, `first`, `nth` |
 | positions and order | `index`, `sorted`, `order`, `take`, `listed` |
-| value-by-value mathematics | `abs`, `sign`, `sqrt`, `exp`, `log`, `cos`, `sin`, `cosh`, `sinh`, `hypot`, `min`, `max`, `clip`, `isfinite`, `if` |
+| joining lists | `join`, as electrons and muons into one list of leptons |
+| value-by-value mathematics | `abs`, `sign`, `sqrt`, `exp`, `log`, `log10`, `cos`, `sin`, `tan`, `acos`, `asin`, `atan`, `atan2`, `cosh`, `sinh`, `tanh`, `hypot`, `floor`, `ceil`, `round`, `min`, `max`, `clip`, `isfinite`, `if` |
 | bits | `bit_and`, `shift_right` |
-| kinematics | `delta_phi`, `delta_r`, `mass` |
+| kinematics | `delta_phi`, `delta_r`, value by value |
+| a list's sum of four-momenta | `mass`, `pt`, `eta`, `phi`, `rapidity` |
 | matching between two lists | `dr_nearest`, `dr_second_nearest`, `dr_farthest`, `dr_second_farthest`, `nearest_index`, `second_nearest_index`, `farthest_index`, `second_farthest_index` |
-| pairs within a list | `pair_first`, `pair_second`, `pair_dr`, `pair_mass` |
+| pairs within a list | `pair_first`, `pair_second`, `pair_dr`, `pair_mass`, `pair_pt`, `pair_eta`, `pair_phi`, `pair_rapidity` |
 | text, branches, types | `contains`, `branch`, `stored` |
 
 A reduction that may meet an empty list takes an explicit `otherwise` value, so it never gives a
@@ -515,9 +517,9 @@ once: its kind, its checksums (whole and per sample) and its facts (`lim`, `nice
 that works one out checks it against that record, so a derived column is as trustworthy as a stored
 one; `rvr diff` compares it from the headers alone, and a plot gets its axis from `nice` without
 computing anything. The reference reader does the work (`Reader::column` in `rowver`), and every
-function of the recipe language gives the same bits on every platform: `exp`, `log`, `cos`, `sin`,
-`cosh`, `sinh`, `hypot` and `**` come from the `libm` crate, as the platforms' own math libraries do
-not agree. Measured, Apple's and musl's disagree in the last bit of 2 to 26% of double results over
+function of the recipe language gives the same bits on every platform: its exponentials,
+logarithms, trigonometry, roundings, `hypot` and `**` come from the `libm` crate, as the platforms'
+own math libraries do not agree. Measured, Apple's and musl's disagree in the last bit of 2 to 26% of double results over
 the ranges physics columns take, and on the bench every one of twelve such columns came out
 different; the `libm` crate costs 1.6% of a press of all twelve (6.93 s against 6.82 s, within the
 run-to-run spread).

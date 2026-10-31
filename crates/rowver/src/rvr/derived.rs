@@ -160,12 +160,14 @@ struct Store<'a> {
     held: RefCell<BTreeMap<String, Rc<Held>>>,
     /// The derived columns being worked out, which none of them may use.
     working: RefCell<BTreeSet<String>>,
+    /// How a column an expression asked for failed, said as it is rather than as the expression's.
+    failed: RefCell<Option<crate::Error>>,
 }
 
 impl<'a> Store<'a> {
     fn new(file: &'a Reader, derived: &'a [(String, String)]) -> Self {
-        let (held, working) = Default::default();
-        Store { file, derived, held, working }
+        let (held, working, failed) = Default::default();
+        Store { file, derived, held, working, failed }
     }
 
     /// A column by name, or `None` when the file has no column of that name.
@@ -211,10 +213,26 @@ impl<'a> Store<'a> {
     }
 
     /// Work one derived column out over every row, a file's rows at a time, each with its
-    /// sample's metadata and its file, as a press gives them.
+    /// sample's metadata and its file, as a press gives them. A column it uses that failed is said
+    /// as it failed; its own expression failing, in a column a newer rvr recorded, says to update.
     fn compute(&self, name: &str, expression: &str) -> Result<Held> {
-        let parsed = parse(expression).map_err(|e| invalid(format!("derived column {name}: {}", e.0)))?;
+        self.worked_out(name, expression).map_err(|e| {
+            if let Some(failed) = self.failed.borrow_mut().take() {
+                return failed;
+            }
+            let header = self.file.header();
+            let recorded = listed(header).iter().any(|(n, x)| n == name && x == expression);
+            match unread(header).filter(|_| recorded) {
+                Some(hint) => invalid(format!("{e}. {hint}")),
+                None => e,
+            }
+        })
+    }
+
+    /// `compute`, before its failure is told.
+    fn worked_out(&self, name: &str, expression: &str) -> Result<Held> {
         let header = self.file.header();
+        let parsed = parse(expression).map_err(|e| invalid(format!("derived column {name}: {}", e.0)))?;
         let mut runs = Vec::new();
         let mut first = 0;
         for read in header["data"]["files"].as_array().into_iter().flatten() {
@@ -248,6 +266,45 @@ impl<'a> Store<'a> {
     }
 }
 
+/// For a file a newer rvr pressed than this version: what to do, said after what failed.
+fn newer(header: &Value) -> Option<String> {
+    let made = header["made"]["toolchain"]["rvr"].as_str()?;
+    let this = env!("CARGO_PKG_VERSION");
+    let pip = if made.contains('-') { "pip install -U --pre rowver" } else { "pip install -U rowver" };
+    later(made, this).then(|| {
+        format!("The file was made by rvr {made}, newer than this one ({this}), and may use what only a newer version reads: update rvr and rowver to {made} or later ({pip} updates both; or that release's rvr download, or rowver crate).")
+    })
+}
+
+/// What a newer file's derived column that cannot be worked out here adds to its failure.
+fn unread(header: &Value) -> Option<String> {
+    newer(header).map(|update| format!("{update} Its stored columns still read, each asked for by name."))
+}
+
+/// What to do when a file's recipe or derived columns cannot be worked out here.
+pub fn remedy(header: &Value) -> String {
+    newer(header).unwrap_or_else(|| "Press its study again.".into())
+}
+
+/// Whether version `made` comes after `this`, as semver orders them: by their three numbers (a
+/// part that is no number counts as 0), a pre-release (15.1.0-rc.1) before its release, and
+/// pre-releases by their dot-separated parts, numbers before words. Build metadata is left out.
+fn later(made: &str, this: &str) -> bool {
+    /// A version's place: its numbers, whether it is a release, and its pre-release's parts.
+    type Place<'a> = (Vec<u64>, bool, Vec<(bool, u64, &'a str)>);
+    fn order(version: &str) -> Place<'_> {
+        let version = version.split('+').next().unwrap_or_default();
+        let (release, pre) = version.split_once('-').map_or((version, None), |(r, p)| (r, Some(p)));
+        let numbers: Vec<u64> = release.split('.').take(3).map(|part| part.parse().unwrap_or(0)).collect();
+        let parts: Vec<(bool, u64, &str)> = pre.into_iter().flat_map(|pre| pre.split('.')).map(|part| match part.parse() {
+            Ok(number) => (false, number, ""),
+            Err(_) => (true, 0, part),
+        }).collect();
+        (numbers, pre.is_none(), parts)
+    }
+    order(made) > order(this)
+}
+
 /// Rows `first..last` of a file's columns, as an expression reads them.
 struct Run<'s, 'a> {
     store: &'s Store<'a>,
@@ -257,7 +314,12 @@ struct Run<'s, 'a> {
 
 impl Columns for Run<'_, '_> {
     fn column(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
-        let Some(whole) = self.store.get(name).map_err(|e| rvr_recipe::Error(e.to_string()))? else {
+        let got = self.store.get(name).map_err(|e| {
+            let said = rvr_recipe::Error(e.to_string());
+            self.store.failed.borrow_mut().get_or_insert(e);
+            said
+        });
+        let Some(whole) = got? else {
             return Ok(None);
         };
         let kind = Kind::named(&whole.kind)?;
@@ -338,10 +400,15 @@ fn columns_while(file: &Reader, names: &[String], go: &dyn Fn() -> Result<()>) -
         let expression = record["expression"].as_str().unwrap_or_default();
         let again = crate::write::derived(name, expression, &whole, &rows).map_err(|e| invalid(format!("derived column {e}")))?;
         if again != *record {
+            let differs = format!("derived column {name}, worked out here, is not what the file records of it (its checksums or facts differ)");
+            // A newer rvr's record is not to be replaced by this rowver's: it says to update too.
+            if let Some(hint) = unread(header) {
+                return Err(invalid(format!("{differs}: its header was changed, or a newer rvr works the expression out otherwise. {hint}")));
+            }
             // Quoted for a shell: an expression may hold quotes of its own, as branch('Jet.pt').
             let quoted = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
             let (path, line) = (quoted(&file.path().display().to_string()), quoted(&format!("{name} = {expression}")));
-            return Err(invalid(format!("derived column {name}, worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr derive {path} --drop {name} (with any derived column that uses it), then rvr derive {path} {line}, records it as this rowver works it out.")));
+            return Err(invalid(format!("{differs}: its header was changed, or the rowver that wrote it works the expression out differently. rvr derive {path} --drop {name} (with any derived column that uses it), then rvr derive {path} {line}, records it as this rowver works it out.")));
         }
         wholes.push(whole);
     }
@@ -372,13 +439,29 @@ pub(super) fn agreed(header: &Value) -> Result<usize> {
     // A recipe this rowver cannot read is checked only when there are derived columns to work out.
     match header["made"]["recipe"]["text"].as_str().map(Recipe::read) {
         Some(Ok(recipe)) if recipe.derived != derived => {
-            return Err(invalid("the [derived] table of the recipe it carries does not list the derived columns its header records: one of the two was edited after it was written. Press its study again."))
+            return Err(invalid(format!("the [derived] table of the recipe it carries does not list the derived columns its header records: one of the two was edited after it was written. {}", remedy(header))))
         }
         Some(Err(e)) if !derived.is_empty() => {
-            return Err(invalid(format!("the recipe it carries cannot be read ({}), so its derived columns cannot be worked out: press its study again", e.0)))
+            return Err(invalid(format!("the recipe it carries cannot be read ({}), so its derived columns cannot be worked out. {}", e.0, remedy(header))))
         }
         None if !derived.is_empty() => return Err(invalid("it has derived columns but carries no recipe to say what they are")),
         _ => {}
     }
     Ok(derived.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::later;
+
+    #[test]
+    fn a_version_is_later_as_semver_orders_them() {
+        assert!(later("15.1.0", "15.0.0") && later("16.0.0", "15.9.9") && later("15.0.10", "15.0.9"));
+        assert!(!later("15.0.0", "15.0.0") && !later("15.0.0", "15.1.0"));
+        // A pre-release comes before its release, and after an earlier pre-release.
+        assert!(later("15.1.0", "15.1.0-rc.1") && !later("16.0.0-rc.1", "16.0.0"));
+        assert!(later("16.0.0-rc.2", "16.0.0-rc.1") && later("16.0.0-rc.1.1", "16.0.0-rc.1"));
+        assert!(later("16.0.0-rc", "16.0.0-11") && !later("16.0.0-alpha", "16.0.0-beta"));
+        assert!(!later("15.0.0+linux", "15.0.0"));
+    }
 }

@@ -5,6 +5,7 @@ use crate::functions as f;
 use crate::kind::Kind;
 use crate::parse::Expression;
 use crate::{problem, Result};
+use hep_columns::vectors::Momentum;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -12,12 +13,14 @@ use std::sync::Arc;
 /// Every function an expression can call, as the README lists them.
 pub const FUNCTIONS: &[&str] = &[
     "count", "sum", "any", "all", "least", "greatest", "least_index", "greatest_index", "first",
-    "nth", "index", "sorted", "order", "take", "listed", "abs", "sign", "sqrt", "exp", "log", "cos",
-    "sin", "cosh", "sinh", "hypot", "min", "max", "clip", "isfinite", "if", "bit_and",
-    "shift_right", "delta_phi", "delta_r", "mass", "dr_nearest", "dr_second_nearest",
-    "dr_farthest", "dr_second_farthest", "nearest_index", "second_nearest_index",
-    "farthest_index", "second_farthest_index", "pair_first", "pair_second", "pair_dr",
-    "pair_mass", "contains", "branch", "stored",
+    "nth", "index", "sorted", "order", "take", "listed", "join", "abs", "sign", "sqrt", "exp", "log",
+    "log10", "cos", "sin", "tan", "acos", "asin", "atan", "atan2", "cosh", "sinh", "tanh", "hypot",
+    "floor", "ceil", "round", "min", "max", "clip", "isfinite", "if", "bit_and", "shift_right",
+    "delta_phi", "delta_r", "mass", "pt", "eta", "phi", "rapidity", "dr_nearest",
+    "dr_second_nearest", "dr_farthest", "dr_second_farthest", "nearest_index",
+    "second_nearest_index", "farthest_index", "second_farthest_index", "pair_first",
+    "pair_second", "pair_dr", "pair_mass", "pair_pt", "pair_eta", "pair_phi", "pair_rapidity",
+    "contains", "branch", "stored",
 ];
 
 /// Where an expression's columns come from.
@@ -198,6 +201,12 @@ impl<'a> Scope<'a> {
             |function: fn(&Array) -> Result<Array>| arity(1).and_then(|_| function(&arrays[0]));
         let float =
             |function: fn(f64) -> f64| arity(1).and_then(|_| f::float_map(&arrays[0], function));
+        // What `of` measures of each event's list added together, or of each pair of it.
+        let kinematic = |of: fn(Momentum) -> f64, pairs: bool| match arrays.len() {
+            3 | 4 if pairs => f::pair_summed(&arrays, name, of),
+            3 | 4 => f::summed(&arrays, name, of),
+            _ => Err(problem(format!("{name} takes pt, eta, phi, and optionally a mass"))),
+        };
         let text = |array: &Array, what: &str| match array {
             Array::Constant(crate::Constant::Text(text)) => Ok(text.clone()),
             Array::Constant(crate::Constant::Missing(key)) => {
@@ -221,13 +230,25 @@ impl<'a> Scope<'a> {
             "sinh" => float(libm::sinh)?,
             "exp" => float(libm::exp)?,
             "log" => float(libm::log)?,
+            "log10" => float(libm::log10)?,
+            "tan" => float(libm::tan)?,
+            "acos" => float(libm::acos)?,
+            "asin" => float(libm::asin)?,
+            "atan" => float(libm::atan)?,
+            "tanh" => float(libm::tanh)?,
+            // floor and ceil keep whole numbers and true-or-false values, as NumPy does; round
+            // takes no true-or-false values, which NumPy rounds as 16-bit floats.
+            "floor" => one(|array| f::kept_whole(array, libm::floor))?,
+            "ceil" => one(|array| f::kept_whole(array, libm::ceil))?,
+            "round" => one(f::rounded)?,
+            "atan2" => arity(2).and_then(|_| f::float_pair(&arrays[0], &arrays[1], libm::atan2))?,
             "min" => {
                 arity(2).and_then(|_| f::pairwise(&arrays[0], &arrays[1], f::Extreme::Least))?
             }
             "max" => {
                 arity(2).and_then(|_| f::pairwise(&arrays[0], &arrays[1], f::Extreme::Greatest))?
             }
-            "hypot" => arity(2).and_then(|_| f::hypot(&arrays[0], &arrays[1]))?,
+            "hypot" => arity(2).and_then(|_| f::float_pair(&arrays[0], &arrays[1], libm::hypot))?,
             "least" => arity(2).and_then(|_| f::extreme(&arrays[0], &arrays[1], false))?,
             "greatest" => arity(2).and_then(|_| f::extreme(&arrays[0], &arrays[1], true))?,
             "first" => arity(2).and_then(|_| f::nth(&arrays[0], 0, &arrays[1]))?,
@@ -315,17 +336,15 @@ impl<'a> Scope<'a> {
                 f::order(&arrays[0], descending, name == "order")?
             }
             "take" => arity(3).and_then(|_| f::take(&arrays[0], &arrays[1], &arrays[2]))?,
+            "join" => f::join(&arrays)?,
             "pair_first" => one(|array| f::pair_member(array, false))?,
             "pair_second" => one(|array| f::pair_member(array, true))?,
             "pair_dr" => arity(2).and_then(|_| f::pair_dr(&arrays[0], &arrays[1]))?,
-            "pair_mass" => {
-                if arrays.len() != 3 && arrays.len() != 4 {
-                    return Err(problem(
-                        "pair_mass takes pt, eta, phi, and optionally a mass",
-                    ));
-                }
-                f::pair_mass(&arrays)?
-            }
+            "pair_mass" => kinematic(Momentum::mass, true)?,
+            "pair_pt" => kinematic(Momentum::pt, true)?,
+            "pair_eta" => kinematic(Momentum::eta, true)?,
+            "pair_phi" => kinematic(Momentum::phi, true)?,
+            "pair_rapidity" => kinematic(Momentum::rapidity, true)?,
             "contains" => {
                 arity(2)?;
                 let found = match (&arrays[0], &arrays[1]) {
@@ -339,12 +358,11 @@ impl<'a> Scope<'a> {
                 };
                 Array::Constant(crate::Constant::Truth(found))
             }
-            "mass" => {
-                if arrays.len() != 3 && arrays.len() != 4 {
-                    return Err(problem("mass takes pt, eta, phi, and optionally a mass"));
-                }
-                f::mass(&arrays)?
-            }
+            "mass" => kinematic(Momentum::mass, false)?,
+            "pt" => kinematic(Momentum::pt, false)?,
+            "eta" => kinematic(Momentum::eta, false)?,
+            "phi" => kinematic(Momentum::phi, false)?,
+            "rapidity" => kinematic(Momentum::rapidity, false)?,
             "branch" => arity(1).and_then(|_| self.column(&text(&arrays[0], "a branch name")?))?,
             "stored" => {
                 arity(2)?;

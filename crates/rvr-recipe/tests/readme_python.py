@@ -29,6 +29,10 @@ ev = ak.Array({
     "Muon_phi": f4([[0.2, -2.8], [1.5], []]),
     "Muon_tightId": ak.Array([[True, False], [True], []]),
     "Muon_charge": ak.values_astype(ak.Array([[1, -1], [-1], []]), np.int32),
+    "Electron_pt": f4([[], [30], [50, 9]]),
+    "Electron_eta": f4([[], [1.1], [-0.6, 2.0]]),
+    "Electron_phi": f4([[], [-1.2], [0.4, -2.2]]),
+    "Electron_charge": ak.values_astype(ak.Array([[], [1], [-1, -1]]), np.int32),
     "MET_pt": np.array([31.5, 85, 16], np.float32),
     "MET_phi": np.array([-0.5, 2.0, 1.0], np.float32),
 })

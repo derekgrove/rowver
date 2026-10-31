@@ -609,6 +609,10 @@ path of the row's file in the lock). It is worked out a file's rows at a time, a
 them, and every function of the recipe language computes the same bits on every platform (none
 calls the platform's own math library), so it has the same values whoever works it out. A reader
 that works one out checks its values against the record, and refuses the column when they differ.
+A later rvr may add functions to the language; a reader that meets one it does not know, in a
+file whose `made.toolchain.rvr` is newer than its own version, says that the file needs a newer
+reader, and still reads each stored column asked for by name. A function, once released, keeps
+its results.
 
 The recipe the file carries (`made.recipe`) lists the same derived columns in its `[derived]`
 table, by the same names, with the same expressions. A derived column is added to a pressed file,

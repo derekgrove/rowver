@@ -899,6 +899,7 @@ what to run.
 | `… has changed since samples.lock was written …` (a `changed` hole, from `press`) | as for `check`: resolve again if the change is wanted, review the new lock, and `rvr press --fill` |
 | `… has a samples.lock but no samples.toml` (from `press`) | put samples.toml back: the file carries both |
 | `This file is rowver 14; this reader reads rowver 15 only.` | press its study again with `rvr press` |
+| `The file was made by rvr …, newer than this one (…), and may use what only a newer version reads` | update rvr and rowver to that version or later; its stored columns still read meanwhile |
 | `The header changed after it was signed` | the file was edited after it was pressed: press it again |
 
 MIT licensed.

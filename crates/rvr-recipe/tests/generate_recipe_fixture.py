@@ -1,4 +1,4 @@
-"""Regenerate the expression fixture: inputs, expressions, and what NumPy, awkward and coffea give for each.
+"""Regenerate the expression fixture: inputs, expressions, and what NumPy, awkward, coffea and vector give for each.
 
 Run with `mamba run -n rowver python tests/generate_recipe_fixture.py`. The versions used are
 printed at the end and recorded in the fixture.
@@ -17,7 +17,10 @@ import pathlib
 import awkward as ak
 import coffea
 import numpy as np
+import vector as hep_vector
 from coffea.nanoevents.methods import vector
+
+hep_vector.register_awkward()
 
 EVENTS = 60
 SAMPLE = {"trigger": "flag", "year": 2018, "xsec": 87.3, "is_data": False, "era": "UL18"}
@@ -78,6 +81,20 @@ def summed_mass(particles):
     total = ak.zip({part: ak.sum(getattr(particles, part), axis=1) for part in ("x", "y", "z", "t")},
                    with_name="LorentzVector", behavior=vector.behavior)
     return narrow(total.mass)
+
+
+def summed(particles):
+    """The vector library's sum of each event's particles, which hep-columns reproduces (coffea's
+    ak.sum takes no PtEtaPhiM vectors; summed_mass adds their components instead)."""
+    held = {part: getattr(particles, part) for part in ("pt", "eta", "phi", "mass")}
+    return ak.sum(ak.zip(held, with_name="Momentum4D"), axis=1)
+
+
+def paired(particles):
+    """The vector library's sum of each pair of each event's particles."""
+    held = {part: getattr(particles, part) for part in ("pt", "eta", "phi", "mass")}
+    pairs = ak.combinations(ak.zip(held, with_name="Momentum4D"), 2, fields=["a", "b"])
+    return pairs.a + pairs.b
 
 
 def ranked(table, rank, descending):
@@ -216,6 +233,31 @@ def cases(c):
         ("stored(count(Jet_pt > 30), 'i4')", ak.to_numpy(ak.sum(c["Jet_pt"] > 30, axis=1)).astype("i4")), ("stored(MET, 'f8')", c["MET"].astype("f8")),
         ("stored(Jet_pt, 'i2')", ak.values_astype(c["Jet_pt"], "i2")),
         ("hem_veto", ak.sum(hem, axis=1) == 0), ("met_twice > 60", c["MET"] * 2 > 60), ("Jet_pt * 2", c["Jet_pt"] * 2),
+        # NumPy: more of its math, value by value.
+        ("log10(MET)", np.log10(c["MET"]), True), ("tan(MET_phi / 2)", np.tan(c["MET_phi"] / 2), True),
+        ("atan(weight)", np.arctan(c["weight"]), True), ("asin(Jet_btag)", np.arcsin(c["Jet_btag"]), True),
+        ("acos(Jet_btag - 0.5)", np.arccos(c["Jet_btag"] - 0.5), True), ("tanh(Jet_eta)", np.tanh(c["Jet_eta"]), True),
+        ("atan2(Jet_eta, Jet_phi)", np.arctan2(c["Jet_eta"], c["Jet_phi"]), True), ("atan2(MET, nlep)", np.arctan2(c["MET"], c["nlep"]), True),
+        ("floor(MET)", np.floor(c["MET"])), ("ceil(Jet_eta)", np.ceil(c["Jet_eta"])), ("round(MET / 10)", np.round(c["MET"] / 10)),
+        ("round(small)", np.round(c["small"])), ("floor(run)", np.floor(c["run"])),
+        # Awkward: lists joined event by event.
+        ("join(Muon_pt, Jet_pt)", ak.concatenate([c["Muon_pt"], c["Jet_pt"]], axis=1)),
+        ("join(Muon_charge, Jet_id)", ak.concatenate([c["Muon_charge"], c["Jet_id"]], axis=1)),
+        ("join(Muon_pt, Jet_id)", ak.concatenate([c["Muon_pt"], c["Jet_id"]], axis=1)),
+        ("join(Muon_tight, Jet_pt > 30, Muon_tight)", ak.concatenate([c["Muon_tight"], c["Jet_pt"] > 30, c["Muon_tight"]], axis=1)),
+        # The vector library: the pt, eta, phi and rapidity of a sum, and of each pair.
+        ("pt(Jet_pt, Jet_eta, Jet_phi)", narrow(summed(jets).pt), float(ak.max(ak.sum(c["Jet_pt"], axis=1)))),
+        ("eta(Muon_pt, Muon_eta, Muon_phi, Muon_mass)", narrow(summed(muons).eta), True),
+        ("phi(Jet_pt, Jet_eta, Jet_phi)", narrow(summed(jets).phi), pi),
+        ("rapidity(Muon_pt, Muon_eta, Muon_phi, Muon_mass)", narrow(summed(muons).rapidity), True),
+        ("pt(join(Muon_pt, Jet_pt), join(Muon_eta, Jet_eta), join(Muon_phi, Jet_phi))",
+         narrow(ak.sum(ak.concatenate([ak.zip({k: getattr(muons, k) for k in ("pt", "eta", "phi")}, with_name="Momentum3D"),
+                                       ak.zip({k: getattr(jets, k) for k in ("pt", "eta", "phi")}, with_name="Momentum3D")], axis=1), axis=1).rho),
+         float(ak.max(ak.sum(c["Jet_pt"], axis=1) + ak.sum(c["Muon_pt"], axis=1)))),
+        ("pair_pt(Muon_pt, Muon_eta, Muon_phi, Muon_mass)", narrow(paired(muons).pt), True),
+        ("pair_eta(Jet_pt, Jet_eta, Jet_phi)", narrow(paired(jets).eta), True),
+        ("pair_phi(Jet_pt, Jet_eta, Jet_phi)", narrow(paired(jets).phi), pi),
+        ("pair_rapidity(Muon_pt, Muon_eta, Muon_phi, Muon_mass)", narrow(paired(muons).rapidity), True),
     ]
 
 
@@ -251,7 +293,7 @@ def main():
             close = case[2] if len(case) > 2 else False
             results.append({"expression": case[0], "close": close is not False, "scale": 0.0 if isinstance(close, bool) else close, **record(case[1])})
     held = {name: record(value) for name, value in columns.items()}
-    versions = {"numpy": np.__version__, "awkward": ak.__version__, "coffea": coffea.__version__}
+    versions = {"numpy": np.__version__, "awkward": ak.__version__, "coffea": coffea.__version__, "vector": hep_vector.__version__}
 
     def lines(records):
         """One compact line per record."""

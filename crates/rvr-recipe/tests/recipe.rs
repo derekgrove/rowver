@@ -1,5 +1,5 @@
-//! Every expression of the fixture against what NumPy 2.5.1, awkward 2.12.0 and coffea 2026.7.0
-//! gave for it.
+//! Every expression of the fixture against what NumPy 2.5.1, awkward 2.12.0, coffea 2026.7.0 and
+//! vector 1.8.1 gave for it.
 
 use rvr_recipe::{parse, per_event, Array, Columns, Constant, Kind, Recipe, Scope, Store, Values};
 use serde_json::Value;
@@ -300,6 +300,13 @@ fn edge_cases_follow_the_documented_rules() {
         run("count(Jet_pt[Muon_pt > 3])").is_err(),
         "a mask of other lists"
     );
+    // join takes lists only, two or more; the kinematics take three or four of one list.
+    assert_eq!(run("join(Jet_pt)").unwrap_err().0, "join takes two lists or more");
+    assert!(run("join(Jet_pt, nJet)").unwrap_err().0.contains("join needs a list per event"));
+    assert!(run("pt(Jet_pt, Jet_pt)").unwrap_err().0.contains("pt takes pt, eta, phi, and optionally a mass"));
+    assert!(run("pair_rapidity(Jet_pt)").unwrap_err().0.contains("pair_rapidity takes pt, eta, phi"));
+    assert!(run("rapidity(Jet_pt, Jet_pt, Muon_pt)").unwrap_err().0.contains("rapidity needs pt, eta, phi, and any mass of the same list"));
+    assert!(run("floor(Jet_pt > 30)").is_ok(), "floor keeps true-or-false values, as NumPy");
 }
 
 #[test]
@@ -315,6 +322,13 @@ fn float_functions_give_the_same_bits_on_every_platform() {
     };
     assert_eq!(bits("cos(x)")[0], 0x3fecac76498be14c);
     assert_eq!(bits("exp(x)")[1], 0x3ff4f59d48ad2682);
+    // A constant is rounded as it stands, halves to even; a whole number stays one.
+    let run = |text: &str| scope.evaluate(&parse(text).unwrap());
+    assert_eq!(run("round(2.5)").unwrap(), Array::Constant(Constant::Float(2.0)));
+    assert_eq!(run("round(-3)").unwrap(), Array::Constant(Constant::Whole(-3)));
+    // NumPy rounds true-or-false values as 16-bit floats, a kind no column has.
+    assert!(run("round(x > 0.3)").unwrap_err().0.starts_with("round rounds numbers, not true-or-false values"));
+    assert_eq!(run("floor(1 > 0)").unwrap(), Array::Constant(Constant::Truth(true)));
 }
 
 /// A bare name is a defined name or a column; any other is refused as an unknown column,

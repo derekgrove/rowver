@@ -185,6 +185,22 @@ impl Values {
         }
     }
 
+    /// The values as floats, when they are held as floats.
+    pub(crate) fn floats(&self) -> Option<&[f64]> {
+        match &self.store {
+            Store::Float(held) => Some(held),
+            Store::Whole(_) => None,
+        }
+    }
+
+    /// The values as whole numbers, when they are held as whole numbers.
+    pub(crate) fn wholes(&self) -> Option<&[i64]> {
+        match &self.store {
+            Store::Whole(held) => Some(held),
+            Store::Float(_) => None,
+        }
+    }
+
     /// Convert every value to another kind, as NumPy's `astype` does.
     pub fn cast(&self, kind: Kind) -> Values {
         if kind == self.kind {

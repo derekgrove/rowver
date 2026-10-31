@@ -21,7 +21,8 @@ impl Columns for Events {
 fn values(kind: &str, numbers: &[f64]) -> Values {
     let kind = Kind::named(kind).unwrap();
     match kind.float() {
-        true => Values::float(kind, numbers.to_vec()),
+        // Held as a file holds them: an f4 column's values are 32-bit floats.
+        true => Values::float(kind, numbers.iter().map(|n| kind.round(*n)).collect()),
         false => Values::whole(kind, numbers.iter().map(|&n| n as i64).collect()),
     }
 }
@@ -49,6 +50,10 @@ fn events() -> Events {
         ("Muon_phi".into(), jet("f4", [&[0.2, -2.8], &[1.5], &[]])),
         ("Muon_tightId".into(), jet("b1", [&[1.0, 0.0], &[1.0], &[]])),
         ("Muon_charge".into(), jet("i4", [&[1.0, -1.0], &[-1.0], &[]])),
+        ("Electron_pt".into(), jet("f4", [&[], &[30.0], &[50.0, 9.0]])),
+        ("Electron_eta".into(), jet("f4", [&[], &[1.1], &[-0.6, 2.0]])),
+        ("Electron_phi".into(), jet("f4", [&[], &[-1.2], &[0.4, -2.2]])),
+        ("Electron_charge".into(), jet("i4", [&[], &[1.0], &[-1.0, -1.0]])),
         ("MET_pt".into(), flat("f4", [31.5, 85.0, 16.0])),
         ("MET_phi".into(), flat("f4", [-0.5, 2.0, 1.0])),
         ("Flags".into(), flat("i4", [11.0, 4.0, 1.0])),
@@ -98,11 +103,14 @@ fn json(array: &Array) -> Value {
     let one = |values: &Values, at: usize| match &values.store {
         Store::Whole(held) if values.kind == Kind::B1 => Value::Bool(held[at] != 0),
         Store::Whole(held) => Value::from(held[at]),
+        // Infinities and NaN as the README writes them; JSON has no number for them.
+        Store::Float(held) if held[at].is_nan() => Value::from("nan"),
+        Store::Float(held) if held[at].is_infinite() => Value::from(if held[at] > 0.0 { "inf" } else { "-inf" }),
         Store::Float(held) => Value::from(held[at]),
     };
     match array {
         Array::Constant(Constant::Whole(n)) => Value::from(*n),
-        Array::Constant(Constant::Float(x)) => Value::from(*x),
+        Array::Constant(Constant::Float(x)) => one(&Values::float(Kind::F8, vec![*x]), 0),
         Array::Constant(Constant::Truth(t)) => Value::Bool(*t),
         Array::Constant(Constant::Text(t)) => Value::from(t.clone()),
         Array::Constant(Constant::Missing(_)) => Value::from("missing"),
@@ -122,16 +130,16 @@ fn same(ours: &Value, shown: &Value) -> bool {
             let (a, b) = (a.as_f64().unwrap(), b.as_f64().unwrap());
             (a - b).abs() <= 2e-6 * a.abs().max(1.0)
         }
-        (Value::Null, Value::String(inf)) => inf == "inf", // serde_json writes infinity as null
         (a, b) => a == b,
     }
 }
 
-/// What the README writes, read as JSON: `inf` is text, and a cell with no code is plain words.
+/// What the README writes, read as JSON: `inf`, `-inf` and `nan` are text, and a cell with no
+/// code is plain words.
 fn shown(cell: &str) -> Value {
     match code(cell) {
         Some(text) => {
-            let quoted = text.replace("inf", "\"inf\"");
+            let quoted = text.replace("-inf", "\"-INF\"").replace("inf", "\"inf\"").replace("-INF", "-inf").replace("nan", "\"nan\"");
             serde_json::from_str(&quoted).unwrap_or_else(|_| Value::from(text))
         }
         None => Value::from(cell),
