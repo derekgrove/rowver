@@ -1,5 +1,5 @@
-"""Plan a release from a vX.Y.Z tag: which crates go to crates.io and whether the Python
-package goes to PyPI. A version already published with the same contents is skipped, so a release
+"""Plan a release from a vX.Y.Z tag, or rehearse one on main: which crates go to crates.io and
+whether the Python package goes to PyPI. A version already published with the same contents is skipped, so a release
 that stopped part way can run again; one published with other contents stops the release."""
 
 import io
@@ -12,6 +12,10 @@ import tempfile
 import tomllib
 import urllib.error
 import urllib.request
+
+# A rehearsal (the workflow run by hand on main) pushes no tag: what fixes a mistake differs.
+REHEARSAL = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+AGAIN = "then rehearse again" if REHEARSAL else "then tag again"
 
 CRATES = ["rvr-recipe", "rowver", "rvr"]  # the order they are published in: each needs the ones before
 AGENT = {"User-Agent": "rowver-release (https://gitlab.cern.ch/dgrove/rowver)"}
@@ -80,7 +84,7 @@ def crate_plan(name, version):
                           special={"Cargo.toml": manifest, "Cargo.lock": lock})
     if changed:
         fail(f"{name} {version} is on crates.io with other contents ({', '.join(changed[:5])}). "
-             f"Raise the version in Cargo.toml, then tag again.")
+             f"Raise the version in Cargo.toml, {AGAIN}.")
     return False
 
 
@@ -100,7 +104,7 @@ def python_plan(version):
     changed = differences(ours, members(get(sdists[0])), skip=["PKG-INFO"])
     if changed:
         fail(f"rowver {version} is on PyPI with other contents ({', '.join(changed[:5])}). "
-             f"Raise the version in Cargo.toml, then tag again.")
+             f"Raise the version in Cargo.toml, {AGAIN}.")
     return False
 
 
@@ -113,11 +117,15 @@ def main():
     if others:
         fail(f"every crate shares the workspace version {version}, but {', '.join(others)}: "
              f"give each crate version.workspace = true")
+    if tag != f"v{version}" and REHEARSAL:
+        fail(f"the rehearsal names {tag}, but Cargo.toml's version is {version}: run it naming v{version}")
     if tag != f"v{version}":
         fail(f"the tag {tag} does not name the version {version} (Cargo.toml): "
              f"tag v{version}, or raise the version first")
     if subprocess.run(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"]).returncode:
-        fail(f"{tag} is not on main: tag a commit of main")
+        fail("a rehearsal runs on main: start it there" if REHEARSAL else f"{tag} is not on main: tag a commit of main")
+    # The commit planned, so that a rehearsal and the tag after it can be told to be the same.
+    print(f"{'Rehearsing' if REHEARSAL else 'Releasing'} {tag} from commit {run('git', 'rev-parse', 'HEAD').strip()}")
     crates = [c for c in CRATES if crate_plan(c, version)]
     python = python_plan(version)
     for c in CRATES:

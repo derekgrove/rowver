@@ -8,15 +8,17 @@ on:
     tags: ["v[0-9]*"]
   workflow_dispatch:
     inputs:
-      tag:
-        description: "vX.Y.Z tag to rehearse (builds it and publishes to TestPyPI only)"
+      version:
+        description: "vX.Y.Z, the release to come: builds main as it is and publishes to TestPyPI only (no tag is pushed)"
         required: true
 
 permissions:
   contents: read
 
 env:
-  TAG: ${{ inputs.tag || github.ref_name }}
+  # The release's name: the tag pushed, or in a rehearsal the version it names. Every job checks out
+  # the commit the run began at (the tag's, or main's in a rehearsal), so a rehearsal pushes no tag.
+  TAG: ${{ inputs.version || github.ref_name }}
   RUST: "1.91"
   MATURIN: "1.15.0"
 
@@ -29,7 +31,7 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { ref: "${{ env.TAG }}", fetch-depth: 0, persist-credentials: false }
+        with: { fetch-depth: 0, persist-credentials: false }
       - run: rustup toolchain install $RUST --profile minimal && rustup default $RUST
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with: { python-version: "3.11" }
@@ -49,7 +51,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { ref: "${{ env.TAG }}", persist-credentials: false }
+        with: { persist-credentials: false }
       - uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
         with:
           maturin-version: ${{ env.MATURIN }}
@@ -70,7 +72,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { ref: "${{ env.TAG }}", persist-credentials: false }
+        with: { persist-credentials: false }
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with: { python-version: "${{ matrix.python }}" }
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -86,7 +88,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { ref: "${{ env.TAG }}", persist-credentials: false }
+        with: { persist-credentials: false }
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with: { python-version: "3.11" }
       - run: rustup toolchain install $RUST --profile minimal && rustup default $RUST
@@ -114,7 +116,7 @@ jobs:
       - if: matrix.container
         run: dnf install -y -q gcc git tar
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { ref: "${{ env.TAG }}", persist-credentials: false }
+        with: { persist-credentials: false }
       - run: |
           if ! command -v rustup; then curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal; fi
           . "$HOME/.cargo/env"
@@ -144,7 +146,7 @@ jobs:
     permissions: { contents: read, id-token: write }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { ref: "${{ env.TAG }}", persist-credentials: false }
+        with: { persist-credentials: false }
       - run: rustup toolchain install $RUST --profile minimal && rustup default $RUST
       - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
         id: auth
