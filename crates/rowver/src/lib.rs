@@ -1,4 +1,5 @@
-//! RowVer 14 in Rust: read, validate, and write `.rvr` files as `docs/FORMAT.md` specifies them.
+//! RowVer in Rust: read, validate, and write `.rvr` files as
+//! [the format](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md) specifies them.
 
 pub mod choice;
 mod codec;

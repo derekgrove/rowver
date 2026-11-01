@@ -47,17 +47,19 @@ jobs:
         include:
           - { os: ubuntu-24.04, target: x86_64, manylinux: "2_28" }
           - { os: ubuntu-24.04-arm, target: aarch64, manylinux: "2_28" }
-          - { os: macos-14, target: universal2-apple-darwin }
+          - { os: macos-15, target: universal2-apple-darwin }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
-      - uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           maturin-version: ${{ env.MATURIN }}
           rust-toolchain: ${{ env.RUST }}
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'off' }}
+          # The container's root does not own the checkout, and git refuses it unless trusted.
+          before-script-linux: git config --global --add safe.directory "$GITHUB_WORKSPACE"
           args: --release --locked --out dist -m crates/rowver-py/Cargo.toml
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: "wheel-${{ matrix.os }}", path: dist }
@@ -67,7 +69,7 @@ jobs:
     needs: wheels
     strategy:
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15-intel]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
         python: ["3.11", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -80,7 +82,8 @@ jobs:
       - run: pip install --no-index --no-deps --find-links dist rowver && pip install numpy awkward pyarrow pandas
       - run: python -m unittest discover tests
         working-directory: crates/rowver-py
-      - run: rvr --version
+      # rvr names the commit it was built from, as every file it presses records it.
+      - run: bash .github/check-commit.sh rvr
 
   # The source package conda-forge builds from, checked to build a working wheel on its own.
   sdist:
@@ -106,7 +109,7 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-24.04, container: "almalinux:8", name: x86_64-linux }
-          - { os: macos-14, name: macos }
+          - { os: macos-15, name: macos }
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
     env:
@@ -114,7 +117,8 @@ jobs:
       CARGO_PROFILE_RELEASE_STRIP: "true"
     steps:
       - if: matrix.container
-        run: dnf install -y -q gcc git tar
+        # As for the wheels: the container's root does not own the checkout.
+        run: dnf install -y -q gcc git tar && git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - run: |
@@ -130,7 +134,7 @@ jobs:
           else
             cargo build --release --locked -p rvr && cp target/release/rvr out/
           fi
-          out/rvr --version
+          bash .github/check-commit.sh out/rvr
           tar czf rvr-$V-${{ matrix.name }}.tar.gz -C out rvr
         shell: bash
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -175,7 +179,7 @@ jobs:
         with: { pattern: "wheel-*", path: dist, merge-multiple: true }
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: sdist, path: dist }
-      - uses: pypa/gh-action-pypi-publish@aef6c9b6e301dc803e1bc9133e9ce67ae9b0906b # v1.14.3
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           repository-url: ${{ github.event_name == 'push' && 'https://upload.pypi.org/legacy/' || 'https://test.pypi.org/legacy/' }}
           skip-existing: true  # files an earlier run of this release uploaded; plan checked they match
