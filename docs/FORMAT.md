@@ -1,5 +1,9 @@
 # The `.rvr` format
 
+> **Being built.** This page is the agreed format of RowVer 15.0 (2026-11-02). The code reaches it
+> in the commits that follow; until then, where the two differ, this page is the target, and its
+> running example, `tiny.rvr`, is pressed again once they agree.
+
 Version 15 (rowver 15.0). This page specifies every byte of a `.rvr` file. `crates/rowver` reads
 and writes all of it and is the reference builder; `rvr press` writes pressed files with it.
 [The features](FEATURES.md) describe what the tools around the format do.
@@ -57,7 +61,22 @@ The first bytes of `tiny.rvr`:
   that changes only the header writes the new header and copies the arrays byte for byte.
 
 A reader refuses a file whose first 8 bytes are not the magic, whose `rowver` is not 15, or whose
-arrays do not fill the rest of the file exactly.
+arrays do not fill the rest of the file exactly (the header's array records say where each lies, so
+this is checked on opening, with no array read).
+
+**The header's JSON** is one JSON value (RFC 8259) in UTF-8, an object, with these rules:
+
+- no byte-order mark; spaces, tabs and line ends may stand between tokens and around the value;
+- no object holds the same key twice, at any depth;
+- arrays and objects nest at most 64 deep;
+- a string holds no lone surrogate (`\ud800` without its pair);
+- every count the format names (`rows`, `at`, `size`, `count`, `entries`, `stop`, `take`, `n`, and a
+  hole's entries) is a whole number written without a fraction or an exponent, from 0 to 2^63 − 1;
+  `seed` from 0 to 2^64 − 1;
+- every record holds exactly the fields this page gives it, no more; only the top level may hold
+  others, the tool keys (§11).
+
+The header length is at most 2^32 − 1, as its four bytes allow.
 
 **An empty file** is a file's header, byte for byte, with nothing after it: the file ends at byte
 12 + header length, while its records still name every array, its checksums and its signature as
@@ -87,9 +106,9 @@ is a compressed frame of a few bytes.
 }
 ```
 
-The top level has exactly `rowver`, `data`, `made`, an optional `derived`, an optional
-`signature`, and zero or more tool keys. Nothing else. No program rewrites `data` once the press
-has written it.
+The top level has exactly `rowver` (the whole number 15), `data`, `made`, an optional `derived`, an
+optional `signature`, and zero or more tool keys (§11). Nothing else. No program rewrites `data`
+once the press has written it.
 
 ## 3. Rows: `data`
 
@@ -130,14 +149,18 @@ rows because their files are copies of one ntuple.
 
 The rules of the layout:
 
+- `samples` lists the lock's samples, in the lock's order, each with its name and label as the lock
+  gives them (§6.3), and the number of its rows.
 - A sample's rows are contiguous, in the order of `samples`. Within a sample, each file's rows
   are contiguous, in the lock's file order however many files were read at once. The same study
   on the same inputs therefore always lays out the same rows.
-- Within a file, rows keep the order of their entries. Each entry number appears once, and each
-  is an entry the press read (§6.1). With `files`, `entry` says which event every row is, so a
-  later program can read more branches for the same rows without running the selection again.
-- A file the press read nothing of, because the first N events all lay in files before it, is
-  not listed. A file a random choice took nothing from is listed.
+- `files` lists, for each sample in order, the files of its lock entry in the lock's order, leaving
+  out a file the first N events never reached (its `stop` would be 0). A file a random choice took
+  nothing from is listed, with 0 rows.
+- Within a file, rows are in strictly increasing order of their entries, so each entry number
+  appears once, and each is an entry the choice chose and no hole holds (§6.1, §6.2). With `files`,
+  `entry` says which event every row is, so a later program can read more branches for the same
+  rows without running the selection again.
 
 ## 4. Columns
 
@@ -152,7 +175,11 @@ A column is **flat** (one value per row) or **jagged** (a list per row).
 | `jagged` | a list per row | two arrays: offsets `i8[rows + 1]`, and content of any flat kind |
 
 A copied column keeps its branch's kind unless the recipe stores it as another. A computed column
-has the kind its expression gives. There is no promotion rule.
+has the kind its expression gives. There is no promotion rule. A float, flat or in a list, may be
+any IEEE value: NaN and infinities included.
+
+A column's `name` is the name the recipe gives it (`made.recipe.columns`): nonempty, no two columns
+alike, and none `sample`, `entry` or `file`, nor the name of a derived column.
 
 **A flat column** is its name, its kind, the reference to its array `kind[rows]` (§7), and its
 facts:
@@ -180,6 +207,11 @@ content   [65.3125, 19.96875, 16.421875,              row 0 = content[0:3]
            … the same again for rows 4 to 7]          f4[count] = f4[22]
 ```
 
+A flat column's record has exactly `name`, `kind`, `at`, `size`, `sha256`, `by_sample`, `lim`,
+`nice`, and `vals` when §4's rule below gives it. A jagged column's has exactly `name`, `kind`
+(`"jagged"`), `offsets` (exactly `at`, `size`, `sha256`, `by_sample`) and `content` (exactly `kind`,
+`count`, `at`, `size`, `sha256`, `by_sample`).
+
 ### Column facts
 
 Every flat column carries facts about its values, so a reader can draw an axis or a legend without
@@ -187,13 +219,33 @@ reading the array:
 
 | fact | holds | in `tiny.rvr` |
 |---|---|---|
-| `lim` | `[min, max]` of the values; for `b1`, the 0 and 1 that occur | `ht`: `[101.703125, 154.046875]` |
-| `nice` | `[lo, hi]` enclosing `lim`, rounded outward to two significant digits, snapped to integers for integer kinds, widened by one when the two ends coincide | `ht`: `[100.0, 160.0]` |
-| `vals` | every distinct value, ascending, on integer and `b1` columns with at most 64 distinct values | `nJet`: `[1, 3, 4]` |
-| `names` | `{"value": "label"}` for members of `vals` only; optional (`rvr press` writes none) | |
+| `lim` | `[min, max]` over the column's finite values (NaN and infinities passed over); for `b1`, of 0 and 1 | `ht`: `[101.703125, 154.046875]` |
+| `nice` | `[lo, hi]`: `lim` rounded outward, by the rule below | `ht`: `[100.0, 160.0]` |
+| `vals` | every distinct value, ascending; on integer and `b1` columns with at most 64 distinct values, and on no other | `nJet`: `[1, 3, 4]` |
 
-An empty column has `lim: [0, 0]`, `nice: [0, 1]`, and `vals: []` where `vals` applies. There is
-no percentile ladder: a reader holding a column can measure a quantile itself.
+A column with no finite value (an empty one, or one of NaN alone) has `lim: [0, 0]` and
+`nice: [0, 1]`, and `vals: []` where `vals` applies.
+
+**`nice`, exactly.** For each end of `lim`, take its shortest decimal: the digits canonical JSON
+writes for it (§8), so the double `1.2` is `1.2` and the `f4` value 1.1, widened to a double, is
+`1.100000023841858`. A whole-number kind's ends are their digits. Then, in exact decimal arithmetic:
+
+1. an end that is 0 stays 0; for any other, let `e` be the power of ten of its first significant
+   digit (`373.67…` has `e = 2`), and `step = 10^(e − 1)`;
+2. the low end becomes the largest multiple of `step` at or below it, the high end the smallest at
+   or above it (`0.338…` becomes `0.33`; `373.67…` becomes `380`; `-0.037` stays `-0.037`);
+3. when the two ends are then equal, the high end is raised by its `step`, or by 1 when it is 0 or
+   the kind is a whole-number kind and its `step` is below 1 (`[5, 5]` gives `[5, 6]`;
+   `[-1.2, -1.2]` gives `[-1.2, -1.1]`; `[0, 0]` gives `[0, 1]`).
+
+`nice` holds the nearest doubles to those decimals; it always encloses `lim`.
+
+**Spelling.** Facts are compared as numbers: a reader takes each as the double (or, for a
+whole-number or `b1` column, the whole number) it writes, and any JSON spelling of the right value
+is right (`380`, `380.0` and `3.8e2` alike). On a whole-number or `b1` column, `lim`, `nice` and
+`vals` are written as whole numbers.
+
+There is no percentile ladder: a reader holding a column can measure a quantile itself.
 
 ## 5. Sample columns
 
@@ -260,12 +312,18 @@ in JSON. It is not part of `data.sha256`.
 For `tiny.rvr`, `xsec` is the SHA-256 of `2.5` as 8 bytes followed by `00 00 00 00 00 00 f8 7f`
 (`e98f4aa4`), and `kind` that of `01 "signal" 00 01 "background" 00` (`023c71f9`).
 
-**The press adds** two keys to every sample's metadata, so that they are sample columns:
-`events_read` (the entries it read of the sample, before any cut) and `events_total` (the entries
-its files hold). A file with holes (§6.2) adds a third to every sample: `events_missing`, the
-entries chosen that lie in holes (0 for a sample with none). `events_read + events_missing` is
-then what the event choice chose. A file with no hole has no `events_missing`. Each total of the
-recipe's `[totals]` (§6) adds one more, under its name: the sample's sum of it, a number.
+**The press adds** two keys to every sample's metadata, so that they are sample columns; both are
+required, and exact:
+
+- `events_read`: the entries the choice chose of the sample (§6.1), less those in holes;
+- `events_total`: the entries of all the sample's files in the lock, those no row comes from
+  included.
+
+A file with holes (§6.2) adds a third to every sample: `events_missing`, the entries chosen that
+lie in holes (0 for a sample with none), so that `events_read + events_missing` is what the choice
+chose. A file with no hole has no `events_missing`. Each total of the recipe's `[totals]` (§6) adds
+one more, under its name: the sample's sum of it (§6), a finite number. No key of `samples.toml`'s
+metadata has any of these names (SPEC.md §3.5.10, §2.3).
 
 ## 6. The study: `made`
 
@@ -293,55 +351,63 @@ recipe's `[totals]` (§6) adds one more, under its name: the sample's sum of it,
 }
 ```
 
+`made` has exactly these fields:
+
 | field | holds |
 |---|---|
-| `study` | the study folder's name |
-| `title` | the recipe's title; present only when the recipe sets one |
-| `built` | when the file was written, UTC to the second |
-| `by` | free text naming the program that wrote the file |
-| `toolchain` | what built that program, each as text: `rvr` (its version), `rowver` (the format version it writes), `commit`, `rustc` (the compiler's `rustc -V`) and `target` (the platform) |
-| `recipe`, `samples`, `lock` | the study's three files, each as its whole `text` and the `sha256` of that text as UTF-8; `recipe` also has `format` (the recipe language, `rvr-recipe`) and `columns` (every column the recipe stores, in the file's order, each named once) |
+| `study` | the study folder's name: nonempty, not `.` or `..`, with no `/`, `\` or control character |
+| `title` | the recipe's `title`; present exactly when the recipe sets one, and equal to it |
+| `built` | when the file was written, UTC to the second: `YYYY-MM-DDTHH:MM:SSZ`, a real date and time |
+| `by` | nonempty text naming the program that wrote the file |
+| `toolchain` | what built that program: exactly `rvr` (its version, `15.MINOR.PATCH`), `rowver` (`"15"`), `commit` (below), `rustc` (the compiler's `rustc -V`, nonempty) and `target` (the platform, nonempty) |
+| `recipe`, `samples`, `lock` | the study's three files, each exactly its whole `text` and the `sha256` of that text as UTF-8; `recipe` also has `format` (`"rvr-recipe"`) and `columns` (every column the recipe stores, in the file's order, each named once) |
 | `files` | every sample of `data.samples`, by name (below) |
 | `sha256` | the checksum of `made` (§8) |
 
-`commit` is the git commit the program was built from, or `unknown`. When its code had changes
-not yet committed, `-dirty-` follows, then 12 hex digits of git's hash of those changes, or
-`-dirty` alone when they could not be read.
+`commit` is the git commit the program was built from (40 lowercase hexadecimal digits), or
+`unknown`. When its code had changes not yet committed, `-dirty-` follows the commit, then 12
+lowercase hexadecimal digits of git's hash of those changes, or `-dirty` alone when they could not
+be read.
 
-Together, the three texts are the study: write them out as `recipe.toml`, `samples.toml` and
-`samples.lock`, and the study can be pressed again. The lock's own record of the `samples.toml` it
-was resolved from matches `samples`: in `tiny.rvr` the lock says
-`samples_toml_sha256 = "aa22df20…"`, the `sha256` of `made.samples`.
+**The three texts are the study,** and each must be valid: write them out as `recipe.toml`,
+`samples.toml` and `samples.lock`, and the study can be pressed again. A reader checks that:
+
+- `recipe` is a recipe the [recipe reference](../crates/rvr-recipe/README.md) accepts, with all five
+  tables; the columns its `[columns]` stores, in order, are `recipe.columns`; its `[derived]` table
+  lists exactly the columns of `derived` (§10); its `title` is `made.title`;
+- `samples` is a `samples.toml` [SPEC.md §3](SPEC.md#3-samplestoml) accepts;
+- `lock` is a `samples.lock` §6.3 accepts, resolved from that `samples.toml`: its
+  `samples_toml_sha256` is the `sha256` of `made.samples` (in `tiny.rvr`, `aa22df20…`), and its
+  samples are what that `samples.toml` makes (names, labels, trees, metadata, event choices, the
+  paths asked);
+- `data` and `made.files` agree with the lock, as §3, §6.3 and below say.
 
 **`made.files[sample]`** has exactly three fields:
 
-- `events`: which of its events the press read (§6.1);
-- `files`: every file of the sample in `data.files`, keyed by its `at` in the lock (the path or
-  URL it was opened with; for a file of a catalog dataset, its global name
-  `root://cms-xrd-global.cern.ch//store/…`, whichever copy was read);
-- `metadata`: the sample's metadata, from the lock, as text, whole numbers, finite floats,
-  `true`, `false`, `null`, and lists and objects of those. The keys that hold one number, text or
-  truth value per sample are written again as `data.sample_cols` (§5).
+- `events`: which of its events the press read (§6.1): the lock's choice for the sample, or the one
+  `rvr press --events`, `--random` or `--seed` gave;
+- `files`: every file of the sample in `data.files`, keyed by its `at` in the lock;
+- `metadata`: the sample's metadata from the lock, then `events_read`, `events_total`,
+  `events_missing` when the file has holes, and the sample's totals (§5), as text, whole numbers,
+  finite floats, `true` and `false`, and lists and objects of those. The keys that hold one number,
+  text or truth value per sample are written again as `data.sample_cols` (§5).
 
-Each file record holds:
+Each file record has exactly:
 
 | field | holds |
 |---|---|
-| `tree` | the tree read |
-| `uuid` | the UUID stored inside that ROOT file (or `null`, §6.2) |
-| `entries` | the tree's entries |
-| `stop` or `take` | how much of it the event choice read (§6.1) |
-| `served` | for a file of a catalog dataset, the copy it was read from: exactly `rse` (the storage element, `T2_US_Purdue`) and `host` (its HTTPS door, `eos.cms.rcac.purdue.edu:9000`), both nonempty |
+| `tree` | the tree read: the lock's `tree` for the sample |
+| `uuid` | the UUID stored inside that ROOT file, as the lock gives it: 36 characters, lowercase hexadecimal in groups of 8, 4, 4, 4 and 12 joined by `-` |
+| `entries` | the tree's entries, as the lock gives them |
+| `stop` or `take` | how much of it the event choice read, as §6.1 says when each is present |
 | `holes` | only when the press could not read some of the entries it chose (§6.2) |
-| `totals` | only when the recipe has `[totals]` and the press read the file: each total by name, a finite number, its expression added up over the entries the press read of this file before any cut, one at a time in entry order (or over every entry of the other tree it names); a `--fill` adds the sum of the entries it read |
+| `totals` | exactly when the recipe has `[totals]` and the press read at least one entry of the file: each total by name, a finite number, its expression added up over the entries the press read of this file before any cut, one at a time in entry order from +0.0 (or over every entry of the other tree it names); a `--fill` adds the sum of the entries it read |
 
-When a read moved to another copy part way, `served` names the copy that served the last read.
-A sample's metadata holds each total as the sum of its files' `totals`, added in the order of
-`made.files`, so that it does not depend on how many files were read at once; a reader checks
-that it does. A total is what a file of kept events cannot give afterwards, such as the sum of
-`genWeight` over every event read, which normalizes simulation.
-Every copy holds the same bytes: each is checked against the lock's size, and its adler32 when the
-storage gives one, before it is read.
+A sample's metadata holds each total as the sum of its files' `totals`, added from +0.0 in the order
+of `data.files` (a file with no `totals` adds nothing), so that it does not depend on how many files
+were read at once; a reader checks that it is that sum, exactly. A total is what a file of kept
+events cannot give afterwards, such as the sum of `genWeight` over every event read, which
+normalizes simulation.
 
 ### 6.1 The event choice
 
@@ -354,8 +420,11 @@ storage gives one, before it is read.
 | `{"choose": "random", "n": N, "seed": S, "algorithm": "splitmix64-selection-sampling"}` | N entries chosen at random over all the files, or all of them when they hold N or fewer | `take`, how many of the chosen entries are in it |
 
 The choice is what the press did: what `samples.toml` asked, unless `rvr press --events`,
-`--random` or `--seed` changed it. N and S are whole numbers; S may be any value from 0 to
-2^64 − 1.
+`--random` or `--seed` changed it. N is a whole number from 1; S may be any value from 0 to
+2^64 − 1. `events` has exactly the fields its row above shows.
+
+A sample's files hold at most 2^40 entries in all (about 1.1 × 10^12), so that every reader can make
+a random choice again in bounded time; a file whose samples hold more is refused.
 
 **First N.** The files, in `data.files` order, read `min(entries, left)` each, with `left`
 starting at N and going down by what each file read. A row's entry is below what its file read.
@@ -383,6 +452,9 @@ for i = 0, 1, 2, … while needed > 0:
         entry i is chosen; needed = needed − 1
 ```
 
+`total − i` and `needed` are below 2^40, so each is exact as a double; `(total − i) × u` is one IEEE
+multiplication, rounded to nearest, and `<` compares the two doubles.
+
 Entry `i` of the run is entry `i − start` of the file it falls in, where `start` is the number of
 entries in the files before it. Each file's `take` is how many chosen entries fall in it, and a
 row's entry is one of them. A reader makes the choice again from the seed to check every row: the
@@ -409,8 +481,7 @@ Each hole has exactly:
 
 | `kind` | the press found |
 |---|---|
-| `tape` | every copy of the dataset's file is on tape only |
-| `unreachable` | its storage kept failing after every wait (busy, down, not answering) |
+| `unreachable` | its storage kept failing after every wait (busy, down, not answering), or answered in a way no wait mends |
 | `damaged` | a basket failed to decompress, or another error reading the file's bytes |
 | `gone` | the file is not there any more |
 | `changed` | the file differs from the lock (size, adler32, ROOT UUID, entries) |
@@ -430,9 +501,87 @@ The rules:
 - The key is absent when a file has no hole; an empty list is refused.
 - A file the press could not open at all has one hole of every entry it chose (`[0, stop]`, or
   `[0, entries]`), no rows, and the `entries` and `uuid` the lock gave.
-- `uuid` is `null` only in two cases. One is a file the press could not open at all whose lock
-  gives no UUID for it (a catalog dataset's file). The other is a file the press chose no entry of
-  (`take` 0, or no entries) and could not open for its UUID.
+
+### 6.3 `samples.lock`
+
+`rvr samples resolve` writes the lock (SPEC.md §6); it pins every file the study reads, and nobody
+edits it. Every file carries it, as `made.lock.text`. It is TOML 1.0 in UTF-8; comments are free.
+The lock of `tiny.rvr`, cut short:
+
+```toml
+# samples.lock: written by rvr samples resolve; it pins every file this study reads.
+# Review its changes as you review code, and never edit it: resolve again instead.
+
+format = "rvr-samples-lock"
+version = 1
+resolved = "2026-10-31T07:03:01Z"
+samples_toml_sha256 = "aa22df20…"
+
+[[sample]]
+name = "signal"
+label = "Signal"
+asked = ["./signal.root"]
+tree = "analysis"
+events = "all"
+events_total = 5
+events_read = 5
+metadata = { kind = "signal", xsec = 2.5 }
+
+[[sample.file]]
+at = "./signal.root"
+bytes = 5281
+adler32 = "0a1b2c3d"
+uuid = "31e851e4-b994-11f1-ba5c-1a45bb13c76a"
+entries = 5
+branches = "5d1a…"
+
+[[branches]]
+sha256 = "5d1a…"
+list = [
+  { name = "Jet_pt", kind = "f4", shape = "jagged" },
+  { name = "nJet", kind = "i4", shape = "flat" },
+]
+```
+
+**The top level** has exactly `format = "rvr-samples-lock"`, `version = 1`, `resolved` (when it was
+written, `YYYY-MM-DDTHH:MM:SSZ`), `samples_toml_sha256` (the SHA-256 of the `samples.toml` text it
+was resolved from), `sample` (one or more) and `branches` (one or more).
+
+**Each `[[sample]]`** has exactly `name`, `label`, `asked`, `tree`, `events`, `events_total`,
+`events_read`, `metadata` and `file`, and `choose` (`"random"`) and `seed` exactly when the sample's
+choice is random. The samples are in the order, and have the name, label, tree, event choice and
+metadata, that `samples.toml` makes (SPEC.md §3.7), with `{file}` filled in. `asked` is the sample's
+`files` entries, their placeholders filled, in order. `events_total` is the sum of its files'
+`entries`, and `events_read` the entries its own choice reads.
+
+**Each `[[sample.file]]`** has exactly `at`, `bytes`, `uuid`, `entries` and `branches`; `adler32`
+when its storage gave one (a file on this computer always has one); `stop` for a first-N choice
+exactly when it reads fewer than `entries` of the file (0 for a file it never reaches); `take` for a
+random choice, always (how many chosen entries lie in it). The files are in the order SPEC.md §3.8
+gives, and no two have the same `at`.
+
+| field | holds |
+|---|---|
+| `at` | where the file is, as `samples.toml` writes it with the matched name: a local path relative to the folder of `samples.toml` (a bare name as `./NAME`), under `~/`, or absolute; or the URL |
+| `bytes` | its size, a whole number from 1 |
+| `adler32` | its adler32, 8 lowercase hexadecimal digits |
+| `uuid` | the UUID inside the ROOT file, as §6 writes it |
+| `entries` | the tree's entries |
+| `branches` | the SHA-256 of the tree's branch list: the `sha256` of one `[[branches]]` |
+
+**Each `[[branches]]`** is one branch list, written once however many files have it: exactly
+`sha256` and `list`. `list` holds one inline table per branch of the tree, in byte order of name,
+each exactly `name` (as a recipe writes it), `kind` and `shape`, and `why` exactly when `kind` is
+`"none"`:
+
+| field | holds |
+|---|---|
+| `kind` | the kind rvr reads the branch as (§4; for a list, its members' kind), or `"none"` when rvr cannot read it |
+| `shape` | `"flat"` (one value per event), `"jagged"` (a list per event), or a whole number N from 1 (N values per event) |
+| `why` | for a branch rvr cannot read, why, in words |
+
+`sha256` is the SHA-256 of the canonical JSON (§8) of `list`, as an array of objects. No two lists
+have the same `sha256`, and every list is some file's.
 
 ## 7. Arrays
 
@@ -466,8 +615,14 @@ Each array is stored in three steps:
    value's second byte, and so on. With `n` values of width `w`, output byte `j × n + i` is input
    byte `i × w + j`. Shuffling puts the slowly changing bytes of neighbouring values together,
    which compresses better;
-3. **compressed** as Zstandard data (RFC 8878), which decompresses to exactly the shuffled bytes
-   and fills `size` exactly. `rvr press` writes one frame per array.
+3. **compressed** as exactly one Zstandard frame (RFC 8878), which fills `size` exactly and
+   decompresses to exactly the shuffled bytes:
+   - it begins with the magic `28 B5 2F FD`; no skippable frame comes before or after it;
+   - it uses no dictionary (its dictionary ID flag is 0);
+   - it has a content checksum (its checksum flag is 1), and the checksum (the low 32 bits of
+     XXH64 of the decompressed bytes, seed 0) is right;
+   - a content size, when the frame gives one, is the decompressed length;
+   - its window is at most 2^27 bytes (128 MiB), which every Zstandard library reads by default.
 
 The `sample` array of `tiny.rvr`, step by step:
 
@@ -575,14 +730,17 @@ It has exactly these three members:
 | `key` | the public key, as lowercase hexadecimal (64 characters) |
 
 A reader refuses a signed file whose `sha256` is not that of its header, or whose signature does
-not hold for `key`: either means the header changed after it was signed. Whether `key` belongs to
+not hold for `key`: either means the header changed after it was signed. The signature is checked
+strictly (RFC 8032's checks, and a key of small order refused), so that one header and key have one
+valid signature. Whether `key` belongs to
 someone the reader trusts is for the reader to decide.
 
 ## 10. Derived columns
 
 A derived column is kept as the expression that computes it, not as an array. A reader works it
 out from the file's own columns when it is asked for; how long it keeps the values is the reader's
-choice. It is listed in `derived.columns`, in the order the recipe's `[derived]` table gives:
+choice. It is listed in `derived.columns`, in the order the recipe's `[derived]` table gives;
+`derived` has exactly `columns`, and is present exactly when there is at least one:
 
 ```json
 "derived": {"columns": [
@@ -595,7 +753,7 @@ choice. It is listed in `derived.columns`, in the order the recipe's `[derived]`
 |---|---|
 | `name` | what every tool calls it: a name no stored column, sample column or other derived column has, nor `sample`, `entry` or `file` |
 | `expression` | the expression that computes it, as the recipe writes it |
-| `kind` and the rest | what a stored column's record holds, without `at` and `size`: for a flat column `sha256`, `by_sample` and its facts (`lim`, `nice`, and `vals` and `names` where they apply, §4); for a jagged one `offsets` (`sha256`, `by_sample`) and `content` (`kind`, `count`, `sha256`, `by_sample`) |
+| `kind` and the rest | exactly what a stored column's record holds, without `at` and `size`: for a flat column `sha256`, `by_sample` and its facts (`lim`, `nice`, and `vals` where it applies, §4); for a jagged one `offsets` (`sha256`, `by_sample`) and `content` (`kind`, `count`, `sha256`, `by_sample`) |
 
 The checksums and facts are of the column's values over every row, as a stored column's are of
 its array (§8): the press works each derived column out once, to record them. In `tiny.rvr`,
@@ -622,53 +780,54 @@ is dropped or renamed only with it, or after it.
 
 ## 11. Tool keys
 
-Any other top-level key belongs to a tool: one object per tool, named for it, holding whatever
-JSON the tool likes. `rvr press` never writes one. Any program that saves a `.rvr` file writes back
+Any other top-level key belongs to a tool: one object per tool, named for it (one or more ASCII
+letters, digits, `_`, `-` and `.`), holding whatever JSON the tool likes, within
+§1's rules. `rvr press` never writes one. Any program that saves a `.rvr` file writes back
 every tool key it found. Tool keys are outside every checksum and the signature, so a tool can
 change its own key without breaking either.
 
 ## 12. What a reader checks
 
-**On opening**, a reader checks everything the header says without reading an array, and refuses
-the file at the first problem:
+Every rule on this page is checked by a reader; none is left to trust. The checks fall in three
+steps, each refusing the file at the first problem, saying which rule failed and where.
 
-- the magic, `rowver: 15`, and the top level;
-- `made`: its fields, the toolchain, each of the three texts against its `sha256`,
-  `recipe.columns`, and `made.sha256`;
-- `data.samples` and `data.files` against `made.files`: the same samples and files, each record's
-  fields, and every sample's `events` against its files' `stop` and `take`;
-- each file's `holes`: their fields, a kind from the list, in order and apart, and within what the
-  choice read. `uuid: null` only on a file that is one whole hole or that the choice took nothing
-  of. In a file with holes whose samples carry `events_read`, `events_missing` on every sample;
-- each file's `totals`, finite numbers, and each sample's metadata holding their sums, in order;
-- that `data.cols` names exactly `made.recipe.columns`, in order;
-- each derived column's record: its fields, a name no other column has, a nonempty expression,
-  a kind the format defines, one checksum per sample, and its facts;
-- the sample columns: each has `name`, `kind`, `values` and `sha256`; its kind is one of the four;
-  it has one value per sample, of a type its kind allows; its name is no column's, nor `sample`,
-  `entry` or `file`; its `sha256` matches its values; and the list is exactly what the metadata
-  gives;
-- that `data.sha256` matches the arrays' `sha256`s;
-- the signature, when there is one.
+**On opening**, a reader checks everything the header says without reading an array or parsing the
+study's texts:
 
-**When it reads a column**, it checks the column against its `sha256`. It can also check then that
-the facts agree with the values, that floats are finite, and that a `b1` holds only 0 and 1.
+- §1: the magic, the header's JSON rules, `rowver: 15`, and the arrays filling the rest of the file
+  exactly, from their records;
+- §2 and §11: the top level, and the tool keys' names;
+- §3: every field of `data`, the samples and files in order, rows adding up;
+- §4: every column record's fields, kinds and names; the facts present that apply;
+- §5: the sample columns, their kinds, values and checksums, against the metadata both ways;
+  `events_read`, `events_total` and `events_missing` present as §5 says;
+- §6: every field of `made` and its values; each text against its `sha256`; `made.sha256`;
+  `made.files` against `data`; each sample's event choice against its files' `stop` and `take`
+  (a random choice's `take` summing to its N, or to every entry when fewer), the entry cap; every
+  file record's fields; the holes' fields, kinds, order and bounds; the totals present, finite, and
+  their sums;
+- §8: `data.sha256` against the arrays' `sha256`s;
+- §9: the signature, when there is one;
+- §10: every derived record's fields, name, kind and facts.
 
-**Full validation** (`rvr validate`, and `rowver.validate` in Python) checks all of the above and,
-unless the file is empty (§1), every array:
+**When it reads a column**, it checks the array's frame (§7), its length and its `sha256`.
 
-- the arrays fill the file in file order, end to end, and each decompresses to its declared length
-  and has its `sha256`;
-- sample rows and file rows each sum to `rows`; the sample index runs through the samples in
-  order; each file's rows are its sample's, with distinct entry numbers that the event choice read
-  (a random choice being made again from its seed), and none in a hole;
-- every hole holds an entry the choice chose. `events_missing`, when present, is the entries
-  chosen that lie in holes, and `events_read` is the entries chosen less those;
-- every `by_sample` has one checksum per sample, each matching that sample's values;
-- jagged offsets start at 0, never decrease, and end at `count`; flat floats are finite; `lim`,
-  `nice`, `vals` and `names` agree with the values;
-- every derived column, worked out, has the checksums and facts its record holds, and the
-  recipe's `[derived]` table lists them as `derived.columns` does (`rvr validate`);
+**Full validation** (`rvr validate`, `rowver::rvr::validate_file`, and `rowver.validate` in Python,
+all the same checks) does all of the above and:
+
+- §6: parses the three texts: the recipe as the recipe reference reads it, `samples.toml` as
+  SPEC.md §3 reads it, the lock as §6.3 reads it; and checks them against each other and the file:
+  the recipe's columns, derived columns and title; the lock resolved from that `samples.toml`; the
+  samples, labels, files, trees, UUIDs, entries and metadata against the lock;
+- §7, unless the file is empty: every array, its frame, its length and its `sha256`;
+- §3 and §6.1: the sample index running through the samples in order; each file's entries strictly
+  increasing, each chosen (a random choice made again from its seed), none in a hole;
+- §5 and §6.2: every hole holding a chosen entry; `events_read`, `events_missing` and
+  `events_total` exact;
+- §8: every `by_sample`;
+- §4: jagged offsets starting at 0, never decreasing, ending at `count`; `b1` values 0 or 1;
+  `lim`, `nice` and `vals` made again from the values, and equal to the record's;
+- §10: every derived column worked out, its checksums and facts equal to its record's;
 - and it says who signed the file.
 
 ## 13. Weights, and what is not in the file
