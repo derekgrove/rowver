@@ -180,12 +180,6 @@ pub const QUIET: Duration = Duration::from_secs(120);
 pub const AGAIN: Duration = Duration::from_secs(15);
 /// How long the doors asked are given to take a connection.
 const REACH: Duration = Duration::from_secs(5);
-/// What a press reading from one site asks too, to tell the network gone from that site down:
-/// CERN's Rucio server for CMS (`host:port`), asked only to take a connection.
-pub fn beacon() -> String {
-    format!("{}:443", rucio_client::Server::cms().host())
-}
-
 /// What the reads of one press share while they wait: `stop` ends every wait.
 #[derive(Default)]
 pub struct Watch {
@@ -200,7 +194,6 @@ pub struct Watch {
 struct Heard {
     quiet: Duration,
     again: Duration,
-    beacon: String,
     began: Instant,
     answer: std::sync::atomic::AtomicU64,
     answers: std::sync::atomic::AtomicU64,
@@ -220,12 +213,11 @@ struct Last {
 
 impl Watch {
     /// A press's watch: the network asked about after `quiet` with no answer, and again after
-    /// `again`; when the doors that answered are of one site, `beacon` (`host:port`) is asked too.
-    pub fn press(quiet: Duration, again: Duration, beacon: &str) -> Self {
+    /// `again`.
+    pub fn press(quiet: Duration, again: Duration) -> Self {
         let heard = Heard {
             quiet,
             again,
-            beacon: beacon.to_owned(),
             began: Instant::now(),
             answer: Default::default(),
             answers: Default::default(),
@@ -242,6 +234,7 @@ impl Watch {
     }
 
     /// A server at `host` (`host:port`) answered.
+    #[cfg(test)]
     pub fn heard_from(&self, host: &str) {
         self.answered(Some(host), true);
     }
@@ -304,9 +297,9 @@ impl Watch {
     }
 
     /// Once no storage has answered for `quiet`, the doors that answered are asked: those whose
-    /// last reply was an answer or, when every one fails, all of them, and with them the beacon
-    /// when they are of one site (which would not tell that site down from the network gone). The
-    /// network is gone when none takes a connection twice, `again` apart, with no answer meanwhile.
+    /// last reply was an answer or, when every one fails, all of them. When none takes a
+    /// connection twice, `again` apart, with no answer meanwhile, the press stops: the network is
+    /// gone, or, when every door is of one site, that site down cannot be told from it.
     fn ask(&self, heard: &Heard) -> bool {
         let now = || heard.began.elapsed().as_millis() as u64;
         let answers = heard.answers.load(Ordering::Relaxed);
@@ -329,10 +322,7 @@ impl Watch {
                 (true, false) => known,
                 (true, true) => return false,
             };
-            let mut names: Vec<String> = asked.iter().map(|(door, _)| (*door).clone()).collect();
-            if one_site && !names.contains(&heard.beacon) {
-                names.push(heard.beacon.clone());
-            }
+            let names: Vec<String> = asked.iter().map(|(door, _)| (*door).clone()).collect();
             let addresses = asked.iter().flat_map(|(_, (_, addresses))| addresses.iter().flatten().copied()).collect();
             (names, addresses, one_site)
         };
@@ -348,12 +338,10 @@ impl Watch {
             last.doubt = Some((now(), answers));
             return false;
         }
-        let doors: Vec<&str> = names.iter().map(String::as_str).filter(|door| *door != heard.beacon).collect();
         let said = match one_site {
             true => format!(
-                "no storage has answered, the one site this press reads takes no connection ({}), and neither does {}, asked to tell the network gone from that site down: the network seems to be gone",
-                doors.join(", "),
-                heard.beacon
+                "no storage has answered, and the one site this press reads takes no connection ({}): rvr cannot tell that site down from the network gone, so it stops and keeps what it read",
+                names.join(", ")
             ),
             false => format!(
                 "no storage has answered, and none that answered earlier in this press takes a connection now ({}): the network seems to be gone",
@@ -395,11 +383,6 @@ fn domain(door: &str) -> &str {
         Some((at, _)) if !numeric => &host[at + 1..],
         _ => host,
     }
-}
-
-/// Whether any of `doors` (`host:port`) takes a connection within a few seconds.
-pub fn any_door_answers(doors: &[String]) -> bool {
-    reachable(doors, &[], REACH)
 }
 
 /// Whether any of `addresses`, or of the addresses `names` (`host:port`) have now, takes a TCP
@@ -697,34 +680,6 @@ pub fn digest_seen(
     }
     let seen = reply.as_ref().err().map_or(Fault::Unreachable, |e| fault(e, proxied));
     digested(url, reply).map_err(|why| Failed::new(seen, why))
-}
-
-/// Why a file was not read, what that means for it, and whether asking again may pass.
-#[derive(Clone, Debug)]
-pub struct Refusal {
-    /// What failed, in words.
-    pub why: String,
-    /// What it means for the file.
-    pub fault: Fault,
-    /// Whether asking again may pass.
-    pub busy: bool,
-}
-
-impl Refusal {
-    /// A refusal that asking again does not mend, answered.
-    pub fn lasting(fault: Fault, why: impl Into<String>) -> Self {
-        Refusal { why: why.into(), fault, busy: false }
-    }
-}
-
-/// `digest` asked once with a proxy; a failure says what it means for the file.
-pub fn digest_once(agent: &ureq::Agent, url: &str, watch: &Watch) -> Result<Digest, Refusal> {
-    let (origin, path) = door(url).map_err(|why| Refusal::lasting(Fault::Mistake, why))?;
-    let at = format!("{origin}{path}");
-    let reply = head(agent, &at, watch);
-    let fault = reply.as_ref().err().map_or(Fault::Unreachable, |e| fault(e, true));
-    let busy = reply.as_ref().is_err_and(|e| watch.passing(e, true).is_some());
-    digested(url, reply).map_err(|why| Refusal { why, fault, busy })
 }
 
 /// What a failed request means for its file.
@@ -1238,7 +1193,7 @@ mod tests {
     #[test]
     fn the_network_is_gone_only_when_no_host_that_answered_can_be_reached() {
         assert_eq!(host_port("https://eos.example:9000/store/f.root").as_deref(), Some("eos.example:9000"));
-        assert_eq!(host_port("https://Rucio.Example").as_deref(), Some("rucio.example:443"));
+        assert_eq!(host_port("https://Door.Example").as_deref(), Some("door.example:443"));
         assert_eq!((domain("cmseos.fnal.gov:443"), domain("eos.cms.rcac.purdue.edu:9000")), ("fnal.gov", "purdue.edu"));
         assert_eq!((domain("127.0.0.1:0"), domain("[::1]:0")), ("127.0.0.1", "[::1]"));
         // A door that takes connections, and two that never do (port 0).
@@ -1248,7 +1203,7 @@ mod tests {
         let unanswered = ureq::get("https://exa mple/").call();
         let busy = || hep_root::Error::Remote("https://door.example/f.root: its storage answered 503".into());
         let shown = "https://door.example/f.root";
-        let watch = |quiet| Watch::press(quiet, Duration::ZERO, &door);
+        let watch = |quiet| Watch::press(quiet, Duration::ZERO);
         // Something answered moments ago: the network is not asked about.
         let recent = watch(Duration::from_secs(60));
         recent.heard_from(&door);
@@ -1258,20 +1213,15 @@ mod tests {
         let (silent, tries) = (watch(Duration::ZERO), std::cell::Cell::new(0));
         assert!(read_again(&[0, 0], &silent, shown, flaky(9, busy, &tries)).is_err());
         assert!(!silent.lost() && silent.gone().is_none() && tries.get() == 3);
-        // One site whose doors all fail, and the beacon takes a connection: the site is down, not
-        // the network, and the files become holes after their waits.
-        let alone = watch(Duration::ZERO);
-        alone.heard_from(closed);
-        alone.note(Some(closed), &unanswered);
-        assert!(!alone.lost() && !alone.lost() && alone.gone().is_none());
-        // The same, and the beacon takes no connection either, twice: the network is gone.
-        let cut = Watch::press(Duration::ZERO, Duration::ZERO, shut);
+        // One site whose doors all fail and take no connection, twice: that site down cannot be
+        // told from the network gone, so the press stops and keeps what it read.
+        let cut = watch(Duration::ZERO);
         cut.heard_from(closed);
         cut.note(Some(closed), &unanswered);
         assert!(!cut.lost(), "a first probe that finds none is asked again");
         assert!(cut.lost());
         let why = cut.gone().unwrap();
-        assert!(why.contains("the one site this press reads takes no connection (127.0.0.1:0), and neither does [::1]:0"), "{why}");
+        assert!(why.contains("the one site this press reads takes no connection (127.0.0.1:0): rvr cannot tell that site down from the network gone"), "{why}");
         // Doors that never answered have no addresses to ask: no telling either.
         let never = watch(Duration::ZERO);
         never.note(Some(closed), &unanswered);
@@ -1282,13 +1232,15 @@ mod tests {
         works.heard_from(&door);
         works.note(Some(closed), &unanswered);
         assert!(!works.lost() && !works.stop.load(Ordering::Acquire));
-        // Two doors of one site whose names do not resolve: nothing to ask, so no telling.
+        // Two doors of one site, both failing, whose names no longer resolve: that site down
+        // cannot be told from the network gone, so the press stops and keeps what it read.
         let site = watch(Duration::ZERO);
         for door in ["a.site.example:0", "b.site.example:0"] {
             site.heard_from(door);
             site.note(Some(door), &unanswered);
         }
-        assert!(!site.lost() && !site.lost() && site.gone().is_none());
+        assert!(!site.lost(), "a first probe that finds none is asked again");
+        assert!(site.lost() && site.gone().unwrap().contains("cannot tell that site down"));
         // Two doors of two sites, both failing, neither taking a connection twice: the network
         // is gone, and a wait ends then. An answer between two probes would have cleared the first.
         let gone = watch(Duration::ZERO);

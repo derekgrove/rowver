@@ -1,6 +1,6 @@
 //! The example studies in docs/examples: every samples.toml expands and every recipe.toml reads,
-//! as `rvr press` reads them before it opens a file. Pressing them needs the network and a grid
-//! proxy: `cargo test -p rvr --test examples -- --ignored`.
+//! as `rvr press` reads them before it opens a file. Pressing them reads Open Data over the network:
+//! `cargo test -p rvr --test examples -- --ignored`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -64,7 +64,7 @@ fn every_example_study_reads() {
 }
 
 #[test]
-#[ignore = "reads Open Data and DAS datasets: needs the network and a grid proxy"]
+#[ignore = "reads Open Data over the network"]
 fn every_example_study_presses() {
     for study in studies() {
         let name = study.file_name().unwrap().to_str().unwrap();

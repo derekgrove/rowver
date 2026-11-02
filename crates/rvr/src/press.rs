@@ -8,18 +8,15 @@
 //! only the runs that hold a chosen entry.
 
 use crate::holes::{fault_of, Failed, Fault, Seen};
-use crate::samples::copies::{Datasets, Reader};
 use crate::samples::remote::{
-    digest_seen, patiently, read_again, HttpsFile, Refusal, Storage, Watch, READING, STOPPED,
+    digest_seen, read_again, HttpsFile, Storage, Watch, READING, STOPPED,
 };
 use crate::samples::resolve::{self, adler32_file, File, Lock, Locked};
 use crate::samples::spec::Events;
 use crate::samples::{some, Choice};
-use grid_catalog::GridHttps;
 use hep_root::{ByteSource, RootFile, Tree};
 use rowver::write::{self, Labels};
 use rowver::NumericBuffer;
-use rucio_client::{Rucio, Server};
 use rvr_recipe::{Array, Columns, Constant, Expression, Kind, Recipe, Scope, Values};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
@@ -72,7 +69,7 @@ pub const USAGE: &str = "usage:
                                            pressed, read just those, and when only samples were
                                            added, just those (--full reads everything);
                                            --fill reads only the file's holes (of KINDS, such as
-                                           tape,unreachable) and writes it again with them; a
+                                           refused,unreachable) and writes it again with them; a
                                            press that stopped part way is picked up where it
                                            stopped (--restart starts it over)";
 
@@ -306,11 +303,9 @@ pub(crate) struct Input<'a> {
     pub(crate) order: usize,
 }
 
-/// Where a study's files can be read from: its folder, its storage and its datasets' copies.
+/// Where a study's files can be read from: its folder and its storage.
 pub(crate) struct Reach<'a> {
     pub storage: Option<&'a Storage>,
-    /// Where each file of a catalog dataset can be read.
-    pub datasets: Option<&'a Datasets>,
     /// Why a remote file cannot be read, when there is no storage.
     pub offline: &'a str,
     /// The study folder, which a relative path in the lock is relative to.
@@ -862,29 +857,13 @@ fn spans(branches: &[&hep_root::Branch], first: i64, last: i64) -> Vec<(u64, u64
     out
 }
 
-/// Check one input against the lock and open it, local, remote, or from a dataset's copies (with
-/// the reader that says which copy served it); a failure says what it means for the file.
-pub(crate) fn open(reach: &Reach, file: &File) -> Result<(RootFile<Held>, Option<Reader>), Failed> {
+/// Check one input against the lock and open it, local or remote; a failure says what it means
+/// for the file.
+pub(crate) fn open(reach: &Reach, file: &File) -> Result<RootFile<Held>, Failed> {
     let at = &file.at;
     // No usable grid proxy is not the file's fault: every remote file would fail the same.
     let offline = || Failed::new(Fault::Save, format!("{at}: {}", reach.offline));
     let again = Some((READING, reach.watch.clone()));
-    if file.lfn.is_some() {
-        let (Some(datasets), Some(storage)) = (reach.datasets, reach.storage) else {
-            return Err(offline());
-        };
-        // A copy failing as a busy storage does is asked again, as a read is.
-        let busy = |refused: &Refusal| refused.busy.then(|| refused.why.clone());
-        let name = at.rsplit('/').next().unwrap_or(at);
-        let seen = Arc::new(Seen::default());
-        let reader = patiently(READING, &reach.watch, name, busy, || datasets.open(storage, file, &seen))
-            .map_err(|refused| match reach.watch.stop.load(Ordering::Acquire) {
-                true => Failed::new(Fault::Stopped, format!("{at}: {STOPPED}")),
-                false => Failed::new(refused.fault, refused.why),
-            })?;
-        let handle = reader.handle();
-        return opened(file, Box::new(reader), again, Some(seen), &reach.read).map(|root| (root, Some(handle)));
-    }
     if !at.contains("://") {
         // A relative path is the lock's own: relative to the study folder.
         let path = reach.dir.join(at);
@@ -914,7 +893,7 @@ pub(crate) fn open(reach: &Reach, file: &File) -> Result<(RootFile<Held>, Option
         changed(file, Some(meta.len()), adler32)?;
         let local = hep_root::LocalFile::open(&path)
             .map_err(|e| Failed::new(fault_of(&e, None), format!("{at}: {e}")))?;
-        return opened(file, Box::new(local), None, None, &reach.read).map(|root| (root, None));
+        return opened(file, Box::new(local), None, None, &reach.read);
     }
     let storage = reach.storage.ok_or_else(offline)?;
     // The storage's size and adler32 are asked while the file is opened at the size the lock
@@ -932,7 +911,7 @@ pub(crate) fn open(reach: &Reach, file: &File) -> Result<(RootFile<Held>, Option
             .join()
             .map_err(|_| Failed::new(Fault::Bug, format!("{at}: asking its storage stopped unexpectedly (a bug in rvr: please report it with the command you ran)")))??;
         changed(file, bytes, adler32)?;
-        root.map(|root| (root, None))
+        root
     })
 }
 
@@ -948,12 +927,8 @@ pub(crate) fn sample_at(lock: &Lock, named: Option<&str>) -> Result<usize, Strin
     })
 }
 
-/// How many of a sample's files are tried, in the lock's order, for one that can be read now.
-const ON_DISK: usize = 10;
-
-/// The first of a sample's files that can be read now, opened, with its entry in the lock. A file
-/// of a dataset with no copy on disk (only on tape), or none at a recorded storage when Rucio
-/// cannot be reached, is passed over, as is one with no entries when `entries` is asked for.
+/// The first of a sample's files (with entries, when `entries` is asked for), opened, with its
+/// entry in the lock.
 pub(crate) fn first_readable<'a>(
     lock: &'a Lock,
     sample: usize,
@@ -961,37 +936,16 @@ pub(crate) fn first_readable<'a>(
     entries: bool,
 ) -> Result<(RootFile<Held>, &'a File), String> {
     let s = &lock.sample[sample];
-    let files: Vec<(usize, &File)> = s
+    let file = s
         .file
         .iter()
-        .filter(|f| !entries || f.entries != Some(0))
-        .take(ON_DISK)
-        .map(|f| (sample, f))
-        .collect();
-    if files.is_empty() {
-        return Err(format!("{} has no file with events", s.name));
-    }
+        .find(|f| !entries || f.entries != Some(0))
+        .ok_or_else(|| format!("{} has no file with events", s.name))?;
     let watch = Arc::new(Watch::default());
-    let (storage, datasets, offline) = connect(lock, &files, &watch)?;
+    let (storage, offline) = connect(&[(sample, file)], &watch);
     let read = Default::default();
-    let reach = Reach { storage: storage.as_ref(), datasets: datasets.as_ref(), offline: &offline, dir, watch, whole: false, read };
-    // Passed over at once, with no storage asked: a file only on tape, and, while Rucio cannot be
-    // reached, one no recorded storage holds. A storage failing is waited for, and said, as is a
-    // lock Rucio says is out of date.
-    let mut passed = None;
-    for &(_, file) in &files {
-        let unheld = reach.datasets.and_then(|d| d.problem(file)).is_some_and(|p| p.fault == Fault::Unreachable);
-        match open(&reach, file) {
-            Ok((root, _)) => return Ok((root, file)),
-            Err(failed) if failed.fault == Fault::Tape || unheld => passed = passed.or(Some(failed.why)),
-            Err(failed) => return Err(failed.why),
-        }
-    }
-    let why = passed.unwrap_or_default();
-    Err(match files.len() {
-        1 => why,
-        n => format!("none of the first {n} files of {} can be read now. The first: {why}", s.name),
-    })
+    let reach = Reach { storage: storage.as_ref(), offline: &offline, dir, watch, whole: false, read };
+    open(&reach, file).map(|root| (root, file)).map_err(|failed| failed.why)
 }
 
 /// Open a checked input and refuse one whose ROOT UUID is not the lock's; `again`, `seen` and
@@ -1030,9 +984,8 @@ fn opened(
 
 /// What to do about a failure reading a file's events: a name that is not a branch, with the
 /// nearest branches and defined names; a function that is not one, with the nearest functions;
-/// a damaged file (hep-root says `decompression failed`), whose every copy is damaged when it
-/// is a dataset's.
-pub(crate) fn hint(error: &str, branches: &[String], recipe: &Recipe, dataset: bool) -> String {
+/// a damaged file (hep-root says `decompression failed`).
+pub(crate) fn hint(error: &str, branches: &[String], recipe: &Recipe) -> String {
     if let Some((_, name)) = error.rsplit_once("There is no column named ") {
         let defined = recipe.defines.keys().map(String::as_str);
         let mut names: Vec<&str> = branches.iter().map(String::as_str).chain(defined).collect();
@@ -1053,10 +1006,9 @@ pub(crate) fn hint(error: &str, branches: &[String], recipe: &Recipe, dataset: b
         };
         return format!(".{near} Every function, with an example, is in the recipe reference: {RECIPES}");
     }
-    match (error.contains("decompression failed"), dataset) {
-        (false, _) => String::new(),
-        (true, true) => ". The file is damaged there, and every copy of a dataset's file holds the same bytes: report the file to the dataset's owners.".into(),
-        (true, false) => ". The file is damaged there: if another copy of it exists, put it in its place, run rvr samples resolve samples.toml, then rvr press --fill.".into(),
+    match error.contains("decompression failed") {
+        false => String::new(),
+        true => ". The file is damaged there: if another copy of it exists, put it in its place, run rvr samples resolve samples.toml, then rvr press --fill.".into(),
     }
 }
 
@@ -1149,8 +1101,7 @@ fn take(
         missing,
         cutflow: vec![0; recipe.keep.len()],
     };
-    // A file a random choice takes nothing from is recorded from the lock, not opened, when the
-    // lock has its UUID; a dataset file has none in the lock, so it is opened for it.
+    // A file a random choice takes nothing from is recorded from the lock, not opened.
     if input.chosen.as_ref().is_some_and(Vec::is_empty) && input.file.uuid.is_some() && input.file.entries.is_some() {
         if input.kept.as_ref().is_some_and(|kept| !kept.is_empty()) {
             return Err(located("none of the events the earlier file kept were chosen (a bug in rvr: press with --full, and please report it)".into()).into());
@@ -1182,7 +1133,7 @@ fn take(
         }
         Ok(nothing(record, chosen_here))
     };
-    let (file, served) = match open(&shared.reach, input.file) {
+    let file = match open(&shared.reach, input.file) {
         Ok(opened) => opened,
         Err(failed) => return unread(failed),
     };
@@ -1230,7 +1181,7 @@ fn take(
         .into_iter()
         .map(|(_, b)| b.name.clone())
         .collect();
-    let remote = at.contains("://") || input.file.lfn.is_some();
+    let remote = at.contains("://");
     let wanted: Vec<&hep_root::Branch> = if remote {
         tree.walk()
             .into_iter()
@@ -1315,7 +1266,7 @@ fn take(
                     input.tree,
                     self::count(first),
                     self::count(last - 1),
-                    hint(&error, &names, recipe, input.file.lfn.is_some())
+                    hint(&error, &names, recipe)
                 )
             };
             // What each column held before the run, put back if the run fails part way: a run is
@@ -1452,13 +1403,6 @@ fn take(
     }
     if let Some(chosen) = chosen {
         record["take"] = chosen.len().into();
-    }
-    // A copy is counted as having served the file only when it was read to its end.
-    if let Some(reader) = served.as_ref().filter(|_| holes.iter().all(|(_, _, failed)| failed.fault.local())) {
-        reader.finish();
-    }
-    if let Some((rse, host)) = served.and_then(|reader| reader.served()) {
-        record["served"] = json!({"rse": rse, "host": host});
     }
     // Its totals: over its events read, and over every entry of another tree of it; building on
     // an earlier file, which reads only the events it kept, the earlier file's.
@@ -1699,69 +1643,26 @@ pub fn toolchain() -> Value {
     })
 }
 
-/// Connect to what the files need: the storage behind the grid proxy for remote files, and Rucio
-/// for the files of central datasets. With no remote file, nothing; with no usable proxy, the
-/// reason a remote file cannot be read.
-pub(crate) fn connect(
-    lock: &Lock,
-    files: &[(usize, &File)],
-    watch: &Arc<Watch>,
-) -> Result<(Option<Storage>, Option<Datasets>, String), String> {
-    let remote = files
-        .iter()
-        .any(|(_, f)| f.at.contains("://") || f.lfn.is_some());
-    let mut datasets = None;
-    let (storage, offline) = if remote {
-        let proxy = crate::samples::proxy();
-        // Said once, however many times a command connects.
-        static WARNED: std::sync::Once = std::sync::Once::new();
-        if let Some(short) = &proxy.short {
-            WARNED.call_once(|| eprintln!("rvr: {short}"));
+/// Connect to what the files need: the storage behind the grid proxy, for remote files. With no
+/// remote file, nothing; with no usable proxy, the reason a remote file cannot be read.
+pub(crate) fn connect(files: &[(usize, &File)], watch: &Arc<Watch>) -> (Option<Storage>, String) {
+    if !files.iter().any(|(_, f)| f.at.contains("://")) {
+        return (None, String::new());
+    }
+    let proxy = crate::samples::proxy();
+    // Said once, however many times a command connects.
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    if let Some(short) = &proxy.short {
+        WARNED.call_once(|| eprintln!("rvr: {short}"));
+    }
+    match Storage::new(proxy.path.as_deref(), proxy.ca.as_deref()) {
+        Ok(mut storage) => {
+            storage.waits = READING;
+            storage.watch = watch.clone();
+            (Some(storage), proxy.said)
         }
-        let catalog: Vec<crate::samples::copies::Wanted> = files
-            .iter()
-            .filter(|(_, f)| f.lfn.is_some())
-            .map(|&(sample, f)| (f, lock.sample[sample].asked.first().map_or("", String::as_str), lock.sample[sample].sites.as_slice()))
-            .collect();
-        if let Some((file, _, _)) = catalog.first() {
-            let path = proxy
-                .path
-                .as_ref()
-                .ok_or_else(|| format!("{} is in a central dataset. {}", file.at, proxy.said))?;
-            let ca = proxy.ca.clone().map(std::path::PathBuf::from);
-            let transport: Arc<dyn grid_catalog::Transport> =
-                Arc::new(GridHttps::new(path.into(), ca));
-            let asked = std::time::Instant::now();
-            let server = Server::cms();
-            let found = Datasets::ask(&Rucio::new(server.clone(), transport), &catalog)?;
-            match &found.unasked {
-                Some(why) => println!(
-                    "Rucio could not be reached ({why}), but storages samples.lock recorded can: each of the {} is read from those of its sample, and one none of them holds is left as a hole for rvr press --fill unreachable once Rucio answers.",
-                    some(catalog.len(), "dataset file", "dataset files")
-                ),
-                None => {
-                    watch.heard_from(&format!("{}:443", server.host()));
-                    println!(
-                        "Rucio said where the {} can be read in {:.1} s.",
-                        some(catalog.len(), "dataset file", "dataset files"),
-                        asked.elapsed().as_secs_f64()
-                    );
-                }
-            }
-            datasets = Some(found);
-        }
-        match Storage::new(proxy.path.as_deref(), proxy.ca.as_deref()) {
-            Ok(mut storage) => {
-                storage.waits = READING;
-                storage.watch = watch.clone();
-                (Some(storage), proxy.said)
-            }
-            Err(why) => (None, why),
-        }
-    } else {
-        (None, String::new())
-    };
-    Ok((storage, datasets, offline))
+        Err(why) => (None, why),
+    }
 }
 
 /// What a press builds on, besides what it reads.
@@ -1955,14 +1856,14 @@ pub fn press(
     let mut picked = (!matches!(on, On::Once)).then(|| crate::journal::pick_up(&staged, &identity)).flatten();
     let resumed = picked.as_mut().map(|p| std::mem::take(&mut p.taken)).unwrap_or_default();
     let picked_up = !resumed.is_empty();
-    let watch = Arc::new(Watch::press(crate::samples::remote::QUIET, crate::samples::remote::AGAIN, &crate::samples::remote::beacon()));
+    let watch = Arc::new(Watch::press(crate::samples::remote::QUIET, crate::samples::remote::AGAIN));
     let files: Vec<(usize, &File)> = reads
         .iter()
         .enumerate()
         .filter(|(at, _)| !resumed.contains_key(at))
         .map(|(_, i)| (i.sample, i.file))
         .collect();
-    let (storage, datasets, offline) = connect(&lock, &files, &watch)?;
+    let (storage, offline) = connect(&files, &watch);
     let (spool, journal) = crate::journal::stage(target, &staged, &identity, picked)?;
     let read: u64 = lock.sample.iter().map(|s| s.events_read).sum();
     // The samples a press of other samples than the file's reads: "sample c", "samples c, d".
@@ -2052,7 +1953,6 @@ pub fn press(
         outputs: &reading,
         reach: Reach {
             storage: storage.as_ref(),
-            datasets: datasets.as_ref(),
             offline: &offline,
             dir: base,
             watch,
@@ -2153,9 +2053,6 @@ pub fn press(
         for (sample, lacks) in lock.sample.iter().zip(&missing) {
             made_files[&sample.name]["metadata"]["events_missing"] = (*lacks).into();
         }
-    }
-    for line in datasets.iter().flat_map(Datasets::summary) {
-        println!("  {line}");
     }
     if kinds.iter().any(Option::is_none) && tally.read == 0 {
         if let Some((_, hole)) = tally.holes.first() {
@@ -2456,9 +2353,6 @@ mod tests {
             bytes: 10,
             adler32: adler32.map(str::to_owned),
             modified: None,
-            lfn: None,
-            events: None,
-            disk: None,
             uuid: None,
             entries: None,
             stop: None,

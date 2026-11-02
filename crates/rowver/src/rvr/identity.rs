@@ -225,8 +225,8 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
         object(source, "metadata")?;
         for (path, record) in object(source, "files")?.as_object().unwrap() {
             let label = format!("{label}.files[{path:?}]");
-            let fields = ["tree", "uuid", "entries", "stop", "take", "served", "holes", "totals"];
-            exactly(record, &fields, &["stop", "take", "served", "holes", "totals"], &label)?;
+            let fields = ["tree", "uuid", "entries", "stop", "take", "holes", "totals"];
+            exactly(record, &fields, &["stop", "take", "holes", "totals"], &label)?;
             let limit = match record.get("stop") {
                 Some(_) => count(record, "stop")?,
                 None => count(record, "entries")?,
@@ -242,14 +242,6 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
             let held: Vec<&String> = record.get("totals").and_then(Value::as_object).map(|t| t.keys().collect()).unwrap_or_default();
             if let Some(asked) = asked.as_ref().filter(|asked| !unread && (held.len() != asked.len() || asked.iter().any(|name| !held.contains(&name)))) {
                 return Err(invalid(format!("{label}: a file the press read holds every total of the recipe's [totals] ({}), and this one holds {}", asked.join(", "), if held.is_empty() { "none".into() } else { held.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ") })));
-            }
-            if let Some(served) = record.get("served") {
-                exactly(served, &["rse", "host"], &[], &format!("{label}.served"))?;
-                if string(served, "rse")?.is_empty() || string(served, "host")?.is_empty() {
-                    return Err(invalid(format!(
-                        "{label}.served must name its rse and host"
-                    )));
-                }
             }
             if path.is_empty()
                 || (!record["uuid"].is_null() && string(record, "uuid")?.is_empty())

@@ -1,20 +1,13 @@
 //! `samples.lock`: what each sample of samples.toml resolved to, file by file, with the identity
-//! of every file (bytes and adler32 always; events, ROOT UUID and entries where they are known
+//! of every file (bytes, adler32 where its storage gives one, ROOT UUID and entries, all known
 //! without reading the events). Written by `resolve`, reviewed like code, never edited.
 
 use super::plan::plan;
-use super::copies::holding;
-use super::remote::{digest_once, host_port, HttpsFile, Storage};
+use super::remote::{HttpsFile, Storage};
 use super::spec::{Events, Plan, Source};
-use cms_dbs::{DbsCatalog, DbsInstance};
-use grid_catalog::{Catalog, CatalogFile, Did, GridHttps, Replicas, Resolver};
-use rucio_client::{Location, Rucio, Server};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, OnceLock};
-use std::time::{Duration, Instant};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Lock {
@@ -35,7 +28,7 @@ pub struct Locked {
     pub label: String,
     /// The name of the [[sample]] entry it came from, before eras and trees were added.
     pub from: String,
-    /// What the block asked for, its placeholders filled: paths and patterns, or a dataset.
+    /// What the block asked for, its placeholders filled: paths and patterns.
     pub asked: Vec<String>,
     pub tree: String,
     /// What samples.toml asked for: a number of events, or "all".
@@ -49,91 +42,7 @@ pub struct Locked {
     pub events_total: u64,
     pub events_read: u64,
     pub metadata: Map<String, Value>,
-    /// For a dataset: the storages that answered fastest when it was resolved, fastest first.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sites: Vec<Site>,
     pub file: Vec<File>,
-}
-
-/// A storage a dataset sample is read from first, and when Rucio cannot be reached.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Site {
-    /// The storage element, as T2_US_Purdue.
-    pub rse: String,
-    /// The address, `https://host:port/path`, its files' logical names follow.
-    pub prefix: String,
-}
-
-impl Site {
-    /// The site of a copy of the file `lfn`, when its address is a prefix and that name.
-    pub fn of(copy: &Location, lfn: &str) -> Option<Site> {
-        let prefix = copy.url.strip_suffix(lfn).filter(|prefix| prefix.starts_with("https://"))?;
-        Some(Site { rse: copy.rse.clone(), prefix: prefix.to_owned() })
-    }
-
-    /// The copy of the file `lfn` this site holds, only at a CMS storage door.
-    pub fn copy(&self, lfn: &str) -> Option<Location> {
-        // The address itself is held to the doors Rucio's answers are held to, so that a lock from
-        // elsewhere sends the proxy to no other host, whatever its prefix and names say.
-        let url = format!("{}{lfn}", self.prefix);
-        let door = host_port(&url).filter(|_| lfn.starts_with('/'))?;
-        let (host, port) = door.rsplit_once(':')?;
-        let known = cms_doors().contains(&(host.to_owned(), port.parse().ok()?));
-        known.then(|| Location { url, door: door.clone(), rse: self.rse.clone(), priority: 0 })
-    }
-}
-
-/// CMS's storage doors, as `(host, port)`.
-fn cms_doors() -> &'static HashSet<(String, u16)> {
-    static DOORS: OnceLock<HashSet<(String, u16)>> = OnceLock::new();
-    DOORS.get_or_init(|| rucio_client::copies::doors("cms"))
-}
-
-/// How many storages a dataset sample records.
-const SITES: usize = 3;
-
-/// How long resolve waits for storages to answer: those that answer later are not recorded.
-const PROBED: Duration = Duration::from_secs(3);
-
-/// How many of a sample's files with copies on disk are asked of Rucio for one it can be read from.
-const ASKED: usize = 3;
-
-/// The storages a dataset sample is read from first: the first of its files that Rucio says can be
-/// read over HTTPS asked at every storage that holds it, all at once, and the first three storages
-/// to answer that they hold it, as a press asks. None when the storages or Rucio cannot be asked:
-/// a press then asks Rucio alone.
-fn best_sites(ctx: &Context, files: &[File]) -> Vec<Site> {
-    let (Some(storage), Some((_, rucio))) = (&ctx.storage, &ctx.catalog) else {
-        return Vec::new();
-    };
-    let on_disk = files.iter().filter(|f| f.disk.as_ref().is_some_and(|disk| !disk.is_empty()));
-    let Some((file, lfn, said)) = on_disk.take(ASKED).find_map(|f| {
-        let lfn = f.lfn.clone()?;
-        let said = rucio.copies(&[Did::cms(lfn.clone())]).ok()?.remove(&lfn).filter(|said| !said.copies.is_empty())?;
-        Some((f, lfn, said))
-    }) else {
-        return Vec::new();
-    };
-    let (tell, heard) = mpsc::channel();
-    for copy in said.copies.into_iter().filter_map(|copy| Site::of(&copy, &lfn).map(|site| (copy, site))) {
-        let (agent, watch, tell, file) = (storage.agent(), storage.watch.clone(), tell.clone(), (*file).clone());
-        // Each asks once, and the ones answering after the first three are not waited for.
-        std::thread::spawn(move || {
-            let right = holding(&file, digest_once(&agent, &copy.0.url, &watch)).is_ok();
-            let _ = tell.send(right.then_some(copy.1));
-        });
-    }
-    drop(tell);
-    let (mut sites, until) = (Vec::new(), Instant::now() + PROBED);
-    while sites.len() < SITES {
-        match heard.recv_timeout(until.saturating_duration_since(Instant::now())) {
-            // One storage, given twice (its davs and https addresses), takes one place.
-            Ok(Some(site)) if sites.iter().all(|kept: &Site| kept.rse != site.rse) => sites.push(site),
-            Ok(_) => {}
-            Err(_) => break,
-        }
-    }
-    sites
 }
 
 /// A lock's value as TOML writes it, each number a TOML number: rowver keeps serde_json's numbers
@@ -160,23 +69,16 @@ pub fn toml_value(value: &Value, name: &str) -> Result<toml::Value, String> {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct File {
-    /// Where to open it: a local path or a root:// URL.
+    /// Where it is: a local path (relative to samples.toml's folder, under ~/, or absolute), or a URL.
     pub at: String,
     pub bytes: u64,
-    /// adler32 of the whole file, as 8 hex digits: from the storage or catalog, or computed here.
+    /// adler32 of the whole file, as 8 hex digits: from the storage, or computed here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adler32: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modified: Option<String>,
-    /// For a catalog file: its logical name, events, and the sites holding it on disk.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lfn: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub events: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub disk: Option<Vec<String>>,
     /// Read from the file's header (through its storage's door for a remote file): the ROOT UUID
-    /// and the tree's entries. A catalog file's entries are its events.
+    /// and the tree's entries.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uuid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -334,12 +236,11 @@ fn root_identity<S: hep_root::ByteSource>(
     }
 }
 
-/// What resolving needs: the folder samples.toml is in, storage access, and the catalog.
+/// What resolving needs: the folder samples.toml is in, and storage access.
 pub struct Context {
     pub base: PathBuf,
     pub storage: Option<Storage>,
-    pub catalog: Option<(DbsCatalog, Rucio)>,
-    /// Why storage or the catalog is unavailable, said once to the user if a sample needs them.
+    /// Why storage is unavailable, said once to the user if a sample needs it.
     pub offline: String,
 }
 
@@ -351,14 +252,6 @@ impl Context {
         ca: Option<String>,
     ) -> Self {
         let storage = Storage::new(proxy.as_deref(), ca.as_deref());
-        let catalog = proxy.as_ref().map(|p| {
-            let transport: Arc<dyn grid_catalog::Transport> =
-                Arc::new(GridHttps::new(p.into(), ca.clone().map(PathBuf::from)));
-            (
-                DbsCatalog::new(DbsInstance::Global, transport.clone()),
-                Rucio::new(Server::cms(), transport),
-            )
-        });
         let offline = match &storage {
             Err(e) => e.clone(),
             Ok(_) => proxy_said,
@@ -366,7 +259,6 @@ impl Context {
         Context {
             base,
             storage: storage.ok(),
-            catalog,
             offline,
         }
     }
@@ -420,9 +312,6 @@ fn files_of(ctx: &Context, asked: &str, tree: &str) -> Result<Vec<File>, String>
                     bytes: e.bytes,
                     adler32,
                     modified: e.modified.clone(),
-                    lfn: None,
-                    events: None,
-                    disk: None,
                     uuid: Some(uuid),
                     entries: Some(entries),
                     stop: None,
@@ -476,9 +365,6 @@ fn files_of(ctx: &Context, asked: &str, tree: &str) -> Result<Vec<File>, String>
                     bytes: meta.len(),
                     adler32: Some(adler32_file(&path).map_err(|e| e.to_string())?),
                     modified: meta.modified().ok().map(utc),
-                    lfn: None,
-                    events: None,
-                    disk: None,
                     uuid: Some(uuid),
                     entries: Some(entries),
                     stop: None,
@@ -519,81 +405,14 @@ pub fn nearest<'a>(asked: &str, names: impl Iterator<Item = &'a str>) -> Vec<&'a
     ranked.into_iter().take(3).map(|(_, n)| n).collect()
 }
 
-/// The files of a catalog dataset: names, events, sizes and adler32 from DBS, disk sites from Rucio.
-fn dataset_files(ctx: &Context, dataset: &str) -> Result<Vec<File>, String> {
-    let (dbs, rucio) = ctx.catalog.as_ref().ok_or_else(|| ctx.offline.clone())?;
-    let did = Did::cms(dataset);
-    let files: Vec<CatalogFile> = dbs.files(&did).map_err(|e| e.to_string())?;
-    if files.is_empty() {
-        let parts: Vec<&str> = dataset.split('/').collect();
-        let hint = match parts.as_slice() {
-            ["", primary, _, tier] => {
-                let found: Vec<String> = dbs
-                    .search(&format!("/{primary}/*/{tier}"))
-                    .map(|f| f.into_iter().map(|d| d.dataset).collect())
-                    .unwrap_or_default();
-                nearest(dataset, found.iter().map(String::as_str))
-                    .into_iter()
-                    .map(str::to_owned)
-                    .collect()
-            }
-            _ => Vec::new(),
-        };
-        return Err(format!(
-            "the dataset {dataset} has no valid files in DBS.{}",
-            if hint.is_empty() {
-                String::new()
-            } else {
-                format!(" Did you mean: {}?", hint.join(", "))
-            }
-        ));
-    }
-    let urls = cms_dbs::CmsResolver::new("root://cms-xrd-global.cern.ch/")
-        .and_then(|r| r.urls(&files))
-        .map_err(|e| e.to_string())?;
-    let replicas = rucio
-        .replicas(&files.iter().map(|f| f.did.clone()).collect::<Vec<_>>())
-        .map_err(|e| e.to_string())?;
-    Ok(files
-        .iter()
-        .zip(urls)
-        .zip(replicas)
-        .map(|((f, url), replica)| File {
-            at: url.unwrap_or_else(|| f.did.name.clone()),
-            bytes: f.bytes.unwrap_or(0),
-            adler32: f.checksum.clone(),
-            modified: None,
-            lfn: Some(f.did.name.clone()),
-            events: f.events,
-            disk: Some(replica.disk),
-            uuid: None,
-            entries: f.events,
-            stop: None,
-            take: None,
-        })
-        .collect())
-}
-
 /// One sample resolved: every file it names, and its metadata with {file} filled.
 pub fn resolve(ctx: &Context, plan: &Plan) -> Result<Locked, String> {
-    let (asked, files) = match &plan.source {
-        Source::Files(list) => {
-            let mut files = Vec::new();
-            for text in list {
-                files.extend(files_of(ctx, text, &plan.tree)?);
-            }
-            (list.clone(), files)
-        }
-        // DBS counts a file's events in its Events tree, and the lock's entries are DBS's.
-        Source::Dataset(_) if plan.tree != "Events" => {
-            return Err(format!("it reads the tree {:?} of a dataset, but rvr knows a dataset file's entries only from DBS, which counts its Events tree, so a dataset sample reads tree = \"Events\". Set it so; the Runs and LuminosityBlocks trees of a dataset cannot be pressed yet.", plan.tree))
-        }
-        Source::Dataset(d) => (vec![d.clone()], dataset_files(ctx, d)?),
-    };
-    let sites = match &plan.source {
-        Source::Dataset(_) => best_sites(ctx, &files),
-        Source::Files(_) => Vec::new(),
-    };
+    let Source::Files(list) = &plan.source;
+    let mut files = Vec::new();
+    for text in list {
+        files.extend(files_of(ctx, text, &plan.tree)?);
+    }
+    let asked = list.clone();
     let mut metadata = plan.metadata.clone();
     for (key, value) in metadata.iter_mut() {
         if let Value::String(s) = value {
@@ -617,7 +436,6 @@ pub fn resolve(ctx: &Context, plan: &Plan) -> Result<Locked, String> {
         events_total: 0,
         events_read: 0,
         metadata,
-        sites,
         file: files,
     };
     planned(&mut locked, plan.events)?;

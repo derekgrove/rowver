@@ -82,7 +82,7 @@ fn run(args: &[&str]) -> Result<(), String> {
         let scope = Scope::new(&branches, &metadata, &recipe.defines);
         let within = |error: String| {
             let entries = format!("entries {} to {}", count(first), count(last - 1));
-            format!("{shown_name}, {entries}: {error}{}", hint(&error, &names, &recipe, file.lfn.is_some()))
+            format!("{shown_name}, {entries}: {error}{}", hint(&error, &names, &recipe))
         };
         let keep = match only_kept {
             true => kept(&recipe, &scope, vec![true; entries], &mut cutflow).map_err(within)?,

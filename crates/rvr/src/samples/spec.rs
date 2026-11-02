@@ -23,8 +23,8 @@ use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
 /// Keys of a sample that name it or say where its events are; every other key is metadata.
-pub const SOURCE_KEYS: [&str; 10] = [
-    "name", "label", "files", "dataset", "tree", "trees", "eras", "events", "choose", "seed",
+pub const SOURCE_KEYS: [&str; 9] = [
+    "name", "label", "files", "tree", "trees", "eras", "events", "choose", "seed",
 ];
 
 pub use rowver::choice::Events;
@@ -64,8 +64,6 @@ pub fn events_of(table: &toml::Table, place: &str) -> Result<Events, String> {
 pub enum Source {
     /// Paths, URLs or patterns (`*` and `?` in the file name).
     Files(Vec<String>),
-    /// A catalog dataset: `/Primary/Processed/TIER` for CMS (DBS and Rucio).
-    Dataset(String),
 }
 
 /// One sample as it will be read.
@@ -98,7 +96,7 @@ pub fn is_name(text: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-/// Text made into a name, as CMS dataset names do it: `.` becomes `p`, every other run of
+/// Text made into a name, as CMS dataset names write numbers: `.` becomes `p`, every other run of
 /// characters that a name cannot hold becomes one `_`, and `_` is trimmed from both ends.
 /// "300/292.5" is "300_292p5"; "ST s-channel (13.6 TeV)" is "ST_s-channel_13p6_TeV".
 pub fn as_name(text: &str) -> String {
@@ -253,15 +251,12 @@ pub fn expand(text: &str) -> Result<Vec<Plan>, String> {
         };
         let events = events_of(&merged, &place)?;
         let source_of = |vars: &Map<String, Value>| -> Result<Source, String> {
-            match (merged.get("files"), merged.get("dataset")) {
-                (Some(_), Some(_)) => Err(problem(format!("{place}: give files or dataset, not both"))),
-                (None, None) => Err(problem(format!("{place}: no source. Say where its events are: files = \"…\" (paths, URLs or patterns) or dataset = \"/…/…/NANOAODSIM\"."))),
-                (Some(toml::Value::String(f)), None) => Ok(Source::Files(vec![fill(f, vars, &place)?])),
-                (Some(toml::Value::Array(list)), None) => list.iter().map(|f| f.as_str().ok_or_else(|| problem(format!("{place}: files must be text or a list of text"))).and_then(|f| fill(f, vars, &place)))
+            match merged.get("files") {
+                None => Err(problem(format!("{place}: no files. Say where its events are: files = \"…\" (paths, URLs or patterns)."))),
+                Some(toml::Value::String(f)) => Ok(Source::Files(vec![fill(f, vars, &place)?])),
+                Some(toml::Value::Array(list)) => list.iter().map(|f| f.as_str().ok_or_else(|| problem(format!("{place}: files must be text or a list of text"))).and_then(|f| fill(f, vars, &place)))
                     .collect::<Result<_, _>>().map(Source::Files),
-                (Some(_), None) => Err(problem(format!("{place}: files must be text or a list of text"))),
-                (None, Some(toml::Value::String(d))) => Ok(Source::Dataset(fill(d, vars, &place)?)),
-                (None, Some(_)) => Err(problem(format!("{place}: dataset must be text, like dataset = \"/WZTo3LNu_…/…/NANOAODSIM\""))),
+                Some(_) => Err(problem(format!("{place}: files must be text or a list of text"))),
             }
         };
         for era in &era_list {
@@ -336,7 +331,7 @@ pub fn expand(text: &str) -> Result<Vec<Plan>, String> {
         }
     }
     if plans.is_empty() {
-        return Err(problem("samples.toml describes no sample. Add one: [[sample]] with name = \"…\" and files = \"…\" or dataset = \"…\"."));
+        return Err(problem("samples.toml describes no sample. Add one: [[sample]] with name = \"…\" and files = \"…\"."));
     }
     Ok(plans)
 }
@@ -448,7 +443,7 @@ mod tests {
     fn mistakes_are_said_plainly() {
         let err = |text: &str| expand(text).unwrap_err();
         assert!(err("[[sample]]\nname = \"a\"\nfiles = \"x.root\"").contains("no tree"));
-        assert!(err("[[sample]]\nname = \"a\"\ntree = \"Events\"").contains("no source"));
+        assert!(err("[[sample]]\nname = \"a\"\ntree = \"Events\"").contains("no files"));
         assert!(err("[[sample]]\ntree = \"Events\"\nfiles = \"x.root\"").contains("has no name"));
         assert!(
             err("[[sample]]\nname = \"ST s-channel\"\ntree = \"E\"\nfiles = \"x\"")

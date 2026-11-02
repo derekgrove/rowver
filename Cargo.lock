@@ -100,18 +100,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cms-dbs"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e4c290186b9d50018f55314bc51ae9ec3e1cfc3518c9eab73d9aae4acdf4ac3"
-dependencies = [
- "grid-catalog",
- "serde",
- "serde_json",
- "url",
-]
-
-[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -331,23 +319,6 @@ dependencies = [
  "cfg-if",
  "libc",
  "wasi",
-]
-
-[[package]]
-name = "grid-catalog"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e51e8baaaad70dd21d8bdcaefa6fb8ebe0ea6b53fbc1fa4eaeb54c1ee6157bdb"
-dependencies = [
- "grid-trust",
- "quick-xml",
- "rustls",
- "serde",
- "serde_json",
- "thiserror",
- "ureq",
- "url",
- "voms-proxy",
 ]
 
 [[package]]
@@ -823,15 +794,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quick-xml"
-version = "0.42.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
-dependencies = [
- "memchr",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -936,19 +898,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rucio-client"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3aba919a4552f604f3f62b43c38b4046ec2fb71f87a6034aac353cce460154d"
-dependencies = [
- "grid-catalog",
- "serde",
- "serde_json",
- "url",
- "wlcg-doors",
-]
-
-[[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1020,12 +969,9 @@ dependencies = [
 name = "rvr"
 version = "15.0.0"
 dependencies = [
- "cms-dbs",
- "grid-catalog",
  "grid-trust",
  "hep-root",
  "rowver",
- "rucio-client",
  "rvr-recipe",
  "serde",
  "serde_json",

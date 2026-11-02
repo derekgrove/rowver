@@ -26,7 +26,7 @@ pub use reader::{Held, Reader};
 const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
 
 /// The kinds of hole a file records (docs/FORMAT.md, "Holes"); a reader refuses any other.
-pub const HOLE_KINDS: [&str; 6] = ["tape", "unreachable", "damaged", "gone", "changed", "refused"];
+pub const HOLE_KINDS: [&str; 5] = ["unreachable", "damaged", "gone", "changed", "refused"];
 
 /// Entries `[first, last)` of one file's tree that a press chose but could not read.
 #[derive(Clone, Debug, PartialEq, Serialize)]

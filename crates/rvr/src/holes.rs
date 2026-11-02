@@ -9,8 +9,6 @@ use std::sync::Mutex;
 /// Why an input, or a run of its entries, was not read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
-    /// Every copy of a dataset's file is on tape only.
-    Tape,
     /// Its storage kept failing after every wait.
     Unreachable,
     /// Its bytes do not decompress, or are not ROOT's.
@@ -36,7 +34,6 @@ impl Fault {
     /// The kind of hole it leaves, or `None` when it ends the press.
     pub fn kind(self) -> Option<&'static str> {
         Some(match self {
-            Fault::Tape => "tape",
             Fault::Unreachable => "unreachable",
             Fault::Damaged => "damaged",
             Fault::Gone => "gone",
@@ -53,9 +50,9 @@ impl Fault {
     }
 }
 
-/// Whether a hole of `kind` may pass (a storage busy, down or refusing; tape), so is read again.
+/// Whether a hole of `kind` may pass (a storage busy, down or refusing), so is read again.
 pub fn passing(kind: &str) -> bool {
-    matches!(kind, "unreachable" | "refused" | "tape")
+    matches!(kind, "unreachable" | "refused")
 }
 
 /// A failure to read, what it is and why, in words for a person.
@@ -147,7 +144,7 @@ mod tests {
     #[test]
     fn every_kind_of_hole_is_one_the_reader_knows() {
         use Fault::*;
-        let kinds: Vec<&str> = [Tape, Unreachable, Damaged, Gone, Changed, Refused, Save, Mistake, Stopped, Bug]
+        let kinds: Vec<&str> = [Unreachable, Damaged, Gone, Changed, Refused, Save, Mistake, Stopped, Bug]
             .iter()
             .filter_map(|fault| fault.kind())
             .collect();

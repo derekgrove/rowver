@@ -934,12 +934,12 @@ fn a_file_gone_or_changed_since_the_lock_is_a_hole_of_its_own() {
     let (code, said) = rvr(&dir, &["validate", &name]);
     assert_eq!(code, 0, "{said}");
     assert!(said.contains("read 5 of 15 entries, 2 holes (1 gone, 1 changed)"), "{said}");
-    let (code, said) = rvr(&dir, &["press", "--fill", "tape,unreachabel"]);
+    let (code, said) = rvr(&dir, &["press", "--fill", "refused,unreachabel"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("not \"unreachabel\""), "{said}");
-    let (code, said) = rvr(&dir, &["press", "--fill", "tape"]);
+    let (code, said) = rvr(&dir, &["press", "--fill", "refused"]);
     assert_eq!(code, 1, "{said}");
-    assert!(said.contains("has no holes of kind tape: its holes are changed, gone"), "{said}");
+    assert!(said.contains("has no holes of kind refused: its holes are changed, gone"), "{said}");
     // --fill gone reads only that kind: still gone, it fills nothing and leaves the file.
     let before = std::fs::read(dir.join(&name)).unwrap();
     let (code, said) = rvr(&dir, &["press", "--fill", "gone"]);

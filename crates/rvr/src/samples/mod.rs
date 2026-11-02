@@ -1,7 +1,6 @@
 //! `rvr samples`: samples.toml in, samples.lock out, and what a press reads of each sample.
 //! See the crate's README for the files and every command.
 
-pub(crate) mod copies;
 mod multipart;
 mod plan;
 pub(crate) mod remote;
@@ -99,7 +98,7 @@ pub(crate) fn proxy() -> Proxy {
         ""
     };
     let said = format!(
-        "No usable grid proxy: {}. Remote folders and datasets need one; local files do not.{next}",
+        "No usable grid proxy: {}. Remote files need one; local files do not.{next}",
         status.message
     );
     Proxy {
@@ -116,7 +115,7 @@ fn expand(path: &Path, json: bool) -> Result<(), String> {
     let plans = spec::expand(&text)?;
     if json {
         let list: Vec<_> = plans.iter().map(|p| serde_json::json!({"name": p.name, "label": p.label, "tree": p.tree, "metadata": p.metadata,
-            "source": match &p.source { spec::Source::Files(f) => serde_json::json!({"files": f}), spec::Source::Dataset(d) => serde_json::json!({"dataset": d}) }})).collect();
+            "source": match &p.source { spec::Source::Files(f) => serde_json::json!({"files": f}) }})).collect();
         println!("{}", serde_json::to_string_pretty(&list).unwrap());
         return Ok(());
     }
@@ -131,7 +130,6 @@ fn expand(path: &Path, json: bool) -> Result<(), String> {
     for p in &plans {
         let source = match &p.source {
             spec::Source::Files(f) => f.join(" + "),
-            spec::Source::Dataset(d) => format!("dataset {d}"),
         };
         println!("  {:34} {:40} {:18} {}", p.name, p.label, p.tree, source);
     }
@@ -145,7 +143,6 @@ fn resolve_all(path: &Path) -> Result<(), String> {
     let proxy = proxy();
     let remote = plans.iter().any(|p| match &p.source {
         spec::Source::Files(f) => f.iter().any(|f| f.contains("://")),
-        spec::Source::Dataset(_) => true,
     });
     if let Some(short) = proxy.short.as_ref().filter(|_| remote) {
         eprintln!("rvr: {short}");
@@ -182,9 +179,6 @@ fn resolve_all(path: &Path) -> Result<(), String> {
                     size(bytes),
                     reading(&l)
                 );
-                if l.sites.is_empty() && l.file.iter().any(|f| f.lfn.is_some()) {
-                    println!("        {}: the lock records no sites for it (no storage holding its first files on disk answered within 3 s, or Rucio could not be asked); a press asks Rucio alone.", l.name);
-                }
                 locked.push(l);
             }
             Err(why) => {
@@ -208,7 +202,7 @@ fn resolve_all(path: &Path) -> Result<(), String> {
         let folders: BTreeSet<&str> = locked
             .iter()
             .flat_map(|l| l.file.iter())
-            .filter(|f| f.at.contains("://") && f.lfn.is_none())
+            .filter(|f| f.at.contains("://"))
             .filter_map(|f| f.at.rsplit_once('/').map(|(d, _)| d))
             .collect();
         let mut unread = Vec::new();
@@ -245,7 +239,7 @@ fn resolve_all(path: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
         .and_then(|lock| resolve::toml_value(&lock, "the lock"))
         .and_then(|lock| toml::to_string(&lock).map_err(|e| e.to_string()))?;
-    let header = "# samples.lock: what samples.toml resolved to, file by file. Written by `rvr samples resolve`;\n# do not edit it. Review a change to it like a change to code: a changed line is a changed input,\n# but for a dataset's `sites`, the storages that answered fastest when it was written.\n\n";
+    let header = "# samples.lock: what samples.toml resolved to, file by file. Written by `rvr samples resolve`;\n# do not edit it. Review a change to it like a change to code: a changed line is a changed input.\n\n";
     std::fs::write(&out, format!("{header}{body}"))
         .map_err(|e| format!("{} cannot be written: {e}", out.display()))?;
     println!(
@@ -257,28 +251,23 @@ fn resolve_all(path: &Path) -> Result<(), String> {
 }
 
 /// How each file a lock names differs from what it recorded, one line each: a local file (its
-/// path relative to `base`) by its size and adler32, a storage file by its digest, and with
-/// `catalog` a dataset file by what Rucio says of it. None when every file is as recorded.
-pub(crate) fn differing(lock: &Lock, base: &Path, catalog: bool) -> Result<Vec<String>, String> {
+/// path relative to `base`) by its size and adler32, a storage file by its digest. None when every
+/// file is as recorded.
+pub(crate) fn differing(lock: &Lock, base: &Path) -> Result<Vec<String>, String> {
     let proxy = proxy();
     let ctx = Context::new(base.to_path_buf(), proxy.path, proxy.said, proxy.ca);
-    let files: BTreeMap<&str, (&resolve::File, &str)> = lock
+    let files: BTreeMap<&str, &resolve::File> = lock
         .sample
         .iter()
-        .flat_map(|s| s.file.iter().map(move |f| (f.at.as_str(), (f, s.asked.first().map_or("", String::as_str)))))
+        .flat_map(|s| s.file.iter().map(|f| (f.at.as_str(), f)))
         .collect();
     let mut changed = Vec::new();
-    let mut datasets = Vec::new();
-    for (at, (f, dataset)) in &files {
-        let now = if at.contains("://") && f.lfn.is_none() {
+    for (at, f) in &files {
+        let now = if at.contains("://") {
             ctx.storage
                 .as_ref()
                 .ok_or(ctx.offline.clone())
                 .and_then(|s| s.digest(at))
-        } else if f.lfn.is_some() {
-            // No recorded site stands in for Rucio here: what is checked is what Rucio says.
-            datasets.push((*f, *dataset, &[][..]));
-            continue;
         } else {
             let local = ctx.base.join(at);
             std::fs::metadata(&local)
@@ -294,11 +283,6 @@ pub(crate) fn differing(lock: &Lock, base: &Path, catalog: bool) -> Result<Vec<S
             Ok((bytes, adler)) => changed.extend(resolve::differs(f, bytes, adler.as_deref())),
             Err(why) => changed.push(why),
         }
-    }
-    if catalog && !datasets.is_empty() {
-        let (_, rucio) = ctx.catalog.as_ref().ok_or_else(|| format!("{} is in a central dataset, which Rucio is asked of: {}", datasets[0].0.at, ctx.offline))?;
-        let copies = crate::samples::copies::Datasets::ask(rucio, &datasets)?;
-        changed.extend(datasets.iter().filter_map(|(f, _, _)| copies.problem(f)).map(|failed| failed.why.clone()));
     }
     Ok(changed)
 }
@@ -316,29 +300,13 @@ fn check(path: &Path) -> Result<bool, String> {
             same = false;
         }
     }
-    let changed = differing(&lock, path.parent().unwrap_or(Path::new("")), false)?;
-    let files: BTreeMap<&str, &resolve::File> = lock
-        .sample
-        .iter()
-        .flat_map(|s| s.file.iter().map(|f| (f.at.as_str(), f)))
-        .collect();
-    let catalog = files.values().filter(|f| f.lfn.is_some()).count();
-    if changed.is_empty() && catalog > 0 && catalog == files.len() {
+    let changed = differing(&lock, path.parent().unwrap_or(Path::new("")))?;
+    let files: BTreeSet<&str> = lock.sample.iter().flat_map(|s| s.file.iter().map(|f| f.at.as_str())).collect();
+    if changed.is_empty() {
         println!(
-            "The lock ({}) names only the {} of central datasets. Their size and adler32 are checked against what Rucio says of each copy as rvr press reads it.",
-            lock.resolved,
-            some(catalog, "file", "files")
-        );
-    } else if changed.is_empty() {
-        println!(
-            "All {} storage and local files are as the lock recorded them ({}).{}",
-            files.len() - catalog,
-            lock.resolved,
-            if catalog > 0 {
-                format!(" {catalog} catalog files are checked when pressed.")
-            } else {
-                String::new()
-            }
+            "Every one of the {} is as the lock recorded it ({}).",
+            some(files.len(), "file", "files"),
+            lock.resolved
         );
     } else {
         same = false;

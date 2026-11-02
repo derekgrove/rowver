@@ -173,20 +173,12 @@ fn the_event_choice_is_made_again_and_checked() {
 }
 
 #[test]
-fn a_file_may_say_which_storage_served_it_and_nothing_else() {
+fn a_file_record_holds_nothing_but_its_fields() {
     let (header, _) = rebuilt(10.);
-    fn record(header: &mut Value) -> &mut Value {
-        &mut header["made"]["files"]["B"]["files"]["fixture-b.root"]
-    }
     let mut served = header.clone();
-    record(&mut served)["served"] = json!({"rse": "T2_US_Nebraska", "host": "xrootd.unl.edu:1094"});
-    assert_eq!(opens(&sealed(served)), Ok(()));
-    let mut unnamed = header.clone();
-    record(&mut unnamed)["served"] = json!({"rse": "", "host": "xrootd.unl.edu:1094"});
-    assert!(opens(&sealed(unnamed)).unwrap_err().contains("served"));
-    let mut more = header.clone();
-    record(&mut more)["served"] = json!({"rse": "T2_US_Nebraska", "host": "h:1", "when": 1});
-    assert!(opens(&sealed(more)).unwrap_err().contains("when"));
+    served["made"]["files"]["B"]["files"]["fixture-b.root"]["served"] =
+        json!({"rse": "T2_US_Nebraska", "host": "xrootd.unl.edu:1094"});
+    assert!(opens(&sealed(served)).unwrap_err().contains("served"));
 }
 
 #[test]
@@ -245,9 +237,9 @@ fn holes_are_ranges_no_row_lies_in_and_the_counts_hold() {
         assert!(why.contains(said), "{why}");
     };
     let counts = Some([(21, 4), (4, 0)]);
-    refused(&[("A", "fixture-empty.root", json!([hole(1, 5, "damaged"), hole(4, 6, "tape")]))], counts, "in order and apart");
+    refused(&[("A", "fixture-empty.root", json!([hole(1, 5, "damaged"), hole(4, 6, "gone")]))], counts, "in order and apart");
     refused(&[("A", "fixture-empty.root", json!([hole(3, 11, "damaged")]))], counts, "in order and apart");
-    refused(&[("A", "fixture-empty.root", json!([hole(3, 7, "lost")]))], counts, "not one of tape");
+    refused(&[("A", "fixture-empty.root", json!([hole(3, 7, "lost")]))], counts, "not one of unreachable");
     refused(&[("A", "fixture-empty.root", json!([]))], counts, "one hole or more");
     refused(&[("A", "fixture-a2.root", json!([hole(4, 5, "damaged")]))], Some([(24, 1), (4, 0)]), "or one in a hole");
     refused(std::slice::from_ref(&empty), Some([(21, 3), (4, 0)]), "events_missing");
@@ -264,7 +256,7 @@ fn holes_are_ranges_no_row_lies_in_and_the_counts_hold() {
 
     // Only a file never opened (one hole of every entry chosen, or one chosen nothing of) may
     // lack its UUID.
-    let mut never = holed(&[("A", "fixture-empty.root", json!([hole(0, 10, "tape")]))], Some([(15, 10), (4, 0)]));
+    let mut never = holed(&[("A", "fixture-empty.root", json!([hole(0, 10, "unreachable")]))], Some([(15, 10), (4, 0)]));
     never["made"]["files"]["A"]["files"]["fixture-empty.root"]["uuid"] = Value::Null;
     assert_eq!(opens(&sealed(never)), Ok(()));
     let mut opened = holed(std::slice::from_ref(&empty), counts);

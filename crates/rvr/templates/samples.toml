@@ -16,7 +16,7 @@ tree = "Events"
 # [eras.UL18]         # a sample that lists eras = ["UL18", …] becomes one sample per era;
 # era = 3             # an era's values become metadata, and {era} is the era's name
 
-# Each [[sample]] needs a name (letters, digits, _ and -) and a source: files = "…" or dataset = "…".
+# Each [[sample]] needs a name (letters, digits, _ and -) and its files = "…".
 # label is what plots show. Any other key (kind, xsec, …) is metadata the .rvr carries.
 
 [[sample]]
@@ -30,14 +30,6 @@ name = "VBF_HToTauTau"
 label = "VBF H to tau tau (CMS Open Data 2012)"
 files = "{opendata}/VBF_HToTauTau.root"
 kind = "signal"
-
-# A central CMS dataset, found through DBS and Rucio (needs a grid proxy):
-# [[sample]]
-# name = "WZTo3LNu_UL18"
-# label = "WZ to 3l nu (UL18)"
-# dataset = "/WZTo3LNu_TuneCP5_13TeV-amcatnloFXFX-pythia8/RunIISummer20UL18NanoAODv9-106X_upgrade2018_realistic_v16_L1v1-v2/NANOAODSIM"
-# events = 1_000_000            # the first million; choose = "random" (and seed = 7) to pick them at random
-# kind = "background"
 
 # Skims on EOS, one sample per era, the file named with a pattern (* and ? in the file name):
 # [[sample]]

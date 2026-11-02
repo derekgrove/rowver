@@ -91,7 +91,7 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result
     if !anyway {
         let text = reader.header()["made"]["lock"]["text"].as_str().unwrap_or_default();
         let lock: Lock = toml::from_str(text).map_err(|e| format!("{shown}: the samples.lock it carries does not read: {e}"))?;
-        let changed = crate::samples::differing(&lock, &base(file, study)?, true)
+        let changed = crate::samples::differing(&lock, &base(file, study)?)
             .map_err(|e| format!("{shown} was not emptied: its inputs could not all be checked ({e}). With --anyway it is emptied all the same."))?;
         if !changed.is_empty() {
             let lines: String = changed.iter().map(|line| format!("\n  {line}")).collect();

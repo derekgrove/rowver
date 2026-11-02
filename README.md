@@ -275,5 +275,4 @@ every key of `samples.toml`.
 | [`docs/FORMAT.md`](docs/FORMAT.md) | the `.rvr` specification, shown on a real file |
 
 It reads ROOT with [hep-root](https://crates.io/crates/hep-root) and reaches the grid with
-[voms-proxy](https://crates.io/crates/voms-proxy), [rucio-client](https://crates.io/crates/rucio-client)
-and [cms-dbs](https://crates.io/crates/cms-dbs). MIT licensed.
+[voms-proxy](https://crates.io/crates/voms-proxy). MIT licensed.

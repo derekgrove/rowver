@@ -284,7 +284,7 @@ fn entries_read(made: &serde_json::Value) -> Result<Option<(u64, u64)>, String> 
     Ok(Some((read, total)))
 }
 
-/// How many holes, by kind: `1 hole (tape), ` or `4 holes (3 tape, 1 damaged), `; nothing for none.
+/// How many holes, by kind: `1 hole (gone), ` or `4 holes (3 unreachable, 1 damaged), `; nothing for none.
 fn holed(holes: &[rowver::rvr::Hole]) -> String {
     let mut kinds: Vec<(&str, usize)> = Vec::new();
     for hole in holes {

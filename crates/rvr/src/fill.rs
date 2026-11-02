@@ -4,8 +4,8 @@
 //! rows, then the old rows after. Every column is packed again (each is compressed whole), but
 //! nothing but the holes is read from storage. The study must be the one that pressed the file,
 //! except that the lock may have been resolved again for the files whose holes are read (a file
-//! put back where it was), and for where a dataset's copies are: every other file must be the
-//! lock's as it was, and a file the old file holds rows of must be the same ROOT file (its UUID).
+//! put back where it was, or another copy in its place): every other file must be the lock's as it
+//! was, and a file the old file holds rows of must be the same ROOT file (its UUID).
 //! A press of samples added since builds on a file the same way (`crate::reuse`): their files are
 //! read whole, and every other sample's rows are the file's own.
 
@@ -48,7 +48,7 @@ pub struct Fill {
     pub added: Option<Vec<String>>,
 }
 
-/// The kinds `--fill` was given (`tape,unreachable`), or every kind.
+/// The kinds `--fill` was given (`refused,unreachable`), or every kind.
 pub fn kinds(given: Option<&str>) -> Result<Vec<String>, String> {
     let Some(given) = given else {
         return Ok(HOLE_KINDS.iter().map(|k| k.to_string()).collect());
@@ -142,9 +142,9 @@ pub fn fits(
 }
 
 /// A file of the lock as another lock gives the same file: but for what a press plans of it
-/// (stop, take), where its copies are (disk, which a Rucio rule changes) and when it was written.
+/// (stop, take) and when it was written.
 pub(crate) fn unplanned(file: &crate::samples::resolve::File) -> crate::samples::resolve::File {
-    crate::samples::resolve::File { stop: None, take: None, disk: None, modified: None, ..file.clone() }
+    crate::samples::resolve::File { stop: None, take: None, modified: None, ..file.clone() }
 }
 
 /// What filling the file at `path` reads, or why it cannot (see `fits`).
@@ -338,9 +338,6 @@ pub(crate) fn merged(
                 }
                 (_, now @ Value::String(_)) => record["uuid"] = now.clone(),
                 _ => {}
-            }
-            if let Some(served) = taken.record.get("served") {
-                record["served"] = served.clone();
             }
             // The events read now add to the file's totals over them; one over another tree,
             // read with the whole file, is the one it had, if it had one.

@@ -60,7 +60,7 @@ fn run(
         .map_err(|e| format!("{shown}: its samples.lock does not read: {e}"))?;
     let local = lock.sample.iter().flat_map(|s| &s.file);
     let local = local
-        .filter(|f| !f.at.contains("://") && f.lfn.is_none())
+        .filter(|f| !f.at.contains("://"))
         .map(|f| &f.at);
     if let Some(missing) = local.into_iter().find(|at| !base.join(at).exists()) {
         return Err(format!("{missing}, which the lock names, is not in {}. The lock's relative paths are from the study folder: name it with --study FOLDER.", base.display()));

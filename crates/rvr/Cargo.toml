@@ -1,6 +1,6 @@
 [package]
 name = "rvr"
-description = "The rvr command: start a study, resolve its samples (local, EOS or central CMS datasets), press .rvr files from ROOT, and validate, dump, diff and reproduce them; makes grid proxies too"
+description = "The rvr command: start a study, resolve its samples (local files, or any storage over HTTPS), press .rvr files from ROOT, and validate, dump, diff and reproduce them; makes grid proxies too"
 keywords = ["hep", "physics", "cms", "rvr", "cli"]
 categories = ["science", "command-line-utilities"]
 readme = "README.md"
@@ -15,9 +15,6 @@ license.workspace = true
 rowver.workspace = true
 rvr-recipe.workspace = true
 hep-root.workspace = true
-grid-catalog.workspace = true
-rucio-client.workspace = true
-cms-dbs.workspace = true
 wlcg-doors.workspace = true
 voms-proxy.workspace = true
 grid-trust.workspace = true
