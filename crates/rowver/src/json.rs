@@ -4,7 +4,119 @@
 //! ensure_ascii=False)` gives, which is where it came from; docs/FORMAT.md states it on its own.)
 
 use crate::{invalid, Result};
-use serde_json::Value;
+use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
+use serde_json::{Map, Number, Value};
+
+/// How deep a header's arrays and objects may nest, the header itself the first.
+const DEEPEST: usize = 64;
+
+/// Parse a header's JSON, refusing what a plain parse lets through (docs/FORMAT.md §1): an object
+/// holding a key twice, or arrays and objects nested deeper than 64.
+pub(crate) fn strict(text: &[u8]) -> Result<Value> {
+    let mut parsed = serde_json::Deserializer::from_slice(text);
+    let value = Strict { depth: 1, at: At::Top }.deserialize(&mut parsed)?;
+    parsed.end()?;
+    Ok(value)
+}
+
+/// Where a value is in the header, written out only when it is refused.
+#[derive(Clone, Copy)]
+enum At<'a> {
+    Top,
+    Key(&'a At<'a>, &'a str),
+    Index(&'a At<'a>, usize),
+}
+
+impl std::fmt::Display for At<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            At::Top => f.write_str("the header"),
+            At::Key(At::Top, key) => f.write_str(key),
+            At::Key(parent, key) => write!(f, "{parent}.{key}"),
+            At::Index(parent, index) => write!(f, "{parent}[{index}]"),
+        }
+    }
+}
+
+/// One value of the header, `depth` arrays and objects deep, at `at`.
+#[derive(Clone, Copy)]
+struct Strict<'a> {
+    depth: usize,
+    at: At<'a>,
+}
+
+impl Strict<'_> {
+    /// The depth of what an array or object holds, refused when it is too deep itself.
+    fn deeper<E: serde::de::Error>(self) -> std::result::Result<usize, E> {
+        match self.depth > DEEPEST {
+            true => Err(E::custom(format!("{} is nested {} arrays and objects deep, and a header nests at most {DEEPEST} (docs/FORMAT.md §1): hold the tool's data flatter", self.at, self.depth))),
+            false => Ok(self.depth + 1),
+        }
+    }
+}
+
+impl<'de> DeserializeSeed<'de> for Strict<'_> {
+    type Value = Value;
+    fn deserialize<D: serde::Deserializer<'de>>(self, value: D) -> std::result::Result<Value, D::Error> {
+        value.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Strict<'_> {
+    type Value = Value;
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a JSON value")
+    }
+    fn visit_bool<E>(self, value: bool) -> std::result::Result<Value, E> {
+        Ok(Value::Bool(value))
+    }
+    fn visit_i64<E>(self, value: i64) -> std::result::Result<Value, E> {
+        Ok(value.into())
+    }
+    fn visit_u64<E>(self, value: u64) -> std::result::Result<Value, E> {
+        Ok(value.into())
+    }
+    fn visit_f64<E>(self, value: f64) -> std::result::Result<Value, E> {
+        Ok(Number::from_f64(value).map_or(Value::Null, Value::Number))
+    }
+    fn visit_str<E>(self, value: &str) -> std::result::Result<Value, E> {
+        Ok(Value::String(value.to_owned()))
+    }
+    fn visit_string<E>(self, value: String) -> std::result::Result<Value, E> {
+        Ok(Value::String(value))
+    }
+    fn visit_unit<E>(self) -> std::result::Result<Value, E> {
+        Ok(Value::Null)
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Value, A::Error> {
+        let depth = self.deeper()?;
+        let mut out = Vec::new();
+        while let Some(value) = seq.next_element_seed(Strict { depth, at: At::Index(&self.at, out.len()) })? {
+            out.push(value);
+        }
+        Ok(Value::Array(out))
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<Value, A::Error> {
+        let mut out = Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            // serde_json hands a number over as a map of one member, its digits as written.
+            if out.is_empty() && key == "$serde_json::private::Number" {
+                let digits: String = map.next_value()?;
+                return digits.parse().map(Value::Number).map_err(A::Error::custom);
+            }
+            let depth = self.deeper()?;
+            if out.contains_key(&key) {
+                return Err(A::Error::custom(format!("{} is written twice, and no object of a header holds a key twice (docs/FORMAT.md §1): write it once", At::Key(&self.at, &key))));
+            }
+            let value = map.next_value_seed(Strict { depth, at: At::Key(&self.at, &key) })?;
+            out.insert(key, value);
+        }
+        if out.is_empty() {
+            self.deeper()?;
+        }
+        Ok(Value::Object(out))
+    }
+}
 
 /// The canonical text of a value.
 pub(crate) fn canonical(value: &Value) -> Result<String> {
@@ -52,10 +164,9 @@ fn write(value: &Value, out: &mut String) -> Result<()> {
 fn number(number: &serde_json::Number) -> Result<String> {
     let text = number.to_string();
     if text.contains(['.', 'e', 'E']) {
-        let value = number
-            .as_f64()
-            .filter(|value| value.is_finite())
-            .ok_or_else(|| invalid("Nonfinite recipe JSON number"))?;
+        let value = number.as_f64().filter(|value| value.is_finite()).ok_or_else(|| {
+            invalid(format!("the number {text} is past the largest double, and a checksum is taken of JSON whose numbers with a fraction or an exponent are doubles (docs/FORMAT.md §8): write a number a double holds"))
+        })?;
         return Ok(float(value));
     }
     Ok(if text == "-0" { "0".into() } else { text })

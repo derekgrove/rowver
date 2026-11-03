@@ -55,6 +55,7 @@ fn run(args: &[&str]) -> Result<bool, String> {
             _ => return Err(format!("status takes one study folder.\n{USAGE}")),
         }
     }
+    choice.valid()?;
     let (dir, _, target) = press::study(dir, out)?;
     let (texts, mut lock) = press::texts(&dir)?;
     let resolved = press::resolved(&texts, &lock);

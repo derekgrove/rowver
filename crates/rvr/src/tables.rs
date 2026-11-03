@@ -4,8 +4,7 @@
 
 use std::path::Path;
 
-/// The tables every study's recipe.toml writes, in their order.
-pub const TABLES: [&str; 5] = ["define", "keep", "columns", "totals", "derived"];
+pub use rowver::rvr::RECIPE_TABLES as TABLES;
 
 /// The tables of the five that `root` does not write.
 pub fn lacking(root: &toml::Table) -> Vec<&'static str> {

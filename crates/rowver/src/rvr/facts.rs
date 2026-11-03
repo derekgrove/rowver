@@ -1,148 +1,144 @@
+//! A flat column's facts (docs/FORMAT.md §4), compared as numbers: their forms and `nice` made
+//! again from `lim` on opening, and every fact made again from the values in full validation.
+
 use super::cancellation::Cancellation;
-use super::{list, string};
-use crate::numeric::NumericArray;
+use super::samples::whole as written_whole;
+use super::{field, MEND};
+use crate::decimal::{nice, Decimal};
+use crate::numeric::{width, NumericArray};
+use crate::write::facts::Facts;
 use crate::{invalid, Result};
-use serde_json::Value;
-use std::collections::BTreeSet;
+use serde_json::{Map, Value};
 
-/// Validate mandatory flat-column limits and the enclosing display interval.
-pub(super) fn validate(
-    record: &Value,
-    array: &NumericArray,
-    cancellation: Cancellation<'_>,
-) -> Result<()> {
-    let name = string(record, "name")?;
-    let lim = list(record, "lim")?;
-    let nice = list(record, "nice")?;
-    if lim.len() != 2 || nice.len() != 2 {
-        return Err(invalid(format!(
-            "{name}: lim and nice must contain two endpoints"
-        )));
+/// A JSON number as the whole number it is, whatever its spelling.
+fn whole(value: &Value) -> Option<i128> {
+    Decimal::parse(&value.as_number()?.to_string())?.to_whole()
+}
+
+/// A JSON number as the finite double it reads as.
+fn double(value: &Value) -> Option<f64> {
+    value.as_f64().filter(|x| x.is_finite())
+}
+
+/// How `same` compares two numbers.
+#[derive(Clone, Copy)]
+pub(super) enum Numbers {
+    /// As the whole numbers they are.
+    Whole,
+    /// As the doubles they read as (so `-0.0` is `0.0`).
+    Double,
+    /// As written: whole numbers (no fraction or exponent) as whole numbers, other numbers as
+    /// doubles, the one never equal to the other.
+    Written,
+}
+
+/// Whether two values are the same, numbers compared as `numbers` says, lists in order, objects
+/// by key in any order, everything else as it is.
+pub(super) fn same(a: &Value, b: &Value, numbers: Numbers) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => match numbers {
+            Numbers::Whole => whole(a).is_some() && whole(a) == whole(b),
+            Numbers::Double => double(a).is_some() && double(a) == double(b),
+            Numbers::Written => match (written_whole(x), written_whole(y)) {
+                (true, true) => same(a, b, Numbers::Whole),
+                (false, false) => same(a, b, Numbers::Double),
+                _ => false,
+            },
+        },
+        (Value::Array(a), Value::Array(b)) => a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same(a, b, numbers)),
+        (Value::Object(a), Value::Object(b)) => a.len() == b.len() && a.iter().all(|(key, a)| b.get(key).is_some_and(|b| same(a, b, numbers))),
+        _ => a == b,
     }
-    let lo = lim[0]
-        .as_f64()
-        .ok_or_else(|| invalid(format!("{name}: invalid lower limit")))?;
-    let hi = lim[1]
-        .as_f64()
-        .ok_or_else(|| invalid(format!("{name}: invalid upper limit")))?;
-    let nice_lo = nice[0]
-        .as_f64()
-        .ok_or_else(|| invalid(format!("{name}: invalid nice lower endpoint")))?;
-    let nice_hi = nice[1]
-        .as_f64()
-        .ok_or_else(|| invalid(format!("{name}: invalid nice upper endpoint")))?;
-    if ![lo, hi, nice_lo, nice_hi]
-        .iter()
-        .all(|value| value.is_finite())
-        || nice_lo > lo
-        || hi > nice_hi
-        || nice_lo >= nice_hi
-        || lo > hi
-    {
-        return Err(invalid(format!(
-            "{name}: display interval must enclose finite ordered limits"
-        )));
+}
+
+/// How a column of `kind`'s facts are compared: as whole numbers, or as doubles.
+pub(super) fn numbers(kind: &str) -> Numbers {
+    match wholes(kind) {
+        true => Numbers::Whole,
+        false => Numbers::Double,
     }
-    let float = array.kind.starts_with('f');
-    let mut actual_lo = f64::INFINITY;
-    let mut actual_hi = f64::NEG_INFINITY;
-    for index in 0..array.count {
-        cancellation.at(index)?;
-        let value = array.value(index)?;
-        if float && !value.is_finite() {
-            return Err(invalid(format!("{name}: floating values must be finite")));
+}
+
+/// Whether a kind holds whole numbers (every kind but `f4` and `f8`).
+pub(super) fn wholes(kind: &str) -> bool {
+    !kind.starts_with('f')
+}
+
+/// Check a flat column's facts on opening: `lim` two numbers in order (whole numbers for a
+/// whole-number kind), `nice` the rule's for them, and `vals` (on a whole-number kind only)
+/// whole numbers ascending, at most 64, between `lim`'s ends, there whenever `lim` spans 64
+/// values or fewer.
+pub(super) fn forms(record: &Value, kind: &str, place: &str) -> Result<()> {
+    let wholes = wholes(kind);
+    let number = |value: &Value| match wholes {
+        true => whole(value).map(Decimal::whole),
+        false => double(value).map(Decimal::of),
+    };
+    let what = if wholes { "whole numbers" } else { "finite numbers" };
+    let lim = field(record, place, "lim")?;
+    let ends = lim.as_array().filter(|ends| ends.len() == 2).and_then(|ends| ends.iter().map(number).collect::<Option<Vec<_>>>());
+    let Some([lo, hi]) = ends.as_deref().map(|ends| [ends[0], ends[1]]) else {
+        return Err(invalid(format!("{place}.lim must be two {what}, [min, max] (docs/FORMAT.md §4): {MEND}")));
+    };
+    let ordered = match wholes {
+        true => whole(&lim[0]) <= whole(&lim[1]),
+        false => double(&lim[0]) <= double(&lim[1]),
+    };
+    if !ordered {
+        return Err(invalid(format!("{place}.lim is {lim}, and its first end is its least value (docs/FORMAT.md §4): {MEND}")));
+    }
+    let want: Vec<Value> = nice(lo, hi, wholes).iter().map(|end| match wholes {
+        true => serde_json::Number::from_i128(end.to_whole().unwrap_or_default()).map_or(Value::Null, Value::Number),
+        false => serde_json::Number::from_f64(end.to_f64()).map_or(Value::Null, Value::Number),
+    }).collect();
+    let have = field(record, place, "nice")?;
+    if !same(have, &Value::Array(want.clone()), numbers(kind)) {
+        return Err(invalid(format!("{place}.nice is {have}, and the rule of docs/FORMAT.md §4 makes {} of its lim {lim}: {MEND}", Value::Array(want))));
+    }
+    let Some(vals) = record.get("vals") else {
+        let (lo, hi) = (whole(&lim[0]).unwrap_or_default(), whole(&lim[1]).unwrap_or_default());
+        if wholes && hi.checked_sub(lo).is_some_and(|span| span < 64) {
+            return Err(invalid(format!("{place} has no vals, and a whole-number column whose lim {lim} spans 64 values or fewer lists them (docs/FORMAT.md §4): {MEND}")));
         }
-        actual_lo = actual_lo.min(value);
-        actual_hi = actual_hi.max(value);
+        return Ok(());
+    };
+    if !wholes {
+        return Err(invalid(format!("{place} has vals, which a float column never has (docs/FORMAT.md §4): take it out")));
     }
-    if array.count == 0 {
-        actual_lo = 0.0;
-        actual_hi = 0.0;
+    let listed = vals.as_array().and_then(|vals| vals.iter().map(whole).collect::<Option<Vec<_>>>());
+    let fits = listed.as_ref().is_some_and(|listed| {
+        let ends = match (listed.first(), listed.last()) {
+            (Some(first), Some(last)) => Some(*first) == whole(&lim[0]) && Some(*last) == whole(&lim[1]),
+            _ => whole(&lim[0]) == Some(0) && whole(&lim[1]) == Some(0),
+        };
+        listed.len() <= 64 && listed.windows(2).all(|pair| pair[0] < pair[1]) && ends
+    });
+    match fits {
+        true => Ok(()),
+        false => Err(invalid(format!("{place}.vals must be every distinct value, ascending, from lim's first end to its last, at most 64 of them (docs/FORMAT.md §4): {MEND}"))),
     }
-    if lo != actual_lo || hi != actual_hi {
-        return Err(invalid(format!(
-            "{name}: declared limits differ from the array"
-        )));
+}
+
+/// Check a flat column's facts against its values: each made again, and equal as a number.
+pub(super) fn values(record: &Value, array: &NumericArray, place: &str, cancellation: Cancellation<'_>) -> Result<()> {
+    let mut facts = Facts::new(&array.kind);
+    for chunk in array.bytes.chunks(width(&array.kind)? << 16) {
+        cancellation.check()?;
+        facts.add(chunk)?;
     }
-    if !array.kind.starts_with('f') {
-        integers(record, array, cancellation)?;
-    }
-    if let Some(names) = record.get("names") {
-        let names = names
-            .as_object()
-            .ok_or_else(|| invalid(format!("{name}: names must be an object")))?;
-        let vals = list(record, "vals")?;
-        for (key, label) in names {
-            let key = key
-                .parse::<i128>()
-                .map_err(|_| invalid(format!("{name}: label keys must be integer values")))?;
-            if !label.is_string() || !vals.iter().any(|value| exact(value).ok() == Some(key)) {
-                return Err(invalid(format!("{name}: labels must name members of vals")));
-            }
+    agree(record, &facts.finish(), &array.kind, place)
+}
+
+/// Require a record's facts to be `want`'s, compared as numbers, `vals` there exactly when wanted.
+pub(super) fn agree(record: &Value, want: &Map<String, Value>, kind: &str, place: &str) -> Result<()> {
+    for key in ["lim", "nice", "vals"] {
+        match (record.get(key), want.get(key)) {
+            (None, None) => {}
+            (Some(have), Some(want)) if same(have, want, numbers(kind)) => {}
+            (None, Some(want)) => return Err(invalid(format!("{place} has no {key}, and its values give {want} (docs/FORMAT.md §4): {MEND}"))),
+            (Some(_), None) => return Err(invalid(format!("{place} has vals, and its values are more than 64 distinct ones, which have none (docs/FORMAT.md §4): {MEND}"))),
+            (Some(have), Some(want)) => return Err(invalid(format!("{place}.{key} is {have}, and its values give {want} (docs/FORMAT.md §4): {MEND}"))),
         }
     }
     Ok(())
-}
-
-/// Validate integer extrema and value labels without a lossy f64 conversion.
-fn integers(record: &Value, array: &NumericArray, cancellation: Cancellation<'_>) -> Result<()> {
-    let name = string(record, "name")?;
-    let mut values = BTreeSet::new();
-    let mut lo = i128::MAX;
-    let mut hi = i128::MIN;
-    for index in 0..array.count {
-        cancellation.at(index)?;
-        let value = array.integer(index)?;
-        lo = lo.min(value);
-        hi = hi.max(value);
-        if values.len() <= 64 {
-            values.insert(value);
-        }
-    }
-    if array.count == 0 {
-        lo = 0;
-        hi = 0;
-    }
-    let lim: Vec<i128> = list(record, "lim")?
-        .iter()
-        .map(exact)
-        .collect::<Result<_>>()?;
-    if lim != [lo, hi] {
-        return Err(invalid(format!(
-            "{name}: integer limits differ from exact array values"
-        )));
-    }
-    let nice: Vec<i128> = list(record, "nice")?
-        .iter()
-        .map(exact)
-        .collect::<Result<_>>()?;
-    if nice[0] > lo || hi > nice[1] {
-        return Err(invalid(format!(
-            "{name}: nice does not enclose exact integer limits"
-        )));
-    }
-    if let Some(vals) = record.get("vals") {
-        let vals = vals
-            .as_array()
-            .ok_or_else(|| invalid(format!("{name}: vals must be an array")))?;
-        let vals: Vec<i128> = vals.iter().map(exact).collect::<Result<_>>()?;
-        if values.len() > 64 || vals != values.into_iter().collect::<Vec<_>>() {
-            return Err(invalid(format!(
-                "{name}: vals differ from exact distinct array values"
-            )));
-        }
-    } else if values.len() <= 64 {
-        return Err(invalid(format!(
-            "{name}: integer columns with at most 64 values require vals"
-        )));
-    }
-    Ok(())
-}
-
-/// Require an integer JSON spelling large enough for every supported dtype.
-fn exact(value: &Value) -> Result<i128> {
-    value
-        .as_number()
-        .and_then(|number| number.to_string().parse().ok())
-        .ok_or_else(|| invalid("Integer column facts must contain exact integers"))
 }

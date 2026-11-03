@@ -1,8 +1,7 @@
 //! The rvr command on files written here: validate, header, dump, and diff naming what changed.
 
-use rowver::write::{
-    array, made_checksum, pack, sample_cols, text_checksum, write, Labels, Piece, Values,
-};
+use rowver::study::lock::{Branch, Branches, File, Lock, Sample, Shape};
+use rowver::write::{array, made_checksum, pack, sample_cols, text_checksum, write, Piece, Values};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -30,24 +29,41 @@ fn pressed(path: &Path, met_b: f32, xsec_b: f64) {
         piece("B", vec![met_b, 50.], vec![2, 1], vec![70., 80., 90.]),
     ];
     let files = vec![
-        json!({"sample": "A", "path": "a.root", "rows": 3}),
-        json!({"sample": "B", "path": "b.root", "rows": 2}),
+        json!({"sample": "A", "path": "./a.root", "rows": 3}),
+        json!({"sample": "B", "path": "./b.root", "rows": 2}),
     ];
-    let (mut data, arrays) = pack(pieces, Labels::new(), files).unwrap();
-    let record = |entries: u64| json!({"tree": "Events", "uuid": "00000000-0000-0000-0000-000000000000", "entries": entries});
+    let (mut data, arrays) = pack(pieces, files).unwrap();
+    let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"Events\"\n\n[eras]\n\n\
+        [[sample]]\nname = \"A\"\nlabel = \"Sample A\"\nfiles = \"./a.root\"\nmetadata = {{ xsec = 1.5 }}\n\n\
+        [[sample]]\nname = \"B\"\nlabel = \"Sample B\"\nfiles = \"./b.root\"\nmetadata = {{ xsec = {xsec_b:?} }}\n");
+    let list = Branches::new(vec![
+        Branch { name: "MET".into(), kind: "f4".into(), shape: Shape::Flat, why: None },
+        Branch { name: "Jet_pt".into(), kind: "f4".into(), shape: Shape::Jagged, why: None },
+    ]);
+    let made_samples = rowver::study::samples::read(&samples).unwrap();
+    let locked: Vec<Sample> = made_samples.iter().zip([3, 2]).enumerate().map(|(n, (s, entries))| Sample {
+        name: s.name.clone(), label: s.label.clone(), asked: s.files.clone(), tree: s.tree.clone(),
+        branches: list.sha256.clone(), events: s.events, events_total: 0, events_read: 0, metadata: s.metadata.clone(),
+        files: vec![File { at: s.files[0].clone(), bytes: 4000, adler32: Some("0a1b2c3d".into()), uuid: format!("31e851e4-b994-11f1-ba5c-{n:012x}"), entries, stop: None, take: None }],
+    }.planned(s.events)).collect();
+    let lock = Lock { resolved: "2026-10-16T00:00:00Z".into(), samples_toml_sha256: text_checksum(&samples), samples: locked, branches: vec![list] }.write().unwrap();
+    let lock = Lock::read(&lock).map(|read| (lock, read)).unwrap();
     let text = |text: &str| json!({"sha256": text_checksum(text), "text": text});
-    let mut recipe = text("format = \"rvr-recipe\"\nversion = 1\n");
+    let mut recipe = text("format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET\", \"Jet_pt\"]\n\n[totals]\n\n[derived]\n");
     recipe["format"] = "rvr-recipe".into();
     recipe["columns"] = json!(["MET", "Jet_pt"]);
-    let all = json!({"choose": "all"});
+    let mut files = serde_json::Map::new();
+    for sample in &lock.1.samples {
+        let file = &sample.files[0];
+        let mut metadata = sample.metadata.clone();
+        metadata.insert("events_read".into(), sample.events_read.into());
+        metadata.insert("events_total".into(), sample.events_total.into());
+        files.insert(sample.name.clone(), json!({"events": {"choose": "all"}, "files": {file.at.clone(): {"tree": "Events", "uuid": file.uuid, "entries": file.entries}}, "metadata": metadata}));
+    }
     let mut made = json!({
         "study": "cli-test", "built": "2026-10-16T00:00:00Z", "by": "rvr test",
-        "toolchain": {"rvr": "test", "rowver": "14", "commit": "test", "rustc": "test", "target": "test"},
-        "recipe": recipe, "samples": text("# samples\n"), "lock": text("# lock\n"),
-        "files": {
-            "A": {"events": all, "files": {"a.root": record(3)}, "metadata": {"xsec": 1.5}},
-            "B": {"events": all, "files": {"b.root": record(2)}, "metadata": {"xsec": xsec_b}},
-        },
+        "toolchain": {"rvr": "15.0.0", "rowver": "15", "commit": "unknown", "rustc": "rustc 1.91.0", "target": "test"},
+        "recipe": recipe, "samples": text(&samples), "lock": text(&lock.0), "files": files,
     });
     made["sha256"] = made_checksum(&made).unwrap().into();
     data["sample_cols"] = sample_cols(&["A", "B"], &made["files"], &["MET", "Jet_pt"])
@@ -116,7 +132,7 @@ fn validate_header_and_dump_read_a_pressed_file() {
     let (code, said) = rvr(&["validate", file]);
     assert_eq!(
         (code, said),
-        (0, format!("{file}: valid, 5 rows, 2 columns, not signed\n"))
+        (0, format!("{file}: valid, 5 rows, 2 columns, read all 5 entries, not signed\n"))
     );
     // A flag it does not know is refused (on stderr), not read past.
     assert_eq!(rvr(&["validate", file, "--parent", file]), (2, String::new()));

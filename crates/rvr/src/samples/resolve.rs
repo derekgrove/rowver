@@ -7,32 +7,10 @@ use super::remote::{HttpsFile, Storage};
 use hep_root::columns::{inventory, Kind, Shape};
 use rowver::study::lock::{self, Branch, Branches, File};
 use rowver::study::meant;
+pub use rowver::study::{join, matches, split};
 use rowver::study::samples::Sample;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
-
-/// Whether `name` matches `pattern`, where `*` is any run of characters and `?` one character.
-pub fn matches(pattern: &str, name: &str) -> bool {
-    let (p, n): (Vec<char>, Vec<char>) = (pattern.chars().collect(), name.chars().collect());
-    let (mut pi, mut ni, mut star, mut mark) = (0, 0, None, 0);
-    while ni < n.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
-            pi += 1;
-            ni += 1;
-        } else if pi < p.len() && p[pi] == '*' {
-            star = Some(pi);
-            mark = ni;
-            pi += 1;
-        } else if let Some(s) = star {
-            pi = s + 1;
-            mark += 1;
-            ni = mark;
-        } else {
-            return false;
-        }
-    }
-    p[pi..].iter().all(|c| *c == '*')
-}
 
 fn pattern(text: &str) -> bool {
     text.contains(['*', '?'])
@@ -245,22 +223,6 @@ pub struct Context {
 /// One folder's listing, made by the first thread to ask for it while the others wait.
 type Listing = Arc<OnceLock<Result<Arc<[String]>, String>>>;
 
-/// The folder and name of a path or URL of `files` (`.` for a bare name, `/` for one at the root).
-pub fn split(asked: &str) -> (&str, &str) {
-    match asked.rsplit_once('/') {
-        Some(("", name)) => ("/", name),
-        Some(split) => split,
-        None => (".", asked),
-    }
-}
-
-/// A file's path or URL from its folder and name, as `split` parts them.
-pub fn join(folder: &str, name: &str) -> String {
-    match folder {
-        "/" => format!("/{name}"),
-        _ => format!("{folder}/{name}"),
-    }
-}
 
 impl Context {
     pub fn new(
@@ -426,29 +388,6 @@ pub fn resolve(ctx: &Context, sample: &Sample) -> Result<(lock::Sample, Branches
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn patterns() {
-        assert!(matches("Run2012*_TauPlusX.root", "Run2012B_TauPlusX.root"));
-        assert!(matches("*.root", "a.root"));
-        assert!(!matches(
-            "Run2012?_Tau*.root",
-            "Run2012BC_DoubleMuParked_Muons.root"
-        ));
-        assert!(matches(
-            "SMS-Signal*_Summer22_130X.root",
-            "SMS-Signal-2L_TuneCP5_13p6TeV_madgraphMLM-pythia8_Summer22_130X.root"
-        ));
-    }
-
-    #[test]
-    fn a_path_is_split_and_joined_back_as_written() {
-        for asked in ["root://eospublic.cern.ch//x.root", "root://h//eos/a/x.root", "/x.root", "./x.root", "~/d/x.root", "d//x.root"] {
-            let (folder, name) = split(asked);
-            assert_eq!(join(folder, name), asked);
-        }
-        assert_eq!(join(split("x.root").0, "x.root"), "./x.root");
-    }
 
     #[test]
     fn two_branch_lists_differ_by_name_kind_and_shape() {

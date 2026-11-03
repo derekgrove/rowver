@@ -3,6 +3,7 @@
 
 pub mod choice;
 mod codec;
+mod decimal;
 mod json;
 mod numeric;
 pub mod parallel;

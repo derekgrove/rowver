@@ -301,6 +301,7 @@ impl Lock {
                     p.say(format!("{place}: {}'s uuid is not a ROOT UUID (8-4-4-4-12 lowercase hex)", f.at));
                 }
             }
+            order(s, &place, p);
             match lists.contains_key(s.branches.as_str()) {
                 true => drop(used.insert(s.branches.as_str())),
                 false => p.say(format!("{place}: its branches names no branch list of the lock")),
@@ -399,6 +400,33 @@ impl Lock {
     /// The branch list of a sample of the lock.
     pub fn branches_of(&self, sample: &Sample) -> Option<&Branches> {
         self.branches.iter().find(|b| b.sha256 == sample.branches)
+    }
+}
+
+/// Check a sample's files are the matches of its `asked` entries (docs/SPEC.md §3.8): entry after
+/// entry, each entry's in byte order of name, each `at` its entry's folder and the name (a bare
+/// name as `./NAME`), and every entry matching one file or more.
+fn order(s: &Sample, place: &str, p: &mut Problems) {
+    let (mut entry, mut last, mut used) = (0, None::<&str>, vec![false; s.asked.len()]);
+    for f in &s.files {
+        let (folder, name) = super::split(&f.at);
+        let written = super::join(folder, name);
+        let found = (entry..s.asked.len()).find(|&i| {
+            let (at, pattern) = super::split(&s.asked[i]);
+            at == folder && super::matches(pattern, name)
+        });
+        match found {
+            Some(i) if written == f.at && (i > entry || last.is_none_or(|last| last < name)) => {
+                (entry, last, used[i]) = (i, Some(name), true);
+            }
+            _ => {
+                p.say(format!("{place}: {} is not where the lock lists it: its files are the matches of asked, entry after entry, each entry's in byte order of name, written as the entry writes its folder (a bare name as ./NAME)", f.at));
+                return;
+            }
+        }
+    }
+    if let Some(i) = used.iter().position(|u| !u) {
+        p.say(format!("{place}: its asked {} matches none of its files, and every entry of asked matches one or more", s.asked[i]));
     }
 }
 
@@ -722,6 +750,10 @@ mod tests {
         let twice = said(text.replace("bytes = 100", "bytes = 0").replace("31e851e4", "31E851E4"));
         assert!(twice.contains("bytes 0") && twice.contains("uuid"), "{twice}");
         assert!(said(text.replace("nJet", "Aaa")).contains("byte order"));
+        let swapped = text.replace("at = \"./a.root\"", "at = \"./c.root\"").replace("at = \"./b.root\"", "at = \"./a.root\"").replace("at = \"./c.root\"", "at = \"./b.root\"");
+        assert!(said(swapped).contains("./a.root is not where the lock lists it"));
+        assert!(said(text.replace("at = \"./b.root\"", "at = \"b.root\"")).contains("b.root is not where the lock lists it"));
+        assert!(said(text.replace("at = \"./b.root\"", "at = \"./b.dat\"")).contains("./b.dat is not where"));
     }
 
     #[test]

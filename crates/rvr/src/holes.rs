@@ -28,6 +28,9 @@ pub enum Fault {
     Stopped,
     /// A bug in rvr: the press stops, and keeps what it read.
     Bug,
+    /// A file the press needs but cannot read, with no entry to make a hole of (one of no entries
+    /// read for its totals): the press stops, and keeps what it read.
+    Needed,
 }
 
 impl Fault {
@@ -39,7 +42,7 @@ impl Fault {
             Fault::Gone => "gone",
             Fault::Changed => "changed",
             Fault::Refused => "refused",
-            Fault::Save | Fault::Mistake | Fault::Stopped | Fault::Bug => return None,
+            Fault::Save | Fault::Mistake | Fault::Stopped | Fault::Bug | Fault::Needed => return None,
         })
     }
 

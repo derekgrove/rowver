@@ -72,8 +72,9 @@ validator reads only its input: none reads an event or opens a ROOT file.
 - the lock was resolved from this `samples.toml`: its `samples_toml_sha256` is that text's SHA-256,
   and its samples are the expansion of `samples.toml` (names, labels, trees, metadata, event
   choices, the paths and patterns asked);
-- every branch the recipe reads is in the branch list (in the lock) of every sample, with a type rvr
-  reads;
+- every branch the recipe reads from the event tree is in the branch list (in the lock) of every
+  sample, with a type rvr reads (a `[totals]` total over another tree reads branches of that tree,
+  which the lock does not list);
 - every expression of the recipe type-checks against those branches' kinds, and every column has
   one kind in every file;
 - no name of the recipe's `[totals]` or `[derived]` is a key of a sample's metadata;
@@ -193,7 +194,8 @@ out.
 
 **3.5.4** `files`, required: text, or a nonempty list of texts. Each is where files are (§3.8).
 
-**3.5.5** `tree` or `trees`: exactly one of them, from the sample, or `tree` from `[defaults]`.
+**3.5.5** `tree` or `trees`: exactly one of them, from the sample, or `tree` from `[defaults]`; a
+sample's own `trees` replaces a default `tree`, as a sample's own value replaces any default.
 `tree` is the tree's name. `trees` is a nonempty table of `LABEL = TREE`, making one sample per
 entry: as for the mass points of a signal scan, each its own tree in the same files.
 
@@ -233,10 +235,11 @@ above, a `{` never closed, and a `}` with no `{` before it are refused.
 the order of `eras`; within that, each tree of `trees` in the order written.
 
 **3.7.2** A sample made by `trees` and `eras` is named `NAME_POINT_ERA` and labelled
-`LABEL POINT (ERA)`, leaving out what does not apply. `POINT` is the `trees` label made into a name:
-ASCII letters, digits and `-` are kept, `.` becomes `p`, any other run of characters becomes one `_`,
-and `_` is trimmed from both ends (`300/292.5` becomes `300_292p5`). A label that gives nothing is
-refused.
+`LABEL POINT (ERA)`, leaving out what does not apply. In the label, `POINT` is the `trees` label as
+written (`Signal 300/292.5 (UL17)`); in the name, it is that label made into a name: ASCII letters,
+digits and `-` are kept, `.` becomes `p`, any other run of characters becomes one `_`, and `_` is
+trimmed from both ends (`300/292.5` becomes `300_292p5`, so `Signal_300_292p5_UL17`). A label that
+gives nothing as a name is refused.
 
 **3.7.3** A sample's metadata is the era's values, then the `[defaults]` metadata, then its own, a
 later key replacing an earlier one.
@@ -579,6 +582,9 @@ happened. A file that cannot be opened at all is one hole of every entry it chos
 
 **7.3.3** A local file missing from a folder that is there is `gone`; its folder missing, or the file
 not readable for want of rights, stops the press (not the file's own failure: a disk not mounted).
+A file of no entries that the recipe's `[totals]` read (under a choice of all or the first N,
+FORMAT.md §6) has no entry to make a hole of: when it cannot be read, the press stops, keeps what
+it read, and says which file and why its totals need it.
 
 **7.3.4** `rvr press` exits 3 when the file it writes has holes, prints each with its kind and why,
 and says `rvr press --fill reads them again once they can be read.`

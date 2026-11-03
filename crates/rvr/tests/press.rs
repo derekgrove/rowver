@@ -313,6 +313,11 @@ fn presses_that_cannot_be_trusted_are_refused() {
     let (code, said) = rvr(&dir, &["press", "--events", "all", "--random"]);
     assert_eq!(code, 1);
     assert!(said.contains("not --events all"), "{said}");
+    // A number of events from 1 to 2^63 − 1, refused at once, before the study is read.
+    for n in ["0", "9223372036854775808"] {
+        let (code, said) = rvr(&dir, &["press", "--events", n]);
+        assert!(code == 1 && said.contains(&format!("--events is a number of events from 1 to 2^63 − 1, or all, not \"{n}\"")) && !said.contains("Pressing"), "{said}");
+    }
 
     std::fs::rename(dir.join("samples.toml"), dir.join("aside.toml")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
@@ -404,6 +409,81 @@ metadata = { flat = "x", listed = "list" }
         header["made"]["files"]["empty"]["metadata"]["events_total"],
         0
     );
+}
+
+#[test]
+fn a_file_of_no_entries_that_cannot_be_read_for_its_totals_stops_the_press() {
+    let samples = r#"format = "rvr-samples"
+version = 1
+
+[places]
+
+[defaults]
+
+[eras]
+
+[[sample]]
+name = "full"
+files = "codecs-zlib.root"
+tree = "Events"
+metadata = { flat = "f4" }
+
+[[sample]]
+name = "empty"
+files = "nothing.root"
+tree = "Empty"
+metadata = { flat = "x" }
+"#;
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nvalue = \"branch(sample.flat)\"\n\n[totals]\nn = \"1\"\n\n[derived]\n";
+    let dir = study("nothing", samples, recipe);
+    std::fs::copy(dir.join("codecs-zlib.root"), dir.join("nothing.root")).unwrap();
+    // Read, it holds its totals: 0.0 over its no events.
+    let header = pressed(&dir, &[]);
+    assert_eq!(header["made"]["files"]["empty"]["files"]["./nothing.root"]["totals"]["n"], 0.0);
+    // Gone, it has no entry to make a hole of: the press stops and writes nothing.
+    std::fs::remove_file(dir.join("nothing.root")).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    let needed = "The press reads it for the recipe's [totals]";
+    assert!(code == 1 && said.contains("./nothing.root no longer exists: put it back") && said.contains(needed) && said.contains("was not written"), "{said}");
+    // Another file in its place is said as it is, with what mends it.
+    std::fs::copy(dir.join("uproot_flat.root"), dir.join("nothing.root")).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert!(code == 1 && said.contains("It has changed since samples.lock was written") && said.contains("run rvr samples resolve samples.toml") && said.contains(needed), "{said}");
+}
+
+#[test]
+fn samples_whose_branch_lists_give_a_column_two_kinds_are_refused_before_any_file_is_read() {
+    // The empty sample's tree has no entries, so no read would ever compare its kind.
+    let samples = r#"format = "rvr-samples"
+version = 1
+
+[places]
+
+[defaults]
+
+[eras]
+
+[[sample]]
+name = "full"
+files = "codecs-zlib.root"
+tree = "Events"
+metadata = { flat = "f8" }
+
+[[sample]]
+name = "empty"
+files = "codecs-zlib.root"
+tree = "Empty"
+metadata = { flat = "x" }
+"#;
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nvalue = \"branch(sample.flat)\"\n\n[totals]\n\n[derived]\n";
+    let dir = study("kinds", samples, recipe);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 1 && said.contains("[columns] value is f8 in sample full and f4 in sample empty") && said.contains("stored = \"f8\"") && !said.contains("Pressing"), "{said}");
+    assert!(!dir.join("kinds.rvr").exists());
+    // Converted in the recipe, the column has one kind.
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("value = \"branch(sample.flat)\"", "value = { value = \"branch(sample.flat)\", stored = \"f8\" }")).unwrap();
+    assert_eq!(pressed(&dir, &[])["data"]["cols"][0]["kind"], "f8");
 }
 
 #[test]
@@ -502,10 +582,10 @@ per_jet = "ht / nJet"
     assert!(code == 1 && said.contains("sample flat: derived column n: sample.xsec is used as a number, but this sample has no xsec: give it one in samples.toml, or give every sample one under [defaults]"), "{said}");
     // A record that is not what its expression gives is refused when it is worked out.
     let mut changed = header.clone();
-    changed["derived"]["columns"][0]["lim"][1] = 1e9.into();
+    changed["derived"]["columns"][0]["sha256"] = "0".repeat(64).into();
     rowver::write::rewrite(dir.join(&file), dir.join("changed.rvr"), &changed).unwrap();
     let (code, said) = rvr(&dir, &["validate", "changed.rvr"]);
-    assert!(code == 1 && said.contains("derived column per_jet, worked out here, is not what"), "{said}");
+    assert!(code == 1 && said.contains("derived.columns[\"per_jet\"], worked out here, is not what"), "{said}");
     // Nor is it changed, and signed again, by rvr derive.
     let (code, said) = rvr(&dir, &["derive", "changed.rvr", "--rename", "per_jet", "mean"]);
     assert!(code == 1 && said.contains("is not what the file records"), "{said}");
@@ -524,9 +604,14 @@ per_jet = "ht / nJet"
     let (code, said) = rvr(&dir, &["validate", "stripped.rvr"]);
     assert!(code == 1 && said.contains("does not list the derived columns its header records"), "{said}");
     // A derived column that cannot be worked out stops the press on the first run of a file.
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("per_jet = \"ht / nJet\"", "per_jet = \"ht / sample.file\"")).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert!(code == 1 && said.contains("uproot_flat.root: derived column per_jet: \"./uproot_flat.root\" is text, not a number") && !said.contains("could not be written"), "{said}");
+    // A float may be NaN or infinite: a derived column dividing by zero is written as it is.
     std::fs::write(dir.join("recipe.toml"), recipe.replace("per_jet = \"ht / nJet\"", "per_jet = \"ht / (nJet - nJet)\"")).unwrap();
     let (code, said) = rvr(&dir, &["press", "--full"]);
-    assert!(code == 1 && said.contains("uproot_flat.root: derived column per_jet: some of its values are not finite") && !said.contains("could not be written"), "{said}");
+    assert!(code == 0, "{said}");
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
     std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
 }
 
@@ -837,22 +922,22 @@ fn damage(path: &Path, branch: &str) {
 
 #[test]
 fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_columns() {
-    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[totals]\n\n[derived]\nr = \"if(sample.file == './flat_b.root', weight / (nJet - nJet), weight)\"\n";
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[totals]\n\n[derived]\nr = \"if(sample.file == './flat_b.root', weight * sample.file, weight)\"\n";
     let dir = twice("late", recipe);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     assert_eq!(rvr(&dir, &["key", "new", "Tester"]).0, 0);
     // One worker reads flat_a.root first, where the trial passes; flat_b.root's values fail at the end.
     let (code, said) = rvr(&dir, &["press", "--workers", "1"]);
-    assert!(code == 1 && said.contains("derived column r: some of its values are not finite") && said.contains("is written without its derived columns"), "{said}");
+    assert!(code == 1 && said.contains("derived column r: \"./flat_b.root\" is text, not a number") && said.contains("is written without its derived columns"), "{said}");
     let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     let (code, said) = rvr(&dir, &["validate", &file]);
     assert!(code == 0 && said.contains("10 rows, 2 columns, read all") && said.contains("signed by you"), "{said}");
     // Fixed, the next press reads no input and adds it.
-    std::fs::write(dir.join("recipe.toml"), recipe.replace("weight / (nJet - nJet)", "weight * 2")).unwrap();
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("weight * sample.file", "weight * 2")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert!(code == 0 && said.contains("Nothing to read") && said.contains("2 columns and 1 derived"), "{said}");
     // So with derived columns written as an inline table, which cannot be edited a line at a time.
-    let inline = "format = \"rvr-recipe\"\nversion = 1\nderived = { r = \"if(sample.file == './flat_b.root', weight / (nJet - nJet), weight)\" }\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[totals]\n";
+    let inline = "format = \"rvr-recipe\"\nversion = 1\nderived = { r = \"if(sample.file == './flat_b.root', weight * sample.file, weight)\" }\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[totals]\n";
     let dir = twice("late-inline", inline);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     let (code, said) = rvr(&dir, &["press", "--workers", "1"]);
@@ -860,7 +945,7 @@ fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_co
     let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
     // The recipe it carries keeps an empty [derived], so the next press builds on the file.
-    std::fs::write(dir.join("recipe.toml"), inline.replace("weight / (nJet - nJet)", "weight * 2")).unwrap();
+    std::fs::write(dir.join("recipe.toml"), inline.replace("weight * sample.file", "weight * 2")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert!(code == 0 && said.contains("Nothing to read") && said.contains("2 columns and 1 derived"), "{said}");
     // rvr derive changes a [derived] table a line at a time, and says why it cannot change this one.
@@ -1207,7 +1292,7 @@ fn a_flag_some_samples_lack_is_compared_or_given_to_all_in_defaults() {
     // A flag on the data sample alone is missing for mc: a condition it cannot be.
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
-    assert!(said.contains("mc.root, tree analysis, ") && said.contains(": [columns] w: sample.isData is used as the condition of if, but this sample has no isData: give it one in samples.toml, or give every sample one under [defaults]"), "{said}");
+    assert!(said.contains("(sample mc, ") && said.contains(": [columns] w: sample.isData is used as the condition of if, but this sample has no isData: give it one in samples.toml, or give every sample one under [defaults]"), "{said}");
     // Compared, a sample without it is not data; it is in the metadata, but no sample column.
     std::fs::write(dir.join("recipe.toml"), recipe("sample.isData == true")).unwrap();
     assert_eq!(rvr(&dir, &["press"]).0, 0);

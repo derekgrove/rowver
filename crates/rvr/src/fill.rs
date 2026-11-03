@@ -256,7 +256,8 @@ pub(crate) fn laid<'a, 'p>(
             keep(row..plan.rows.end, &mut order);
         }
         let read = (!ranges.is_empty()).then(|| {
-            reads.push(Input { ranges: Some(ranges), ..input.clone() });
+            let unsummed = plan.record.get("totals").is_none();
+            reads.push(Input { ranges: Some(ranges), unsummed, ..input.clone() });
             reads.len() - 1
         });
         all.push(Laid { old, read });
@@ -400,7 +401,7 @@ mod tests {
             files: Vec::new(),
         };
         let lock = Lock { resolved: String::new(), samples_toml_sha256: String::new(), samples: vec![sample], branches: Vec::new() };
-        let input = |file| Input { sample: 0, tree: "t", file, chosen: None, kept: None, before: None, ranges: None, order: 0 };
+        let input = |file| Input { sample: 0, tree: "t", file, chosen: None, kept: None, before: None, ranges: None, order: 0, unsummed: false };
         let plan = |rows: std::ops::Range<usize>, read: Vec<(u64, u64)>| crate::fill::Plan { rows, read, kept: Vec::new(), record: Value::Null, unread: false };
         let plans = HashMap::from([
             (("s".to_string(), "f.root".to_string()), plan(0..5, vec![(3, 5), (6, 8)])),
@@ -416,5 +417,12 @@ mod tests {
         assert_eq!(all.iter().map(|laid| laid.read).collect::<Vec<_>>(), [Some(0), None]);
         assert_eq!(reads.len(), 1, "one input for f.root, reading both its holes");
         assert_eq!(reads[0].ranges, Some(vec![(3, 5, 1), (6, 8, 2)]));
+        // A file with no totals yet, all of whose chosen entries lay in holes, has its other
+        // trees summed by the fill that first reads some of it, though it reads only some holes.
+        assert!(reads[0].unsummed && crate::press::whole(&reads[0], 10));
+        let mut summed = plans;
+        summed.get_mut(&("s".to_string(), "f.root".to_string())).unwrap().record = serde_json::json!({"totals": {"w": 1.0}});
+        let (reads, _) = laid(&[input(&file), input(&other)], &lock, &summed, &entries).unwrap();
+        assert!(!reads[0].unsummed && !crate::press::whole(&reads[0], 10));
     }
 }

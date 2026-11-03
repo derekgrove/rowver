@@ -4,9 +4,9 @@
 
 mod common;
 
-use common::{golden, rebuilt, split, written};
+use common::{golden, rebuilt, sealed, split, written};
 use rowver::rvr::{from_bytes, validate_file, Reader};
-use rowver::write::{made_checksum, to_bytes};
+use rowver::write::to_bytes;
 use serde_json::{json, Value};
 
 /// Little-endian values of a kind, each as an f64.
@@ -85,7 +85,6 @@ fn reader_gives_the_columns_the_fixture_holds() {
         }
     }
     assert_eq!(reader.entry().unwrap().len(), table.len());
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -101,7 +100,6 @@ fn a_header_declaring_more_rows_than_its_arrays_hold_is_refused_not_allocated() 
             assert!(reader.column(&name).is_err(), "{name}");
         }
     }
-    std::fs::remove_file(path).unwrap();
 }
 
 /// Whether a header, written with the fixture's arrays, opens and validates; the first error.
@@ -111,14 +109,7 @@ fn opens(header: &Value) -> Result<(), String> {
     let opened = Reader::open(&path)
         .map(drop)
         .and_then(|()| validate_file(&path).map(drop));
-    std::fs::remove_file(path).unwrap();
     opened.map_err(|e| e.to_string())
-}
-
-/// Seal a changed `made` with its new checksum, so only the change itself is wrong.
-fn sealed(mut header: Value) -> Value {
-    header["made"]["sha256"] = made_checksum(&header["made"]).unwrap().into();
-    header
 }
 
 #[test]
@@ -151,7 +142,6 @@ fn a_made_without_its_study_is_refused_but_can_be_inspected() {
     let path = written(&to_bytes(&gone, &[arrays.concat()]).unwrap(), "inspect");
     let (reader, checked) = Reader::inspect(&path).unwrap();
     assert!(checked.is_err() && reader.column("MET").unwrap().is_some());
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -160,12 +150,12 @@ fn the_event_choice_is_made_again_and_checked() {
     let mut seed = header.clone();
     seed["made"]["files"]["B"]["events"]["seed"] = 8.into();
     let why = opens(&sealed(seed)).unwrap_err();
-    assert!(why.contains("did not read"), "{why}");
+    assert!(why.contains("did not choose"), "{why}");
     let mut take = header.clone();
-    take["made"]["files"]["B"]["files"]["fixture-b.root"]["take"] = 3.into();
+    take["made"]["files"]["B"]["files"]["./fixture-b.root"]["take"] = 3.into();
     assert!(opens(&sealed(take)).unwrap_err().contains("take"));
     let mut stop = header.clone();
-    stop["made"]["files"]["A"]["files"]["fixture-a2.root"]["stop"] = 6.into();
+    stop["made"]["files"]["A"]["files"]["./fixture-a2.root"]["stop"] = 6.into();
     assert!(opens(&sealed(stop)).unwrap_err().contains("stop"));
     let mut fewer = header.clone();
     fewer["made"]["files"]["A"]["events"]["n"] = 24.into();
@@ -176,7 +166,7 @@ fn the_event_choice_is_made_again_and_checked() {
 fn a_file_record_holds_nothing_but_its_fields() {
     let (header, _) = rebuilt(10.);
     let mut served = header.clone();
-    served["made"]["files"]["B"]["files"]["fixture-b.root"]["served"] =
+    served["made"]["files"]["B"]["files"]["./fixture-b.root"]["served"] =
         json!({"rse": "T2_US_Nebraska", "host": "xrootd.unl.edu:1094"});
     assert!(opens(&sealed(served)).unwrap_err().contains("served"));
 }
@@ -195,28 +185,17 @@ fn a_signed_header_that_changed_is_refused() {
 }
 
 /// Holes put in the fixture's records, with `events_read` and `events_missing` as a press writes
-/// them (or left out), sealed, and the sample columns made again.
-fn holed(holes: &[(&str, &str, Value)], counts: Option<[(u64, u64); 2]>) -> Value {
+/// them, sealed, and the sample columns made again.
+fn holed(holes: &[(&str, &str, Value)], counts: [(u64, u64); 2]) -> Value {
     let (mut header, _) = rebuilt(10.);
     for (sample, file, list) in holes {
         header["made"]["files"][*sample]["files"][*file]["holes"] = list.clone();
     }
-    for (sample, (read, missing)) in ["A", "B"].iter().zip(counts.into_iter().flatten()) {
+    for (sample, (read, missing)) in ["A", "B"].iter().zip(counts) {
         let metadata = &mut header["made"]["files"][*sample]["metadata"];
         metadata["events_read"] = read.into();
         metadata["events_missing"] = missing.into();
     }
-    let names: Vec<String> = header["made"]["recipe"]["columns"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|n| n.as_str().unwrap().to_owned())
-        .collect();
-    let taken: Vec<&str> = names.iter().map(String::as_str).collect();
-    header["data"]["sample_cols"] =
-        rowver::write::sample_cols(&["A", "B"], &header["made"]["files"], &taken)
-            .unwrap()
-            .into();
     sealed(header)
 }
 
@@ -224,58 +203,49 @@ fn holed(holes: &[(&str, &str, Value)], counts: Option<[(u64, u64); 2]>) -> Valu
 fn holes_are_ranges_no_row_lies_in_and_the_counts_hold() {
     let hole = |first: u64, last: u64, kind: &str| json!({"entries": [first, last], "kind": kind, "why": "basket 2 does not decompress"});
     // A has 10 + 10 + 5 entries chosen; B 4 of 20 at random.
-    let empty = ("A", "fixture-empty.root", json!([hole(3, 7, "damaged")]));
-    assert_eq!(opens(&holed(std::slice::from_ref(&empty), Some([(21, 4), (4, 0)]))), Ok(()));
-    let header = holed(std::slice::from_ref(&empty), Some([(21, 4), (4, 0)]));
+    let empty = ("A", "./fixture-empty.root", json!([hole(3, 7, "damaged")]));
+    let counts = [(21, 4), (4, 0)];
+    assert_eq!(opens(&holed(std::slice::from_ref(&empty), counts)), Ok(()));
+    let header = holed(std::slice::from_ref(&empty), counts);
     let found = rowver::rvr::holes(&header);
     assert_eq!((found.len(), found[0].first, found[0].last, found[0].kind.as_str()), (1, 3, 7, "damaged"));
-    // Holes without the counts are a file a tool other than rvr press wrote.
-    assert_eq!(opens(&holed(std::slice::from_ref(&empty), None)), Ok(()));
 
     let refused = |holes: &[(&str, &str, Value)], counts, said: &str| {
         let why = opens(&holed(holes, counts)).unwrap_err();
         assert!(why.contains(said), "{why}");
     };
-    let counts = Some([(21, 4), (4, 0)]);
-    refused(&[("A", "fixture-empty.root", json!([hole(1, 5, "damaged"), hole(4, 6, "gone")]))], counts, "in order and apart");
-    refused(&[("A", "fixture-empty.root", json!([hole(3, 11, "damaged")]))], counts, "in order and apart");
-    refused(&[("A", "fixture-empty.root", json!([hole(3, 7, "lost")]))], counts, "not one of unreachable");
-    refused(&[("A", "fixture-empty.root", json!([]))], counts, "one hole or more");
-    refused(&[("A", "fixture-a2.root", json!([hole(4, 5, "damaged")]))], Some([(24, 1), (4, 0)]), "or one in a hole");
-    refused(std::slice::from_ref(&empty), Some([(21, 3), (4, 0)]), "events_missing");
-    // events_read is the press's own, which rvr validate checks; the reader leaves it.
-    assert_eq!(opens(&holed(std::slice::from_ref(&empty), Some([(22, 4), (4, 0)]))), Ok(()));
-    let mut uncounted = holed(std::slice::from_ref(&empty), Some([(21, 4), (4, 0)]));
+    refused(&[("A", "./fixture-empty.root", json!([hole(1, 5, "damaged"), hole(4, 6, "gone")]))], counts, "in entry order and apart");
+    refused(&[("A", "./fixture-empty.root", json!([hole(3, 11, "damaged")]))], counts, "in entry order and apart");
+    refused(&[("A", "./fixture-empty.root", json!([hole(3, 7, "lost")]))], counts, "not one of unreachable");
+    refused(&[("A", "./fixture-empty.root", json!([]))], counts, "one hole or more");
+    refused(&[("A", "./fixture-a2.root", json!([hole(4, 5, "damaged")]))], [(24, 1), (4, 0)], "or a hole holds");
+    refused(std::slice::from_ref(&empty), [(21, 3), (4, 0)], "events_missing is 3");
+    refused(std::slice::from_ref(&empty), [(22, 4), (4, 0)], "events_read is 22");
+    // Every sample of a file with holes counts what it misses.
+    let mut uncounted = holed(std::slice::from_ref(&empty), counts);
     uncounted["made"]["files"]["B"]["metadata"].as_object_mut().unwrap().shift_remove("events_missing");
-    assert!(opens(&uncounted).is_err(), "a pressed file with holes counts what each sample misses");
+    assert!(opens(&sealed(uncounted)).unwrap_err().contains("events_missing"));
 
     // A random choice's hole holds some of the chosen entries.
     let chosen = rowver::choice::per_file(&[20], 4, 7).remove(0);
     let unchosen = (0..20).find(|e| !chosen.contains(e)).unwrap();
-    refused(&[("B", "fixture-b.root", json!([hole(unchosen, unchosen + 1, "unreachable")]))], None, "holds no entry the press chose");
+    refused(&[("B", "./fixture-b.root", json!([hole(unchosen, unchosen + 1, "unreachable")]))], [(25, 0), (4, 0)], "none of which the event choice chose");
 
-    // Only a file never opened (one hole of every entry chosen, or one chosen nothing of) may
-    // lack its UUID.
-    let mut never = holed(&[("A", "fixture-empty.root", json!([hole(0, 10, "unreachable")]))], Some([(15, 10), (4, 0)]));
-    never["made"]["files"]["A"]["files"]["fixture-empty.root"]["uuid"] = Value::Null;
-    assert_eq!(opens(&sealed(never)), Ok(()));
+    // A file never opened is one hole of every entry chosen, with the lock's UUID: never null.
+    assert_eq!(opens(&holed(&[("A", "./fixture-empty.root", json!([hole(0, 10, "unreachable")]))], [(15, 10), (4, 0)])), Ok(()));
     let mut opened = holed(std::slice::from_ref(&empty), counts);
-    opened["made"]["files"]["A"]["files"]["fixture-empty.root"]["uuid"] = Value::Null;
-    assert!(opens(&sealed(opened)).unwrap_err().contains("no uuid"));
-    let (mut untaken, _) = rebuilt(10.);
-    untaken["made"]["files"]["B"]["files"]["fixture-b.root"]["take"] = 0.into();
-    untaken["made"]["files"]["B"]["files"]["fixture-b.root"]["uuid"] = Value::Null;
-    assert!(!opens(&sealed(untaken)).unwrap_err().contains("no uuid"), "take 0 may lack it");
+    opened["made"]["files"]["A"]["files"]["./fixture-empty.root"]["uuid"] = Value::Null;
+    assert!(opens(&sealed(opened)).unwrap_err().contains("uuid must be text"));
 }
 
-/// A sample's totals are its files' totals, finite numbers, summed in their order into its
+/// A sample's totals are its files' totals, finite doubles, summed in their order into its
 /// metadata, and every file the press read holds each total the recipe asks for; anything else is
 /// refused.
 #[test]
 fn a_samples_totals_are_its_files_totals_summed() {
     let totaled = |total: Value, said: Value, asked: &str| {
         let (mut header, _) = rebuilt(10.);
-        let text = format!("format = \"rvr-recipe\"\nversion = 1\n[totals]\n{asked}\n");
+        let text = common::recipe().replace("[totals]\n", &format!("[totals]\n{asked}\n"));
         header["made"]["recipe"]["text"] = text.as_str().into();
         header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(&text).into();
         for sample in ["A", "B"] {
@@ -285,22 +255,21 @@ fn a_samples_totals_are_its_files_totals_summed() {
             }
             header["made"]["files"][sample]["metadata"]["sumw"] = (files.len() as f64).into();
         }
-        header["made"]["files"]["B"]["files"]["fixture-b.root"]["totals"] = json!({ "sumw": total });
+        header["made"]["files"]["B"]["files"]["./fixture-b.root"]["totals"] = json!({ "sumw": total });
         header["made"]["files"]["B"]["metadata"]["sumw"] = said;
-        let names: Vec<String> = header["made"]["recipe"]["columns"].as_array().unwrap().iter().map(|n| n.as_str().unwrap().to_owned()).collect();
-        let taken: Vec<&str> = names.iter().map(String::as_str).collect();
-        header["data"]["sample_cols"] = rowver::write::sample_cols(&["A", "B"], &header["made"]["files"], &taken).unwrap().into();
         opens(&sealed(header))
     };
-    let asked = "sumw = \"w\"";
+    let asked = "sumw = \"MET\"";
     assert_eq!(totaled(2.5.into(), 2.5.into(), asked), Ok(()));
     let wrong = totaled(2.5.into(), 3.0.into(), asked).unwrap_err();
-    assert!(wrong.contains("made.files[\"B\"].metadata.sumw is not the sum of its files' totals of sumw"), "{wrong}");
+    assert!(wrong.contains("made.files[\"B\"].metadata.sumw is 3.0, and its files' totals of sumw"), "{wrong}");
     let text = totaled("2.5".into(), 2.5.into(), asked).unwrap_err();
-    assert!(text.contains("a file's total sumw must be a finite number"), "{text}");
+    assert!(text.contains("totals.sumw is \"2.5\", and a total is a finite double"), "{text}");
+    let whole = totaled(2.into(), 2.0.into(), asked).unwrap_err();
+    assert!(whole.contains("totals.sumw is 2, and a total is a finite double, written with a . or an exponent"), "{whole}");
     // A total the recipe does not ask for, or one it asks for that a file read does not hold.
     let more = totaled(2.5.into(), 2.5.into(), "").unwrap_err();
-    assert!(more.contains("holds every total of the recipe's [totals] (), and this one holds sumw"), "{more}");
-    let less = totaled(2.5.into(), 2.5.into(), "sumw = \"w\"\nn = \"1\"").unwrap_err();
-    assert!(less.contains("holds every total of the recipe's [totals] (sumw, n), and this one holds sumw"), "{less}");
+    assert!(more.contains(".totals holds [\"sumw\"], and a file the press read holds each total"), "{more}");
+    let less = totaled(2.5.into(), 2.5.into(), "sumw = \"MET\"\nn = \"1\"").unwrap_err();
+    assert!(less.contains(".totals holds [\"sumw\"]"), "{less}");
 }

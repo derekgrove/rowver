@@ -214,7 +214,7 @@ fn validate(words: &[&str], args: &[String]) -> u8 {
     let mut ok = true;
     for file in words {
         let checked = rowver::rvr::validate_file(file).map_err(|e| e.to_string());
-        let compared = checked.and_then(|summary| {
+        let compared = checked.map(|summary| {
             let derived = match (summary.derived, summary.empty) {
                 (0, _) => String::new(),
                 (n, true) => format!("{n} derived (worked out once refilled), "),
@@ -224,10 +224,9 @@ fn validate(words: &[&str], args: &[String]) -> u8 {
                 Some(signature) => key::signer(signature["key"].as_str().unwrap_or_default()),
                 None => "not signed".into(),
             };
-            let read = match entries_read(&summary.header["made"])? {
-                Some((read, total)) if read == total => format!("read all {total} entries, "),
-                Some((read, total)) => format!("read {read} of {total} entries, "),
-                None => String::new(),
+            let read = match entries_read(&summary.header["made"]) {
+                (read, total) if read == total => format!("read all {total} entries, "),
+                (read, total) => format!("read {read} of {total} entries, "),
             };
             let holes = rowver::rvr::holes(&summary.header);
             let empty = match summary.empty {
@@ -235,7 +234,7 @@ fn validate(words: &[&str], args: &[String]) -> u8 {
                 false => "",
             };
             let said = derived + &read + &holed(&holes) + empty + &signed;
-            Ok((summary.rows, summary.columns, said, holes.is_empty(), summary.empty))
+            (summary.rows, summary.columns, said, holes.is_empty(), summary.empty)
         });
         // With --complete, a file with holes, or an empty one, fails, on its one line.
         let compared = compared.and_then(|(rows, columns, said, whole, empty)| match complete && (!whole || empty) {
@@ -248,40 +247,13 @@ fn validate(words: &[&str], args: &[String]) -> u8 {
     u8::from(!ok)
 }
 
-/// The entries a press read and the entries its samples hold (`events_read` and `events_total`,
-/// the metadata rvr press adds), refused when what each file's record says was read disagrees.
-/// `None` for a file without them.
-fn entries_read(made: &serde_json::Value) -> Result<Option<(u64, u64)>, String> {
-    let Some(samples) = made["files"].as_object() else {
-        return Ok(None);
-    };
-    let (mut read, mut total) = (0, 0);
-    for (name, sample) in samples {
-        let (Some(said_read), Some(said_total)) = (
-            sample["metadata"]["events_read"].as_u64(),
-            sample["metadata"]["events_total"].as_u64(),
-        ) else {
-            return Ok(None);
-        };
-        let missing = sample["metadata"]["events_missing"].as_u64().unwrap_or(0);
-        let files = sample["files"].as_object().into_iter().flatten();
-        let (mut held, mut taken) = (0, 0);
-        for (_, file) in files {
-            let entries = file["entries"].as_u64().unwrap_or(0);
-            held += entries;
-            taken += file["take"]
-                .as_u64()
-                .or(file["stop"].as_u64())
-                .unwrap_or(entries);
-        }
-        // A file the first N events never reach is not recorded: its entries are in the total alone.
-        if said_read + missing != taken || said_total < held {
-            return Err(format!("sample {name} says it read {said_read} of {said_total} entries ({missing} in holes), but its files record {taken} chosen of {held}"));
-        }
-        read += said_read;
-        total += said_total;
-    }
-    Ok(Some((read, total)))
+/// The entries a press read and the entries its samples hold: the sums of their `events_read` and
+/// `events_total`, which `validate_file` checked.
+fn entries_read(made: &serde_json::Value) -> (u64, u64) {
+    let samples = made["files"].as_object().into_iter().flatten().map(|(_, sample)| &sample["metadata"]);
+    samples.fold((0, 0), |(read, total), metadata| {
+        (read + metadata["events_read"].as_u64().unwrap_or(0), total + metadata["events_total"].as_u64().unwrap_or(0))
+    })
 }
 
 /// How many holes, by kind: `1 hole (gone), ` or `4 holes (3 unreachable, 1 damaged), `; nothing for none.

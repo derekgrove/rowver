@@ -34,9 +34,9 @@ impl Events {
     /// algorithm, is refused.
     pub fn read(record: &Value) -> Result<Events> {
         let n = || {
-            record["n"]
-                .as_u64()
-                .ok_or_else(|| invalid("events.n must be a whole number"))
+            whole(&record["n"])
+                .filter(|n| (1..=i64::MAX as u64).contains(n))
+                .ok_or_else(|| invalid("events.n must be a whole number from 1 to 2^63 − 1"))
         };
         let (events, fields) = match record["choose"].as_str() {
             Some("all") => (Events::All, 1),
@@ -47,7 +47,7 @@ impl Events {
                         "events.algorithm is not {ALGORITHM}, the one this reader knows"
                     )));
                 }
-                let seed = record["seed"].as_u64().ok_or_else(|| {
+                let seed = whole(&record["seed"]).ok_or_else(|| {
                     invalid("events.seed must be a whole number from 0 to 2^64 - 1")
                 })?;
                 (Events::Random { n: n()?, seed }, 4)
@@ -56,12 +56,20 @@ impl Events {
         };
         if record.as_object().map(serde_json::Map::len) != Some(fields) {
             return Err(invalid(format!(
-                "events holds fields a {} choice does not have",
-                record["choose"]
+                "events holds fields a {} choice does not have (exactly choose{})",
+                record["choose"],
+                ["", ", n", ", n, seed, algorithm"][fields.min(4) / 2]
             )));
         }
         Ok(events)
     }
+}
+
+/// A whole number from 0 to 2^64 − 1 written without a fraction or an exponent (`-0` is 0).
+fn whole(value: &Value) -> Option<u64> {
+    let text = value.as_number()?.to_string();
+    let n: i128 = text.parse().ok().filter(|_| !text.contains(['.', 'e', 'E']))?;
+    u64::try_from(n).ok()
 }
 
 /// SplitMix64 (Steele, Lea and Flood 2014): the generator a random choice is drawn from.

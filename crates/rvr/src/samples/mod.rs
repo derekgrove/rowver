@@ -384,6 +384,23 @@ impl Choice<'_> {
             .map_err(|_| format!("--seed is a whole number, not {text:?}"))
     }
 
+    /// Read `--events`' number: a whole number of events from 1 to 2^63 − 1.
+    pub fn number(text: &str) -> Result<u64, String> {
+        text.replace('_', "")
+            .parse::<u64>()
+            .ok()
+            .filter(|n| (1..=i64::MAX as u64).contains(n))
+            .ok_or_else(|| format!("--events is a number of events from 1 to 2^63 − 1, or all, not {text:?}"))
+    }
+
+    /// Refuse an option's value that can never be read, before the study is.
+    pub fn valid(&self) -> Result<(), String> {
+        match self.events {
+            Some("all") | None => Ok(()),
+            Some(n) => Self::number(n).map(drop),
+        }
+    }
+
     /// The options in words.
     pub fn said(&self) -> String {
         match (self.events, self.random) {
@@ -414,10 +431,7 @@ impl Choice<'_> {
             },
             (Some("all"), false) => All,
             (Some(n), random) => {
-                let n: u64 = n
-                    .replace('_', "")
-                    .parse()
-                    .map_err(|_| format!("--events is a number of events or all, not {n:?}"))?;
+                let n = Self::number(n)?;
                 match random {
                     true => Random { n, seed: seed(1) },
                     false => First(n),

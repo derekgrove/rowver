@@ -121,7 +121,7 @@ class Pressed(unittest.TestCase):
         data[at] = ord("0") if data[at] != ord("0") else ord("1")
         changed = self.dir / "changed.rvr"
         changed.write_bytes(data)
-        with self.assertRaisesRegex(rowver.Error, "derived column ht_per_jet, worked out here, is not what"):
+        with self.assertRaisesRegex(rowver.Error, r'derived\.columns\["ht_per_jet"\], worked out here, is not what'):
             rowver.validate(changed)
         changed.unlink()
 

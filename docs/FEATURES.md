@@ -106,10 +106,10 @@ jagged column is two arrays: `offsets` (`i8[rows + 1]`) and `content` of any fla
 column has the type its expression gives. There is no promotion rule.
 
 The press computes *column facts* for each flat column: `lim` (the minimum and maximum) and
-`nice` (that range rounded outward to two significant digits, ready for an axis). Integer and
-boolean columns with at most 64 distinct values also get `vals` (the distinct values, sorted) and
-`names` (the recipe's labels for them). With these, a consumer can build axes and category
-legends without reading any data.
+`nice` (that range rounded outward to two significant digits, ready for an axis), both over the
+finite values, so NaN and infinities, which a float may hold, are passed over. Integer and boolean
+columns with at most 64 distinct values also get `vals` (the distinct values, sorted). With these,
+a consumer can build axes and category legends without reading any data.
 
 ### 3.4 Sample columns
 
@@ -209,7 +209,7 @@ its checksum when it is first read.
 `rvr validate` goes further. It decompresses every array and checks its length and checksum, and
 every `by_sample`. It checks that the rows add up and belong to the recorded files, that every
 entry is one the choice read and none lies in a hole, that jagged offsets never decrease, that
-floats are finite, and that the column facts are right. It prints one line per file and names the
+the column facts are right, and that the study's three texts agree with each other and the file. It prints one line per file and names the
 signer. `rvr dump` still shows a file that fails these checks, after saying what is wrong, so a
 damaged file can be looked into.
 

@@ -3,83 +3,39 @@
 //! values are worked out here from the whole columns they use, a million rows at a time, and
 //! checked against the records.
 
-use super::identity::exactly;
-use super::{checksum, count, list, object, string, Held, Reader};
-use crate::numeric::width;
+use super::{exactly, list, nonempty, text, Held, Reader, MEND};
 use crate::{invalid, Result};
-use rvr_recipe::{parse, per_event, reads, Array, Columns, Constant, Expression, Kind, Recipe, Scope, Store as Numbers, Values};
+use rvr_recipe::{parse, per_event, reads, Array, Columns, Constant, Expression, Kind, Recipe, Scope, Values};
 use serde_json::{Map, Value};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// Whether a kind is one a flat column, or a jagged column's content, may have.
-fn flat(kind: &str) -> bool {
-    kind != "jagged" && width(kind).is_ok()
-}
-
-/// Require one checksum per sample.
-fn by_sample(value: &Value, samples: usize, what: &str) -> Result<()> {
-    let sums = list(value, "by_sample")?;
-    if sums.len() != samples {
-        return Err(invalid(format!("{what}: by_sample needs one checksum per sample")));
-    }
-    for sum in sums {
-        checksum(&serde_json::json!({ "sha256": sum }))?;
-    }
-    checksum(value).map(drop)
-}
-
-/// Require a `[low, high]` pair of numbers.
-fn pair(value: &Value, key: &str, what: &str) -> Result<()> {
-    match value[key].as_array().map(Vec::as_slice) {
-        Some([low, high]) if low.is_number() && high.is_number() => Ok(()),
-        _ => Err(invalid(format!("{what}: {key} must be two numbers"))),
-    }
-}
-
-/// Check the derived section against the file's own header: every record's fields, and a name
-/// no stored column, sample column or other derived column has.
+/// Check the derived section against the file's own header (docs/FORMAT.md §10): one derived
+/// column or more, each record's fields, a name no stored, sample or other derived column has,
+/// an expression, a kind, and the forms of its checksums and facts.
 pub(super) fn validate(derived: &Value, data: &Value) -> Result<()> {
-    exactly(derived, &["columns"], &[], "derived")?;
-    let samples = list(data, "samples")?.len();
-    let mut names: HashSet<&str> = super::samples::RESERVED.into();
-    for column in list(data, "cols")?.iter().chain(list(data, "sample_cols")?) {
-        names.insert(string(column, "name")?);
+    exactly(derived, "derived", &["columns"], &[])?;
+    let records = list(derived, "derived", "columns")?;
+    if records.is_empty() {
+        return Err(invalid("derived.columns is empty, and a file with no derived column has no derived key (docs/FORMAT.md §10): take it out"));
     }
-    for record in list(derived, "columns")? {
-        let name = string(record, "name")?;
-        let what = format!("derived column {name}");
-        if name.is_empty() || !names.insert(name) {
-            return Err(invalid(format!("{what}: a derived column needs a name no other column has")));
+    let samples = list(data, "data", "samples")?.len();
+    let mut names: HashSet<&str> = super::samples::RESERVED.into();
+    for column in list(data, "data", "cols")?.iter().chain(list(data, "data", "sample_cols")?) {
+        names.insert(column["name"].as_str().unwrap_or_default());
+    }
+    for (index, record) in records.iter().enumerate() {
+        let name = nonempty(record, &format!("derived.columns[{index}]"), "name")?;
+        let place = format!("derived.columns[{name:?}]");
+        if !names.insert(name) {
+            return Err(invalid(format!("{place}: a derived column's name is one no stored, sample or other derived column has, nor sample, entry or file (docs/FORMAT.md §10): rename it with rvr derive")));
         }
-        if string(record, "expression")?.trim().is_empty() {
-            return Err(invalid(format!("{what} has no expression")));
+        if text(record, &place, "expression")?.trim().is_empty() {
+            return Err(invalid(format!("{place}.expression is blank, and a derived column is kept as the expression that computes it (docs/FORMAT.md §10): {MEND}")));
         }
-        match string(record, "kind")? {
-            "jagged" => {
-                exactly(record, &["name", "expression", "kind", "offsets", "content"], &[], &what)?;
-                let offsets = object(record, "offsets")?;
-                exactly(offsets, &["sha256", "by_sample"], &[], &format!("{what} offsets"))?;
-                by_sample(offsets, samples, &what)?;
-                let content = object(record, "content")?;
-                exactly(content, &["kind", "count", "sha256", "by_sample"], &[], &format!("{what} content"))?;
-                if !flat(string(content, "kind")?) {
-                    return Err(invalid(format!("{what}: its content's kind is not one the format defines")));
-                }
-                count(content, "count")?;
-                by_sample(content, samples, &what)?;
-            }
-            kind if flat(kind) => {
-                let fields = ["name", "expression", "kind", "sha256", "by_sample", "lim", "nice", "vals", "names"];
-                exactly(record, &fields, &["vals", "names"], &what)?;
-                by_sample(record, samples, &what)?;
-                pair(record, "lim", &what)?;
-                pair(record, "nice", &what)?;
-            }
-            _ => return Err(invalid(format!("{what}: its kind is not one the format defines"))),
-        }
+        super::columns::record_of(record, &place, &["name", "expression"], false, samples)?;
     }
     Ok(())
 }
@@ -104,24 +60,20 @@ pub fn fields(metadata: &Map<String, Value>) -> BTreeMap<String, Constant> {
     metadata.iter().filter_map(|(name, value)| Some((name.clone(), read(value)?))).collect()
 }
 
-/// One derived column's values over a run of `rows` rows of `columns`, with its sample's
-/// `metadata`: refused when they are not finite, or not of the kind and shape `seen` holds.
-pub fn evaluate(name: &str, expression: &Expression, columns: &dyn Columns, metadata: &BTreeMap<String, Constant>, rows: usize, seen: &mut Option<(Kind, bool)>) -> Result<Array> {
+/// One derived column's values over `rows` rows, of the kind and shape `seen` holds; `place` names it in a refusal.
+pub fn evaluate(place: &str, expression: &Expression, columns: &dyn Columns, metadata: &BTreeMap<String, Constant>, rows: usize, seen: &mut Option<(Kind, bool)>) -> Result<Array> {
     let defines = BTreeMap::new();
     let array = Scope::new(columns, metadata, &defines)
         .evaluate(expression)
         .and_then(|value| per_event(value, rows))
-        .map_err(|e| invalid(format!("derived column {name}: {}", e.0)))?;
+        .map_err(|e| invalid(format!("{place}: {}", e.0)))?;
     let (values, listed) = match &array {
         Array::Event(values) => (values, false),
         Array::Object { values, .. } => (values, true),
         Array::Constant(_) => unreachable!("per_event gives one value per row"),
     };
     if *seen.get_or_insert((values.kind, listed)) != (values.kind, listed) {
-        return Err(invalid(format!("derived column {name} is not the same kind of column for every sample: give each sample's value the same type")));
-    }
-    if matches!(&values.store, Numbers::Float(numbers) if numbers.iter().any(|v| !v.is_finite())) {
-        return Err(invalid(format!("derived column {name}: some of its values are not finite numbers (NaN or infinity, as a division by zero gives), and a file holds only finite ones: give those rows a finite value, as with if(…)")));
+        return Err(invalid(format!("{place} is not the same kind of column for every sample: give each sample's value the same type")));
     }
     Ok(array)
 }
@@ -162,12 +114,30 @@ struct Store<'a> {
     working: RefCell<BTreeSet<String>>,
     /// How a column an expression asked for failed, said as it is rather than as the expression's.
     failed: RefCell<Option<crate::Error>>,
+    /// Whether every column is worked out over no rows, as for an empty file.
+    hollow: bool,
 }
 
 impl<'a> Store<'a> {
     fn new(file: &'a Reader, derived: &'a [(String, String)]) -> Self {
         let (held, working, failed) = Default::default();
-        Store { file, derived, held, working, failed }
+        Store { file, derived, held, working, failed, hollow: false }
+    }
+
+    /// A stored column of no rows, of the kind its record gives.
+    fn none_of(record: &Value) -> Held {
+        let jagged = record["kind"] == "jagged";
+        let kind = if jagged { &record["content"]["kind"] } else { &record["kind"] };
+        Held { kind: kind.as_str().unwrap_or_default().into(), bytes: Vec::new(), offsets: jagged.then(|| vec![0]) }
+    }
+
+    /// What a refusal calls derived column `name`: its place in the header, or for one being
+    /// added, its name.
+    fn place(&self, name: &str) -> String {
+        match listed(self.file.header()).iter().any(|(n, _)| n == name) {
+            true => format!("derived.columns[{name:?}]"),
+            false => format!("derived column {name}"),
+        }
     }
 
     /// A column by name, or `None` when the file has no column of that name.
@@ -175,14 +145,16 @@ impl<'a> Store<'a> {
         if let Some(held) = self.held.borrow().get(name) {
             return Ok(Some(held.clone()));
         }
-        let whole = if self.file.record(name).is_some() {
+        let whole = if let Some(record) = self.file.record(name).filter(|_| self.hollow) {
+            Self::none_of(record)
+        } else if self.file.record(name).is_some() {
             let Some(held) = self.file.column(name)? else {
                 return Ok(None);
             };
             held
         } else if let Some((_, expression)) = self.derived.iter().find(|(n, _)| n == name) {
             if !self.working.borrow_mut().insert(name.to_owned()) {
-                return Err(invalid(format!("derived column {name} uses itself, directly or through other derived columns")));
+                return Err(invalid(format!("{} uses itself, directly or through other derived columns: rvr derive drops one of them", self.place(name))));
             }
             let computed = self.compute(name, expression);
             self.working.borrow_mut().remove(name);
@@ -232,13 +204,21 @@ impl<'a> Store<'a> {
     /// `compute`, before its failure is told.
     fn worked_out(&self, name: &str, expression: &str) -> Result<Held> {
         let header = self.file.header();
-        let parsed = parse(expression).map_err(|e| invalid(format!("derived column {name}: {}", e.0)))?;
+        let place = self.place(name);
+        let parsed = parse(expression).map_err(|e| invalid(format!("{place}: {}", e.0)))?;
         let mut runs = Vec::new();
         let mut first = 0;
         for read in header["data"]["files"].as_array().into_iter().flatten() {
-            let rows = read["rows"].as_u64().unwrap_or(0) as usize;
+            let rows = super::whole_count(&read["rows"]).unwrap_or(0) as usize;
             let sample = read["sample"].as_str().unwrap_or_default();
             let path = read["path"].as_str().unwrap_or_default();
+            // Over no rows, the runs a whole file has, one for each file that has rows.
+            if self.hollow {
+                if rows > 0 {
+                    runs.push((0, 0, sample, path));
+                }
+                continue;
+            }
             let mut at = first;
             while at < first + rows {
                 let to = (at + RUN).min(first + rows);
@@ -259,10 +239,10 @@ impl<'a> Store<'a> {
             metadata.retain(|key, _| !ADDED.contains(&key.as_str()));
             metadata.insert("file".into(), Constant::Text(path.into()));
             let run = Run { store: self, first, last };
-            let values = evaluate(name, &parsed, &run, &metadata, last - first, &mut seen);
+            let values = evaluate(&place, &parsed, &run, &metadata, last - first, &mut seen);
             add(&mut whole, values.map_err(|e| invalid(format!("sample {sample}: {e}")))?);
         }
-        whole.ok_or_else(|| invalid(format!("derived column {name} has no values")))
+        whole.ok_or_else(|| invalid(format!("{place} has no values")))
     }
 }
 
@@ -270,9 +250,8 @@ impl<'a> Store<'a> {
 fn newer(header: &Value) -> Option<String> {
     let made = header["made"]["toolchain"]["rvr"].as_str()?;
     let this = env!("CARGO_PKG_VERSION");
-    let pip = if made.contains('-') { "pip install -U --pre rowver" } else { "pip install -U rowver" };
     later(made, this).then(|| {
-        format!("The file was made by rvr {made}, newer than this one ({this}), and may use what only a newer version reads: update rvr and rowver to {made} or later ({pip} updates both; or that release's rvr download, or rowver crate).")
+        format!("The file was made by rvr {made}, newer than this one ({this}), and may use what only a newer version reads: update rvr and rowver to {made} or later (pip install -U rowver updates both; or that release's rvr download, or rowver crate).")
     })
 }
 
@@ -286,23 +265,11 @@ pub fn remedy(header: &Value) -> String {
     newer(header).unwrap_or_else(|| "Press its study again.".into())
 }
 
-/// Whether version `made` comes after `this`, as semver orders them: by their three numbers (a
-/// part that is no number counts as 0), a pre-release (15.1.0-rc.1) before its release, and
-/// pre-releases by their dot-separated parts, numbers before words. Build metadata is left out.
+/// Whether version `made` comes after `this`, each MAJOR.MINOR.PATCH (a part that is no number
+/// counts as 0), by their three numbers.
 fn later(made: &str, this: &str) -> bool {
-    /// A version's place: its numbers, whether it is a release, and its pre-release's parts.
-    type Place<'a> = (Vec<u64>, bool, Vec<(bool, u64, &'a str)>);
-    fn order(version: &str) -> Place<'_> {
-        let version = version.split('+').next().unwrap_or_default();
-        let (release, pre) = version.split_once('-').map_or((version, None), |(r, p)| (r, Some(p)));
-        let numbers: Vec<u64> = release.split('.').take(3).map(|part| part.parse().unwrap_or(0)).collect();
-        let parts: Vec<(bool, u64, &str)> = pre.into_iter().flat_map(|pre| pre.split('.')).map(|part| match part.parse() {
-            Ok(number) => (false, number, ""),
-            Err(_) => (true, 0, part),
-        }).collect();
-        (numbers, pre.is_none(), parts)
-    }
-    order(made) > order(this)
+    let numbers = |version: &str| version.split('.').take(3).map(|part| part.parse().unwrap_or(0)).collect::<Vec<u64>>();
+    numbers(made) > numbers(this)
 }
 
 /// Rows `first..last` of a file's columns, as an expression reads them.
@@ -345,7 +312,7 @@ impl Columns for Run<'_, '_> {
 /// Each sample's rows, in order.
 fn sample_rows(header: &Value) -> Vec<usize> {
     let samples = header["data"]["samples"].as_array().into_iter().flatten();
-    samples.map(|s| s["rows"].as_u64().unwrap_or(0) as usize).collect()
+    samples.map(|s| super::whole_count(&s["rows"]).unwrap_or(0) as usize).collect()
 }
 
 /// A file's derived columns, by name and expression, as its header records them.
@@ -396,11 +363,17 @@ fn columns_while(file: &Reader, names: &[String], go: &dyn Fn() -> Result<()>) -
             .flatten()
             .find(|r| r["name"] == name.as_str())
             .ok_or_else(|| invalid(format!("the file has no derived column named {name}")))?;
-        let whole = store.get(name)?.ok_or_else(|| invalid(format!("derived column {name} has no values")))?;
+        let place = store.place(name);
+        let whole = store.get(name)?.ok_or_else(|| invalid(format!("{place} has no values")))?;
         let expression = record["expression"].as_str().unwrap_or_default();
         let again = crate::write::derived(name, expression, &whole, &rows).map_err(|e| invalid(format!("derived column {e}")))?;
-        if again != *record {
-            let differs = format!("derived column {name}, worked out here, is not what the file records of it (its checksums or facts differ)");
+        // A jagged record's only number is its content's count.
+        let numbers = match record["kind"].as_str().unwrap_or_default() {
+            "jagged" => super::facts::Numbers::Whole,
+            kind => super::facts::numbers(kind),
+        };
+        if !super::facts::same(&again, record, numbers) {
+            let differs = format!("{place}, worked out here, is not what the file records of it (its checksums or facts differ)");
             // A newer rvr's record is not to be replaced by this rowver's: it says to update too.
             if let Some(hint) = unread(header) {
                 return Err(invalid(format!("{differs}: its header was changed, or a newer rvr works the expression out otherwise. {hint}")));
@@ -415,6 +388,24 @@ fn columns_while(file: &Reader, names: &[String], go: &dyn Fn() -> Result<()>) -
     // The values are handed out, not copied, once nothing else holds them.
     drop(store);
     Ok(wholes.into_iter().map(|whole| Rc::try_unwrap(whole).unwrap_or_else(|shared| (*shared).clone())).collect())
+}
+
+/// An empty file's derived columns, worked out over no rows: each of its record's kind and shape
+/// (its checksums and facts are of the rows the file no longer holds); how many.
+pub(super) fn checked_empty(file: &Reader) -> Result<usize> {
+    let derived = listed(file.header());
+    let mut store = Store::new(file, &derived);
+    store.hollow = true;
+    let records = file.header()["derived"]["columns"].as_array().map_or(&[][..], Vec::as_slice);
+    for ((name, _), record) in derived.iter().zip(records) {
+        let whole = store.get(name)?.ok_or_else(|| invalid(format!("{} has no values", store.place(name))))?;
+        let want = Store::none_of(record);
+        if (&whole.kind, whole.offsets.is_some()) != (&want.kind, want.offsets.is_some()) {
+            let shape = |held: &Held| if held.offsets.is_some() { format!("jagged of {}", held.kind) } else { held.kind.clone() };
+            return Err(invalid(format!("derived.columns[{name:?}] is {}, and its expression, worked out over no rows, gives {} (docs/FORMAT.md §10): {MEND}", shape(&want), shape(&whole))));
+        }
+    }
+    Ok(derived.len())
 }
 
 /// Check a file's derived columns against the recipe it carries and its records; how many.
@@ -455,13 +446,8 @@ mod tests {
     use super::later;
 
     #[test]
-    fn a_version_is_later_as_semver_orders_them() {
+    fn a_version_is_later_by_its_three_numbers() {
         assert!(later("15.1.0", "15.0.0") && later("16.0.0", "15.9.9") && later("15.0.10", "15.0.9"));
         assert!(!later("15.0.0", "15.0.0") && !later("15.0.0", "15.1.0"));
-        // A pre-release comes before its release, and after an earlier pre-release.
-        assert!(later("15.1.0", "15.1.0-rc.1") && !later("16.0.0-rc.1", "16.0.0"));
-        assert!(later("16.0.0-rc.2", "16.0.0-rc.1") && later("16.0.0-rc.1.1", "16.0.0-rc.1"));
-        assert!(later("16.0.0-rc", "16.0.0-11") && !later("16.0.0-alpha", "16.0.0-beta"));
-        assert!(!later("15.0.0+linux", "15.0.0"));
     }
 }

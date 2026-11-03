@@ -3,30 +3,39 @@ use crate::table::Source;
 use crate::write::data_checksum;
 use crate::{invalid, Column, Result, Table, VERSION};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
 mod arrays;
 mod cancellation;
+mod columns;
 pub mod derived;
 mod facts;
 mod identity;
 mod reader;
 pub(crate) mod samples;
 mod snapshot;
+mod texts;
 
 use arrays::Arrays;
 use cancellation::{CancelReader, Cancellation};
 pub use reader::{Held, Reader};
+pub use snapshot::{study_name, toolchain};
+pub use texts::kinds;
 
 const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
 
+/// The tables every recipe writes, even empty, in their order.
+pub const RECIPE_TABLES: [&str; 5] = ["define", "keep", "columns", "totals", "derived"];
+
 /// The kinds of hole a file records (docs/FORMAT.md, "Holes"); a reader refuses any other.
 pub const HOLE_KINDS: [&str; 5] = ["unreachable", "damaged", "gone", "changed", "refused"];
+
+/// What every refusal of a file's own facts says to do.
+const MEND: &str = "press its study again with rvr press, which writes it as docs/FORMAT.md says";
 
 /// Entries `[first, last)` of one file's tree that a press chose but could not read.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -39,9 +48,15 @@ pub struct Hole {
     pub why: String,
 }
 
+/// Whether a press read a file of `chosen` entries, `in_holes` of them lost, and so it holds the totals (FORMAT.md §6).
+pub fn read_file(chosen: u64, in_holes: u64, random: bool) -> bool {
+    // Choosing none, all or the first N opens a file of no entries; a random choice opens none.
+    chosen > in_holes || (chosen == 0 && !random)
+}
+
 /// How many entries the event choice chose in each of `holes(header)`.
 pub fn chosen_in_holes(header: &Value) -> Result<Vec<u64>> {
-    identity::chosen_in_holes(object(header, "data")?, object(header, "made")?)
+    identity::chosen_in_holes(header)
 }
 
 /// Every hole a checked header records, in the order of `data.files`, then of entries.
@@ -54,8 +69,8 @@ pub fn holes(header: &Value) -> Vec<Hole> {
             record["holes"].as_array().into_iter().flatten().map(move |hole| Hole {
                 sample: sample.into(),
                 file: at.into(),
-                first: hole["entries"][0].as_u64().unwrap_or(0),
-                last: hole["entries"][1].as_u64().unwrap_or(0),
+                first: whole_count(&hole["entries"][0]).unwrap_or(0),
+                last: whole_count(&hole["entries"][1]).unwrap_or(0),
                 kind: hole["kind"].as_str().unwrap_or("").into(),
                 why: hole["why"].as_str().unwrap_or("").into(),
             })
@@ -67,14 +82,14 @@ pub fn holes(header: &Value) -> Vec<Hole> {
 pub struct CheckpointSummary {
     pub rows: usize,
     pub columns: usize,
-    /// How many derived columns it has, each worked out and checked unless the file is empty.
+    /// How many derived columns it has, each worked out and checked (over no rows when empty).
     pub derived: usize,
     /// Whether the file is empty: its header alone, every fact of which is checked.
     pub empty: bool,
     pub header: Value,
 }
 
-/// Validate a checkpoint one column at a time without retaining its event table.
+/// Validate a file in full (docs/FORMAT.md §12), one column at a time, holding no event table.
 pub fn validate_file(path: impl AsRef<Path>) -> Result<CheckpointSummary> {
     validate_file_cancellable(path, || false)
 }
@@ -90,12 +105,13 @@ pub fn validate_file_cancellable(
     result
 }
 
-/// Read the shared header and stream columns without retaining the event table.
+/// Every check of full validation: the header's, the study's texts against it, the event choice
+/// made again, then each array as it streams past, and the derived columns worked out.
 fn validate_stream(path: &Path, cancellation: Cancellation<'_>) -> Result<CheckpointSummary> {
     cancellation.check()?;
     let file = std::fs::File::open(path)?;
     let size = usize::try_from(file.metadata()?.len())
-        .map_err(|_| invalid("Checkpoint length exceeds the current platform"))?;
+        .map_err(|_| invalid("the file is longer than this computer can address"))?;
     if size < 12 {
         return Err(invalid(NOT_RVR));
     }
@@ -108,32 +124,42 @@ fn validate_stream(path: &Path, cancellation: Cancellation<'_>) -> Result<Checkp
     let start = header_end(&prefix, size)?;
     let mut text = vec![0; start - 12];
     file.read_exact(&mut text)?;
-    let header = checked_header(&text)?;
+    let (header, end) = checked(&text)?;
     let empty = size == start;
+    arrays::fill(end, size - start)?;
+    let reads = identity::choices(&header, cancellation)?;
+    texts::validate(&header, &reads)?;
     if !empty {
-        read_body(&header, Arrays::new(file, size - start, cancellation), drop)?;
+        read_body(&header, Arrays::new(file, size - start, cancellation), &reads, drop)?;
     }
     cancellation.check()?;
-    // Only a file with derived columns is opened again, to work them out.
-    let derived = match derived::agreed(&header)? {
+    // The file is read for its derived columns as it was checked, not opened and checked again.
+    let file = || Reader::of(path, header.clone(), start as u64, (size - start) as u64);
+    let derived = match listed_derived(&header) {
         0 => 0,
-        n if empty => n,
-        _ => derived::checked_while(&Reader::open(path)?, &|| cancellation.check())?,
+        _ if empty => derived::checked_empty(&file())?,
+        _ => derived::checked_while(&file(), &|| cancellation.check())?,
     };
+    let data = &header["data"];
     Ok(CheckpointSummary {
-        rows: count(object(&header, "data")?, "rows")?,
-        columns: list(object(&header, "data")?, "cols")?.len(),
+        rows: count(data, "data", "rows")?,
+        columns: list(data, "data", "cols")?.len(),
         derived,
         empty,
         header,
     })
 }
 
+/// How many derived columns a checked header records.
+fn listed_derived(header: &Value) -> usize {
+    header["derived"]["columns"].as_array().map_or(0, Vec::len)
+}
+
 /// Read the bytes of a checkpoint's JSON header, without decoding or checking any array.
 fn header_text(path: impl AsRef<Path>) -> Result<Vec<u8>> {
     let mut file = std::fs::File::open(path)?;
     let size = usize::try_from(file.metadata()?.len())
-        .map_err(|_| invalid("Checkpoint length exceeds the current platform"))?;
+        .map_err(|_| invalid("the file is longer than this computer can address"))?;
     let mut prefix = [0; 12];
     file.read_exact(&mut prefix).map_err(|_| invalid(NOT_RVR))?;
     let mut text = vec![0; header_end(&prefix, size)? - 12];
@@ -166,40 +192,61 @@ fn version(header: &Value) -> Result<()> {
         Some(other) => Err(invalid(format!(
             "This file is rowver {other}; this reader reads rowver {VERSION} only. Press its study again with rvr press."
         ))),
-        None => Err(invalid("The header has no rowver version")),
+        None => Err(invalid(format!("rowver must be the whole number {VERSION}, the format version: {MEND}"))),
     }
 }
 
-/// Parse a header's text and check every fact it holds that needs no array: its version, its
-/// `made` (the recipe, samples and lock texts and their checksums), the sample records, the
-/// sample columns, `data.sha256`, the derived columns' records, and the signature, when it has one.
+/// The top level's own keys; any other is a tool's.
+const TOP: [&str; 5] = ["rowver", "data", "made", "derived", "signature"];
+
+/// Whether `name` is a tool key's name: one or more ASCII letters, digits, `_`, `-` and `.`.
+fn tool_name(name: &str) -> bool {
+    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+}
+
+/// Parse a header's text and check every fact it holds that needs no array and no parse of the
+/// study's texts (docs/FORMAT.md §12, "On opening"), but that the arrays fill the file, which the
+/// caller checks with `arrays::fill`.
 pub fn checked_header(text: &[u8]) -> Result<Value> {
-    let header: Value = serde_json::from_slice(text)?;
-    version(&header)?;
-    let root = header
-        .as_object()
-        .ok_or_else(|| invalid("Header must be an object"))?;
+    checked(text).map(|(header, _)| header)
+}
+
+/// `checked_header`, and where the arrays its records lay out end.
+fn checked(text: &[u8]) -> Result<(Value, u64)> {
+    let header = crate::json::strict(text)?;
+    let end = checks(&header)?;
+    Ok((header, end))
+}
+
+/// Every check `checked_header` makes, of a header parsed as `json::strict` parses it; where
+/// the arrays its records lay out end.
+fn checks(header: &Value) -> Result<u64> {
+    let root = header.as_object().ok_or_else(|| invalid(format!("the header must be one JSON object: {MEND}")))?;
+    version(header)?;
     for (key, value) in root {
+        if !TOP.contains(&key.as_str()) && !tool_name(key) {
+            return Err(invalid(format!("the top-level key {key:?} is no field of the format and not a tool key's name (one or more ASCII letters, digits, _, - and ., docs/FORMAT.md §11): rename the tool key")));
+        }
         if key != "rowver" && !value.is_object() {
-            return Err(invalid(format!("Header section {key} must be an object")));
+            return Err(invalid(format!("{key} must be an object (docs/FORMAT.md §2, §11): {MEND}")));
         }
     }
-    let data = object(&header, "data")?;
-    let made = object(&header, "made")?;
+    let data = object(header, "", "data")?;
+    let made = object(header, "", "made")?;
+    exactly(data, "data", &["rows", "samples", "files", "sample", "entry", "cols", "sha256", "sample_cols"], &[])?;
     snapshot::validate(made)?;
-    snapshot::columns(made, list(data, "cols")?)?;
+    identity::records(data, made)?;
+    columns::records(data, made)?;
+    let end = arrays::layout(data)?;
     samples::columns(data, made)?;
     if let Some(derived) = header.get("derived") {
         derived::validate(derived, data)?;
     }
-    identity::records(data, made)?;
-    if data_checksum(data)? != checksum(data)? {
-        return Err(invalid(
-            "data.sha256 does not match the checksums of the arrays its records name",
-        ));
+    if data_checksum(data)? != checksum(data, "data")? {
+        return Err(invalid(format!("data.sha256 is not the SHA-256 of the arrays' sha256s joined in file order (docs/FORMAT.md §8): {MEND}")));
     }
-    crate::sign::verify(&header)?;
-    Ok(header)
+    crate::sign::verify(header)?;
+    Ok(end)
 }
 
 /// Read a file's stored columns and check them, as `from_bytes` does.
@@ -207,25 +254,18 @@ pub fn load(path: impl AsRef<Path>) -> Result<Arc<Table>> {
     from_bytes(&std::fs::read(path)?)
 }
 
-/// Decode a file's stored columns and check them; `validate_file` works its derived columns out too.
+/// Decode a file's stored columns and check them; `validate_file` checks the rest.
 pub fn from_bytes(bytes: &[u8]) -> Result<Arc<Table>> {
-    decode(bytes)
-}
-
-/// Decode and validate one complete container.
-fn decode(bytes: &[u8]) -> Result<Arc<Table>> {
     let start = header_end(bytes, bytes.len())?;
-    let header = checked_header(&bytes[12..start])?;
+    let (header, end) = checked(&bytes[12..start])?;
+    if start == bytes.len() {
+        return Err(invalid(EMPTY));
+    }
+    arrays::fill(end, bytes.len() - start)?;
+    let cancellation = Cancellation(&|| false);
+    let reads = identity::choices(&header, cancellation)?;
     let mut columns = Vec::new();
-    let (sources, entry) = read_body(
-        &header,
-        Arrays::new(
-            &bytes[start..],
-            bytes.len() - start,
-            Cancellation(&|| false),
-        ),
-        |column| columns.push(column),
-    )?;
+    let (sources, entry) = read_body(&header, Arrays::new(&bytes[start..], bytes.len() - start, cancellation), &reads, |column| columns.push(column))?;
     Ok(Arc::new(Table {
         header,
         columns,
@@ -243,66 +283,43 @@ pub(crate) fn header_end(prefix: &[u8], size: usize) -> Result<usize> {
     12_usize
         .checked_add(length)
         .filter(|end| *end <= size)
-        .ok_or_else(|| invalid("JSON header length exceeds the file"))
+        .ok_or_else(|| invalid("the header's length (bytes 8 to 11) is more than the file holds: the file was cut short; copy it again"))
 }
 
-/// Validate every array of a checked header through the same decoder, retaining columns only
-/// for a table load.
+/// Check every array of a checked header as it streams past, keeping the columns only for a table.
 fn read_body(
     header: &Value,
     mut decoder: Arrays<'_, impl Read>,
+    reads: &identity::Reads,
     mut keep: impl FnMut(Column),
 ) -> Result<(Vec<Source>, NumericArray)> {
     let cancellation = decoder.cancellation;
     cancellation.check()?;
-    let data = object(header, "data")?;
-    let made = object(header, "made")?;
-    let rows = count(data, "rows")?;
-    let sample = decoder.read(required(data, "sample")?, "i4", rows, "sample")?;
-    let entry = decoder.read(required(data, "entry")?, "i8", rows, "entry")?;
-    let sources = identity::validate(data, made, &sample, &entry, rows, cancellation)?;
+    let data = &header["data"];
+    let rows = count(data, "data", "rows")?;
+    let sample = decoder.read(&data["sample"], "i4", rows, "data.sample")?;
+    let entry = decoder.read(&data["entry"], "i8", rows, "data.entry")?;
+    let sources = identity::rows(header, &sample, &entry, reads, cancellation)?;
     drop(sample);
-    let spans = samples::spans(data, rows)?;
-    samples::per_row(
-        required(data, "entry")?,
-        &entry,
-        &spans,
-        "entry",
-        cancellation,
-    )?;
-    let mut names = HashSet::new();
-    for record in list(data, "cols")? {
+    let spans = samples::spans(data)?;
+    samples::per_row(&data["entry"], &entry, &spans, "data.entry", cancellation)?;
+    for record in list(data, "data", "cols")? {
         cancellation.check()?;
-        let name = string(record, "name")?;
-        if name.is_empty() || !names.insert(name.to_owned()) {
-            return Err(invalid("Column names must be nonempty and unique"));
-        }
-        let kind = string(record, "kind")?;
+        let name = text(record, "data.cols", "name")?;
+        let place = format!("data.cols[{name:?}]");
+        let kind = text(record, &place, "kind")?;
         let (array, offsets) = if kind == "jagged" {
-            let n = rows
-                .checked_add(1)
-                .ok_or_else(|| invalid("Too many jagged rows"))?;
-            let offsets = decoder.read(
-                required(record, "offsets")?,
-                "i8",
-                n,
-                &format!("{name} offsets"),
-            )?;
-            let content = object(record, "content")?;
-            let nvalues = count(content, "count")?;
-            let array = decoder.read(
-                content,
-                string(content, "kind")?,
-                nvalues,
-                &format!("{name} content"),
-            )?;
-            let offsets = jagged_offsets(&offsets, nvalues, name, cancellation)?;
-            samples::jagged(record, &offsets, &array, &spans, name, cancellation)?;
+            let offsets = decoder.read(&record["offsets"], "i8", rows + 1, &format!("{place}.offsets"))?;
+            let content = &record["content"];
+            let count = count(content, &place, "count")?;
+            let array = decoder.read(content, text(content, &place, "kind")?, count, &format!("{place}.content"))?;
+            let offsets = jagged_offsets(&offsets, count, &place, cancellation)?;
+            samples::jagged(record, &offsets, &array, &spans, &place, cancellation)?;
             (array, Some(offsets))
         } else {
-            let array = decoder.read(record, kind, rows, name)?;
-            facts::validate(record, &array, cancellation)?;
-            samples::per_row(record, &array, &spans, name, cancellation)?;
+            let array = decoder.read(record, kind, rows, &place)?;
+            facts::values(record, &array, &place, cancellation)?;
+            samples::per_row(record, &array, &spans, &place, cancellation)?;
             (array, None)
         };
         keep(Column {
@@ -315,88 +332,114 @@ fn read_body(
     Ok((sources, entry))
 }
 
-/// Require ordered offsets covering exactly the declared content.
+/// Require offsets that start at 0, never decrease, and end at the content's count.
 fn jagged_offsets(
     array: &NumericArray,
-    nvalues: usize,
-    name: &str,
+    count: usize,
+    place: &str,
     cancellation: Cancellation<'_>,
 ) -> Result<Vec<usize>> {
     let mut offsets = Vec::with_capacity(array.count);
     for index in 0..array.count {
         cancellation.at(index)?;
-        let offset = usize::try_from(array.signed(index)?)
-            .map_err(|_| invalid(format!("{name}: negative jagged offset")))?;
-        if offset > nvalues || offsets.last().is_some_and(|previous| *previous > offset) {
-            return Err(invalid(format!(
-                "{name}: jagged offsets decrease or exceed content"
-            )));
-        }
-        offsets.push(offset);
+        let offset = usize::try_from(array.signed(index)?).ok().filter(|offset| *offset <= count && offsets.last().is_none_or(|before| before <= offset));
+        offsets.push(offset.ok_or_else(|| {
+            invalid(format!("{place}.offsets decrease, or pass the content's count, at row {index} (docs/FORMAT.md §4): {MEND}"))
+        })?);
     }
-    if offsets.first() != Some(&0) || offsets.last() != Some(&nvalues) {
-        return Err(invalid(format!(
-            "{name}: offsets must start at zero and end at content count"
-        )));
+    if offsets.first() != Some(&0) || offsets.last() != Some(&count) {
+        return Err(invalid(format!("{place}.offsets must start at 0 and end at content.count, {count} (docs/FORMAT.md §4): {MEND}")));
     }
     Ok(offsets)
 }
 
-/// Obtain a required object member with a readable schema error.
-fn required<'a>(value: &'a Value, key: &str) -> Result<&'a Value> {
-    value
-        .get(key)
-        .ok_or_else(|| invalid(format!("Header is missing {key}")))
+/// A record's member `key`, refused when missing; `place` is where the record is.
+fn field<'a>(value: &'a Value, place: &str, key: &str) -> Result<&'a Value> {
+    value.get(key).ok_or_else(|| invalid(format!("{} is missing (docs/FORMAT.md): {MEND}", at(place, key))))
 }
 
-/// Obtain a required nested object.
-fn object<'a>(value: &'a Value, key: &str) -> Result<&'a Value> {
-    let member = required(value, key)?;
-    if !member.is_object() {
-        return Err(invalid(format!("{key} must be an object")));
+/// `place.key`, or `key` at the top level.
+fn at(place: &str, key: &str) -> String {
+    match place {
+        "" => key.into(),
+        _ => format!("{place}.{key}"),
     }
-    Ok(member)
 }
 
-/// Obtain a required list.
-fn list<'a>(value: &'a Value, key: &str) -> Result<&'a Vec<Value>> {
-    required(value, key)?
+/// A member that must be an object.
+fn object<'a>(value: &'a Value, place: &str, key: &str) -> Result<&'a Value> {
+    let member = field(value, place, key)?;
+    match member.is_object() {
+        true => Ok(member),
+        false => Err(invalid(format!("{} must be an object: {MEND}", at(place, key)))),
+    }
+}
+
+/// A member that must be a list.
+fn list<'a>(value: &'a Value, place: &str, key: &str) -> Result<&'a Vec<Value>> {
+    field(value, place, key)?
         .as_array()
-        .ok_or_else(|| invalid(format!("{key} must be an array")))
+        .ok_or_else(|| invalid(format!("{} must be a list: {MEND}", at(place, key))))
 }
 
-/// Obtain a required text field.
-fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
-    required(value, key)?
+/// A member that must be text.
+fn text<'a>(value: &'a Value, place: &str, key: &str) -> Result<&'a str> {
+    field(value, place, key)?
         .as_str()
-        .ok_or_else(|| invalid(format!("{key} must be text")))
+        .ok_or_else(|| invalid(format!("{} must be text: {MEND}", at(place, key))))
 }
 
-/// Obtain a nonnegative size representable on the current platform.
-fn count(value: &Value, key: &str) -> Result<usize> {
-    required(value, key)?
-        .as_u64()
-        .and_then(|count| usize::try_from(count).ok())
-        .ok_or_else(|| {
-            invalid(format!(
-                "{key} must be a nonnegative platform-sized integer"
-            ))
-        })
-}
-
-/// Require a lowercase 64-character SHA-256 digest.
-fn checksum(value: &Value) -> Result<&str> {
-    let hash = string(value, "sha256")?;
-    if hash.len() != 64
-        || !hash
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(invalid(
-            "sha256 must be 64 lowercase hexadecimal characters",
-        ));
+/// A member that must be nonempty text.
+fn nonempty<'a>(value: &'a Value, place: &str, key: &str) -> Result<&'a str> {
+    match text(value, place, key)? {
+        "" => Err(invalid(format!("{} must be nonempty text: {MEND}", at(place, key)))),
+        held => Ok(held),
     }
-    Ok(hash)
+}
+
+/// A count, as every count of the format is: a whole number written without a fraction or an
+/// exponent, from 0 to 2^63 − 1.
+fn whole_count(value: &Value) -> Option<u64> {
+    let text = value.as_number()?.to_string();
+    let n: i128 = text.parse().ok().filter(|_| !text.contains(['.', 'e', 'E']))?;
+    u64::try_from(n).ok().filter(|n| *n <= i64::MAX as u64)
+}
+
+/// A member that must be a count.
+fn count(value: &Value, place: &str, key: &str) -> Result<usize> {
+    whole_count(field(value, place, key)?)
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or_else(|| invalid(format!("{} must be a whole number from 0 to 2^63 − 1, written without a fraction or an exponent (docs/FORMAT.md §1): {MEND}", at(place, key))))
+}
+
+/// Whether text is 64 lowercase hexadecimal characters.
+fn hex64(text: &str) -> bool {
+    crate::study::hex(text, 64)
+}
+
+/// A record's `sha256`: 64 lowercase hexadecimal characters.
+fn checksum<'a>(value: &'a Value, place: &str) -> Result<&'a str> {
+    let hash = text(value, place, "sha256")?;
+    match hex64(hash) {
+        true => Ok(hash),
+        false => Err(invalid(format!("{} must be 64 lowercase hexadecimal characters (docs/FORMAT.md §8): {MEND}", at(place, "sha256")))),
+    }
+}
+
+/// Require a record to hold exactly these fields, of which `optional` may be left out.
+fn exactly(value: &Value, place: &str, keys: &[&str], optional: &[&str]) -> Result<()> {
+    let held: Option<&Map<String, Value>> = value.as_object();
+    let held = held.ok_or_else(|| invalid(format!("{place} must be an object: {MEND}")))?;
+    if let Some(key) = held.keys().find(|key| !keys.contains(&key.as_str())) {
+        return Err(invalid(format!(
+            "{place} has a field {key:?}, which the format does not give it ({}): a newer rowver may write it (update rowver), or take it out",
+            keys.join(", ")
+        )));
+    }
+    match keys.iter().find(|key| !held.contains_key(**key) && !optional.contains(key)) {
+        Some(key) => Err(invalid(format!("{} is missing (docs/FORMAT.md): {MEND}", at(place, key)))),
+        None => Ok(()),
+    }
 }
 
 /// Hash the unchanged byte representation.

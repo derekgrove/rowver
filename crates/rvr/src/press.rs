@@ -16,7 +16,7 @@ use rowver::choice::Events;
 use rowver::study::lock::{File, Lock, Sample as Locked};
 use crate::samples::{some, Choice};
 use hep_root::{ByteSource, RootFile, Tree};
-use rowver::write::{self, Labels};
+use rowver::write;
 use rowver::NumericBuffer;
 use rvr_recipe::{Array, Columns, Constant, Expression, Kind, Recipe, Scope, Values};
 use serde_json::{json, Map, Value};
@@ -134,6 +134,7 @@ fn run(args: &[&str]) -> Result<usize, String> {
     if full && fill.is_some() {
         return Err(format!("--fill reads only a file's holes, --full every entry: give one.\n{USAGE}"));
     }
+    choice.valid()?;
     let (dir, name, target) = study(dir, out)?;
     let workers =
         workers.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
@@ -180,6 +181,9 @@ pub fn study(
         .and_then(|n| n.to_str())
         .unwrap_or("study")
         .to_string();
+    if !rowver::rvr::study_name(&name) {
+        return Err(format!("{}: the study folder's name {name:?} is not one a file can record (nonempty, not . or .., with no /, \\ or control character): rename the folder", dir.display()));
+    }
     let target = out.unwrap_or_else(|| match given.as_os_str() == "." {
         true => PathBuf::from(format!("{name}.rvr")),
         false => given.join(format!("{name}.rvr")),
@@ -307,6 +311,15 @@ pub(crate) struct Input<'a> {
     pub(crate) ranges: Option<Vec<(u64, u64, usize)>>,
     /// Its place among the pieces of the spool, when it is read whole.
     pub(crate) order: usize,
+    /// For a fill, whether the file's record has no totals yet (every entry it chose lay in
+    /// holes): what the fill reads of it is its first read, so its other trees are summed too.
+    pub(crate) unsummed: bool,
+}
+
+/// Whether reading `input` (to `entries`) reads its other trees for their totals: a read of the
+/// whole file, or of a file whose record has none yet; never building on an earlier file.
+pub(crate) fn whole(input: &Input, entries: u64) -> bool {
+    input.kept.is_none() && (input.unsummed || input.ranges.as_ref().is_none_or(|r| matches!(r[..], [(0, to, _)] if to >= entries)))
 }
 
 /// Where a study's files can be read from: its folder and its storage.
@@ -587,7 +600,7 @@ fn derived_tried(recipe: &Recipe, gathered: &[Option<Gathered>], before: &[Optio
     for (name, expression) in &recipe.derived {
         let parsed = rvr_recipe::parse(expression).map_err(|e| format!("derived column {name}: {}", e.0))?;
         let seen = seen.entry(name.clone()).or_default();
-        let array = rowver::rvr::derived::evaluate(name, &parsed, &run, sample, rows, seen).map_err(|e| e.to_string())?;
+        let array = rowver::rvr::derived::evaluate(&format!("derived column {name}"), &parsed, &run, sample, rows, seen).map_err(|e| e.to_string())?;
         run.0.borrow_mut().insert(name.clone(), array);
     }
     Ok(())
@@ -1102,9 +1115,18 @@ fn take(
     // with its own place among the spool's pieces.
     let to_read = input.ranges.clone().unwrap_or_else(|| vec![(0, limit, order)]);
     let chosen_here = chosen_of(input);
-    // A file that cannot be opened is one hole of every entry chosen of what it reads.
+    // A file that cannot be opened is one hole of every entry chosen of what it reads; one of no
+    // entries, which holds the totals once read, has none to make a hole of, and ends the press.
     let unread = |failed: Failed| {
         let failed = hole_or_end(failed, input)?;
+        if !recipe.totals.is_empty() && rowver::rvr::read_file(chosen_here, chosen_here, input.chosen.is_some()) {
+            let why = match failed.fault {
+                Fault::Gone => format!("{at} no longer exists: put it back (if it moved, run rvr samples resolve samples.toml again)"),
+                _ if failed.why.contains(at.as_str()) => failed.why,
+                _ => located(failed.why),
+            };
+            return Err(Failed::new(Fault::Needed, format!("{} The press reads it for the recipe's [totals] (each file it reads holds them, as a total over another of its trees holds that tree's sum), and as samples.lock gives it no entries, there is none to make a hole of: it cannot be left out.", sentence(&why))));
+        }
         let ranges = to_read.iter().filter(|(from, to, _)| chosen_in(input, *from, *to) > 0);
         let holes: Vec<Value> = ranges.map(|&(from, to, _)| hole(&(from, to, failed.clone()))).collect();
         let mut record = planned(input);
@@ -1143,9 +1165,9 @@ fn take(
     let mut sample = sample.clone();
     sample.insert("file".into(), Constant::Text(at.clone()));
     // Totals over another tree of the file, read before its events (so that one that fails makes
-    // the whole file a hole), when it is read whole: not when building on an earlier file, nor
-    // for a fill of only some of its entries, whose record has them.
-    let whole = input.kept.is_none() && input.ranges.as_ref().is_none_or(|r| matches!(r[..], [(0, to, _)] if to >= entries));
+    // the whole file a hole), when it is read whole or for the first time: not when building on an
+    // earlier file, nor for a fill of only some of the entries of a file whose record has them.
+    let whole = whole(input, entries);
     let mut others = Vec::new();
     for total in recipe.totals.iter().filter(|_| whole) {
         let Some(name) = &total.tree else { continue };
@@ -1395,12 +1417,25 @@ fn take(
     if let Some(chosen) = chosen {
         record["take"] = chosen.len().into();
     }
-    // Its totals: over its events read, and over every entry of another tree of it; building on
-    // an earlier file, which reads only the events it kept, the earlier file's.
+    // Building on an earlier file, its holes are this file's: what it kept was read around them.
+    let missing = match input.before.as_ref().filter(|_| !carried.is_empty()) {
+        Some(before) => {
+            record["holes"] = before["holes"].clone();
+            missed(&carried)
+        }
+        None => {
+            if !holes.is_empty() {
+                record["holes"] = holes.iter().map(hole).collect();
+            }
+            holes.iter().map(|(first, last, _)| chosen_in(input, *first, *last)).sum()
+        }
+    };
+    // Its totals, when it was read: over its events read, and over every entry of another tree of
+    // it; building on an earlier file, which reads only the events it kept, the earlier file's.
     let earlier = input.before.as_ref().filter(|_| input.kept.is_some()).map(|before| before["totals"].clone());
     if let Some(totals) = earlier.filter(|totals| !totals.is_null()) {
         record["totals"] = totals;
-    } else if !recipe.totals.is_empty() && input.kept.is_none() {
+    } else if !recipe.totals.is_empty() && input.kept.is_none() && rowver::rvr::read_file(chosen_here, missing, input.chosen.is_some()) {
         let mut sums = Map::new();
         let mut events = totals.iter();
         for total in &recipe.totals {
@@ -1416,19 +1451,6 @@ fn take(
         }
         record["totals"] = Value::Object(sums);
     }
-    // Building on an earlier file, its holes are this file's: what it kept was read around them.
-    let missing = match input.before.as_ref().filter(|_| !carried.is_empty()) {
-        Some(before) => {
-            record["holes"] = before["holes"].clone();
-            missed(&carried)
-        }
-        None => {
-            if !holes.is_empty() {
-                record["holes"] = holes.iter().map(hole).collect();
-            }
-            holes.iter().map(|(first, last, _)| chosen_in(input, *first, *last)).sum()
-        }
-    };
     Ok(Taken {
         kinds: gathered
             .into_iter()
@@ -1683,11 +1705,15 @@ pub fn press(
     on: On,
 ) -> Result<usize, String> {
     let started = std::time::Instant::now();
+    rowver::rvr::toolchain(&toolchain()).map_err(|e| format!("this rvr cannot record what built it, as every file it writes does ({e}): build it again from a git checkout of its repository, or install a released rvr"))?;
     let mut lock = Lock::read(&texts.lock).map_err(|p| format!("samples.lock does not check out: {p}. Run rvr samples resolve samples.toml again."))?;
     agreed(texts, &lock)?;
     let source = &texts.recipe;
     let recipe = read_recipe(source)?;
     let asked = plan(&mut lock, events)?;
+    // Every column has one kind over every sample's branch list, and the recipe reads only
+    // branches each has, before anything is read.
+    rowver::rvr::kinds(&recipe, &lock).map_err(|e| e.to_string())?;
     // A derived column has a name no sample column has, before anything is read.
     let metadata = |name: &str| ADDED.contains(&name) || lock.samples.iter().any(|s| s.metadata.contains_key(name));
     if let Some(total) = recipe.totals.iter().find(|total| metadata(&total.name)) {
@@ -1789,6 +1815,7 @@ pub fn press(
                     before: None,
                     ranges: None,
                     order: 0,
+                    unsummed: false,
                 })
         })
         .collect();
@@ -2076,7 +2103,6 @@ pub fn press(
         samples,
         files: tally.files,
         entry,
-        labels: Labels::new(),
     };
     // Each column is copied from the earlier file, or packed from what the spool holds of it,
     // which is nothing when no sample kept an event of it.

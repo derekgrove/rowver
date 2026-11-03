@@ -12,7 +12,6 @@ use ruzstd::encoding::{compress, CompressionLevel};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
@@ -295,9 +294,12 @@ pub(super) enum Measure<'a> {
     /// `by_sample` between these value bounds.
     Bounds(&'a [usize]),
     /// `by_sample` between these row bounds, then the column's facts.
-    Column(&'a [usize], Option<&'a BTreeMap<i128, String>>),
+    Column(&'a [usize]),
     /// `by_sample` of each sample's offsets counted from its first; the samples' row bounds.
     Steps(&'a [usize]),
+    /// The entry array: `by_sample` between the samples' row bounds, each file's entries (between
+    /// the second bounds) strictly increasing.
+    Entries(&'a [usize], &'a [usize]),
 }
 
 /// The checksums of an array taken in row order, a piece at a time.
@@ -316,6 +318,8 @@ struct Meter<'a> {
     last: Option<i64>,
     by_sample: Vec<Value>,
     facts: Option<Facts>,
+    /// For the entry array, the file being read and its last entry.
+    file: (usize, Option<i64>),
 }
 
 impl<'a> Meter<'a> {
@@ -333,6 +337,7 @@ impl<'a> Meter<'a> {
             last: None,
             by_sample: Vec::new(),
             facts: matches!(measure, Measure::Column(..)).then(|| Facts::new(kind)),
+            file: (0, None),
         })
     }
 
@@ -397,7 +402,24 @@ impl<'a> Meter<'a> {
                 }
                 return Ok(());
             }
-            Measure::Bounds(bounds) | Measure::Column(bounds, _) => *bounds,
+            Measure::Entries(bounds, files) => {
+                for (at, value) in bytes.chunks_exact(8).enumerate() {
+                    let (row, entry) = (self.seen + at, i64::from_le_bytes(value.try_into().unwrap()));
+                    while self.file.0 + 1 < files.len() && row >= files[self.file.0 + 1] {
+                        self.file = (self.file.0 + 1, None);
+                    }
+                    // Rows no file of `files` holds are not a file's.
+                    if self.file.0 + 1 >= files.len() {
+                        continue;
+                    }
+                    if self.file.1.is_some_and(|last| entry <= last) {
+                        return Err(invalid(format!("the entries of a file's rows must be strictly increasing, and row {row} holds entry {entry} after a row of entry {}: keep each file's rows in the order of their entries", self.file.1.unwrap_or_default())));
+                    }
+                    self.file.1 = Some(entry);
+                }
+                *bounds
+            }
+            Measure::Bounds(bounds) | Measure::Column(bounds) => *bounds,
         };
         let mut rest = bytes;
         while !rest.is_empty() {
@@ -420,7 +442,7 @@ impl<'a> Meter<'a> {
         let mut after = Map::new();
         let bounds = match self.measure {
             Measure::Nothing => None,
-            Measure::Bounds(bounds) | Measure::Column(bounds, _) | Measure::Steps(bounds) => {
+            Measure::Bounds(bounds) | Measure::Column(bounds) | Measure::Steps(bounds) | Measure::Entries(bounds, _) => {
                 Some(*bounds)
             }
         };
@@ -436,8 +458,8 @@ impl<'a> Meter<'a> {
             }
             after.insert("by_sample".into(), Value::Array(self.by_sample));
         }
-        if let (Some(facts), Measure::Column(_, labels)) = (self.facts, self.measure) {
-            after.append(&mut facts.finish(*labels, self.name)?);
+        if let Some(facts) = self.facts {
+            after.append(&mut facts.finish());
         }
         Ok((hex(&self.total.finalize()), after))
     }
@@ -634,8 +656,9 @@ impl Held<'_> {
     }
 }
 
-/// Pack the `entry` array, which must hold one `i8` value per row, from its source.
-pub(super) fn entry(source: Source, edges: &[usize], out: &mut dyn Write) -> Result<Packed> {
+/// Pack the `entry` array, which must hold one `i8` value per row, from its source; `files` are
+/// the files' row bounds, within each of which the entries strictly increase.
+pub(super) fn entry(source: Source, edges: &[usize], files: &[usize], out: &mut dyn Write) -> Result<Packed> {
     let held = match source {
         Source::Values(values) => Held::Whole(Whole::new(values, "entry")?),
         Source::Spooled(spooled) => Held::Spooled(spooled),
@@ -646,7 +669,7 @@ pub(super) fn entry(source: Source, edges: &[usize], out: &mut dyn Write) -> Res
     if pieces.listed() || pieces.kind() != "i8" || total != edges[edges.len() - 1] {
         return Err(invalid("The entry array must hold one i8 value per row"));
     }
-    plain("entry", pieces, &Measure::Bounds(edges), out)
+    plain("entry", pieces, &Measure::Entries(edges, files), out)
 }
 
 /// Pack one column of the rows bounded by `edges` from its source.
@@ -654,7 +677,6 @@ pub(super) fn column(
     name: &str,
     source: Source,
     edges: &[usize],
-    labels: Option<&BTreeMap<i128, String>>,
     out: &mut dyn Write,
     scratch: Option<&Path>,
 ) -> Result<Packed> {
@@ -666,7 +688,6 @@ pub(super) fn column(
                 reader,
                 from: &from,
                 edges,
-                labels,
                 scratch,
             };
             return copied(&copy, out);
@@ -674,7 +695,7 @@ pub(super) fn column(
         Source::Spooled(spooled) => Held::Spooled(spooled),
         Source::Values(values) => Held::Whole(Whole::new(values, name)?),
     };
-    laid(name, held.pieces(), edges, labels, Some(out))
+    laid(name, held.pieces(), edges, Some(out))
 }
 
 /// The record a column of these values would have, its checksums, `by_sample` and facts, with
@@ -691,7 +712,7 @@ pub(super) fn measured(name: &str, column: &crate::rvr::Held, edges: &[usize]) -
         bytes: Cow::Borrowed(&column.bytes),
         counts,
     };
-    Ok(laid(name, &whole, edges, None, None)?.record)
+    Ok(laid(name, &whole, edges, None)?.record)
 }
 
 /// Measure a column's pieces and, with `out`, write their arrays.
@@ -699,7 +720,6 @@ fn laid<'w>(
     name: &str,
     pieces: &dyn Pieces,
     edges: &[usize],
-    labels: Option<&BTreeMap<i128, String>>,
     mut out: Option<&mut (dyn Write + 'w)>,
 ) -> Result<Packed> {
     let rows = edges[edges.len() - 1];
@@ -712,7 +732,7 @@ fn laid<'w>(
             return Err(invalid(format!("{name}: needs one value per row")));
         }
         record.insert("kind".into(), pieces.kind().into());
-        let mut placed = array(name, pieces, &Measure::Column(edges, labels), out)?;
+        let mut placed = array(name, pieces, &Measure::Column(edges), out)?;
         let arrays = vec![(size(&placed), None)];
         record.append(&mut placed);
         return Ok(Packed { record, arrays });
@@ -796,7 +816,6 @@ struct Copy<'a> {
     reader: &'a Reader,
     from: &'a str,
     edges: &'a [usize],
-    labels: Option<&'a BTreeMap<i128, String>>,
     /// A file to decode each array into while it is checked.
     scratch: &'a Path,
 }
@@ -823,6 +842,10 @@ fn decoded(
         return Err(damaged());
     }
     let mut file = std::fs::File::open(path)?;
+    file.seek(SeekFrom::Start(at))?;
+    let mut head = vec![0; (size as usize).min(18)];
+    file.read_exact(&mut head)?;
+    crate::codec::frame(&head, expected, copy.name).map_err(|_| damaged())?;
     file.seek(SeekFrom::Start(at))?;
     let mut tee = Tee {
         from: file.take(size),
@@ -924,7 +947,7 @@ fn copied(copy: &Copy, out: &mut dyn Write) -> Result<Packed> {
                 &held,
                 &kind,
                 rows,
-                &Measure::Column(copy.edges, copy.labels),
+                &Measure::Column(copy.edges),
                 out,
             )?;
             return Ok(vec![(size, None)]);

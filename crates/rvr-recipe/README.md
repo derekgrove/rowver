@@ -297,9 +297,9 @@ the energy too, and the two agree only where the sum is massless (a sum of massl
 generally is not). `pt`, `eta`, `phi` and `rapidity`
 take the same values as `mass`, and give what the `vector` library gives for `ak.sum` of the
 event's four-vectors: an event with none has a sum of zero,
-whose η and φ are 0 and whose rapidity is NaN, as there. A file holds only finite numbers, so a
-rapidity over a list that can be empty is stored with a value for those events, such as
-`if(count(Jet_pt) > 0, rapidity(Jet_pt, Jet_eta, Jet_phi, Jet_mass), -9)`. In a cut, NaN is
+whose η and φ are 0 and whose rapidity is NaN, as there. A file holds any float, NaN and
+infinities included, so such a rapidity is stored as NaN; to store another value for those events,
+write it, as `if(count(Jet_pt) > 0, rapidity(Jet_pt, Jet_eta, Jet_phi, Jet_mass), -9)`. In a cut, NaN is
 neither greater nor less than anything and `!=` to everything, as in NumPy.
 
 The next ones are for matching. For each member of one list, they find a member of another list

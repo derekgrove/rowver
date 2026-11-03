@@ -3,7 +3,7 @@
 use crate::json::canonical;
 use crate::rvr::{digest, hex};
 use crate::{invalid, Result};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde_json::{json, Map, Value};
 
 /// The SHA-256 a signature signs: of the canonical JSON of `rowver`, `data`, `made` and
@@ -48,26 +48,29 @@ pub fn verify(header: &Value) -> Result<Option<String>> {
     let field = |name: &str| {
         signature.get(name).and_then(Value::as_str).ok_or_else(|| {
             invalid(format!(
-                "signature.{name} is missing: the signature cannot be checked"
+                "signature.{name} is missing, or not text: the signature cannot be checked (docs/FORMAT.md §9)"
             ))
         })
     };
-    if signature.as_object().map(Map::len) != Some(3) {
+    let fields = signature.as_object().map(|s| s.keys().map(String::as_str).collect::<Vec<_>>());
+    if fields.is_none_or(|f| f.len() != 3 || !f.iter().all(|k| ["ed25519", "key", "sha256"].contains(k))) {
         return Err(invalid(
-            "signature must hold exactly ed25519, key and sha256",
+            "signature must hold exactly ed25519, key and sha256 (docs/FORMAT.md §9): press its study again",
         ));
     }
     let (key, sum) = (field("key")?, field("sha256")?);
+    let hex = |name: &str, n: usize| invalid(format!("signature.{name} must be {n} lowercase hexadecimal characters (docs/FORMAT.md §9): press its study again"));
+    let sum_bytes = bytes::<32>(sum).map_err(|_| hex("sha256", 64))?;
     if signed_digest(header)? != sum {
         return Err(invalid(
             "The header changed after it was signed (signature.sha256 does not match it)",
         ));
     }
-    let public = VerifyingKey::from_bytes(&bytes::<32>(key)?)
-        .map_err(|_| invalid("signature.key is not an ed25519 public key"))?;
-    let value = Signature::from_bytes(&bytes::<64>(field("ed25519")?)?);
-    public.verify(&bytes::<32>(sum)?, &value).map_err(|_| {
-        invalid("The signature does not hold: signature.ed25519 was not made by signature.key")
+    let public = VerifyingKey::from_bytes(&bytes::<32>(key).map_err(|_| hex("key", 64))?)
+        .map_err(|_| invalid("signature.key is not an ed25519 public key (docs/FORMAT.md §9): press its study again"))?;
+    let value = Signature::from_bytes(&bytes::<64>(field("ed25519")?).map_err(|_| hex("ed25519", 128))?);
+    public.verify_strict(&sum_bytes, &value).map_err(|_| {
+        invalid("signature.ed25519 does not hold for signature.key, checked strictly as RFC 8032 says, a key of small order refused (docs/FORMAT.md §9): the header changed after it was signed, or another key signed it; press its study again")
     })?;
     Ok(Some(key.to_owned()))
 }

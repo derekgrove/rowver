@@ -9,13 +9,13 @@ use crate::rvr::digest;
 use crate::rvr::samples::{kind_of, value_checksum, RESERVED};
 use crate::{invalid, NumericBuffer, Result};
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
 
 mod column;
 mod derived;
-mod facts;
+pub(crate) mod facts;
 mod spool;
 
 pub use column::Source;
@@ -25,9 +25,6 @@ pub use spool::{Order, Spool, Spooled};
 
 /// The first eight bytes of every `.rvr` file.
 const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
-
-/// The text of each labelled value of an integer column, by column name.
-pub type Labels = BTreeMap<String, BTreeMap<i128, String>>;
 
 /// One column over every row: a value per row, or a list of values per row.
 #[derive(Debug)]
@@ -93,7 +90,6 @@ pub struct Skim {
     /// Each row's entry number in its source tree.
     pub entry: Vec<i64>,
     pub columns: Vec<(String, Values)>,
-    pub labels: Labels,
 }
 
 /// A sample as `data.samples` records it.
@@ -124,8 +120,6 @@ pub struct Rows<'a> {
     pub files: Vec<Value>,
     /// Each row's entry number in its source tree, as `i8` values.
     pub entry: Source<'a>,
-    /// The text of each labelled value of an integer column.
-    pub labels: Labels,
 }
 
 /// Where each array of a file is packed into: memory, or a file of its own in this folder.
@@ -177,7 +171,12 @@ fn lay(
         held.take()
             .ok_or_else(|| invalid("A column was packed twice"))
     };
-    let labels = &rows.labels;
+    // Each file's row bounds, within which its entries strictly increase.
+    let mut files = vec![0_usize];
+    for file in &rows.files {
+        let held = file["rows"].as_u64().ok_or_else(|| invalid("A data.files record has no rows"))?;
+        files.push(files[files.len() - 1] + held as usize);
+    }
     let mut items: Vec<usize> = (0..names.len() + 2).collect();
     items.sort_by_key(|item| std::cmp::Reverse(weights[*item]));
     let work = |item: &usize| -> Result<(usize, Packed, Out)> {
@@ -203,18 +202,11 @@ fn lay(
                 &Measure::Nothing,
                 out,
             )?,
-            1 => column::entry(take(0)?, &edges, out)?,
+            1 => column::entry(take(0)?, &edges, &files, out)?,
             n => {
                 let name = &names[n - 2];
                 let scratch = path.as_ref().map(|path| path.with_extension("decoded"));
-                column::column(
-                    name,
-                    take(n - 1)?,
-                    &edges,
-                    labels.get(name),
-                    out,
-                    scratch.as_deref(),
-                )?
+                column::column(name, take(n - 1)?, &edges, out, scratch.as_deref())?
             }
         };
         if let Some(file) = &mut file {
@@ -284,7 +276,6 @@ pub fn build_with(skim: Skim, workers: usize) -> Result<(Value, Vec<Vec<u8>>)> {
         samples: skim.samples,
         files: skim.files,
         entry: Source::Values(Values::Flat(array(&skim.entry))),
-        labels: skim.labels,
     };
     let (data, packed) = lay(rows, columns, workers, Target::Memory)?;
     let mut arrays = Vec::new();
@@ -409,21 +400,12 @@ fn join(name: &str, pieces: Vec<Values>) -> Result<Values> {
 
 /// The data section and the compressed arrays of a skim held one sample at a time,
 /// compressed on every core.
-pub fn pack(
-    pieces: Vec<Piece>,
-    labels: Labels,
-    files: Vec<Value>,
-) -> Result<(Value, Vec<Vec<u8>>)> {
-    pack_with(pieces, labels, files, crate::parallel::cores())
+pub fn pack(pieces: Vec<Piece>, files: Vec<Value>) -> Result<(Value, Vec<Vec<u8>>)> {
+    pack_with(pieces, files, crate::parallel::cores())
 }
 
 /// As `pack`, compressing on at most `workers` threads; the bytes do not depend on how many.
-pub fn pack_with(
-    pieces: Vec<Piece>,
-    labels: Labels,
-    files: Vec<Value>,
-    workers: usize,
-) -> Result<(Value, Vec<Vec<u8>>)> {
+pub fn pack_with(pieces: Vec<Piece>, files: Vec<Value>, workers: usize) -> Result<(Value, Vec<Vec<u8>>)> {
     let samples: Vec<Sample> = pieces
         .iter()
         .map(|piece| Sample {
@@ -478,7 +460,6 @@ pub fn pack_with(
             sample,
             entry,
             columns,
-            labels,
         },
         workers,
     )

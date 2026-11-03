@@ -1,14 +1,20 @@
+//! The samples and files a header records (docs/FORMAT.md §3, §5, §6, §6.1, §6.2): their records
+//! on opening; in full validation, the event choice made again with the holes and counts against
+//! it, then each row's sample and entry.
+
 use super::cancellation::Cancellation;
-use super::{count, list, object, string};
+use super::samples::whole as written_whole;
+use super::{count, exactly, list, nonempty, object, text, whole_count, MEND};
 use crate::choice::{per_file, Events};
 use crate::numeric::NumericArray;
+use crate::study::lock::{uuid, MOST_ENTRIES};
 use crate::table::Source;
 use crate::{invalid, EventIdentity, Result};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
 /// Which entries of one file a press read: the first ones, or those a random choice picked.
-enum Read {
+pub(super) enum Read {
     Below(u64),
     Chosen(Vec<u64>),
 }
@@ -18,148 +24,107 @@ impl Read {
     fn within(&self, first: u64, last: u64) -> u64 {
         match self {
             Read::Below(read) => last.min(*read).saturating_sub(first),
-            Read::Chosen(chosen) => {
-                (chosen.partition_point(|e| *e < last) - chosen.partition_point(|e| *e < first))
-                    as u64
-            }
+            Read::Chosen(chosen) => (chosen.partition_point(|e| *e < last) - chosen.partition_point(|e| *e < first)) as u64,
+        }
+    }
+
+    /// Whether it holds `entry`.
+    fn holds(&self, entry: u64) -> bool {
+        match self {
+            Read::Below(read) => entry < *read,
+            Read::Chosen(chosen) => chosen.binary_search(&entry).is_ok(),
         }
     }
 }
 
-/// What a press read of each file, by sample and path, and the file's holes.
-type Reads<'a> = HashMap<(&'a str, &'a str), (Read, Vec<(u64, u64)>)>;
+/// Whether a press read a file of these holes, as `rvr::read_file` says.
+pub(super) fn read_file(read: &Read, holes: &[(u64, u64)]) -> bool {
+    let lost = holes.iter().map(|(first, last)| read.within(*first, *last)).sum();
+    super::read_file(read.within(0, u64::MAX), lost, matches!(read, Read::Chosen(_)))
+}
 
-/// A file record's holes, checked: each `{entries: [first, last], kind, why}`, `first < last`,
-/// in entry order and disjoint, every one below `limit`, with a kind of the list and a reason.
-/// No `holes` key is no holes; an empty list is refused, as a press leaves the key out.
-fn holes(record: &Value, label: &str, limit: u64) -> Result<Vec<(u64, u64)>> {
+/// What the choice read of each file, by sample and path, with the file's holes.
+pub(super) type Reads<'a> = HashMap<(&'a str, &'a str), (Read, Vec<(u64, u64)>)>;
+
+/// A file record's holes: each exactly `{entries: [first, last], kind, why}`, `first < last`, in
+/// entry order and apart, every one below `limit`, of a kind of the list and with a reason. No
+/// `holes` key is no holes; an empty list is refused, as a press leaves the key out.
+fn holes(record: &Value, place: &str, limit: u64) -> Result<Vec<(u64, u64)>> {
     let Some(held) = record.get("holes") else {
         return Ok(Vec::new());
     };
-    let held = held
-        .as_array()
-        .filter(|held| !held.is_empty())
-        .ok_or_else(|| invalid(format!("{label}.holes must be a list of one hole or more")))?;
+    let held = held.as_array().filter(|held| !held.is_empty()).ok_or_else(|| {
+        invalid(format!("{place}.holes must be a list of one hole or more, and a file with no hole has no holes key (docs/FORMAT.md §6.2): {MEND}"))
+    })?;
     let mut out: Vec<(u64, u64)> = Vec::new();
-    for hole in held {
-        exactly(hole, &["entries", "kind", "why"], &[], &format!("A hole of {label}"))?;
-        let range = hole["entries"].as_array().map(|r| r.iter().map(Value::as_u64).collect::<Vec<_>>());
+    for (index, hole) in held.iter().enumerate() {
+        let place = format!("{place}.holes[{index}]");
+        exactly(hole, &place, &["entries", "kind", "why"], &[])?;
+        let range = hole["entries"].as_array().map(|r| r.iter().map(whole_count).collect::<Vec<_>>());
         let Some([Some(first), Some(last)]) = range.as_deref().and_then(|r| <[_; 2]>::try_from(r).ok()) else {
-            return Err(invalid(format!("{label}: a hole's entries must be [first, last], two whole numbers")));
+            return Err(invalid(format!("{place}.entries must be [first, last], two whole numbers from 0 to 2^63 − 1 (docs/FORMAT.md §6.2): {MEND}")));
         };
-        let kind = string(hole, "kind")?;
+        let kind = text(hole, &place, "kind")?;
         if !super::HOLE_KINDS.contains(&kind) {
             return Err(invalid(format!(
-                "{label}: a hole's kind is {kind:?}, not one of {} (a newer rowver may write it)",
+                "{place}.kind is {kind:?}, not one of {} (docs/FORMAT.md §6.2): a newer rowver may write it; update rowver",
                 super::HOLE_KINDS.join(", ")
             )));
         }
-        if string(hole, "why")?.trim().is_empty() {
-            return Err(invalid(format!("{label}: a hole must say why")));
+        if text(hole, &place, "why")?.trim().is_empty() {
+            return Err(invalid(format!("{place}.why must say what failed, as text that is not blank (docs/FORMAT.md §6.2): {MEND}")));
         }
         if first >= last || last > limit || out.last().is_some_and(|(_, end)| *end > first) {
-            return Err(invalid(format!("{label}: its holes must be ranges of the entries the press chose, in order and apart (entries {first} to {last} is not)")));
+            return Err(invalid(format!("{place}.entries is [{first}, {last}], and holes are ranges first < last, in entry order and apart, within what the file's choice read ({limit} entries) (docs/FORMAT.md §6.2): {MEND}")));
         }
         out.push((first, last));
     }
     Ok(out)
 }
 
-/// Require an object to hold exactly these keys, of which `optional` may be left out.
-pub(super) fn exactly(value: &Value, keys: &[&str], optional: &[&str], label: &str) -> Result<()> {
-    let mut held = value.as_object().map(Map::keys).into_iter().flatten();
-    if let Some(key) = held.find(|key| !keys.contains(&key.as_str())) {
-        // A key this reader does not know may be one a newer rowver writes.
-        return Err(invalid(format!(
-            "{label} has a field {key} it may not have"
-        )));
-    }
-    let missing = keys
-        .iter()
-        .find(|key| value.get(**key).is_none() && !optional.contains(key));
-    if let Some(key) = missing {
-        return Err(invalid(format!("{label} is missing {key}")));
-    }
-    Ok(())
-}
-
 /// A sample's files in row order, as `data.files` names them, with each one's record.
-fn ordered<'a>(
-    data: &'a Value,
-    made: &'a Value,
-    sample: &str,
-) -> Result<Vec<(&'a str, &'a Value)>> {
-    let records = object(object(object(made, "files")?, sample)?, "files")?;
-    list(data, "files")?
-        .iter()
-        .filter(|file| file["sample"] == sample)
-        .map(|file| {
-            let path = string(file, "path")?;
-            let record = records.get(path).ok_or_else(|| {
-                invalid(format!(
-                    "data.files names {path}, which made.files does not hold"
-                ))
-            })?;
-            Ok((path, record))
-        })
-        .collect()
+fn ordered<'a>(data: &'a Value, made: &'a Value, sample: &str) -> Vec<(&'a str, &'a Value)> {
+    let records = &made["files"][sample]["files"];
+    let files = data["files"].as_array().into_iter().flatten();
+    files.filter(|file| file["sample"] == sample).map(|file| {
+        let path = file["path"].as_str().unwrap_or_default();
+        (path, &records[path])
+    }).collect()
 }
 
 /// What a press read of each of a sample's files, from its `events` record and each file's
 /// entries; with `choose` false, a random choice is only counted, not made again.
-fn reads(
-    files: &[(&str, &Value)],
-    events: &Value,
-    sample: &str,
-    choose: bool,
-) -> Result<Vec<Read>> {
-    let label = format!("made.files[{sample:?}].events");
-    let entries: Vec<u64> = files
-        .iter()
-        .map(|(_, record)| count(record, "entries").map(|n| n as u64))
-        .collect::<Result<_>>()?;
-    let field = |record: &Value, key: &str| match record.get(key) {
-        None => Ok(None),
-        Some(_) => count(record, key).map(|n| Some(n as u64)),
-    };
-    let wrong =
-        |path: &str, what: &str| invalid(format!("{path}: its {what} is not what {label} gives"));
-    let choice = Events::read(events).map_err(|e| invalid(format!("{label}: {e}")))?;
+fn reads(files: &[(&str, &Value)], events: &Value, place: &str, choose: bool) -> Result<Vec<Read>> {
+    let entries: Vec<u64> = files.iter().map(|(_, record)| whole_count(&record["entries"]).unwrap_or(0)).collect();
+    let total = entries.iter().try_fold(0_u64, |sum, n| sum.checked_add(*n)).filter(|total| *total <= MOST_ENTRIES);
+    let total = total.ok_or_else(|| invalid(format!("{place}: the sample's files hold more than 2^40 entries in all, more than a file's samples may, so that a random choice is made again in bounded time (docs/FORMAT.md §6.1): split the sample")))?;
+    let field = |record: &Value, key: &str| record.get(key).and_then(whole_count);
+    let wrong = |path: &str, what: &str| invalid(format!("{place}: the file {path}'s {what} is not what {place} gives (docs/FORMAT.md §6.1): {MEND}"));
+    let choice = Events::read(events).map_err(|e| invalid(format!("{place}: {e} (docs/FORMAT.md §6.1): {MEND}")))?;
     match choice {
-        Events::All => {
-            let read = |((path, record), &n): (&(&str, &Value), &u64)| match (
-                field(record, "stop")?,
-                field(record, "take")?,
-            ) {
-                (None, None) => Ok(Read::Below(n)),
-                _ => Err(wrong(path, "stop or take")),
-            };
-            files.iter().zip(&entries).map(read).collect()
-        }
-        Events::First(mut left) => {
-            let mut read = |((path, record), &n): (&(&str, &Value), &u64)| {
-                let read = n.min(left);
-                left -= read;
-                let stop = (read < n).then_some(read);
-                if field(record, "stop")? != stop || field(record, "take")?.is_some() {
-                    return Err(wrong(path, "stop"));
-                }
-                Ok(Read::Below(read))
-            };
-            files.iter().zip(&entries).map(&mut read).collect()
-        }
+        Events::All => files.iter().zip(&entries).map(|((path, record), &n)| match (field(record, "stop"), field(record, "take")) {
+            (None, None) => Ok(Read::Below(n)),
+            _ => Err(wrong(path, "stop or take")),
+        }).collect(),
+        Events::First(mut left) => files.iter().zip(&entries).map(|((path, record), &n)| {
+            let read = n.min(left);
+            left -= read;
+            let stop = (read < n).then_some(read);
+            match field(record, "stop") != stop || field(record, "take").is_some() {
+                true => Err(wrong(path, "stop")),
+                false => Ok(Read::Below(read)),
+            }
+        }).collect(),
         Events::Random { n, seed } => {
-            let taken: Vec<u64> = files
-                .iter()
-                .map(|(path, record)| match field(record, "stop")? {
-                    None => field(record, "take")?.ok_or_else(|| wrong(path, "take")),
-                    Some(_) => Err(wrong(path, "stop")),
-                })
-                .collect::<Result<_>>()?;
-            if taken.iter().sum::<u64>() != n.min(entries.iter().sum()) {
-                return Err(invalid(format!(
-                    "The files' take does not add up to the {n} events {label} chose"
-                )));
+            let mut taken = Vec::new();
+            for (path, record) in files {
+                match (field(record, "stop"), field(record, "take")) {
+                    (None, Some(take)) if Some(take) <= whole_count(&record["entries"]) => taken.push(take),
+                    _ => return Err(wrong(path, "take")),
+                }
+            }
+            if taken.iter().sum::<u64>() != n.min(total) {
+                return Err(invalid(format!("{place}: the files' take adds up to {}, and a random choice of {n} takes {} (docs/FORMAT.md §6.1): {MEND}", taken.iter().sum::<u64>(), n.min(total))));
             }
             if !choose {
                 return Ok(taken.into_iter().map(|_| Read::Below(0)).collect());
@@ -175,263 +140,270 @@ fn reads(
     }
 }
 
-/// Check the samples and files the header records against each other, without the arrays:
-/// `data.samples`, `data.files` and `made.files` name the same samples and files, and every
-/// sample's `events` record agrees with what each of its files says was read.
+/// The refusal of counts that add up past what a count holds.
+fn past(what: &str) -> crate::Error {
+    invalid(format!("{what} add up past 2^64, and every count is from 0 to 2^63 − 1 (docs/FORMAT.md §1): {MEND}"))
+}
+
+/// Refuse a metadata value that is none of text, whole numbers, finite floats, `true` and
+/// `false`, and lists and objects of those.
+fn metadata_value(value: &Value, place: &str) -> Result<()> {
+    match value {
+        Value::Null => Err(invalid(format!("{place} is null, and metadata holds text, whole numbers, finite floats, true and false, and lists and objects of those (docs/FORMAT.md §6): {MEND}"))),
+        Value::Number(n) if !written_whole(n) && !n.as_f64().is_some_and(f64::is_finite) => Err(invalid(format!("{place} is {n}, not a finite float (docs/FORMAT.md §6): {MEND}"))),
+        Value::Array(values) => values.iter().enumerate().try_for_each(|(i, v)| metadata_value(v, &format!("{place}[{i}]"))),
+        Value::Object(values) => values.iter().try_for_each(|(k, v)| metadata_value(v, &format!("{place}.{k}"))),
+        _ => Ok(()),
+    }
+}
+
+/// A total's value: a finite double written as one, with a `.` or an exponent.
+pub(super) fn total(value: &Value, place: &str) -> Result<f64> {
+    let number = value.as_number().filter(|n| !written_whole(n));
+    number.and_then(serde_json::Number::as_f64).filter(|v| v.is_finite()).ok_or_else(|| {
+        invalid(format!("{place} is {value}, and a total is a finite double, written with a . or an exponent (docs/FORMAT.md §6): {MEND}"))
+    })
+}
+
+/// Check one file record of `made.files[sample].files`; whether it has holes.
+fn file_record(record: &Value, place: &str) -> Result<bool> {
+    let fields = ["tree", "uuid", "entries", "stop", "take", "holes", "totals"];
+    exactly(record, place, &fields, &["stop", "take", "holes", "totals"])?;
+    nonempty(record, place, "tree")?;
+    let id = text(record, place, "uuid")?;
+    if !uuid(id) {
+        return Err(invalid(format!("{place}.uuid is {id:?}, and it is the UUID inside the ROOT file as the lock gives it: 36 characters, lowercase hexadecimal in groups of 8, 4, 4, 4 and 12 joined by - (docs/FORMAT.md §6): {MEND}")));
+    }
+    let entries = count(record, place, "entries")?;
+    for key in ["stop", "take"].iter().filter(|key| record.get(**key).is_some()) {
+        count(record, place, key)?;
+    }
+    let limit = record.get("stop").and_then(whole_count).unwrap_or(entries as u64);
+    let holed = !holes(record, place, limit)?.is_empty();
+    if let Some(totals) = record.get("totals") {
+        let totals = totals.as_object().filter(|t| !t.is_empty()).ok_or_else(|| {
+            invalid(format!("{place}.totals must be an object of one total or more, and a file without totals has no totals key (docs/FORMAT.md §6): {MEND}"))
+        })?;
+        for (name, value) in totals {
+            total(value, &format!("{place}.totals.{name}"))?;
+        }
+    }
+    Ok(holed)
+}
+
+/// Check the samples and files the header records against each other, without the arrays or
+/// the study's texts (docs/FORMAT.md §12, "On opening").
 pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
-    let mut names = HashSet::new();
-    for record in list(data, "samples")? {
-        exactly(
-            record,
-            &["name", "label", "rows"],
-            &[],
-            "A data.samples record",
-        )?;
-        let name = string(record, "name")?;
-        string(record, "label")?;
-        count(record, "rows")?;
-        if name.is_empty() || !names.insert(name) {
-            return Err(invalid("Sample names must be nonempty and unique"));
+    let rows = count(data, "data", "rows")?;
+    let (mut names, mut seen, mut sum) = (Vec::new(), HashSet::new(), 0_usize);
+    for (index, record) in list(data, "data", "samples")?.iter().enumerate() {
+        let name = nonempty(record, &format!("data.samples[{index}]"), "name")?;
+        let place = format!("data.samples[{name:?}]");
+        exactly(record, &place, &["name", "label", "rows"], &[])?;
+        nonempty(record, &place, "label")?;
+        sum = sum.checked_add(count(record, &place, "rows")?).ok_or_else(|| past("data.samples' rows"))?;
+        if !seen.insert(name) {
+            return Err(invalid(format!("{place}: two samples have this name, and each has its own (docs/FORMAT.md §3): {MEND}")));
         }
+        names.push((name, whole_count(&record["rows"]).unwrap_or(0) as usize));
     }
-    let sources = object(made, "files")?.as_object().unwrap();
-    if sources.len() != names.len() || sources.keys().any(|name| !names.contains(name.as_str())) {
-        return Err(invalid("made.files samples differ from data.samples"));
+    if sum != rows {
+        return Err(invalid(format!("data.rows is {rows}, and the samples' rows add up to {sum} (docs/FORMAT.md §3): {MEND}")));
     }
-    let mut listed = HashSet::new();
-    for file in list(data, "files")? {
-        exactly(
-            file,
-            &["sample", "path", "rows"],
-            &[],
-            "A data.files record",
-        )?;
-        let pair = (string(file, "sample")?, string(file, "path")?);
-        if !sources.contains_key(pair.0) || !listed.insert(pair) {
-            return Err(invalid(
-                "data.files names a file twice, or a sample made.files does not hold",
-            ));
+    let sources = object(made, "made", "files")?.as_object().unwrap();
+    if let Some(name) = sources.keys().find(|name| !seen.contains(name.as_str())) {
+        return Err(invalid(format!("made.files[{name:?}] is no sample of data.samples, and made.files holds exactly those (docs/FORMAT.md §6): {MEND}")));
+    }
+    let mut listed: HashMap<&str, Vec<(&str, usize)>> = HashMap::new();
+    let mut paths = HashSet::new();
+    let mut last = 0;
+    for (index, file) in list(data, "data", "files")?.iter().enumerate() {
+        let place = format!("data.files[{index}]");
+        exactly(file, &place, &["sample", "path", "rows"], &[])?;
+        let (sample, path, held) = (text(file, &place, "sample")?, nonempty(file, &place, "path")?, count(file, &place, "rows")?);
+        let Some(at) = names.iter().position(|(name, _)| *name == sample) else {
+            return Err(invalid(format!("{place}.sample is {sample:?}, which data.samples does not hold (docs/FORMAT.md §3): {MEND}")));
+        };
+        if at < last {
+            return Err(invalid(format!("{place}: data.files lists each sample's files in the order of data.samples, and {sample} comes after {} (docs/FORMAT.md §3): {MEND}", names[last].0)));
         }
-        count(file, "rows")?;
+        last = at;
+        if !paths.insert((sample, path)) {
+            return Err(invalid(format!("{place}: data.files names {path} of {sample} twice (docs/FORMAT.md §3): {MEND}")));
+        }
+        listed.entry(sample).or_default().push((path, held));
     }
     let mut holed = false;
-    // The totals the recipe it carries asks for, which every file the press read holds.
-    let text = made["recipe"]["text"].as_str().unwrap_or_default();
-    // (A recipe this build cannot read leaves its totals unchecked against it.)
-    let asked: Option<Vec<String>> = rvr_recipe::Recipe::read(text).ok().map(|r| r.totals.into_iter().map(|t| t.name).collect());
-    for (name, source) in sources {
-        let label = format!("made.files[{name:?}]");
-        exactly(source, &["events", "files", "metadata"], &[], &label)?;
-        object(source, "metadata")?;
-        for (path, record) in object(source, "files")?.as_object().unwrap() {
-            let label = format!("{label}.files[{path:?}]");
-            let fields = ["tree", "uuid", "entries", "stop", "take", "holes", "totals"];
-            exactly(record, &fields, &["stop", "take", "holes", "totals"], &label)?;
-            let limit = match record.get("stop") {
-                Some(_) => count(record, "stop")?,
-                None => count(record, "entries")?,
-            } as u64;
-            let holes = holes(record, &label, limit)?;
-            holed |= !holes.is_empty();
-            // A file the press could not open has no UUID of its own when the lock had none to
-            // give: one hole of every entry it chose, or a file it chose no entry of.
-            let unread = (limit > 0 && holes == [(0, limit)]) || limit == 0 || record.get("take") == Some(&0.into());
-            if record["uuid"].is_null() && !unread {
-                return Err(invalid(format!("{label}: only a file the press could not open (one hole of every entry it chose, or a file it chose none of) may have no uuid")));
-            }
-            let held: Vec<&String> = record.get("totals").and_then(Value::as_object).map(|t| t.keys().collect()).unwrap_or_default();
-            if let Some(asked) = asked.as_ref().filter(|asked| !unread && (held.len() != asked.len() || asked.iter().any(|name| !held.contains(&name)))) {
-                return Err(invalid(format!("{label}: a file the press read holds every total of the recipe's [totals] ({}), and this one holds {}", asked.join(", "), if held.is_empty() { "none".into() } else { held.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ") })));
-            }
-            if path.is_empty()
-                || (!record["uuid"].is_null() && string(record, "uuid")?.is_empty())
-                || string(record, "tree")?.is_empty()
-            {
-                return Err(invalid(
-                    "Source files must have nonempty paths, UUIDs, and tree names",
-                ));
-            }
-            if !listed.contains(&(name.as_str(), path.as_str())) {
-                return Err(invalid(format!(
-                    "{path} of {name} is in made.files but not in data.files"
-                )));
+    for (name, rows) in &names {
+        let place = format!("made.files[{name:?}]");
+        let source = sources.get(*name).ok_or_else(|| invalid(format!("{place} is missing, and made.files holds every sample of data.samples (docs/FORMAT.md §6): {MEND}")))?;
+        exactly(source, &place, &["events", "files", "metadata"], &[])?;
+        let records = object(source, &place, "files")?.as_object().unwrap();
+        let metadata = object(source, &place, "metadata")?.as_object().unwrap();
+        metadata_value(&source["metadata"], &format!("{place}.metadata"))?;
+        let files = listed.remove(name).unwrap_or_default();
+        let held = files.iter().try_fold(0_usize, |sum, (_, n)| sum.checked_add(*n)).ok_or_else(|| past(&format!("the rows of {place}'s files in data.files")))?;
+        if held != *rows {
+            return Err(invalid(format!("data.samples[{name:?}].rows is {rows}, and its files' rows in data.files add up to {held} (docs/FORMAT.md §3): {MEND}")));
+        }
+        let (keys, paths): (Vec<&str>, Vec<&str>) = (records.keys().map(String::as_str).collect(), files.iter().map(|(p, _)| *p).collect());
+        if keys != paths {
+            return Err(invalid(format!("{place}.files holds {keys:?}, and it holds the sample's files of data.files, in that order: {paths:?} (docs/FORMAT.md §6): {MEND}")));
+        }
+        for (path, record) in records {
+            holed |= file_record(record, &format!("{place}.files[{path:?}]"))?;
+        }
+        reads(&ordered(data, made, name), &source["events"], &format!("{place}.events"), false)?;
+        sums(records, metadata, &paths, &place)?;
+        for key in ["events_read", "events_total"] {
+            if metadata.get(key).and_then(whole_count).is_none() {
+                return Err(invalid(format!("{place}.metadata.{key} must be a whole number, which rvr press gives every sample (docs/FORMAT.md §5): {MEND}")));
             }
         }
-        let files = ordered(data, made, name)?;
-        reads(&files, object(source, "events")?, name, false)?;
-        totals(source, &label, asked.as_deref().unwrap_or_default())?;
     }
-    // A pressed file (whose samples say what was read) with holes says what each sample misses.
-    for (name, source) in sources {
-        let metadata = &source["metadata"];
-        if holed && metadata.get("events_read").is_some() && metadata.get("events_missing").is_none() {
-            return Err(invalid(format!("made.files[{name:?}].metadata has no events_missing, though the file has holes")));
+    for (name, _) in &names {
+        let missing = made["files"][*name]["metadata"].get("events_missing");
+        match (holed, missing.map(whole_count)) {
+            (true, Some(Some(_))) | (false, None) => {}
+            (true, _) => return Err(invalid(format!("made.files[{name:?}].metadata.events_missing must be a whole number, as the file has holes and so every sample says what it misses (docs/FORMAT.md §5): {MEND}"))),
+            (false, Some(_)) => return Err(invalid(format!("made.files[{name:?}].metadata has events_missing, and only a file with holes has it (docs/FORMAT.md §5): {MEND}"))),
         }
     }
     Ok(())
 }
 
-/// Check a sample's totals: each file's are numbers, and its metadata holds their sum, in the
-/// order of its files, under the name of each total `asked` (0 when no file was read).
-fn totals(source: &Value, label: &str, asked: &[String]) -> Result<()> {
-    let mut sums: Vec<(&String, f64)> = Vec::new();
-    for record in object(source, "files")?.as_object().unwrap().values() {
-        let Some(totals) = record.get("totals") else { continue };
-        for (name, value) in totals.as_object().ok_or_else(|| invalid(format!("{label}: a file's totals must be an object")))? {
-            let value = value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| invalid(format!("{label}: a file's total {name} must be a finite number")))?;
-            match sums.iter_mut().find(|(n, _)| *n == name) {
+/// Check a sample's totals: its metadata holds each its files hold, summed from +0.0 in the order
+/// of `data.files` (a file without totals adds nothing).
+fn sums(records: &Map<String, Value>, metadata: &Map<String, Value>, paths: &[&str], place: &str) -> Result<()> {
+    let mut sums: Vec<(&str, f64)> = Vec::new();
+    for path in paths {
+        for (name, value) in records[*path].get("totals").and_then(Value::as_object).into_iter().flatten() {
+            let value = value.as_f64().unwrap_or_default();
+            match sums.iter_mut().find(|(n, _)| n == name) {
                 Some((_, sum)) => *sum += value,
-                None => sums.push((name, value)),
+                None => sums.push((name, 0.0 + value)),
             }
         }
-    }
-    if let Some(name) = asked.iter().find(|name| source["metadata"][name.as_str()].as_f64().is_none()) {
-        return Err(invalid(format!("{label}.metadata has no total {name}, which the recipe's [totals] asks for")));
-    }
-    // A total no file of the sample holds (none was read) is 0.
-    if let Some(name) = asked.iter().find(|name| !sums.iter().any(|(n, _)| n == name) && source["metadata"][name.as_str()].as_f64() != Some(0.0)) {
-        return Err(invalid(format!("{label}.metadata.{name} is not 0, though no file of the sample holds that total")));
     }
     for (name, sum) in sums {
-        if source["metadata"][name].as_f64() != Some(sum) {
-            return Err(invalid(format!("{label}.metadata.{name} is not the sum of its files' totals of {name}")));
+        let held = metadata.get(name).ok_or_else(|| invalid(format!("{place}.metadata has no total {name}, which its files hold (docs/FORMAT.md §6): {MEND}")))?;
+        if total(held, &format!("{place}.metadata.{name}"))? != sum {
+            return Err(invalid(format!("{place}.metadata.{name} is {held}, and its files' totals of {name}, added from +0.0 in the order of data.files, are {sum:?} (docs/FORMAT.md §6): {MEND}")));
         }
     }
     Ok(())
 }
 
-/// How many entries the choice chose in each hole, in the order of `rvr::holes`.
-pub(super) fn chosen_in_holes(data: &Value, made: &Value) -> Result<Vec<u64>> {
-    // What the choice read of every file of a sample with a hole, by sample and path.
-    let mut read: HashMap<(&str, &str), Read> = HashMap::new();
-    let samples = object(made, "files")?.as_object().into_iter().flatten();
-    let holed = samples.filter(|(_, sample)| {
-        let files = sample["files"].as_object().into_iter().flat_map(|f| f.values());
-        files.into_iter().any(|record| record.get("holes").is_some())
-    });
-    for (name, _) in holed {
-        let files = ordered(data, made, name)?;
-        let events = object(object(object(made, "files")?, name)?, "events")?;
-        for ((path, _), what) in files.iter().zip(reads(&files, events, name, true)?) {
-            read.insert((name.as_str(), path), what);
+/// The event choice made again for every sample, each hole holding a chosen entry, totals only on
+/// a file the press read an entry of, and `events_read` and `events_missing` exact: what each
+/// file's rows may hold.
+pub(super) fn choices<'a>(header: &'a Value, cancellation: Cancellation<'_>) -> Result<Reads<'a>> {
+    let (data, made) = (&header["data"], &header["made"]);
+    let mut out = Reads::new();
+    for sample in data["samples"].as_array().into_iter().flatten() {
+        cancellation.check()?;
+        let name = sample["name"].as_str().unwrap_or_default();
+        let place = format!("made.files[{name:?}]");
+        let files = ordered(data, made, name);
+        let (mut chosen, mut missing) = (0_u64, 0_u64);
+        for ((path, record), read) in files.iter().zip(reads(&files, &made["files"][name]["events"], &format!("{place}.events"), true)?) {
+            let at = format!("{place}.files[{path:?}]");
+            let holes = holes(record, &at, u64::MAX)?;
+            let all = read.within(0, u64::MAX);
+            let mut lost = 0;
+            for (index, &(first, last)) in holes.iter().enumerate() {
+                match read.within(first, last) {
+                    0 => return Err(invalid(format!("{at}.holes[{index}] holds entries {first} to {last}, none of which the event choice chose, and a hole holds at least one (docs/FORMAT.md §6.2): {MEND}"))),
+                    n => lost += n,
+                }
+            }
+            if record.get("totals").is_some() && !read_file(&read, &holes) {
+                return Err(invalid(format!("{at} has totals, and the press did not read the file (it took none of its entries, or every one it chose lies in a hole), so it has none (docs/FORMAT.md §6): {MEND}")));
+            }
+            chosen += all;
+            missing += lost;
+            out.insert((name, *path), (read, holes));
         }
-    }
-    let mut out = Vec::new();
-    for file in list(data, "files")? {
-        let (name, path) = (string(file, "sample")?, string(file, "path")?);
-        let record = &made["files"][name]["files"][path];
-        for (first, last) in holes(record, path, u64::MAX)? {
-            let what = read.get(&(name, path)).ok_or_else(|| invalid(format!("{path} of {name} is not in made.files")))?;
-            out.push(what.within(first, last));
+        let metadata = &made["files"][name]["metadata"];
+        let said = |key: &str| whole_count(&metadata[key]);
+        if said("events_read") != Some(chosen - missing) {
+            return Err(invalid(format!("{place}.metadata.events_read is {}, and the sample's event choice chose {chosen} entries, {missing} of them in holes, so it is {} (docs/FORMAT.md §5): {MEND}", metadata["events_read"], chosen - missing)));
+        }
+        if metadata.get("events_missing").is_some() && said("events_missing") != Some(missing) {
+            return Err(invalid(format!("{place}.metadata.events_missing is {}, and {missing} entries the sample's event choice chose lie in its holes (docs/FORMAT.md §5): {MEND}", metadata["events_missing"])));
         }
     }
     Ok(out)
 }
 
-/// Validate sample and file spans against the arrays, choose a random choice's entries again,
-/// and recover each file's identity.
-pub(super) fn validate(
-    data: &Value,
-    made: &Value,
-    sample: &NumericArray,
-    entry: &NumericArray,
-    rows: usize,
-    cancellation: Cancellation<'_>,
-) -> Result<Vec<Source>> {
-    let mut names = HashMap::new();
-    let mut sample_end = 0_usize;
-    for (index, record) in list(data, "samples")?.iter().enumerate() {
-        names.insert(string(record, "name")?, index);
-        let end = sample_end
-            .checked_add(count(record, "rows")?)
-            .filter(|end| *end <= rows)
-            .ok_or_else(|| invalid("Sample rows exceed total rows"))?;
-        for row in sample_end..end {
+/// How many entries the choice chose in each hole, in the order of `rvr::holes`.
+pub(super) fn chosen_in_holes(header: &Value) -> Result<Vec<u64>> {
+    let (data, made) = (&header["data"], &header["made"]);
+    let mut out = Vec::new();
+    let samples = data["samples"].as_array().into_iter().flatten().filter_map(|s| s["name"].as_str());
+    for name in samples {
+        let files = ordered(data, made, name);
+        if !files.iter().any(|(_, record)| record.get("holes").is_some()) {
+            continue;
+        }
+        let place = format!("made.files[{name:?}]");
+        for ((path, record), read) in files.iter().zip(reads(&files, &made["files"][name]["events"], &format!("{place}.events"), true)?) {
+            for (first, last) in holes(record, &format!("{place}.files[{path:?}]"), u64::MAX)? {
+                out.push(read.within(first, last));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Check each row against the samples and files: the sample index running through the samples in
+/// order, and each file's entries strictly increasing, each chosen and in no hole; and recover
+/// each file's identity.
+pub(super) fn rows(header: &Value, sample: &NumericArray, entry: &NumericArray, reads: &Reads, cancellation: Cancellation<'_>) -> Result<Vec<Source>> {
+    let (data, made) = (&header["data"], &header["made"]);
+    for (at, (start, end)) in super::samples::spans(data)?.into_iter().enumerate() {
+        for row in start..end {
             cancellation.at(row)?;
-            if sample.signed(row)? != index as i64 {
-                return Err(invalid("Sample identity arrays disagree with sample spans"));
+            if sample.signed(row)? != at as i64 {
+                return Err(invalid(format!("data.sample: row {row} holds {}, and the rows of data.samples[{at}] hold {at} (docs/FORMAT.md §3): {MEND}", sample.signed(row)?)));
             }
-        }
-        sample_end = end;
-    }
-    if sample_end != rows {
-        return Err(invalid("Sample row counts do not sum to rows"));
-    }
-    let sources = object(made, "files")?;
-    let mut read: Reads = HashMap::new();
-    for name in names.keys() {
-        cancellation.check()?;
-        let files = ordered(data, made, name)?;
-        let events = object(object(sources, name)?, "events")?;
-        let mut missing = 0;
-        for ((path, record), what) in files.iter().zip(reads(&files, events, name, true)?) {
-            let label = format!("made.files[{name:?}].files[{path:?}]");
-            let holes = holes(record, &label, u64::MAX)?;
-            for &(first, last) in &holes {
-                match what.within(first, last) {
-                    0 => return Err(invalid(format!("{label}: its hole of entries {first} to {last} holds no entry the press chose"))),
-                    n => missing += n,
-                }
-            }
-            read.insert((name, path), (what, holes));
-        }
-        // `events_read` is a press's own metadata, which `rvr validate` checks; `events_missing`
-        // is the holes'.
-        let said = sources[*name]["metadata"].get("events_missing").map(Value::as_u64);
-        if said.is_some_and(|n| n != Some(missing)) {
-            return Err(invalid(format!("sample {name}: its events_missing must be the {missing} entries chosen that lie in its holes")));
         }
     }
     let mut files = Vec::new();
     let mut start = 0_usize;
-    let mut previous_sample = 0;
-    for record in list(data, "files")? {
-        let name = string(record, "sample")?;
-        let path = string(record, "path")?;
-        let index = names[name];
-        if index < previous_sample {
-            return Err(invalid("Input files are out of sample order"));
-        }
-        previous_sample = index;
-        let source = &sources[name]["files"][path];
-        let end = start
-            .checked_add(count(record, "rows")?)
-            .filter(|end| *end <= rows)
-            .ok_or_else(|| invalid("Input file rows exceed total rows"))?;
-        let (allowed, holes) = &read[&(name, path)];
-        let mut seen_entries = HashSet::new();
+    for (at, record) in data["files"].as_array().into_iter().flatten().enumerate() {
+        let (name, path) = (record["sample"].as_str().unwrap_or_default(), record["path"].as_str().unwrap_or_default());
+        let end = start.checked_add(whole_count(&record["rows"]).unwrap_or(0) as usize).ok_or_else(|| past("data.files' rows"))?;
+        let (read, holes) = &reads[&(name, path)];
+        let mut previous: Option<i64> = None;
         for row in start..end {
             cancellation.at(row)?;
-            let source_entry = entry.signed(row)?;
-            let inside = u64::try_from(source_entry).is_ok_and(|at| {
-                let hole = holes.partition_point(|(_, last)| *last <= at);
-                let unread = holes.get(hole).is_some_and(|(first, _)| *first <= at);
-                !unread
-                    && match allowed {
-                        Read::Below(read) => at < *read,
-                        Read::Chosen(chosen) => chosen.binary_search(&at).is_ok(),
-                    }
+            let held = entry.signed(row)?;
+            if previous.is_some_and(|previous| held <= previous) {
+                return Err(invalid(format!("data.entry: row {row} holds entry {held} of data.files[{at}] after entry {}, and within a file rows are in strictly increasing order of their entries (docs/FORMAT.md §3): {MEND}", previous.unwrap_or_default())));
+            }
+            previous = Some(held);
+            let inside = u64::try_from(held).is_ok_and(|e| {
+                let hole = holes.partition_point(|(_, last)| *last <= e);
+                read.holds(e) && holes.get(hole).is_none_or(|(first, _)| *first > e)
             });
-            if sample.signed(row)? != index as i64 || !inside || !seen_entries.insert(source_entry)
-            {
-                return Err(invalid(format!("{path}: its rows disagree with their sample, repeat an entry, or hold an entry the press did not read (or one in a hole)")));
+            if !inside {
+                return Err(invalid(format!("data.entry: row {row} holds entry {held} of data.files[{at}] ({path}), which the event choice did not choose or a hole holds (docs/FORMAT.md §3, §6.1, §6.2): {MEND}")));
             }
         }
+        let source = &made["files"][name]["files"][path];
         files.push(Source {
             identity: EventIdentity {
                 sample: name.into(),
                 file: path.into(),
                 entry: 0,
                 uuid: source["uuid"].as_str().unwrap_or_default().into(),
-                tree: string(source, "tree")?.into(),
+                tree: source["tree"].as_str().unwrap_or_default().into(),
             },
             start,
             end,
         });
         start = end;
-    }
-    if start != rows {
-        return Err(invalid("Input file rows do not sum to rows"));
     }
     Ok(files)
 }

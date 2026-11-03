@@ -3,7 +3,7 @@
 mod common;
 
 use common::{golden, rebuilt};
-use rowver::write::{array, build, pack, to_bytes, Labels, Piece, Sample, Values};
+use rowver::write::{array, build, pack, to_bytes, Piece, Sample, Values};
 use serde_json::Value;
 
 /// Drop where each compressed array lies, which depends on the compressor's version.
@@ -51,10 +51,11 @@ fn build_refuses_what_the_format_refuses() {
         sample: vec![0, 0],
         entry: vec![0, 1],
         columns,
-        labels: Labels::new(),
     };
     let flat = |values| vec![("x".to_owned(), Values::Flat(values))];
-    assert!(build(skim(flat(array(&[1.0_f32, f32::NAN])))).is_err());
+    // A float may be any IEEE value, NaN and infinities included.
+    let nan = build(skim(flat(array(&[1.0_f32, f32::NAN])))).unwrap().0;
+    assert_eq!(nan["cols"][0]["lim"], serde_json::json!([1.0, 1.0]));
     assert!(build(skim(flat(array(&[1_i32])))).is_err());
     let jagged = Values::Jagged {
         counts: vec![1, 1],
@@ -76,9 +77,15 @@ fn build_refuses_what_the_format_refuses() {
         entry: (0..rows).collect(),
     };
     let uneven = vec![piece("A", &[1, 2, 3], 2), piece("B", &[4], 2)];
-    assert!(pack(uneven, Labels::new(), Vec::new()).is_err());
+    assert!(pack(uneven, Vec::new()).is_err());
     let even = vec![piece("A", &[1, 2], 2), piece("B", &[3, 4], 2)];
-    assert!(pack(even, Labels::new(), Vec::new()).is_ok());
+    assert!(pack(even, Vec::new()).is_ok());
+    // Within a file, rows are in strictly increasing order of their entries.
+    let mut back = piece("A", &[1, 2], 2);
+    back.entry = vec![1, 0];
+    let files = vec![serde_json::json!({"sample": "A", "path": "./a.root", "rows": 2})];
+    let refused = pack(vec![back], files).unwrap_err().to_string();
+    assert!(refused.contains("strictly increasing"), "{refused}");
     let twice = vec![
         ("x".to_owned(), Values::Flat(array(&[1_i8, 2]))),
         ("x".to_owned(), Values::Flat(array(&[1_i8, 2]))),
@@ -97,7 +104,7 @@ fn a_jagged_column_may_hold_values_that_are_not_finite() {
 }
 
 #[test]
-fn nice_keeps_the_limit_where_two_digit_rounding_fell_inside() {
+fn nice_is_lim_rounded_outward_to_two_digits_in_exact_decimal() {
     let nice = |values| {
         let skim = rowver::write::Skim {
             samples: vec![Sample {
@@ -109,30 +116,21 @@ fn nice_keeps_the_limit_where_two_digit_rounding_fell_inside() {
             sample: vec![0, 0],
             entry: vec![0, 1],
             columns: vec![("x".into(), Values::Flat(values))],
-            labels: Labels::new(),
         };
         build(skim).unwrap().0["cols"][0]["nice"].to_string()
     };
     assert_eq!(nice(array(&[1.2_f64, 5.0])), "[1.2,5.0]");
-    let inexact = "[0.1,0.30000000000000004]";
-    assert_eq!(
-        nice(
-            serde_json::from_str::<Vec<f64>>(inexact)
-                .map(|v| array(&v))
-                .unwrap()
-        ),
-        inexact
-    );
-    assert_eq!(nice(array(&[5_i64, 120000001])), "[5,120000001]");
-    assert_eq!(nice(array(&[1.1_f32, 1.1])), "[1.1,1.100000023841858]");
-    assert_eq!(
-        nice(array(&[5_u64, 9200000000000000001])),
-        "[5,9200000000000000001]"
-    );
-    assert_eq!(nice(array(&[-1.2_f64, -1.2])), "[-1.2000000000000002,-1.2]");
-    assert_eq!(nice(array(&[-120000001_i64, -7])), "[-120000001,-7]");
+    let inexact = serde_json::from_str::<Vec<f64>>("[0.1,0.30000000000000004]").unwrap();
+    assert_eq!(nice(array(&inexact)), "[0.1,0.31]");
+    assert_eq!(nice(array(&[5_i64, 120000001])), "[5,130000000]");
+    assert_eq!(nice(array(&[1.1_f32, 1.1])), "[1.1,1.2]");
+    assert_eq!(nice(array(&[5_u64, 9200000000000000001])), "[5,9300000000000000000]");
+    assert_eq!(nice(array(&[-1.2_f64, -1.2])), "[-1.2,-1.1]");
+    assert_eq!(nice(array(&[-120000001_i64, -7])), "[-130000000,-7]");
     assert_eq!(nice(array(&[150.1_f64, 1583.2])), "[150.0,1600.0]");
     assert_eq!(nice(array(&[-0.037_f64, 41.0])), "[-0.037,41.0]");
+    assert_eq!(nice(array(&[true, true])), "[1,2]");
+    assert_eq!(nice(array(&[f64::NAN, f64::INFINITY])), "[0.0,1.0]");
 }
 
 #[test]
@@ -149,7 +147,6 @@ fn a_derived_column_is_a_record_with_no_array_that_the_header_check_takes() {
         .collect();
     let path = common::written(&bytes, "derived");
     let met = rowver::rvr::Reader::open(&path).unwrap().column("MET").unwrap().unwrap();
-    std::fs::remove_file(path).unwrap();
     let twice: Vec<f32> = met
         .bytes
         .chunks_exact(4)
@@ -175,10 +172,10 @@ fn a_derived_column_is_a_record_with_no_array_that_the_header_check_takes() {
         change(&mut wrong);
         checked(wrong).unwrap_err().to_string()
     };
-    assert!(refused(&|r| r["name"] = "MET".into()).contains("needs a name no other column has"));
-    assert!(refused(&|r| { r.as_object_mut().unwrap().shift_remove("by_sample"); }).contains("is missing by_sample"));
-    assert!(refused(&|r| r["kind"] = "f16".into()).contains("its kind is not one the format defines"));
-    assert!(refused(&|r| r["expression"] = " ".into()).contains("has no expression"));
+    assert!(refused(&|r| r["name"] = "MET".into()).contains("a derived column's name is one no stored"));
+    assert!(refused(&|r| { r.as_object_mut().unwrap().shift_remove("by_sample"); }).contains("by_sample is missing"));
+    assert!(refused(&|r| r["kind"] = "f16".into()).contains("kind is \"f16\", and a kind is one of"));
+    assert!(refused(&|r| r["expression"] = " ".into()).contains("expression is blank"));
 }
 
 #[test]
@@ -187,15 +184,16 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
     let length = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
     let arrays = vec![bytes[12 + length..].to_vec()];
     let mut header: Value = serde_json::from_slice(&bytes[12..12 + length]).unwrap();
-    let text = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET\"]\n\n[derived]\ntwice = \"MET * 2\"\n";
+    let text = common::recipe() + "twice = \"MET * 2\"\n";
+    let text = text.as_str();
     header["made"]["recipe"]["text"] = text.into();
     header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(text).into();
     header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
     let written = |header: &Value, name: &str| common::written(&to_bytes(header, &arrays).unwrap(), name);
     let plain = written(&header, "derived-plain");
     let derived = [("twice".to_owned(), "MET * 2".to_owned())];
-    let records = rowver::rvr::derived::records(&rowver::rvr::Reader::open(&plain).unwrap(), &derived, &[]).unwrap();
-    std::fs::remove_file(plain).unwrap();
+    let opened = rowver::rvr::Reader::inspect(&plain).unwrap().0;
+    let records = rowver::rvr::derived::records(&opened, &derived, &[]).unwrap();
     header["derived"] = serde_json::json!({ "columns": records });
     let path = written(&header, "derived-twice");
     let reader = rowver::rvr::Reader::open(&path).unwrap();
@@ -207,31 +205,31 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
     let refused = rowver::write::rewrite(&path, &path, &header).unwrap_err().to_string();
     assert!(refused.contains("cannot be written again into itself"), "{refused}");
     assert_eq!(rowver::rvr::validate_file(&path).unwrap().derived, 1);
-    std::fs::remove_file(path).unwrap();
+    drop(path);
     // A record its expression does not give is refused when the file is validated.
-    header["derived"]["columns"][0]["lim"][1] = 1e9.into();
+    let sha256 = records[0]["sha256"].clone();
+    header["derived"]["columns"][0]["sha256"] = "0".repeat(64).into();
     let path = written(&header, "derived-changed");
     let refused = rowver::rvr::validate_file(&path).unwrap_err().to_string();
-    std::fs::remove_file(path).unwrap();
-    assert!(refused.contains("derived column twice, worked out here, is not what the file records"), "{refused}");
+    drop(path);
+    assert!(refused.contains("derived.columns[\"twice\"], worked out here, is not what the file records"), "{refused}");
     // A newer rvr's record that this rowver works out otherwise is not replaced: it says to update.
     let made = header["made"]["toolchain"]["rvr"].clone();
-    header["made"]["toolchain"]["rvr"] = "99.1.0".into();
+    header["made"]["toolchain"]["rvr"] = "15.99.0".into();
     header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
     let path = written(&header, "derived-changed-newer");
     let refused = rowver::rvr::validate_file(&path).unwrap_err().to_string();
-    std::fs::remove_file(path).unwrap();
+    drop(path);
     assert!(refused.contains("is not what the file records") && refused.contains("newer than this one") && !refused.contains("rvr derive"), "{refused}");
     header["made"]["toolchain"]["rvr"] = made;
     // A newer rvr's derived column, with a function this rowver does not know, says to update;
     // its stored columns still read.
-    header["derived"]["columns"][0]["lim"][1] = records[0]["lim"][1].clone();
+    header["derived"]["columns"][0]["sha256"] = sha256;
     let later = text.replace("MET * 2", "later(MET)");
     header["made"]["recipe"]["text"] = later.as_str().into();
     header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(&later).into();
     header["derived"]["columns"][0]["expression"] = "later(MET)".into();
     let this = env!("CARGO_PKG_VERSION");
-    let tagged = format!("{this}-rc.1");
     // A second derived column that uses the first: the hint is said once, not at each level.
     let both = format!("{later}again = \"twice * 2\"\n");
     header["made"]["recipe"]["text"] = both.as_str().into();
@@ -240,7 +238,7 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
     again["name"] = "again".into();
     again["expression"] = "twice * 2".into();
     header["derived"]["columns"] = serde_json::json!([header["derived"]["columns"][0].clone(), again]);
-    for (made, newer) in [("99.1.0", true), (this, false), (&tagged, false)] {
+    for (made, newer) in [("15.99.0", true), (this, false)] {
         header["made"]["toolchain"]["rvr"] = made.into();
         header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
         let path = written(&header, "derived-newer");
@@ -250,10 +248,10 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
         // Emptied, it fails for that, and says nothing of updating.
         rowver::write::empty(&path).unwrap();
         let emptied = rowver::rvr::Reader::open(&path).unwrap().column("again").unwrap_err().to_string();
-        std::fs::remove_file(path).unwrap();
+        drop(path);
         assert!(stored && emptied.contains("empty") && !emptied.contains("newer"), "{emptied}");
         for refused in said {
-            let updates = refused.matches("The file was made by rvr 99.1.0, newer than this one").count();
+            let updates = refused.matches("The file was made by rvr 15.99.0, newer than this one").count();
             assert!(refused.contains("There is no function named later") && updates == usize::from(newer), "{refused}");
         }
     }
@@ -263,11 +261,11 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
     header["made"]["recipe"]["text"] = unread.as_str().into();
     header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(&unread).into();
     header["derived"]["columns"][0]["expression"] = "MET ?? 2".into();
-    header["made"]["toolchain"]["rvr"] = "99.1.0".into();
+    header["made"]["toolchain"]["rvr"] = "15.99.0".into();
     header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
     let path = written(&header, "derived-unread");
     let refused = rowver::rvr::validate_file(&path).unwrap_err().to_string();
-    std::fs::remove_file(path).unwrap();
+    drop(path);
     assert!(refused.contains("cannot be read") && refused.contains("newer than this one"), "{refused}");
 }
 
@@ -292,16 +290,13 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
         },
     ];
     let files = whole["files"].as_array().unwrap().clone();
-    let mut labels = Labels::new();
-    labels.insert("flag".into(), [(0, "off".into()), (1, "on".into())].into());
-    let entry = [2_i64, 0, 4, 17, 1];
+    let entry = [0_i64, 2, 4, 1, 17];
     let file = |name: &str| dir.join(name);
     let streamed = |columns: Vec<(String, Source)>, entry: Source, name: &str| {
         let rows = Rows {
             samples: samples.clone(),
             files: files.clone(),
             entry,
-            labels: labels.clone(),
         };
         let (mut data, laid) = stream(rows, columns, 3, &file(name)).unwrap();
         data["sample_cols"] = whole["sample_cols"].clone();
@@ -373,7 +368,6 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
         samples: samples.clone(),
         files: files.clone(),
         entry: Source::Values(Values::Flat(array(&entry))),
-        labels: labels.clone(),
     };
     let refused = stream(
         rows,
@@ -393,7 +387,6 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
         samples: samples.clone(),
         files: files.clone(),
         entry: Source::Values(Values::Flat(array(&entry))),
-        labels: labels.clone(),
     };
     let met = vec![("MET".to_owned(), Source::Copied(&lying, "MET".into()))];
     let refused = stream(rows, met, 1, &file("x.rvr"));

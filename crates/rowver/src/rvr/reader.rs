@@ -5,7 +5,7 @@
 //! array against its `sha256` when it is read. Per-sample array checksums, column facts and
 //! the event choice need every array; `validate_file` checks those.
 
-use super::{checked_header, checksum, count, digest, header_end, object, required, string};
+use super::{checksum, count, digest, header_end, text, MEND};
 use crate::numeric::width;
 use crate::{invalid, Result};
 use serde_json::Value;
@@ -50,19 +50,32 @@ impl Reader {
         let start = header_end(&prefix, usize::try_from(size).unwrap_or(usize::MAX))?;
         let mut text = vec![0; start - 12];
         file.read_exact(&mut text)?;
-        let header: Value = serde_json::from_slice(&text)?;
-        let checked = checked_header(&text).map(drop);
+        let length = (size - start as u64) as usize;
+        // Parsed once: strictly, or, when that fails, as it is, to look inside all the same.
+        let (header, checked) = match crate::json::strict(&text) {
+            Ok(header) => {
+                let checked = super::checks(&header).and_then(|end| super::arrays::fill(end, length));
+                (header, checked)
+            }
+            Err(e) => (serde_json::from_slice(&text)?, Err(e)),
+        };
         let parts = vec![(path.clone(), start as u64, size - start as u64)];
         Ok((Self { path, header, parts }, checked))
     }
 
+    /// The file at `path` whose `header`, already checked, is followed by `length` bytes of arrays from `start`.
+    pub(super) fn of(path: &Path, header: Value, start: u64, length: u64) -> Self {
+        Self { path: path.to_path_buf(), header, parts: vec![(path.to_path_buf(), start, length)] }
+    }
+
     /// Read the arrays laid in `files` under `header`, checked as `open` checks it, before they are written.
     pub(crate) fn laid(dir: &Path, files: &[PathBuf], header: Value) -> Result<Self> {
-        checked_header(&serde_json::to_vec(&header)?)?;
+        let (_, end) = super::checked(&serde_json::to_vec(&header)?)?;
         let mut parts = Vec::new();
         for file in files {
             parts.push((file.clone(), 0, std::fs::metadata(file)?.len()));
         }
+        super::arrays::fill(end, parts.iter().map(|(_, _, n)| *n as usize).sum())?;
         Ok(Self { path: dir.to_path_buf(), header, parts })
     }
 
@@ -88,7 +101,7 @@ impl Reader {
 
     /// How many rows the file has.
     pub fn rows(&self) -> Result<usize> {
-        count(self.data(), "rows")
+        count(self.data(), "data", "rows")
     }
 
     /// The record of a row column, when the file itself holds one of that name.
@@ -108,7 +121,7 @@ impl Reader {
         if self.empty() {
             return Err(invalid(super::EMPTY));
         }
-        let (mut at, size) = (count(record, "at")? as u64, count(record, "size")? as u64);
+        let (mut at, size) = (count(record, label, "at")? as u64, count(record, label, "size")? as u64);
         for (path, start, length) in &self.parts {
             if at.checked_add(size).is_some_and(|end| end <= *length) {
                 return Ok((path, start + at, size));
@@ -119,7 +132,7 @@ impl Reader {
                 None => break,
             }
         }
-        Err(invalid(format!("{label}: compressed span exceeds the file")))
+        Err(invalid(format!("{label}: its array lies past the end of the file: the file is damaged; copy it again")))
     }
 
     /// Decompress one array and refuse it unless its bytes have the checksum its record states.
@@ -134,22 +147,15 @@ impl Reader {
         let mut packed = vec![0; size as usize];
         file.read_exact(&mut packed)?;
         let bytes = crate::codec::unpack(packed, w, expected, label)?;
-        if digest(&bytes) != checksum(record)? {
-            return Err(invalid(format!(
-                "{label} does not match its sha256; validate the file"
-            )));
+        if digest(&bytes) != checksum(record, label)? {
+            return Err(invalid(format!("{label}: its array's bytes are not the sha256 its record states (docs/FORMAT.md §8): the file is damaged; copy it again, or press its study again")));
         }
         Ok(bytes)
     }
 
     /// Each row's index into `data.samples`.
     pub fn sample(&self) -> Result<Vec<i32>> {
-        let bytes = self.array(
-            required(self.data(), "sample")?,
-            "i4",
-            self.rows()?,
-            "sample",
-        )?;
+        let bytes = self.array(&self.data()["sample"], "i4", self.rows()?, "data.sample")?;
         let (values, _) = bytes.as_chunks::<4>();
         Ok(values
             .iter()
@@ -159,7 +165,7 @@ impl Reader {
 
     /// Each row's entry number in its source tree.
     pub fn entry(&self) -> Result<Vec<i64>> {
-        let bytes = self.array(required(self.data(), "entry")?, "i8", self.rows()?, "entry")?;
+        let bytes = self.array(&self.data()["entry"], "i8", self.rows()?, "data.entry")?;
         let (values, _) = bytes.as_chunks::<8>();
         Ok(values
             .iter()
@@ -176,18 +182,19 @@ impl Reader {
             return Ok(None);
         };
         let rows = self.rows()?;
-        let kind = string(record, "kind")?;
+        let place = format!("data.cols[{name:?}]");
+        let kind = text(record, &place, "kind")?;
         if kind != "jagged" {
             return Ok(Some(Held {
                 kind: kind.to_owned(),
-                bytes: self.array(record, kind, rows, name)?,
+                bytes: self.array(record, kind, rows, &place)?,
                 offsets: None,
             }));
         }
-        let content = object(record, "content")?;
-        let (kind, values) = (string(content, "kind")?, count(content, "count")?);
-        let label = format!("{name} offsets");
-        let steps = self.array(object(record, "offsets")?, "i8", rows + 1, &label)?;
+        let content = &record["content"];
+        let (kind, values) = (text(content, &place, "kind")?, count(content, &place, "count")?);
+        let label = format!("{place}.offsets");
+        let steps = self.array(&record["offsets"], "i8", rows + 1, &label)?;
         let (steps, _) = steps.as_chunks::<8>();
         let mut offsets = Vec::with_capacity(steps.len());
         for step in steps {
@@ -196,17 +203,15 @@ impl Reader {
                 *offset <= values && offsets.last().is_none_or(|before| before <= offset)
             });
             offsets.push(ordered.ok_or_else(|| {
-                invalid(format!("{name}: jagged offsets decrease or exceed content"))
+                invalid(format!("{label} decrease, or pass the content's count (docs/FORMAT.md §4): {MEND}"))
             })?);
         }
         if offsets.first() != Some(&0) || offsets.last() != Some(&values) {
-            return Err(invalid(format!(
-                "{name}: offsets must start at zero and end at content count"
-            )));
+            return Err(invalid(format!("{label} must start at 0 and end at content.count, {values} (docs/FORMAT.md §4): {MEND}")));
         }
         Ok(Some(Held {
             kind: kind.to_owned(),
-            bytes: self.array(content, kind, values, &format!("{name} content"))?,
+            bytes: self.array(content, kind, values, &format!("{place}.content"))?,
             offsets: Some(offsets),
         }))
     }

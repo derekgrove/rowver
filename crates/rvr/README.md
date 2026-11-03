@@ -616,10 +616,12 @@ rvr derive: tiny.rvr already has a derived column named mean_jet_pt: an expressi
 
 ### `rvr validate FILE... [--complete]`
 
-Checks each file completely: every array decompresses to its declared length and checksum, every
-per-sample checksum, the column facts, the study's texts and their checksums, that the rows belong
-to the files recorded, and that every row's entry was read (a random choice is made again from its
-seed). One line per file: `valid`, how many entries the press read of how many its samples hold
+Checks each file completely, as docs/FORMAT.md §12 says: every array is one zstd frame that
+decompresses to its declared length and checksum, every per-sample checksum, the column facts, the
+study's three texts parsed and checked against each other and the file (the lock's samples, files,
+UUIDs, entries and metadata), that the rows belong to the files recorded, and that every row's
+entry was read (a random choice is made again from its seed). An empty file gets every check but
+its arrays'. One line per file: `valid`, how many entries the press read of how many its samples hold
 (`read all 968616 entries`, so you can see nothing was left out), its holes by kind
 (`read 5 of 10 entries, 1 hole (damaged)`), and who signed it, or the first problem found. Every
 derived column is worked out, and checked against the checksums and facts the file records of it

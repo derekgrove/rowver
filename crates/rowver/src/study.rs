@@ -132,6 +132,42 @@ pub fn utc(text: &str) -> bool {
     (1..=days).contains(&day) && n(11..13) < 24 && n(14..16) < 60 && n(17..19) < 60
 }
 
+/// The folder and name of a path or URL of `files` (`.` for a bare name, `/` for one at the root).
+pub fn split(asked: &str) -> (&str, &str) {
+    match asked.rsplit_once('/') {
+        Some(("", name)) => ("/", name),
+        Some(split) => split,
+        None => (".", asked),
+    }
+}
+
+/// A file's path or URL from its folder and name, as `split` parts them.
+pub fn join(folder: &str, name: &str) -> String {
+    match folder {
+        "/" => format!("/{name}"),
+        _ => format!("{folder}/{name}"),
+    }
+}
+
+/// Whether `name` matches `pattern`, where `*` is any run of characters and `?` one character.
+pub fn matches(pattern: &str, name: &str) -> bool {
+    let (p, n): (Vec<char>, Vec<char>) = (pattern.chars().collect(), name.chars().collect());
+    let (mut pi, mut ni, mut star, mut mark) = (0, 0, None, 0);
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+            (pi, ni) = (pi + 1, ni + 1);
+        } else if pi < p.len() && p[pi] == '*' {
+            (star, mark, pi) = (Some(pi), ni, pi + 1);
+        } else if let Some(s) = star {
+            (pi, mark) = (s + 1, mark + 1);
+            ni = mark;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|c| *c == '*')
+}
+
 /// Whether `text` is `count` lowercase hexadecimal digits.
 pub fn hex(text: &str, count: usize) -> bool {
     text.len() == count && text.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
@@ -161,5 +197,18 @@ mod tests {
         assert_eq!(p("./d/x.root"), p("d/x.root"));
         assert_eq!(p("d/../e/./x.root"), p("e/x.root"));
         assert_eq!(p("../x.root"), std::path::PathBuf::from("../x.root"));
+    }
+
+    #[test]
+    fn patterns_and_paths_parted_and_joined_back_as_written() {
+        assert!(matches("Run2012*_TauPlusX.root", "Run2012B_TauPlusX.root") && matches("*.root", "a.root"));
+        assert!(!matches("Run2012?_Tau*.root", "Run2012BC_DoubleMuParked_Muons.root"));
+        assert!(matches("SMS-Signal*_Summer22_130X.root", "SMS-Signal-2L_TuneCP5_13p6TeV_madgraphMLM-pythia8_Summer22_130X.root"));
+        assert!(matches("a?c*", "abc") && !matches("a?c", "ac") && matches("*", ""));
+        for asked in ["root://eospublic.cern.ch//x.root", "root://h//eos/a/x.root", "/x.root", "./x.root", "~/d/x.root", "d//x.root"] {
+            let (folder, name) = split(asked);
+            assert_eq!(join(folder, name), asked);
+        }
+        assert_eq!(join(split("x.root").0, "x.root"), "./x.root");
     }
 }
