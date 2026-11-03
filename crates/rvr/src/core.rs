@@ -107,6 +107,12 @@ pub fn press(plan: Plan) -> Result<usize, String> {
     Ok(holes)
 }
 
+/// What a press of every column reads: `S samples, F files, E entries`.
+pub(crate) fn pressed(plan: &Plan) -> String {
+    let read: u64 = plan.lock.samples.iter().map(|s| s.events_read).sum();
+    format!("{}, {}, {}", some(plan.lock.samples.len(), "sample", "samples"), some(plan.reads().len(), "file", "files"), some(read as usize, "entry", "entries"))
+}
+
 /// What the press says it presses, before it reads.
 fn announce(plan: &Plan) {
     let (target, reads, samples) = (plan.target.display(), plan.reads(), plan.lock.samples.len());
@@ -138,10 +144,7 @@ fn announce(plan: &Plan) {
                 false => println!("Reading only {} for those events, {}, {at_a_time} at a time:", names.join(", "), some(reads.len(), "file", "files")),
             }
         }
-        Base::Nothing | Base::Current(_) => {
-            let read: u64 = plan.lock.samples.iter().map(|s| s.events_read).sum();
-            println!("Pressing {}, {}, {}, {at_a_time} at a time:", some(samples, "sample", "samples"), some(reads.len(), "file", "files"), some(read as usize, "entry", "entries"));
-        }
+        Base::Nothing | Base::Current(_) => println!("Pressing {}, {at_a_time} at a time:", pressed(plan)),
     }
 }
 

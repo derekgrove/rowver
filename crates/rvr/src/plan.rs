@@ -117,6 +117,8 @@ pub struct Input {
     pub tree: String,
     /// The file, as the lock pins it.
     pub file: File,
+    /// Where it is read: its local path, or its storage door's HTTPS URL (SPEC §2.4).
+    pub read_at: String,
     /// For a random choice, the entries chosen in this file, ascending.
     pub chosen: Option<Vec<u64>>,
     /// Building on an earlier file, the entries it kept of this file, ascending.
@@ -225,6 +227,8 @@ pub struct Checked {
     pub kinds: Vec<Shape>,
     /// Each derived column's kind and whether it is a list.
     pub derived: Vec<Shape>,
+    /// Where each file is read, by sample and file in the lock's order (`agree::doors`).
+    pub read_at: Vec<Vec<String>>,
 }
 
 /// `lines` of the validator of `file`, each named with it.
@@ -249,23 +253,24 @@ pub fn checked(texts: &Texts, choose: &Choose) -> Result<Checked, String> {
         if samples {
             said.extend(crate::agree::lock(texts, &lock));
         }
-        said.extend(crate::agree::doors(&lock));
+        let read_at = crate::agree::doors(&lock).map_err(|e| said.extend(e)).ok();
         let (lock, asked, problems) = crate::agree::choices(lock, choose);
         said.extend(problems);
-        planned = Some((lock, asked));
+        // A host with no door only adds its line: the recipe is still checked against the lock.
+        planned = Some((lock, asked, read_at));
     }
     let mut kinds = None;
-    if let (Some(recipe), Some((lock, asked))) = (&recipe, &planned) {
+    if let (Some(recipe), Some((lock, asked, _))) = (&recipe, &planned) {
         kinds = crate::agree::recipe(recipe, lock, asked).map_err(|e| said.extend(e)).ok();
     }
     match (recipe, planned, kinds) {
-        (Some(recipe), Some((lock, asked)), Some([kinds, derived])) if said.is_empty() => Ok(Checked { recipe, lock, asked, kinds, derived }),
+        (Some(recipe), Some((lock, asked, Some(read_at))), Some([kinds, derived])) if said.is_empty() => Ok(Checked { recipe, lock, asked, kinds, derived, read_at }),
         _ => Err(said.join("\n")),
     }
 }
 
 /// Every file of the lock a press reads, in order, with what its choice reads of it.
-fn inputs(lock: &Lock, asked: &[Events]) -> Vec<Input> {
+fn inputs(lock: &Lock, asked: &[Events], read_at: &[Vec<String>]) -> Vec<Input> {
     let mut work = Vec::new();
     for (sample, s) in lock.samples.iter().enumerate() {
         let entries: Vec<u64> = s.files.iter().map(|f| f.entries).collect();
@@ -273,9 +278,9 @@ fn inputs(lock: &Lock, asked: &[Events]) -> Vec<Input> {
             Events::Random { n, seed } => rowver::choice::per_file(&entries, n, seed).into_iter().map(Some).collect(),
             _ => vec![None; entries.len()],
         };
-        for (file, chosen) in s.files.iter().zip(chosen).filter(|(f, _)| f.stop != Some(0)) {
+        for ((file, chosen), read_at) in s.files.iter().zip(chosen).zip(&read_at[sample]).filter(|((f, _), _)| f.stop != Some(0)) {
             let order = work.len();
-            work.push(Input { sample, tree: s.tree.clone(), file: file.clone(), chosen, kept: None, before: None, ranges: None, order, unsummed: false });
+            work.push(Input { sample, tree: s.tree.clone(), file: file.clone(), read_at: read_at.clone(), chosen, kept: None, before: None, ranges: None, order, unsummed: false });
         }
     }
     work
@@ -386,8 +391,8 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
         _ => serde_json::Map::new(),
     };
     let (mut from, mut why) = base(&place, at, &texts, &checked, &asked.on)?;
-    let Checked { recipe, lock, asked: events, kinds, derived } = checked;
-    let mut work = inputs(&lock, &events);
+    let Checked { recipe, lock, asked: events, kinds, derived, read_at } = checked;
+    let mut work = inputs(&lock, &events, &read_at);
     if let Base::Columns(earlier) = &mut from {
         if let Err(not) = built_on(&mut work, &lock, earlier) {
             (from, why) = (Base::Nothing, Some(not));
@@ -512,4 +517,20 @@ mod tests {
         assert!(among(&[1, 5], 10, Some(&[1, 3, 5]), &[]));
         assert!(!among(&[1, 4], 10, Some(&[1, 3, 5]), &[]), "not chosen");
     }
+
+    #[test]
+    fn the_plan_reads_a_storage_file_from_its_doors_https_url() {
+        use rowver::study::lock::File;
+        let file = |at: &str| File { at: at.into(), bytes: 1, adler32: None, uuid: "u".into(), entries: 3, stop: None, take: None };
+        let list = rowver::study::lock::Branches::new(Vec::new()).sha256;
+        let mut lock = rowver::study::lock::Lock::read(&LOCK.replace("BR", &list)).unwrap();
+        lock.samples[0].files = vec![file("root://eospublic.cern.ch//eos/opendata/x.root"), file("davs://h.org:1094/d/y.root"), file("./z.root")];
+        let read_at = crate::agree::doors(&lock).unwrap();
+        let urls: Vec<String> = super::inputs(&lock, &[rowver::study::samples::Events::All], &read_at).into_iter().map(|i| i.read_at).collect();
+        assert_eq!(urls, ["https://eospublic.cern.ch:443/eos/opendata/x.root", "https://h.org:1094/d/y.root", "./z.root"]);
+        lock.samples[0].files.push(file("root://no-door.invalid//d/w.root"));
+        assert!(crate::agree::doors(&lock).unwrap_err()[0].contains("no-door.invalid has no WebDAV door"));
+    }
+
+    const LOCK: &str = "format = \"rvr-samples-lock\"\nversion = 1\nresolved = \"2026-11-03T12:00:00Z\"\nsamples_toml_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\n[[sample]]\nname = \"a\"\nlabel = \"a\"\nasked = [\"./z.root\"]\ntree = \"T\"\nbranches = \"BR\"\nevents = \"all\"\nevents_total = 3\nevents_read = 3\nmetadata = {}\n\n[[sample.file]]\nat = \"./z.root\"\nbytes = 1\nadler32 = \"00000001\"\nuuid = \"31e851e4-b994-11f1-ba5c-1a45bb13c76a\"\nentries = 3\n\n[[branches]]\nsha256 = \"BR\"\nlist = []\n";
 }

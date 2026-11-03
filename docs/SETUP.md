@@ -1,24 +1,27 @@
 # Set up rvr on your laptop
 
-`rvr` is meant to run on your own laptop. It reads CMS datasets straight from grid storage, so
-your laptop needs a grid proxy, and for that it needs your grid certificate. You only need to set this up once.
+`rvr` is meant to run on your own laptop. It reads ROOT files on your computer, or straight from
+grid storage over HTTPS. Files anyone can read, such as CMS Open Data, need nothing more than
+step 1. Files on grid storage that needs a login (LPC EOS, most CERN EOS areas, a grid site) need a
+grid proxy, and for that your grid certificate: steps 2 to 4. You only need to set this up once.
 
 ## 1. Install rvr and rowver
 
 `rvr` makes `.rvr` files; the Python package `rowver` reads them
-(from [step 4 of the examples](examples/README.md#4-plot-it) on). One `pip install` builds the package from this repository and brings the `rvr`
-command with it, with no clone. It needs Python 3.11 or later and Rust 1.91 or later
-([rustup](https://rustup.rs)):
+(from [step 4 of the examples](examples/README.md#4-plot-it) on). One `pip install` brings both:
+the package, and the `rvr` command with it. It needs Python 3.11 or later:
 
 ```sh
-pip install "rowver[all] @ git+https://gitlab.cern.ch/dgrove/rowver.git#subdirectory=crates/rowver-py"
+pip install "rowver[all]"
 rvr --version
 ```
 
-(`[all]` adds Awkward, pandas and pyarrow, for list columns and tables. For `rvr` alone, run
-`cargo install --locked rvr`, or download it from the
-[releases](https://gitlab.cern.ch/dgrove/rowver/-/releases) with no Rust at all; see
-[Install](../crates/rvr/README.md#install).)
+(`[all]` adds Awkward, pandas and pyarrow, for list columns and tables; `pip install rowver` needs
+only NumPy. For `rvr` alone, with no Python, download the binary for Linux x86_64 or macOS from the
+[releases](https://gitlab.cern.ch/dgrove/rowver/-/releases).) To build from a checkout instead, see
+[Building from a checkout](#5-building-from-a-checkout).
+
+The rest of this page is for files on grid storage that needs a login.
 
 ## 2. Install your grid certificate on your laptop
 
@@ -49,7 +52,7 @@ now, and again whenever it runs out. The passphrase is whatever you used when yo
 
 ```text
 $ rvr proxy init
-Passphrase for /Users/…/.globus/userkey.pem:
+Passphrase for /home/you/.globus/userkey.pem:
 Asking voms-cms-auth.cern.ch for your cms attributes...
 Wrote /tmp/x509up_u501:
 …
@@ -71,5 +74,25 @@ The grid proxy at /tmp/x509up_u501 is valid for 7 days.
 ```
 
 If you already use `voms-proxy-init -voms cms` on your laptop, the proxy it makes works too.
+`rvr` needs no certificate folder: it trusts the grid's certificate authorities with no setup
+([the specification, §10](SPEC.md#10-keys-and-proxies), says which, and every other rule of the
+proxy and of your signing key).
 
 Now you are ready to move on to [the examples](examples/README.md).
+
+## 5. Building from a checkout
+
+For working on RowVer itself. It needs Rust 1.91 or later ([rustup](https://rustup.rs)) and, for
+the Python package, a Python 3.11 or later with [maturin](https://www.maturin.rs) and NumPy:
+
+```sh
+git clone https://gitlab.cern.ch/dgrove/rowver.git && cd rowver
+cargo build --release -p rvr                  # the command, as target/release/rvr
+cargo test --workspace --exclude rowver-py    # every Rust test
+cd crates/rowver-py
+maturin develop --release                     # the Python package, into the active Python
+python -m unittest discover tests             # its tests
+```
+
+`cargo test -p rvr --test examples -- --ignored` presses every [example study](examples/README.md)
+again, reading Open Data over the network.

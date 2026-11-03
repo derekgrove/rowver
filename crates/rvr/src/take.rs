@@ -204,7 +204,7 @@ fn unread(shared: &Shared, input: &Input, to_read: &[(u64, u64, usize)], failed:
 /// (its entries, and the branches the recipe reads as its sample's list gives them).
 fn opened(shared: &Shared, input: &Input) -> Result<(RootFile<Held>, Tree, u64), Failed> {
     let at = &input.file.at;
-    let file = open(&shared.reach, &input.file)?;
+    let file = open(&shared.reach, &input.file, &input.read_at)?;
     let tree = file.tree_at(&input.tree).map_err(|e| match e {
         hep_root::Error::KeyNotFound(_) => Failed::new(Fault::Changed, format!("{at}: it has no tree {:?}, which samples.lock recorded. Run rvr samples resolve samples.toml and review the new lock.", input.tree)),
         e => Failed::new(fault_of(&e, file.source().inner().seen()), format!("{at}: its tree {:?}: {e}", input.tree)),

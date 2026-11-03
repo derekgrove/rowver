@@ -6,11 +6,11 @@
 #   walkthrough.sh FOLDER [RVR]
 #
 # FOLDER (made if missing) gets the studies, and each step's output in FOLDER/out/NN_step.txt.
-# RVR is the rvr binary (default: rvr). It reads from the grid, so it needs a grid proxy. PY
-# (default: python) is the command that runs the Python snippets, with rowver and matplotlib.
-# SKIM is the local ROOT file (tree SMS_300_200) the holes study of section 11 links 90 times;
-# unset, that part is skipped. Nothing is written outside FOLDER (RVR_CONFIG and matplotlib's
-# caches point inside it); delete FOLDER after.
+# RVR is the rvr binary (default: rvr). It reads CMS Open Data over HTTPS, so it needs the network
+# but no grid proxy. PY (default: python) is the command that runs the Python snippets, with rowver
+# and matplotlib. SKIM is the local ROOT file (tree SMS_300_200) the holes study of section 11
+# links 90 times; unset, that part is skipped. Nothing is written outside FOLDER (RVR_CONFIG and
+# matplotlib's caches point inside it); delete FOLDER after.
 set -u
 
 DIR=${1:?usage: walkthrough.sh FOLDER [RVR]}
@@ -62,30 +62,43 @@ edit() {
   [ "$(cat "$1")" != "$before" ] || { echo "edit $1: $2 changed nothing" >&2; exit 1; }
 }
 
-DY=/DYJetsToLL_M-50_TuneCP5_13TeV-amcatnloFXFX-pythia8/RunIISummer20UL18NanoAODv9-106X_upgrade2018_realistic_v16_L1v1-v2/NANOAODSIM
 cd "$DIR/zmumu" || exit 1
 
 # 2. Make your first file
-cat > samples.toml <<EOF
-[[sample]]
-name = "DY"
-dataset = "$DY"
+cat > samples.toml <<'EOF'
+format = "rvr-samples"
+version = 1
+
+[places]
+opendata = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool"
+
+[defaults]
 tree = "Events"
 events = 100_000
+
+[eras]
+
+[[sample]]
+name = "DY"
+label = "Drell-Yan"
+files = "{opendata}/DYJetsToLL.root"
+metadata = { kind = "simulation", xsec = 3503.7, lumi = 11.6 }
 EOF
 cat > recipe.toml <<'EOF'
 format = "rvr-recipe"
 version = 1
 
 [define]
-good_muon = "Muon_pt > 20 and abs(Muon_eta) < 2.4 and Muon_tightId and Muon_pfRelIso04_all < 0.15"
+good_muon = "Muon_pt > 20 and abs(Muon_eta) < 2.4"
 
 [keep]
 two_muons = "count(good_muon) == 2"
+opposite_charge = "sum(Muon_charge[good_muon]) == 0"
 
 [columns]
-branches = ["MET_pt", "nJet"]
+branches = ["nMuon"]
 mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
+pt = "first(pair_pt(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
 
 [totals]
 
@@ -123,14 +136,14 @@ import rowver
 
 f = rowver.open("zmumu.rvr")
 mass = f["mass"].astype(np.float64)
-met = f["MET_pt"].astype(np.float64)
+pt = f["pt"].astype(np.float64)
 ones = np.ones(len(mass))
 
 h = ROOT.TH1D("mass", ";m_{#mu#mu} [GeV];events", 60, 60, 120)
 h.FillN(len(mass), mass, ones)
 
-h2 = ROOT.TH2D("mass_met", ";m_{#mu#mu} [GeV];p_{T}^{miss} [GeV]", 30, 60, 120, 25, 0, 100)
-h2.FillN(len(mass), mass, met, ones)
+h2 = ROOT.TH2D("mass_pt", ";m_{#mu#mu} [GeV];p_{T}^{#mu#mu} [GeV]", 30, 60, 120, 25, 0, 100)
+h2.FillN(len(mass), mass, pt, ones)
 
 c = ROOT.TCanvas("c", "", 1200, 500)
 c.Divide(2)
@@ -147,58 +160,50 @@ else
 fi
 
 # 5. Add a column you forgot
-edit recipe.toml 's/^branches = \["MET_pt", "nJet"\]$/branches = ["MET_pt", "nJet", "Muon_pt"]/'
+edit recipe.toml 's/^branches = \["nMuon"\]$/branches = ["nMuon", "Muon_pt"]/'
 run 5_status status
 run 5_press press
-run 5_status_after status
+run 5_press_current press
 # (the prose's claim: Python reads Muon_pt as an Awkward array)
 py 5_muon_pt_type <<'EOF'
 import rowver
 print(type(rowver.open("zmumu.rvr")["Muon_pt"]))
 EOF
+edit recipe.toml 's/^\[derived\]$/[derived]\nleading_muon_pt = "first(Muon_pt, -1)"/'
+run 5_press_derived press
 
 # 6. Add data and another background
-cat > samples.toml <<EOF
+cat > samples.toml <<'EOF'
+format = "rvr-samples"
+version = 1
+
+[places]
+opendata = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool"
+
 [defaults]
 tree = "Events"
 events = 100_000
-lumi = 31.84                  # fb⁻¹ of 2018D
+metadata = { kind = "simulation", lumi = 11.6 }   # fb⁻¹: Run 2012 B and C
+
+[eras]
 
 [[sample]]
 name = "data"
-dataset = "/SingleMuon/Run2018D-UL2018_MiniAODv2_NanoAODv9-v1/NANOAOD"
-kind = "data"
+label = "Data, Run 2012 B and C"
+files = "{opendata}/Run2012BC_DoubleMuParked_Muons.root"
+metadata = { kind = "data" }
 
 [[sample]]
 name = "DY"
-dataset = "$DY"
-xsec = 6077.22                # pb
+label = "Drell-Yan"
+files = "{opendata}/DYJetsToLL.root"
+metadata = { xsec = 3503.7 }                       # pb
 
 [[sample]]
 name = "TT"
-dataset = "/TTTo2L2Nu_TuneCP5_13TeV-powheg-pythia8/RunIISummer20UL18NanoAODv9-106X_upgrade2018_realistic_v16_L1v1-v1/NANOAODSIM"
-xsec = 88.29
-EOF
-cat > recipe.toml <<'EOF'
-format = "rvr-recipe"
-version = 1
-
-[define]
-good_muon = "Muon_pt > 20 and abs(Muon_eta) < 2.4 and Muon_tightId and Muon_pfRelIso04_all < 0.15"
-
-[keep]
-trigger = "HLT_IsoMu24"
-two_muons = "count(good_muon) == 2"
-
-[columns]
-branches = ["MET_pt", "nJet", "Muon_pt"]
-mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
-weight = "if(sample.kind == 'data', 0 * MET_pt + 1, genWeight * sample.xsec * 1000 * sample.lumi)"
-
-[totals]
-
-[derived]
-leading_muon_pt = "first(Muon_pt, -1)"
+label = "tt̄"
+files = "{opendata}/TTbar.root"
+metadata = { xsec = 225.2 }
 EOF
 run 6_resolve samples resolve samples.toml
 run 6_status status
@@ -211,24 +216,25 @@ format = "rvr-recipe"
 version = 1
 
 [define]
-good_muon = "Muon_pt > 20 and abs(Muon_eta) < 2.4 and Muon_tightId and Muon_pfRelIso04_all < 0.15"
+good_muon = "Muon_pt > 20 and abs(Muon_eta) < 2.4"
 
 [keep]
-trigger = "HLT_IsoMu24"
 two_muons = "count(good_muon) == 2"
+opposite_charge = "sum(Muon_charge[good_muon]) == 0"
 
 [columns]
-branches = ["MET_pt", "nJet", "Muon_pt"]
+branches = ["nMuon", "Muon_pt"]
 mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
-weight = "if(sample.kind == 'data', 0 * MET_pt + 1, genWeight * sample.xsec * 1000 * sample.lumi)"
+pt = "first(pair_pt(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
 
+# Every simulated event of these files weighs 1, so the sum of the weights is the number read.
 [totals]
-sumw = "if(sample.kind == 'data', 0, genWeight)"
+sumw = "1"
 
-# Worked out from the stored muons when it is read.
+# Worked out from what the file holds when it is read.
 [derived]
 leading_muon_pt = "first(Muon_pt, -1)"
-scaled = "if(sample.kind == 'data', weight, weight / sample.sumw)"
+weight = "if(sample.kind == 'data', 1.0, sample.xsec * 1000 * sample.lumi / sample.sumw)"
 EOF
 run 7_press press
 run 7_dump dump zmumu.rvr --columns
@@ -244,11 +250,11 @@ read, total = f.sample_columns["events_read"], f.sample_columns["events_total"]
 share = read[0] / total[0]
 
 bins = np.linspace(60, 120, 31)
-mass, scaled, sample = f["mass"], f["scaled"], f["sample"]
+mass, weight, sample = f["mass"], f["weight"], f["sample"]
 counts, _ = np.histogram(mass[sample == 0], bins)
 plt.errorbar((bins[1:] + bins[:-1]) / 2, counts, yerr=np.sqrt(counts), fmt="ko", label="data")
-plt.hist([mass[sample == 2], mass[sample == 1]], bins, stacked=True, label=["TT", "DY"],
-         weights=[scaled[sample == 2] * share, scaled[sample == 1] * share])
+plt.hist([mass[sample == 2], mass[sample == 1]], bins, stacked=True, label=["tt̄", "Drell-Yan"],
+         weights=[weight[sample == 2] * share, weight[sample == 1] * share])
 plt.xlabel("dimuon mass [GeV]")
 plt.ylabel("events")
 plt.legend()
@@ -267,13 +273,14 @@ perl -pi -e "s{\Q$RVR_CONFIG\E}{~/.config/rvr}g" "$f"
 run 9_press_full press --full
 run 9_validate validate zmumu.rvr
 
-# 11. When something goes wrong: a misspelt branch, then a dataset's wrong version
+# 11. When something goes wrong: a flag mistyped, a misspelt branch, a value the recipe cannot take
+run 11_wrong_use press --event 1000
 edit recipe.toml 's/first\(pair_mass\(Muon_pt\[good_muon\]/first(pair_mass(Muon_ptt[good_muon]/'
-run 11_press_typo press --events 1000
+run 11_press_typo press
 edit recipe.toml 's/Muon_ptt\[good_muon\]/Muon_pt[good_muon]/'
-edit samples.toml 's{^(dataset = "/TTTo2L2Nu_.*_L1v1)-v1/}{$1-v2/}'
-run 11_resolve_typo samples resolve samples.toml
-edit samples.toml 's{^(dataset = "/TTTo2L2Nu_.*_L1v1)-v2/}{$1-v1/}'
+edit recipe.toml 's/^(pt = .*)$/$1\npt_tenths = { value = "first(Muon_pt[good_muon], 0) * 10", stored = "u1" }/'
+run 11_data_error press
+edit recipe.toml 's/^pt_tenths = .*\n//'
 
 # 11. A file with holes: 90 copies of one local skim in three samples; one goes, then comes back
 if [ -z "$SKIM" ] || [ ! -f "$SKIM" ]; then
@@ -291,6 +298,7 @@ version = 1
 [places]
 
 [defaults]
+tree = "SMS_300_200"
 
 [eras]
 
@@ -298,19 +306,16 @@ version = 1
 name = "early"
 label = "first files"
 files = "files/f0?.root"
-tree = "SMS_300_200"
 
 [[sample]]
 name = "middle"
 label = "middle files"
 files = ["files/f1?.root", "files/f2?.root", "files/f3?.root"]
-tree = "SMS_300_200"
 
 [[sample]]
 name = "late_and_long_named_sample"
 label = "the rest"
 files = ["files/f4?.root", "files/f5?.root", "files/f6?.root", "files/f7?.root", "files/f8?.root", "files/f9?.root"]
-tree = "SMS_300_200"
 EOF
 cat > recipe.toml <<'EOF'
 format = "rvr-recipe"
@@ -333,6 +338,6 @@ run 11_holes_resolve samples resolve samples.toml
 rm files/f45.root
 run 11_holes_press press
 run 11_holes_status status
-ln "$SKIM" files/f45.root 2> /dev/null || ln -s "$SKIM" files/f45.root
+ln "$SKIM" files/f45.root 2> /dev/null || cp "$SKIM" files/f45.root
 run 11_holes_fill press --fill
 run 11_holes_validate validate three.rvr --complete

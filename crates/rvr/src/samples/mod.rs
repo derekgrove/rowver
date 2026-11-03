@@ -399,11 +399,13 @@ impl Choice {
 
     /// The options in words.
     pub fn said(&self) -> String {
+        let seed = self.seed.map_or(String::new(), |seed| format!(" --seed {seed}"));
         match (self.events.as_deref(), self.random) {
+            (None, false) if self.seed.is_some() => format!("{}: as samples.toml asks, with that seed for a random choice", seed.trim_start()),
             (None, false) => "as samples.toml asks".to_string(),
             (Some("all"), _) => "--events all: every sample whole".to_string(),
-            (Some(n), r) => format!("--events {n}{}", if r { " --random" } else { "" }),
-            (None, true) => "--random: each sample's own number, chosen at random".to_string(),
+            (Some(n), r) => format!("--events {n}{}{seed}", if r { " --random" } else { "" }),
+            (None, true) => format!("--random{seed}: each sample's own number, chosen at random"),
         }
     }
 

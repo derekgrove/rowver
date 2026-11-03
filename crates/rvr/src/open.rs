@@ -126,14 +126,16 @@ pub(crate) fn changed(file: &File, bytes: Option<u64>, adler32: Option<String>) 
 
 /// Check one input against the lock and open it, local or remote; a failure says what it means
 /// for the file.
-pub(crate) fn open(reach: &Reach, file: &File) -> Result<RootFile<Held>, Failed> {
+/// It is read from `read_at`, where the Plan says it is: its local path, or its door's HTTPS URL; the
+/// lock's name for it is what every message says.
+pub(crate) fn open(reach: &Reach, file: &File, read_at: &str) -> Result<RootFile<Held>, Failed> {
     let at = &file.at;
     // No usable grid proxy is not the file's fault: every remote file would fail the same.
     let offline = || Failed::new(Fault::Save, format!("{at}: {}", reach.offline));
     let again = Some((READING, reach.watch.clone()));
-    if !at.contains("://") {
+    if !read_at.contains("://") {
         // A relative path is the lock's own: relative to the study folder.
-        let path = resolve::local(at, reach.dir);
+        let path = resolve::local(read_at, reach.dir);
         // A file whose folder is not there either may be on a disk not mounted: not the file's fault.
         let folder = path.parent().is_none_or(Path::exists);
         let meta = std::fs::metadata(&path).map_err(|e| match e.kind() {
@@ -163,17 +165,17 @@ pub(crate) fn open(reach: &Reach, file: &File) -> Result<RootFile<Held>, Failed>
         return opened(file, Box::new(local), None, None, &reach.read);
     }
     let storage = reach.storage.ok_or_else(offline)?;
+    let https = read_at;
     // The storage's size and adler32 are asked while the file is opened at the size the lock
     // gives; a changed file is reported before anything the opening found.
     std::thread::scope(|scope| {
         let agent = storage.agent();
         let digest = scope.spawn(move || {
-            digest_seen(&agent, at, storage.waits, storage.proxy.is_some(), &storage.watch)
+            digest_seen(&agent, at, https, storage.waits, storage.proxy.is_some(), &storage.watch)
         });
         let seen = Arc::new(Seen::default());
-        let root = HttpsFile::new(storage, at, file.bytes)
-            .map_err(|why| Failed::new(Fault::Unreachable, why))
-            .and_then(|remote| opened(file, Box::new(remote.seeing(&seen)), again, Some(seen), &reach.read));
+        let remote = HttpsFile::reading(storage, at, https, file.bytes);
+        let root = opened(file, Box::new(remote.seeing(&seen)), again, Some(seen), &reach.read);
         let (bytes, adler32) = digest
             .join()
             .map_err(|_| Failed::new(Fault::Bug, format!("{at}: asking its storage stopped unexpectedly")))??;
@@ -206,7 +208,11 @@ pub(crate) fn first_readable<'a>(lock: &'a Lock, sample: usize, dir: &Path) -> R
     let (storage, offline) = connect(&[(sample, file)], &watch);
     let read = Default::default();
     let reach = Reach { storage: storage.as_ref(), offline: &offline, dir, watch, whole: false, read };
-    open(&reach, file).map(|root| (root, file)).map_err(|failed| failed.why)
+    let url = match file.at.contains("://") {
+        true => crate::samples::remote::https(&file.at)?,
+        false => file.at.clone(),
+    };
+    open(&reach, file, &url).map(|root| (root, file)).map_err(|failed| failed.why)
 }
 
 /// Open a checked input and refuse one whose ROOT UUID is not the lock's; `again`, `seen` and

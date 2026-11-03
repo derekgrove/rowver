@@ -65,7 +65,8 @@ fn samples(header: &Value, lock: &Lock, recipe: &Recipe, reads: &Reads) -> Resul
         let place = format!("made.files[{name:?}]");
         let source = &made["files"][name];
         // A first-N choice leaves out each file with entries that none of the N was left for.
-        let mut left = match Events::read(&source["events"])? {
+        let events = Events::read(&source["events"])?;
+        let mut left = match events {
             Events::First(n) => n,
             _ => u64::MAX,
         };
@@ -78,6 +79,18 @@ fn samples(header: &Value, lock: &Lock, recipe: &Recipe, reads: &Reads) -> Resul
         let wanted: Vec<&str> = want.iter().map(|f| f.at.as_str()).collect();
         if paths != wanted {
             return Err(invalid(format!("data.files lists of sample {name} {paths:?}, and it lists the lock's files of the sample in its order, leaving out each one the first N never reached (its stop would be 0): {wanted:?} (docs/FORMAT.md §3): {MEND}")));
+        }
+        // Each file's random take, against the choice the file made again (identity::choices)
+        // when it is the lock's own, else made again here.
+        if let Events::Random { n, seed } = locked.events {
+            let counts = match events == locked.events {
+                true => locked.files.iter().map(|f| match reads.get(&(name, f.at.as_str())) {
+                    Some((super::identity::Read::Chosen(chosen), _)) => Ok(chosen.len() as u64),
+                    _ => Err(invalid(format!("a bug in rowver: the random choice of sample {name} was made again without {} (data.files lists it): please report it", f.at))),
+                }).collect::<Result<Vec<u64>>>()?,
+                false => crate::choice::counts(&locked.files.iter().map(|f| f.entries).collect::<Vec<_>>(), n, seed),
+            };
+            locked.takes(&counts).map_err(|why| invalid(format!("made.lock.text: {why}")))?;
         }
         for file in want {
             let at = format!("{place}.files[{:?}]", file.at);

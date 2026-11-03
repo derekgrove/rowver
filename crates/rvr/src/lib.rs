@@ -38,7 +38,8 @@ pub use texts::read_recipe;
 
 const USAGE: &str = "usage:
   rvr new DIR                              start a study: samples.toml, recipe.toml, .gitignore
-  rvr samples COMMAND ...                  what a study reads (rvr samples, alone, lists them)
+  rvr samples expand|resolve|check|plan ...
+                                           what a study reads (rvr samples alone lists them)
   rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N] [--full]
             [--fill [KINDS]] [--restart]
                                            press the study in DIR (.) into DIR/<its name>.rvr;
@@ -65,8 +66,13 @@ const USAGE: &str = "usage:
                                            let a file's columns go, keeping its header to refill
   rvr refill FILE [--study FOLDER] [--workers N]
                                            press an empty file's columns again from its study
-  rvr key new|show|trust ...               the key that signs your files; keys you trust
-  rvr proxy [init]                         your grid proxy's state; make one from ~/.globus";
+  rvr key new [NAME]                       make the key that signs your files
+  rvr key show                             your public key
+  rvr key trust KEY NAME...                trust files signed by KEY, as NAME's
+  rvr proxy                                your grid proxy's state
+  rvr proxy init [--hours H]               make a cms proxy from ~/.globus (H: 1 to 720, 192)
+  rvr --version                            this rvr's version, and the commit it was built from
+  rvr, rvr help, rvr --help                this usage";
 
 /// The usage of the commands that keep none of their own.
 const NEW: &str = "usage:\n  rvr new DIR    start a study in DIR: samples.toml, recipe.toml and .gitignore";
@@ -78,27 +84,27 @@ const DIFF: &str = "usage:\n  rvr diff A B    where two files differ, from their
 /// Every command: its name after `rvr`, its flags, its words.
 const COMMANDS: &[Command] = &[
     Command { name: "new", flags: &[], words: (1, 1, "one folder, DIR"), dashes: false, usage: NEW },
-    Command { name: "samples expand", flags: &[("--json", No)], words: (1, 1, "one samples.toml"), dashes: false, usage: samples::USAGE },
+    Command { name: "samples expand", flags: &[("--json", No, None)], words: (1, 1, "one samples.toml"), dashes: false, usage: samples::USAGE },
     Command { name: "samples resolve", flags: &[], words: (1, 1, "one samples.toml"), dashes: false, usage: samples::USAGE },
     Command { name: "samples check", flags: &[], words: (1, 1, "one samples.lock"), dashes: false, usage: samples::USAGE },
-    Command { name: "samples plan", flags: &[("--events", Value), ("--random", No), ("--seed", Value)], words: (1, 1, "one samples.lock"), dashes: false, usage: samples::USAGE },
-    Command { name: "branches", flags: &[("--sample", Value), ("--find", Value)], words: (0, 1, "at most one study folder"), dashes: false, usage: branches::USAGE },
-    Command { name: "try", flags: &[("--events", Value), ("--sample", Value), ("--kept", No)], words: (1, 2, "one expression and at most one study folder"), dashes: true, usage: trying::USAGE },
-    Command { name: "press", flags: &[("--events", Value), ("--random", No), ("--seed", Value), ("--out", Value), ("--workers", Value), ("--full", No), ("--fill", Kinds), ("--restart", No)], words: (0, 1, "at most one study folder"), dashes: false, usage: press::USAGE },
-    Command { name: "status", flags: &[("--out", Value), ("--events", Value), ("--random", No), ("--seed", Value), ("--holes", No)], words: (0, 1, "at most one study folder"), dashes: false, usage: status::USAGE },
-    Command { name: "derive", flags: &[("--drop", No), ("--rename", No)], words: (2, usize::MAX, "a file and what to change of it"), dashes: false, usage: derive::USAGE },
-    Command { name: "validate", flags: &[("--complete", No)], words: (1, usize::MAX, "the files to check"), dashes: false, usage: VALIDATE },
-    Command { name: "dump", flags: &[("--files", No), ("--recipe", No), ("--samples", No), ("--lock", No), ("--columns", No), ("--all", No)], words: (1, 1, "one file"), dashes: false, usage: DUMP },
+    Command { name: "samples plan", flags: &[("--events", Value, None), ("--random", No, None), ("--seed", Value, None)], words: (1, 1, "one samples.lock"), dashes: false, usage: samples::USAGE },
+    Command { name: "branches", flags: &[("--sample", Value, None), ("--find", Value, None)], words: (0, 1, "at most one study folder"), dashes: false, usage: branches::USAGE },
+    Command { name: "try", flags: &[("--events", Value, None), ("--sample", Value, None), ("--kept", No, None)], words: (1, 2, "one expression and at most one study folder"), dashes: true, usage: trying::USAGE },
+    Command { name: "press", flags: &[("--events", Value, None), ("--random", No, None), ("--seed", Value, None), ("--out", Value, None), ("--workers", Value, None), ("--full", No, None), ("--fill", Kinds, None), ("--restart", No, None)], words: (0, 1, "at most one study folder"), dashes: false, usage: press::USAGE },
+    Command { name: "status", flags: &[("--out", Value, None), ("--events", Value, None), ("--random", No, None), ("--seed", Value, None), ("--holes", No, None)], words: (0, 1, "at most one study folder"), dashes: false, usage: status::USAGE },
+    Command { name: "derive", flags: &[("--drop", No, None), ("--rename", No, None)], words: (2, usize::MAX, "a file and what to change of it"), dashes: false, usage: derive::USAGE },
+    Command { name: "validate", flags: &[("--complete", No, None)], words: (1, usize::MAX, "the files to check"), dashes: false, usage: VALIDATE },
+    Command { name: "dump", flags: &[("--files", No, None), ("--recipe", No, None), ("--samples", No, None), ("--lock", No, None), ("--columns", No, None), ("--all", No, None)], words: (1, 1, "one file"), dashes: false, usage: DUMP },
     Command { name: "header", flags: &[], words: (1, 1, "one file"), dashes: false, usage: HEADER },
     Command { name: "diff", flags: &[], words: (2, 2, "two files, A and B"), dashes: false, usage: DIFF },
-    Command { name: "reproduce", flags: &[("--study", Value), ("--workers", Value)], words: (1, 2, "a file and at most one folder"), dashes: false, usage: reproduce::USAGE },
-    Command { name: "empty", flags: &[("--study", Value), ("--anyway", No), ("--force", No), ("-f", No)], words: (1, usize::MAX, "the files to empty"), dashes: false, usage: empty::USAGE },
-    Command { name: "refill", flags: &[("--study", Value), ("--workers", Value)], words: (1, 1, "one file"), dashes: false, usage: empty::USAGE },
+    Command { name: "reproduce", flags: &[("--study", Value, None), ("--workers", Value, None)], words: (1, 2, "a file and at most one folder"), dashes: false, usage: reproduce::USAGE },
+    Command { name: "empty", flags: &[("--study", Value, None), ("--anyway", No, None), ("--force", No, Some("-f"))], words: (1, usize::MAX, "the files to empty"), dashes: false, usage: empty::USAGE },
+    Command { name: "refill", flags: &[("--study", Value, None), ("--workers", Value, None)], words: (1, 1, "one file"), dashes: false, usage: empty::USAGE },
     Command { name: "key new", flags: &[], words: (0, 1, "at most one name"), dashes: false, usage: key::USAGE },
     Command { name: "key show", flags: &[], words: (0, 0, "no words"), dashes: false, usage: key::USAGE },
     Command { name: "key trust", flags: &[], words: (2, usize::MAX, "a key and its owner's name"), dashes: false, usage: key::USAGE },
     Command { name: "proxy", flags: &[], words: (0, 0, "no words but init"), dashes: false, usage: proxy::USAGE },
-    Command { name: "proxy init", flags: &[("--hours", Value)], words: (0, 0, "no words"), dashes: false, usage: proxy::USAGE },
+    Command { name: "proxy init", flags: &[("--hours", Value, None)], words: (0, 0, "no words"), dashes: false, usage: proxy::USAGE },
     Command { name: "help", flags: &[], words: (0, 0, "no words"), dashes: false, usage: USAGE },
 ];
 
@@ -197,7 +203,7 @@ fn first_word(args: &[&str]) -> Option<usize> {
         if !word.starts_with('-') {
             return Some(at);
         }
-        let takes = COMMANDS.iter().flat_map(|c| c.flags).filter(|(flag, _)| flag == word).map(|(_, takes)| *takes).next();
+        let takes = COMMANDS.iter().flat_map(|c| c.flags).filter(|(flag, _, short)| flag == word || *short == Some(*word)).map(|(_, takes, _)| *takes).next();
         at += match takes {
             Some(Value) => 2,
             Some(Kinds) if args.get(at + 1).is_some_and(|next| options::kinds(next)) => 2,
@@ -329,8 +335,8 @@ fn validate(words: &[&str], complete: bool) -> u8 {
             };
             let read = match entries_read(&summary.header["made"]) {
                 (1, 1) => "read its 1 entry, ".to_owned(),
-                (read, total) if read == total => format!("read all {total} entries, "),
-                (read, total) => format!("read {read} of {}, ", samples::some(total as usize, "entry", "entries")),
+                (read, total) if read == total => format!("read all {} entries, ", press::count(total)),
+                (read, total) => format!("read {} of {}, ", press::count(read), samples::some(total as usize, "entry", "entries")),
             };
             let holes = rowver::rvr::holes(&summary.header);
             let empty = match summary.empty {
@@ -387,4 +393,20 @@ fn said(file: &str, verdict: &Result<(usize, usize, String), String>) -> bool {
         Err(why) => println!("{file}: INVALID: {why}"),
     }
     verdict.is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    /// A short flag is in its command's usage, and in rvr's, beside its long one.
+    #[test]
+    fn every_short_flag_is_in_the_usage_beside_its_long_one() {
+        for command in super::COMMANDS {
+            for (name, _, short) in command.flags {
+                if let Some(short) = short {
+                    let beside = format!("[{name} | {short}]");
+                    assert!(command.usage.contains(&beside) && super::USAGE.contains(&beside), "{}: {beside}", command.name);
+                }
+            }
+        }
+    }
 }

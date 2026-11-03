@@ -21,7 +21,7 @@ pub(crate) const USAGE: &str = "usage:
 
 /// `rvr empty` with its options: the exit status, the worst of its files'.
 pub fn empty_main(options: &Options) -> u8 {
-    let force = options.has("--force") || options.has("-f");
+    let force = options.has("--force");
     if !force && !crate::at_terminal() {
         return said(Err("nothing was emptied: rvr empty asks before it lets a file's columns go, and no one is at a terminal to answer. Give --force (or -f) to empty without asking.".into()), "empty");
     }

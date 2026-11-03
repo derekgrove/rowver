@@ -400,6 +400,15 @@ fn reachable(file: &str, place: &str, p: &mut Problems) {
     if file.contains("://") && !["root://", "davs://", "https://"].iter().any(|s| file.starts_with(s)) {
         p.say(format!("{place}: {file:?} is not a form rvr reads: a local path, or a URL starting root://, davs:// or https://"));
     }
+    let query = (file.starts_with("https://") || file.starts_with("davs://")) && file.find('?').is_some_and(|at| file[at..].contains('='));
+    if query {
+        p.say(format!("{place}: {file} has a query: rvr names a storage file by its path: drop the query; storage access goes by your grid proxy"));
+        return;
+    }
+    let folder = super::split(file).0;
+    if folder.contains(['*', '?']) {
+        p.say(format!("{place}: {file}: its folder, {folder}, holds * or ?, which rvr reads only in a file's name (a pattern), never in a folder: rename the folder, or link it under a name without them, and write that name"));
+    }
 }
 
 /// Check the `metadata` table of `table`, when it has one.
@@ -617,6 +626,10 @@ mod tests {
         assert!(p("name = \"a\"\nfiles = \"x}\"\ntree = \"T\"").contains("no '{' before it"));
         let url = p("name = \"a\"\nfiles = \"xroot://h//x.root\"\ntree = \"T\"");
         assert!(url.contains("not a form rvr reads") && !url.contains("nonempty list"), "{url}");
+        assert!(p("name = \"a\"\nfiles = \"d*/x.root\"\ntree = \"T\"").contains("d*/x.root: its folder, d*, holds * or ?, which rvr reads only in a file's name (a pattern), never in a folder: rename the folder"));
+        let query = p("name = \"a\"\nfiles = \"https://h.org/d/x.root?authz=a/b\"\ntree = \"T\"");
+        assert!(query.contains("has a query: rvr names a storage file by its path: drop the query") && !query.contains("its folder"), "{query}");
+        assert!(read(&format!("{HEAD}[[sample]]\nname = \"a\"\nfiles = \"https://h.org/d/x?.root\"\ntree = \"T\"")).is_ok(), "a ? in the file name is a pattern");
         let placed = problems(&format!("{}[[sample]]\nname = \"a\"\nfiles = \"{{x}}/f.root\"\ntree = \"T\"", HEAD.replace("[places]\n", "[places]\nx = \"xroot://h//d\"\n")));
         assert!(placed.contains("\"xroot://h//d/f.root\" is not a form rvr reads"), "{placed}");
         assert!(problems(&HEAD.replace("[places]\n", "[places]\nfile = \"x\"\n")).contains("{file} is rvr's"));

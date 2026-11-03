@@ -168,7 +168,7 @@ fn every_command_reads_its_options_one_way_and_refuses_wrong_use_with_2() {
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     // The command is the first argument that names one, flags before it or not.
     let (code, said) = rvr(&dir, &["--holes", "status"]);
-    assert!(code == 1 && said.contains("is not there: rvr press makes it"), "{said}");
+    assert!(code == 1 && said.contains("is not there yet: rvr press makes it"), "{said}");
     let (code, said) = rvr(&dir, &["--out", "x.rvr", "status"]);
     assert!(code == 1 && said.contains("x.rvr is not there"), "a flag's value is passed over: {said}");
     // A word that names no command is refused, never read past for one that does.
@@ -196,13 +196,21 @@ fn every_command_reads_its_options_one_way_and_refuses_wrong_use_with_2() {
         let (code, said) = rvr(&dir, args);
         assert!(code == 2 && said.contains(&format!("Did you mean: {near}?")) && said.contains("usage:"), "{args:?}: {said}");
     }
-    for args in [&["header", "a", "b"][..], &["diff", "a"], &["new"], &["key", "show", "x"], &["press", "--events=5"], &["press", "--random", "--random"], &["press", "--out"], &["press", "--workers", "0"], &["proxy", "init", "--hours", "721"]] {
+    for args in [&["header", "a", "b"][..], &["diff", "a"], &["new"], &["key", "show", "x"], &["press", "--events=5"], &["press", "--random", "--random"], &["press", "--out"], &["press", "--workers", "0"], &["proxy", "init", "--hours", "721"], &["try", "nJet", "--events", "9223372036854775808"], &["empty", "x.rvr", "-f", "--force"]] {
         let (code, said) = rvr(&dir, args);
         assert!(code == 2 && said.contains(&format!("rvr {}", args[0])), "{args:?}: {said}");
+    }
+    // The usage names every command and flag of SPEC §5.2.
+    let (code, said) = rvr(&dir, &["help"]);
+    for part in ["rvr samples plan", "--hours H", "rvr key trust KEY NAME", "rvr key show", "rvr --version", "--force | -f", "--all", "--holes"] {
+        assert!(code == 0 && said.contains(part), "{part}: {said}");
     }
     // A count may hold _ between its digits.
     let (code, said) = rvr(&dir, &["press", "--events", "50_000"]);
     assert!(code == 0 && said.contains("Pressing 1 sample, 1 file, 5 entries"), "{said}");
+    // The plan's first line names every option given, the seed too.
+    let (code, said) = rvr(&dir, &["samples", "plan", "samples.lock", "--events", "3", "--random", "--seed", "8"]);
+    assert!(code == 0 && said.contains("(--events 3 --random --seed 8)"), "{said}");
     // The word after --fill is KINDS when every part is a kind, a folder of that name or not.
     std::fs::create_dir(dir.join("gone")).unwrap();
     let (code, said) = rvr(&dir, &["press", "--fill", "gone"]);
@@ -271,4 +279,33 @@ fn header_prints_its_bytes_and_diff_and_derive_say_what_they_find() {
     assert_eq!(rvr(&dir, &["key", "new", "Other"]).0, 0);
     let (code, said) = rvr(&dir, &["derive", &target(&dir), "twice = nJet * 2"]);
     assert!(code == 0 && said.contains("which replaces the signature of key ") && said.contains("which you do not trust"), "{said}");
+}
+
+#[test]
+fn a_lock_whose_random_takes_are_not_the_choices_shares_is_refused() {
+    let samples = TWICE.replace("tree = \"analysis\"\n", "tree = \"analysis\"\nevents = 3\nchoose = \"random\"\nseed = 7\n");
+    let dir = study("takes", &samples, &recipe("", "branches = [\"nJet\"]"));
+    for copy in ["flat_a.root", "flat_b.root"] {
+        std::fs::copy(dir.join("uproot_flat.root"), dir.join(copy)).unwrap();
+    }
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let lock = std::fs::read_to_string(dir.join("samples.lock")).unwrap();
+    let takes: Vec<&str> = lock.lines().filter(|l| l.starts_with("take = ")).collect();
+    assert!(takes.len() == 2 && takes[0] != takes[1], "seed 7 splits 3 of 10 unevenly: {takes:?}");
+    // Swapped, they add up as before, and neither is its file's share.
+    let swapped = lock.replacen(takes[0], "TAKE", 1).replacen(takes[1], takes[0], 1).replacen("TAKE", takes[1], 1);
+    std::fs::write(dir.join("samples.lock"), swapped).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 1 && said.contains("samples.lock does not check out: sample flat's file ./flat_a.root has take"), "{said}");
+}
+
+#[test]
+fn a_storage_host_with_no_door_hides_no_problem_of_the_recipe() {
+    let dir = study("doorless", FLAT, &recipe("", "branches = [\"nJett\"]"));
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let lock = std::fs::read_to_string(dir.join("samples.lock")).unwrap();
+    let far = lock.replace("./uproot_flat.root", "root://no-door.invalid//d/uproot_flat.root").replace("[\"uproot_flat.root\"]", "[\"root://no-door.invalid//d/uproot_flat.root\"]");
+    std::fs::write(dir.join("samples.lock"), far).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 1 && said.contains("no-door.invalid has no WebDAV door") && said.contains("nJett"), "{said}");
 }

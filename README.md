@@ -30,7 +30,7 @@ magic (8 bytes) | header length (4 bytes) | JSON header | compressed arrays
 The first bytes of a real file, `higgs_tautau.rvr` from the tutorial below:
 
 ```text
-00000000: 8952 5652 0d0a 1a0a 8234 0000 7b22 726f  .RVR.....4..{"ro
+00000000: 8952 5652 0d0a 1a0a 2b46 0000 7b22 726f  .RVR....+F..{"ro
 00000010: 7776 6572 223a 3135 2c22 6461 7461 223a  wver":15,"data":
 00000020: 7b22 726f 7773 223a 3232 3438 2c22 7361  {"rows":2248,"sa
 ```
@@ -73,10 +73,10 @@ marks what was cut, and checksums are shortened.
   "made": {
     "study": "higgs_tautau",
     "title": "higgs_tautau",
-    "built": "2026-10-30T19:26:52Z",
+    "built": "2026-11-03T19:54:12Z",
     "by": "rvr 15.0.0",
-    "toolchain": {"rvr": "15.0.0", "rowver": "15", "commit": "e192f78f…", "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
-    "recipe":  {"sha256": "6dabf117…", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
+    "toolchain": {"rvr": "15.0.0", "rowver": "15", "commit": "76ab18e2…", "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
+    "recipe":  {"sha256": "fcc933cd…", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
                 "columns": ["run", "luminosityBlock", "event", "PV_npvs", "MET_pt", "MET_phi", "Muon_pt", "Muon_eta", "Tau_pt", "Tau_eta", "Jet_pt"]},
     "samples": {"sha256": "…", "text": "…the whole samples.toml…"},
     "lock":    {"sha256": "…", "text": "…the whole samples.lock…"},
@@ -89,7 +89,7 @@ marks what was cut, and checksums are shortened.
       },
       …
     },
-    "sha256": "a0400d45…"
+    "sha256": "bb582c6c…"
   }
 }
 ```
@@ -115,12 +115,14 @@ marks what was cut, and checksums are shortened.
 This uses two Higgs-to-tau-tau samples from CMS Open Data, which anyone can read without a grid
 proxy. Every output below is from a real run.
 
-**1. Install `rvr`.** Download it from the [releases](https://gitlab.cern.ch/dgrove/rowver/-/releases)
-(Linux x86_64 with glibc 2.28 or later, so the LPC and lxplus, and macOS), or, with Rust 1.91 or
-later:
+**1. Install `rvr`.** `pip install rowver` installs the Python package and the `rvr` command with
+it (Python 3.11 or later). Or download the `rvr` binary alone from the
+[releases](https://gitlab.cern.ch/dgrove/rowver/-/releases) (Linux x86_64 with glibc 2.28 or later,
+so the LPC and lxplus, and macOS). Building from a checkout is for developers:
+[the setup page](docs/SETUP.md) says how.
 
 ```sh
-cargo install --locked rvr
+pip install rowver
 rvr --version
 ```
 
@@ -138,7 +140,8 @@ $ cd higgs_tautau
 ```
 
 `samples.toml` names each sample, its files and tree, and any metadata to carry along (here
-`kind`), after a header and three tables that every samples.toml has:
+`kind`), after a header and three tables that every samples.toml has (shown without its comments,
+and with the first of its two samples):
 
 ```toml
 format = "rvr-samples"
@@ -159,9 +162,13 @@ files = "{opendata}/GluGluToHToTauTau.root"
 metadata = { kind = "signal" }
 ```
 
-`recipe.toml` says which events to keep and what to store of them:
+`recipe.toml` says which events to keep and what to store of them (shown without its comments):
 
 ```toml
+format = "rvr-recipe"
+version = 1
+title = "higgs_tautau"
+
 [define]
 good_muon = "Muon_tightId and Muon_pfRelIso04_all < 0.15 and Muon_pt > 20 and abs(Muon_eta) < 2.1"
 good_tau = "Tau_idDecayMode and Tau_idIsoTight and Tau_idAntiMuTight and Tau_pt > 20 and abs(Tau_eta) < 2.3"
@@ -174,15 +181,17 @@ a_good_tau = "count(good_tau) >= 1"
 [columns]
 branches = ["run", "luminosityBlock", "event", "PV_npvs", "MET_pt", "MET_phi", "Muon_pt", "Muon_eta", "Tau_pt", "Tau_eta", "Jet_pt"]
 
+[totals]
+
 [derived]
-# ht = "sum(Jet_pt)"
 ```
 
 Each value in quotes is an expression over the event's branches, each named in full. `[define]`
 names the muons and taus that pass their conditions, and the `[keep]` cuts count them. What is
 stored is only what `[columns]` names, so `Muon_pt` holds every muon of each kept event.
-`[derived]` is empty here: a line there would be a column kept as its expression, worked out when
-it is read. The
+`[totals]` and `[derived]` are empty here: a line under `[totals]` would be a sum over every event
+read, before the cuts, and one under `[derived]` a column kept as its expression, worked out when
+it is read. Every recipe writes all five tables, even empty. The
 [recipe reference](crates/rvr-recipe/README.md) explains every part, with examples.
 
 **3. Find the inputs.** No event is read yet. This writes `samples.lock`, which pins every file.
@@ -192,7 +201,7 @@ $ rvr samples resolve samples.toml
   ok    GluGluToHToTauTau                          1 file    196.5 MB   all 476,963 events
   ok    VBF_HToTauTau                              1 file    231.8 MB   all 491,653 events
 
-2 samples, 2 distinct files, 428.4 MB in 1.9 s.
+2 samples, 2 distinct files, 428.4 MB in 1.6 s.
 …
 Wrote samples.lock (0.0 MB).
 ```
@@ -203,8 +212,8 @@ look. Leave it out to read every event, or add `--random --seed 7` to choose the
 ```text
 $ rvr press --events 50000
 Pressing 2 samples, 2 files, 100,000 entries, 2 at a time:
-  1/2       50,000 entries      1,300 kept   VBF_HToTauTau.root
-  2/2       50,000 entries        948 kept   GluGluToHToTauTau.root
+  1/2       50,000 entries        948 kept   GluGluToHToTauTau.root
+  2/2       50,000 entries      1,300 kept   VBF_HToTauTau.root
 Read 100,000 entries; kept after each cut:
   trigger                                8,590
   a_good_muon                            6,650
@@ -216,7 +225,7 @@ Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 2.8 s.
 
 ```text
 $ rvr validate higgs_tautau.rvr
-higgs_tautau.rvr: valid, 2248 rows, 11 columns, read 100000 of 968616 entries, not signed
+higgs_tautau.rvr: valid, 2248 rows, 11 columns, read 100,000 of 968,616 entries, not signed
 $ rvr dump higgs_tautau.rvr --columns
 sample          i4[2248]  [0, 0, 0, 0, 0, ...]
 entry           i8[2248]  [29, 45, 140, 157, 162, ...]
@@ -230,8 +239,7 @@ Muon_pt         jagged f4[2248]  [[44.166725], [20.321072], [60.48154], ...]
 …
 ```
 
-**6. Read it in Python.** Build the package from a checkout of this repository with
-`pip install ./crates/rowver-py`, then:
+**6. Read it in Python.** The package `rowver` installed in step 1 reads it:
 
 ```text
 >>> import rowver
@@ -255,21 +263,21 @@ $ rvr reproduce higgs_tautau.rvr
 Wrote higgs_tautau.reproduced/ with the recipe.toml, samples.toml and samples.lock higgs_tautau.rvr holds.
 …
 Comparing the two with rvr diff:
-The headers show no difference in rows, samples, columns, derived columns, by_sample or sample columns.
+The headers show no difference in rows, samples, labels, columns, derived columns, by_sample or sample columns.
 ```
 
 [The introduction](docs/INTRO.md) says what a `.rvr` file is and why it speeds up an
-analysis. [The examples](docs/examples/README.md) take one study from a first file to a finished plot, with
-central datasets from DAS: histograms in Python and ROOT, a column added later, data and
-simulation together, reading more events, sharing and signing, your own ntuples, and what to do
-when something goes wrong, every output from a real run.
+analysis. [The examples](docs/examples/README.md) take one study of CMS Open Data from a first
+file to a finished plot: histograms in Python and ROOT, a column added later, data and simulation
+together, reading more events, sharing and signing, your own ntuples, and what to do when
+something goes wrong, every output from a real run.
 
-To use your own data, edit `samples.toml` and `recipe.toml`, then repeat steps 3 to 5. LPC EOS,
-most CERN EOS areas and central datasets need a grid proxy first: `rvr proxy init` makes one
-from your certificate in `~/.globus`. Run `rvr key new` once to sign every file you press.
+To use your own data, edit `samples.toml` and `recipe.toml`, then repeat steps 3 to 5. Files on
+LPC EOS and most CERN EOS areas need a grid proxy first: `rvr proxy init` makes one from your
+certificate in `~/.globus`. Run `rvr key new` once to sign every file you press.
 The [recipe reference](crates/rvr-recipe/README.md) lists everything a recipe can say, each with an
-example and its result, and the [rvr README](crates/rvr/README.md) describes every command and
-every key of `samples.toml`.
+example and its result, [the specification](docs/SPEC.md) every key of `samples.toml` and every
+rule of a press, and the [rvr README](crates/rvr/README.md) describes every command.
 
 ## What is in this repository
 
@@ -281,8 +289,9 @@ every key of `samples.toml`.
 | [`crates/rowver`](crates/rowver/README.md) | the Rust library that reads, validates and writes `.rvr` files; the reference builder of the format |
 | [`docs/INTRO.md`](docs/INTRO.md) | what a `.rvr` file is, and why it makes an analysis fast |
 | [`docs/SETUP.md`](docs/SETUP.md) | install `rvr` and `rowver`, and make a grid proxy on your laptop |
-| [`docs/examples`](docs/examples/README.md) | your first `.rvr` file, step by step, from DAS datasets to plots, and example studies, each checked to press |
+| [`docs/examples`](docs/examples/README.md) | your first `.rvr` file, step by step, from CMS Open Data to plots, and example studies, each checked to press |
 | [`docs/FEATURES.md`](docs/FEATURES.md) | every feature of RowVer, and the measurements behind its design |
+| [`docs/SPEC.md`](docs/SPEC.md) | what RowVer does, statement by statement: its inputs, a press, every command, the Python package |
 | [`docs/FORMAT.md`](docs/FORMAT.md) | the `.rvr` specification, shown on a real file |
 
 It reads ROOT with [hep-root](https://crates.io/crates/hep-root) and reaches the grid with

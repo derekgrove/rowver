@@ -21,7 +21,8 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-/// How often finished inputs are made durable (a sync costs ~9 ms on macOS, too much per file).
+/// How often finished inputs are made durable (a sync costs ~4 ms on macOS, and a checkpoint
+/// makes two: too much per file).
 pub const EVERY: Duration = Duration::from_secs(2);
 
 /// The journal's name in the folder, and the spool's.

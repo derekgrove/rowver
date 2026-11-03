@@ -1,67 +1,87 @@
-# Step by step "rowver-vication" 
+# Step by step "rowver-vication"
 
 This file walks you through making plots and embedding `.rvr` files into your analysis framework. To learn why `.rvr` exists and how it speeds up an analysis, [read the introduction](../INTRO.md).
 
+## 1. Before you start
 
-## 0. Before you start
+`rvr` is meant to run on your own laptop, reading ROOT files straight from where they are stored:
+on your computer, or on grid storage over HTTPS. This guide reads CMS Open Data, which anyone can
+read with no grid certificate or proxy, so all you need is `rvr` and the Python package. Your own
+files on grid storage need a grid proxy (step 10). Another idea is to press (create) the `.rvr`
+file on a remote machine close to the files (like CMS LPC), and copy it to your laptop.
 
-`rvr` is meant to run on your own laptop, reading CMS datasets straight from grid storage. Another idea is to press (create) the `.rvr` file(s) on a remote machine (like CMS LPC) and then copy it to your local machine. Why you might want to do that is by getting the code closer to the `.root` files, the `.rvr` file could be created faster than loading files over then network, but this is not always the case. 
-
-If you don't have `rvr` or your grid proxy installed, set it
-up once by following the instructions in [the setup section](../SETUP.md):
+If you don't have `rvr` yet, set it up once by following [the setup page](../SETUP.md):
 
 1. [Install rvr and rowver](../SETUP.md#1-install-rvr-and-rowver)
-2. [Install your grid certificate on your laptop](../SETUP.md#2-install-your-grid-certificate-on-your-laptop)
-3. [Make a grid proxy](../SETUP.md#3-make-a-grid-proxy)
-4. [Check it](../SETUP.md#4-check-it): you are ready when `rvr proxy` says the proxy is valid.
+2. For your own files on grid storage only: [install your grid certificate](../SETUP.md#2-install-your-grid-certificate-on-your-laptop),
+   [make a grid proxy](../SETUP.md#3-make-a-grid-proxy) and [check it](../SETUP.md#4-check-it).
 
-## What you write
+### What you write
 
 You write two short text files, and `rvr` does the rest:
 
 | file | what it says | written by |
 |---|---|---|
-| `samples.toml` | which events to read: datasets, folders or files | you |
+| `samples.toml` | which events to read: the files of each sample | you |
 | `recipe.toml` | which events to keep, and what to store of each | you |
-| `samples.lock` | every file the samples are, pinned (size, checksum, entries) | `rvr samples resolve` |
+| `samples.lock` | every file the samples are, pinned (size, checksum, entries, branches) | `rvr samples resolve` |
 | `zmumu.rvr` | the events, with the three texts above inside it | `rvr press` |
 
-The study here is Z → μμ: Drell-Yan simulation first, then data and tt̄ beside it. Its files, as
-they are at step 7, are in [`zmumu`](zmumu).
+The study here is Z → μμ in CMS Open Data of 2012: Drell-Yan simulation first, then data and tt̄
+beside it. Its files, as they are at step 7, are in [`zmumu`](zmumu).
 
 ### The example studies
 
 Each folder here is a whole study: a `samples.toml` and a `recipe.toml`. Copy one, then run
-`rvr samples resolve samples.toml` and `rvr press` in it. Each was resolved, pressed and validated
-on real data (`rvr press --events 2000`, 2026-10-31). A test (`crates/rvr/tests/examples.rs`)
-checks that every one still reads, and with `-- --ignored` presses each one again. The outputs this
-page quotes come from [`walkthrough.sh`](walkthrough.sh), which runs every command of it again.
+`rvr samples resolve samples.toml` and `rvr press` in it. A test (`crates/rvr/tests/examples.rs`)
+checks that every one still reads, and with `-- --ignored` presses each one again
+(`rvr press --events 2000`). The outputs this page quotes come from
+[`walkthrough.sh`](walkthrough.sh), which runs every command of it again. None needs a grid proxy.
 
-| study | what it shows | grid proxy |
-|---|---|---|
-| [`atlas_higgs_4lep`](atlas_higgs_4lep) | ATLAS Open Data: H → ZZ* → 4ℓ, four leptons of zero total charge, two or four of each flavour, their mass, a weight the files carry every factor of, and the four-lepton system's pt as a derived column | no |
-| [`dimuon_spectrum`](dimuon_spectrum) | the dimuon mass spectrum of CMS Open Data: two muons of opposite charge, and their mass | no |
-| [`higgs_tautau`](higgs_tautau) | every sample of the CMS Open Data H → ττ study: the data from two files by a pattern, signals and backgrounds, a muon and a tau of opposite charge | no |
-| [`lhcb_b_to_kkk`](lhcb_b_to_kkk) | LHCb Open Data: B± → K± K+ K− from three tracks' flat branches, the B mass from defined names, the two magnet polarities written as eras | no |
-| [`recipe_tour`](recipe_tour) | every table of a recipe: defined names that use one another, jets cleaned of muons and taus, a trigger named by each sample, a cut for one sample only, a renamed branch, a stored type; events chosen at random | no |
-| [`zmumu`](zmumu) | this page's study: data, Drell-Yan and tt̄ from DAS, with a weight per event and the sum of generator weights over every event read | yes |
-| [`eras`](eras) | one sample per era (UL17, UL18), an era's values in dataset names and metadata, a cut for 2018 only | yes |
+| study | what it shows |
+|---|---|
+| [`atlas_higgs_4lep`](atlas_higgs_4lep) | ATLAS Open Data: H → ZZ* → 4ℓ, four leptons of zero total charge, two or four of each flavour, their mass, a weight the files carry every factor of, and the four-lepton system's pt as a derived column |
+| [`dimuon_spectrum`](dimuon_spectrum) | the dimuon mass spectrum of CMS Open Data: two muons of opposite charge, and their mass |
+| [`higgs_tautau`](higgs_tautau) | every sample of the CMS Open Data H → ττ study: the data from two files by a pattern, signals and backgrounds, a muon and a tau of opposite charge |
+| [`lhcb_b_to_kkk`](lhcb_b_to_kkk) | LHCb Open Data: B± → K± K+ K− from three tracks' flat branches, the B mass from defined names, the two magnet polarities written as eras |
+| [`recipe_tour`](recipe_tour) | every table of a recipe: defined names that use one another, jets cleaned of muons and taus, a trigger named by each sample, a cut for one sample only, a renamed branch, a stored type; events chosen at random |
+| [`zmumu`](zmumu) | this page's study: data, Drell-Yan and tt̄, the sum of weights over every event read, and a weight per event worked out from it |
 
 ## 2. Make your first file
 
 Make a folder, `zmumu`, with two files in it.
 
-`samples.toml` names one sample: a Drell-Yan dataset, exactly as DAS writes it, the tree to read
-(`Events` in NanoAOD), and how many events to read: the first 100,000, for a quick start (leave
-`events` out to read them all).
+`samples.toml` names one sample: the Drell-Yan simulation of CMS Open Data, read over HTTPS from
+CERN's public EOS, the tree to read (`Events`), and how many events to read: the first 100,000,
+for a quick start (leave `events` out to read them all).
 
 ```toml
-[[sample]]
-name = "DY"
-dataset = "/DYJetsToLL_M-50_TuneCP5_13TeV-amcatnloFXFX-pythia8/RunIISummer20UL18NanoAODv9-106X_upgrade2018_realistic_v16_L1v1-v2/NANOAODSIM"
+format = "rvr-samples"
+version = 1
+
+[places]
+opendata = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool"
+
+[defaults]
 tree = "Events"
 events = 100_000
+
+[eras]
+
+[[sample]]
+name = "DY"
+label = "Drell-Yan"
+files = "{opendata}/DYJetsToLL.root"
+metadata = { kind = "simulation", xsec = 3503.7, lumi = 11.6 }
 ```
+
+Its first two lines name the file's form and its version. `[places]` gives a short name to a long
+location, used as `{opendata}` in `files`; `[defaults]` holds what every sample shares; `[eras]`
+makes one sample per era, and is empty here. All three are written even when empty, so the file
+says at a glance what it uses. `metadata` is what the file carries about the sample (here its
+cross section in pb and the luminosity in fb⁻¹), which the recipe reads as `sample.xsec`. Every key
+is one [the specification](../SPEC.md#3-samplestoml) defines: a key it does not know, such as a
+misspelt `evnets`, is refused, naming the nearest one.
 
 `recipe.toml` says what to keep. Its first two lines name the recipe language and its version, so
 a later rvr knows how to read it. The rest is explained below it.
@@ -71,14 +91,16 @@ format = "rvr-recipe"
 version = 1
 
 [define]
-good_muon = "Muon_pt > 20 and abs(Muon_eta) < 2.4 and Muon_tightId and Muon_pfRelIso04_all < 0.15"
+good_muon = "Muon_pt > 20 and abs(Muon_eta) < 2.4"
 
 [keep]
 two_muons = "count(good_muon) == 2"
+opposite_charge = "sum(Muon_charge[good_muon]) == 0"
 
 [columns]
-branches = ["MET_pt", "nJet"]
+branches = ["nMuon"]
 mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
+pt = "first(pair_pt(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
 
 [totals]
 
@@ -89,47 +111,55 @@ mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_m
 named in full, as the file spells it.
 
 - `[define]` gives names to expressions, for the lines below to use. `good_muon` is true or false
-  for each muon of each event: true for the muons with pt above 20 GeV, |η| below 2.4, the tight ID
-  and an isolation below 0.15. An event with three muons, two of which pass, has two good muons.
-  Nothing under `[define]` is stored.
+  for each muon of each event: true for the muons with pt above 20 GeV and |η| below 2.4. An event
+  with three muons, two of which pass, has two good muons. Nothing under `[define]` is stored.
 - `[keep]` chooses the events. Each line is a cut: a name you choose (`two_muons`) and a condition
-  that is true or false for each event. `count(good_muon)` counts the good muons, so an event is
-  kept when it has exactly two. An event is kept when every cut is true, and `rvr press` prints
-  how many pass each one.
+  that is true or false for each event. `count(good_muon)` counts the good muons, so an event
+  passes the first cut when it has exactly two, and the second when their charges add up to zero.
+  An event is kept when every cut is true, and `rvr press` prints how many pass each one.
 - `[columns]` says what the file stores. `branches` are stored as the ROOT file has them, for the
   events kept. `mass` is computed for each event kept: `Muon_pt[good_muon]` is the good muons'
   pt (the brackets keep the members where `good_muon` is true), `pair_mass` the mass of each pair
-  of them, and `first(…, -1)` the first pair's mass, or -1 for an event with no pair.
-- `[totals]` and `[derived]` are empty for now (a later step puts a column under `[derived]`).
-  Every recipe writes its five tables, even the empty ones: `rvr press` refuses a recipe that
-  leaves one out, or, at a terminal, offers to write it in.
+  of them, and `first(…, -1)` the first pair's mass, or -1 for an event with no pair. `pt` is the
+  pair's transverse momentum, alike.
+- `[totals]` and `[derived]` are empty for now (later steps fill them). Every recipe writes its
+  five tables, even the empty ones: `rvr press` refuses a recipe that leaves one out, or, at a
+  terminal, offers to write it in.
 
 **How do you know the file has `Muon_pt`?** You don't have to guess. Once the samples are resolved
-(just below), `rvr branches` lists every branch of the sample's file, and `--find` narrows the
-1,628 branches of a NanoAOD file down (here cut with `…`):
+(just below), `rvr branches` lists every branch of the sample's first file, from the lock, and
+`--find` narrows them down:
 
 ```text
 $ rvr branches --find muon
-Rucio said where the 10 dataset files can be read in 2.1 s.
-DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events, 108 of its 1,628 branches hold "muon"
+DY: DYJetsToLL.root, tree Events, 16 of its 69 branches hold "muon"
 
-  CorrT1METJet_muonSubtrFactor                float   jagged
-  FatJet_muonIdx3SJ                           int32   jagged
-  Flag_BadPFMuonDzFilter                      bool    flat
-  …
-  Muon_charge                                 int32   jagged
-  Muon_cleanmask                              uint8   jagged
-  Muon_dxy                                    float   jagged
-  …
-  Muon_eta                                    float   jagged
-  …
-  Muon_mass                                   float   jagged
-  …
+  Muon_charge          i4  jagged
+  Muon_dxy             f4  jagged
+  Muon_dxyErr          f4  jagged
+  Muon_dz              f4  jagged
+  Muon_dzErr           f4  jagged
+  Muon_eta             f4  jagged
+  Muon_genPartIdx      i4  jagged
+  Muon_jetIdx          i4  jagged
+  Muon_mass            f4  jagged
+  Muon_pfRelIso03_all  f4  jagged
+  Muon_pfRelIso04_all  f4  jagged
+  Muon_phi             f4  jagged
+  Muon_pt              f4  jagged
+  Muon_softId          b1  jagged
+  Muon_tightId         b1  jagged
+  nMuon                u4  flat
 ```
 
 Each branch says its type and whether it is `flat` (one value per event) or `jagged` (a list per
 event). Run `rvr branches` with no `--find` for all of them. A name the file doesn't have is caught
-too: `count(Muon_ptt > 20)` says "There is no column named Muon_ptt. Did you mean: Muon_pt, …?".
+too:
+
+```text
+$ rvr try "count(Muon_ptt > 20)"
+rvr try: DYJetsToLL.root, entries 0 to 9: There is no column named Muon_ptt. Did you mean: Muon_pt, Muon_eta, Muon_phi? rvr branches lists every branch the file has.
+```
 
 Only what `[columns]` names is stored. `good_muon` is a working name: to store the good muons' pt,
 add a column, `good_muon_pt = "Muon_pt[good_muon]"`.
@@ -140,32 +170,34 @@ know Awkward, its [last section](../../crates/rvr-recipe/README.md#from-python-t
 selections side by side with how you write them in a recipe. To try an expression on real events
 before you press, use [`rvr try`](#trying-an-expression).
 
-In the folder, `rvr samples resolve` finds every file of the dataset (it reads no events) and
+In the folder, `rvr samples resolve` finds every file of every sample (it reads no events) and
 writes `samples.lock`. `rvr press` reads the events and writes `zmumu.rvr`, named after the folder.
 `rvr validate` checks it.
 
 ```text
 $ rvr samples resolve samples.toml
-  ok    DY                                       204 files   257.3 GB   100,000 of 195,510,810 events
+  ok    DY                                         1 file      9.2 GB   100,000 of 30,458,871 events
 
-1 sample, 204 distinct files, 257.3 GB in 5.1 s.
-Wrote samples.lock (0.2 MB).
+1 sample, 1 distinct file, 9.2 GB in 2.0 s.
+The folders read also hold 9 .root files no sample reads (not an error; check none was meant):
+  root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/GluGluToHToTauTau.root
+  root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/Run2012BC_DoubleMuParked_Muons.root
+  root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/Run2012B_TauPlusX.root
+  … and 6 more
+Wrote samples.lock (0.0 MB).
 $ rvr press
-Rucio said where the 2 dataset files can be read in 2.3 s.
-Pressing 1 sample, 2 files, 100,000 entries, 2 at a time:
-  1/2       40,919 entries      4,698 kept   00C9792D-ACD2-2547-BB04-097F0C4E47E3.root
-  2/2       59,081 entries      6,638 kept   13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root
-  read from T3_KR_KISTI: 2 files, 2.1 MB
+Pressing 1 sample, 1 file, 100,000 entries, 1 at a time:
+  1/1      100,000 entries     14,483 kept   DYJetsToLL.root
 Read 100,000 entries; kept after each cut:
-  two_muons                             11,336
-Wrote zmumu.rvr (11,336 rows, 3 columns, 0.3 MB) in 8.5 s.
+  two_muons                             14,562
+  opposite_charge                       14,483
+Wrote zmumu.rvr (14,483 rows, 3 columns, 0.1 MB) in 2.6 s.
 $ rvr validate zmumu.rvr
-zmumu.rvr: valid, 11336 rows, 3 columns, read 100000 of 195510810 entries, not signed
+zmumu.rvr: valid, 14483 rows, 3 columns, read 100,000 of 30,458,871 entries, not signed
 ```
 
-The first 100,000 events lie in two of the 204 files. rvr read only the branches the recipe uses,
-2.1 MB, from whichever storage answered first; a read that fails at one storage is tried at
-another, and the press says which it passed over.
+rvr read only the branches the recipe uses, and only the first 100,000 events of the file's 30
+million. Before it reads a file, it checks that the file is the one the lock pinned.
 
 ### Trying an expression
 
@@ -175,18 +207,17 @@ first), opens one file and reads only the branches the expression names, so it t
 
 ```text
 $ rvr try "count(good_muon)"
-Rucio said where the 10 dataset files can be read in 2.3 s.
-DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events (i8, one value per event)
+DY: DYJetsToLL.root, tree Events (i8, one value per event)
   entry        0   0
-  entry        1   0
+  entry        1   1
   entry        2   1
   entry        3   0
   entry        4   1
   entry        5   0
   entry        6   0
-  entry        7   0
-  entry        8   1
-  entry        9   1
+  entry        7   1
+  entry        8   0
+  entry        9   2
 ```
 
 The recipe's defined names work in it, `--events N` shows N events, and `--kept` shows only the
@@ -195,21 +226,19 @@ are the first ones `zmumu.rvr` holds (step 3 shows them).
 
 ```text
 $ rvr try "Muon_pt[good_muon]" --kept --events 5
-Rucio said where the 10 dataset files can be read in 2.1 s.
-DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events (f4, a list per event)
-  entry       14   [29.942936, 21.988777]
-  entry       25   [46.90944, 46.79786]
-  entry       35   [49.50759, 40.395164]
-  entry       43   [47.15005, 43.033558]
-  entry       52   [51.090717, 42.2735]
+DY: DYJetsToLL.root, tree Events (f4, a list per event)
+  entry        9   [44.30339, 43.80025]
+  entry       13   [30.331768, 52.109802]
+  entry       16   [35.363716, 43.758724]
+  entry       17   [46.6518, 41.99093]
+  entry       21   [23.655155, 22.02532]
 $ rvr try "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)" --kept --events 5
-Rucio said where the 10 dataset files can be read in 2.1 s.
-DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events (f4, one value per event)
-  entry       14   88.6032
-  entry       25   93.59802
-  entry       35   90.682175
-  entry       43   90.26609
-  entry       52   92.6495
+DY: DYJetsToLL.root, tree Events (f4, one value per event)
+  entry        9   90.361694
+  entry       13   90.838066
+  entry       16   85.008064
+  entry       17   90.80479
+  entry       21   50.598198
 ```
 
 ## 3. Look inside it
@@ -218,23 +247,27 @@ DY: 13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root, tree Events (f4, one value per ev
 
 ```text
 $ rvr dump zmumu.rvr --columns
-sample         i4[11336]  [0, 0, 0, 0, 0, ...]
-entry          i8[11336]  [14, 25, 35, 43, 52, ...]
-MET_pt         f4[11336]  [21.15589, 8.36861, 7.9500065, 56.645744, 7.6471, ...]
-nJet           u4[11336]  [3, 3, 2, 6, 7, ...]
-mass           f4[11336]  [88.6032, 93.59802, 90.682175, 90.26609, 92.6495, ...]
+sample         i4[14483]  [0, 0, 0, 0, 0, ...]
+entry          i8[14483]  [9, 13, 16, 17, 21, ...]
+nMuon          u4[14483]  [2, 2, 2, 2, 2, ...]
+mass           f4[14483]  [90.361694, 90.838066, 85.008064, 90.80479, 50.598198, ...]
+pt             f4[14483]  [7.516675, 23.074041, 38.344116, 4.6697426, 3.2600317, ...]
+kind           text by sample[1]  DY: "simulation"
+xsec           f8 by sample[1]  DY: 3503.7
+lumi           f8 by sample[1]  DY: 11.6
 events_read    i8 by sample[1]  DY: 100000
-events_total   i8 by sample[1]  DY: 195510810
+events_total   i8 by sample[1]  DY: 30458871
 ```
 
 `sample` and `entry` say where each event came from: its sample, and its entry in its file.
-`events_read` and `events_total` hold one value per sample. `rvr dump` alone shows everything,
-the three texts included.
+`kind`, `xsec` and `lumi` (the sample's metadata) and `events_read` and `events_total` hold one
+value per sample. `rvr dump` alone shows everything, the three texts included, and
+`rvr dump --all` every value of every column.
 
 ## 4. Plot it
 
-Python reads it with the package `rowver` (`pip install ./crates/rowver-py` from a checkout of this
-repository). Each column is a NumPy array, one value per event:
+Python reads it with the package `rowver` (`pip install rowver`). Each column is a NumPy array, one
+value per event:
 
 ```python
 import matplotlib.pyplot as plt
@@ -259,14 +292,14 @@ import rowver
 
 f = rowver.open("zmumu.rvr")
 mass = f["mass"].astype(np.float64)
-met = f["MET_pt"].astype(np.float64)
+pt = f["pt"].astype(np.float64)
 ones = np.ones(len(mass))
 
 h = ROOT.TH1D("mass", ";m_{#mu#mu} [GeV];events", 60, 60, 120)
 h.FillN(len(mass), mass, ones)
 
-h2 = ROOT.TH2D("mass_met", ";m_{#mu#mu} [GeV];p_{T}^{miss} [GeV]", 30, 60, 120, 25, 0, 100)
-h2.FillN(len(mass), mass, met, ones)
+h2 = ROOT.TH2D("mass_pt", ";m_{#mu#mu} [GeV];p_{T}^{#mu#mu} [GeV]", 30, 60, 120, 25, 0, 100)
+h2.FillN(len(mass), mass, pt, ones)
 
 c = ROOT.TCanvas("c", "", 1200, 500)
 c.Divide(2)
@@ -279,8 +312,6 @@ h2.Draw("colz")
 c.SaveAs("mass_root.png")
 ```
 
-![The mass as a TH1D, and mass against missing pT as a TH2D](plots/mass_root.png)
-
 Both work the same in a Jupyter notebook; show the plot with `plt.show()` or `c.Draw()`.
 
 ## 5. Add a column you forgot
@@ -291,151 +322,156 @@ column, for the events the file already has:
 
 ```text
 $ rvr status
-zmumu.rvr: pressed 2026-10-31T17:22:52Z by rvr 15.0.0
+zmumu.rvr: pressed 2026-11-03T20:16:48Z by rvr 15.0.0
   recipe.toml   changed since: new: Muon_pt
   samples.toml  as the file holds it
   samples.lock  as the file holds it
   events        as the file holds it
 rvr press would read only Muon_pt, for the events the file kept, and copy every other column from it.
 
-  DY  ████████████████████████ 100%   2 files
+  DY  ████████████████████████ 100%   1 file
 $ rvr press
-Rucio said where the 2 dataset files can be read in 1.8 s.
-zmumu.rvr has the events this recipe keeps (11,336) and 3 of its 4 columns.
-Reading only Muon_pt for those events, 2 files 2 at a time:
-  1/2       59,081 entries      6,638 kept   13D0AD97-6B32-CB4C-BA87-5E37BA4CF20E.root
-  2/2       40,919 entries      4,698 kept   00C9792D-ACD2-2547-BB04-097F0C4E47E3.root
-  read from T3_KR_KISTI: 2 files, 0.7 MB
-Wrote zmumu.rvr (11,336 rows, 4 columns, 0.4 MB) in 6.9 s.
-$ rvr status
-zmumu.rvr: pressed 2026-10-31T17:23:32Z by rvr 15.0.0
-  recipe.toml   as the file holds it
-  samples.toml  as the file holds it
-  samples.lock  as the file holds it
-  events        as the file holds it
-It is current: rvr press has nothing to read.
-
-  DY  ████████████████████████ 100%   2 files
+zmumu.rvr has the events this recipe keeps (14,483) and 3 of its 4 columns.
+Reading only Muon_pt for those events, 1 file, 1 at a time:
+  1/1      100,000 entries     14,483 kept   DYJetsToLL.root
+Wrote zmumu.rvr (14,483 rows, 4 columns, 0.3 MB) in 2.0 s.
 ```
 
-`Muon_pt` holds a list per event (every muon), which Python reads as an Awkward array.
+`Muon_pt` holds a list per event (every muon), which Python reads as an Awkward array. The file
+now holds the study as it is, so pressing again does nothing and leaves the file as it is (and
+`rvr status` exits 0):
+
+```text
+$ rvr press
+zmumu.rvr is current: nothing to press.
+```
 
 A column computed only from what the file already stores needs no ROOT file at all, and no room in
 the file either: put it under `[derived]`, as `leading_muon_pt = "first(Muon_pt, -1)"`. The file
-keeps the expression, and the Python package works it out when you ask for `f["leading_muon_pt"]`.
-`rvr press` then reads nothing; `rvr derive zmumu.rvr 'NAME = EXPRESSION'` adds one to the file
-alone ([Derived columns](../../crates/rvr/README.md#derived-columns)).
+keeps the expression, and the Python package works it out when you ask for
+`f["leading_muon_pt"]`. `rvr press` then opens no input:
+
+```text
+$ rvr press
+zmumu.rvr has the events this recipe keeps (14,483) and 4 of its 4 columns.
+Nothing to read: every column is copied from it.
+Wrote zmumu.rvr (14,483 rows, 4 columns and 1 derived, 0.3 MB) in 0.0 s.
+```
+
+`rvr derive zmumu.rvr 'NAME = EXPRESSION'` adds one to the file alone
+([Derived columns](../../crates/rvr/README.md#derived-columns)).
 
 ## 6. Add data and another background
 
-Now put 2018D data and tt̄ beside the Drell-Yan. `[defaults]` gives every sample the same tree and
-number of events. Any other key, such as `kind`, `xsec` or `lumi`, is information about the
-sample: it is stored in the file, and the recipe can use it as `sample.kind`.
+Now put the 2012 data and tt̄ beside the Drell-Yan. `[defaults]` gives every sample the same tree,
+number of events and metadata; a sample's own `metadata` adds to it, key by key. The data file of
+this Open Data release holds only the muons (their momenta and charges), which is why the recipe
+uses nothing else: every branch a recipe reads must be in every sample's files.
 
 ```toml
+format = "rvr-samples"
+version = 1
+
+[places]
+opendata = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool"
+
 [defaults]
 tree = "Events"
 events = 100_000
-lumi = 31.84                  # fb⁻¹ of 2018D
+metadata = { kind = "simulation", lumi = 11.6 }   # fb⁻¹: Run 2012 B and C
+
+[eras]
 
 [[sample]]
 name = "data"
-dataset = "/SingleMuon/Run2018D-UL2018_MiniAODv2_NanoAODv9-v1/NANOAOD"
-kind = "data"
+label = "Data, Run 2012 B and C"
+files = "{opendata}/Run2012BC_DoubleMuParked_Muons.root"
+metadata = { kind = "data" }
 
 [[sample]]
 name = "DY"
-dataset = "/DYJetsToLL_M-50_TuneCP5_13TeV-amcatnloFXFX-pythia8/RunIISummer20UL18NanoAODv9-106X_upgrade2018_realistic_v16_L1v1-v2/NANOAODSIM"
-xsec = 6077.22                # pb
+label = "Drell-Yan"
+files = "{opendata}/DYJetsToLL.root"
+metadata = { xsec = 3503.7 }                       # pb
 
 [[sample]]
 name = "TT"
-dataset = "/TTTo2L2Nu_TuneCP5_13TeV-powheg-pythia8/RunIISummer20UL18NanoAODv9-106X_upgrade2018_realistic_v16_L1v1-v1/NANOAODSIM"
-xsec = 88.29
+label = "tt̄"
+files = "{opendata}/TTbar.root"
+metadata = { xsec = 225.2 }
 ```
 
-The recipe gains a trigger cut, and a weight for each event: 1 for data, and for simulation its
-generator weight times cross section times luminosity (`0 * MET_pt + 1` is a 1 of the same type
-as the simulation's weight, a float: a column has one type in every sample, and a bare 1 is a whole
-number).
-
-```toml
-[keep]
-trigger = "HLT_IsoMu24"
-two_muons = "count(good_muon) == 2"
-
-[columns]
-branches = ["MET_pt", "nJet", "Muon_pt"]
-mass = "first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)"
-weight = "if(sample.kind == 'data', 0 * MET_pt + 1, genWeight * sample.xsec * 1000 * sample.lumi)"
-
-[derived]
-leading_muon_pt = "first(Muon_pt, -1)"
-```
-
-`[derived]` holds the column of step 5, kept as its expression. Resolve again, since the samples
-changed. `rvr status` says the file must be pressed whole this time, and why:
+`DY` is the sample it was (the same file, tree, events and metadata, now partly from
+`[defaults]`), and the recipe is the same, so after resolving again `rvr press` reads only the new
+samples and takes DY's rows from the file:
 
 ```text
 $ rvr samples resolve samples.toml
-  ok    data                                     194 files   449.3 GB   100,000 of 513,909,894 events
-  ok    DY                                       204 files   257.3 GB   100,000 of 195,510,810 events
-  ok    TT                                       155 files   309.0 GB   100,000 of 145,020,000 events
+  ok    data                                       1 file      2.2 GB   100,000 of 61,540,413 events
+  ok    DY                                         1 file      9.2 GB   100,000 of 30,458,871 events
+  ok    TT                                         1 file      3.5 GB   100,000 of 6,423,106 events
 
-3 samples, 553 distinct files, 1015.6 GB in 6.1 s.
-Wrote samples.lock (0.4 MB).
+3 samples, 3 distinct files, 15.0 GB in 1.8 s.
+The folders read also hold 7 .root files no sample reads (not an error; check none was meant):
+  root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/GluGluToHToTauTau.root
+  root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/Run2012B_TauPlusX.root
+  root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/Run2012C_TauPlusX.root
+  … and 4 more
+Wrote samples.lock (0.0 MB).
 $ rvr status
-zmumu.rvr: pressed 2026-10-31T17:23:32Z by rvr 15.0.0
-  recipe.toml   changed since: new: weight; the cuts under [keep] changed; new derived: leading_muon_pt
+zmumu.rvr: pressed 2026-11-03T20:17:06Z by rvr 15.0.0
+  recipe.toml   as the file holds it
   samples.toml  edited since
   samples.lock  resolved again since
   events        as the file holds it
-rvr press would press every column, as the cuts under [keep], or what they use, have changed.
+rvr press would read only the new samples data, TT (2 files), and copy the rows of every other sample from it.
 
-  DY  ████████████████████████ 100%   2 files
+  DY  ████████████████████████ 100%   1 file
 $ rvr press
-Pressing every column: zmumu.rvr cannot be built on, as the cuts under [keep], or what they use, have changed.
-Rucio said where the 4 dataset files can be read in 2.7 s.
-Pressing 3 samples, 4 files, 300,000 entries, 4 at a time:
-  …
-Read 300,000 entries; kept after each cut:
-  trigger                              144,360
-  two_muons                             21,257
-Wrote zmumu.rvr (21,257 rows, 5 columns and 1 derived, 0.9 MB) in 16.4 s.
+zmumu.rvr holds the rows of 1 of the 3 samples as samples.lock has them.
+Reading only the new samples data, TT, 2 files, 200,000 entries, 2 at a time:
+  1/2      100,000 entries      1,746 kept   TTbar.root
+  2/2      100,000 entries     10,420 kept   Run2012BC_DoubleMuParked_Muons.root
+Read 200,000 entries of the new samples data, TT; kept after each cut:
+  two_muons                             14,740
+  opposite_charge                       12,166
+Wrote zmumu.rvr (26,649 rows, 4 columns and 1 derived, 0.5 MB) in 3.1 s.
 $ rvr dump zmumu.rvr --columns
-sample          i4[21257]  [0, 0, 0, 0, 0, ...]
-entry           i8[21257]  [24, 57, 81, 94, 105, ...]
-MET_pt          f4[21257]  [32.52266, 43.860973, 21.542166, 29.062634, 9.035394, ...]
-nJet            u4[21257]  [9, 4, 5, 2, 6, ...]
-Muon_pt         jagged f4[21257]  [[44.89497, 42.32862], [62.786877, 25.476637], [49.11254, 43.06757], ...]
-mass            f4[21257]  [91.12758, 94.01117, 87.904205, 99.630455, 90.229675, ...]
-weight          f4[21257]  [1, 1, 1, 1, 1, ...]
-leading_muon_pt f4[21257]  derived = "first(Muon_pt, -1)"  [44.89497, 62.786877, 49.11254, 122.43711, 33.896442, ...]
-lumi            f8 by sample[3]  data: 31.84, DY: 31.84, TT: 31.84
-kind            text by sample[3]  data: "data", DY: null, TT: null
+sample          i4[26649]  [0, 0, 0, 0, 0, ...]
+entry           i8[26649]  [6, 33, 36, 38, 57, ...]
+nMuon           u4[26649]  [2, 2, 2, 2, 2, ...]
+Muon_pt         jagged f4[26649]  [[57.6067, 53.04508], [45.61478, 32.98454], [42.350727, 29.168762], ...]
+mass            f4[26649]  [113.64686, 88.297104, 88.33483, 91.27149, 93.55725, ...]
+pt              f4[26649]  [4.690069, 13.55605, 16.843533, 27.262497, 4.780898, ...]
+leading_muon_pt f4[26649]  derived = "first(Muon_pt, -1)"  [57.6067, 45.61478, 42.350727, 40.19343, 38.26939, ...]
+kind            text by sample[3]  data: "data", DY: "simulation", TT: "simulation"
+lumi            f8 by sample[3]  data: 11.6, DY: 11.6, TT: 11.6
 events_read     i8 by sample[3]  data: 100000, DY: 100000, TT: 100000
-events_total    i8 by sample[3]  data: 513909894, DY: 195510810, TT: 145020000
-xsec            f8 by sample[3]  data: null, DY: 6077.22, TT: 88.29
+events_total    i8 by sample[3]  data: 61540413, DY: 30458871, TT: 6423106
+xsec            f8 by sample[3]  data: null, DY: 3503.7, TT: 225.2
 ```
 
 The samples are in the order `samples.toml` gives them: `sample` is 0 for data, 1 for DY, 2 for
-TT. (The cross sections here are for illustration; take yours from XSDB.)
+TT. The data have no `xsec`, which is `null` for them.
 
 ## 7. Data against simulation
 
-A simulated sample's weights must be divided by the sum of `genWeight` over every event it read,
-before the cuts. The file keeps only the events that passed them, so the recipe asks the press for
-that sum as it reads, under `[totals]` (one number per sample, 0 for the data, which has no
-`genWeight`), and a derived column divides by it:
+A simulated sample's events are weighted by its cross section times the luminosity, divided by the
+sum of the weights of every event it read, before the cuts. The file keeps only the events that
+passed them, so the recipe asks the press for that sum as it reads, under `[totals]` (one number
+per sample), and a derived column divides by it. Every simulated event of these files weighs 1, so
+the sum of the weights is the number of events read, and the total is `"1"`; for NanoAOD with
+generator weights it is `sumw = "genWeight"`.
 
 ```toml
+# Every simulated event of these files weighs 1, so the sum of the weights is the number read.
 [totals]
-sumw = "if(sample.kind == 'data', 0, genWeight)"
+sumw = "1"
 
-# Worked out from the stored muons when it is read.
+# Worked out from what the file holds when it is read.
 [derived]
 leading_muon_pt = "first(Muon_pt, -1)"
-scaled = "if(sample.kind == 'data', weight, weight / sample.sumw)"
+weight = "if(sample.kind == 'data', 1.0, sample.xsec * 1000 * sample.lumi / sample.sumw)"
 ```
 
 A total counts every event read, so changing `[totals]` presses every event again:
@@ -443,23 +479,25 @@ A total counts every event read, so changing `[totals]` presses every event agai
 ```text
 $ rvr press
 Pressing every column: zmumu.rvr cannot be built on, as the totals under [totals] have changed, which count every event read.
-Rucio said where the 4 dataset files can be read in 3.6 s.
-Pressing 3 samples, 4 files, 300,000 entries, 4 at a time:
-…
+Pressing 3 samples, 3 files, 300,000 entries, 3 at a time:
+  1/3      100,000 entries     14,483 kept   DYJetsToLL.root
+  2/3      100,000 entries      1,746 kept   TTbar.root
+  3/3      100,000 entries     10,420 kept   Run2012BC_DoubleMuParked_Muons.root
 Read 300,000 entries; kept after each cut:
-  trigger                              144,360
-  two_muons                             21,257
-Wrote zmumu.rvr (21,257 rows, 5 columns and 2 derived, 0.9 MB) in 22.6 s.
+  two_muons                             29,302
+  opposite_charge                       26,649
+Wrote zmumu.rvr (26,649 rows, 4 columns and 2 derived, 0.5 MB) in 7.0 s.
 $ rvr dump zmumu.rvr --columns
 …
-sumw            f8 by sample[3]  data: 0.0, DY: 1700834877.5429688, TT: 7213125.645751953
+weight          f8[26649]  derived = "if(sample.kind == 'data', 1.0, sample.xsec * 1000 * sample.lumi / sample.sumw)"  [1, 1, 1, 1, 1, ...]
+…
+sumw            f8 by sample[3]  data: 100000.0, DY: 100000.0, TT: 100000.0
 …
 ```
 
-Each total is the sum, in the files' order, of `genWeight` over the 100,000 events each sample
-read: a study that stores `genWeight` for every event, with no cuts, gives the same sums to the
-last bit. Then the data against the stacked simulation, with the simulation scaled to the share of
-the data that was read (100,000 of its 514 million events):
+Each total is the sum, in the files' order, over the 100,000 events each sample read. Then the
+data against the stacked simulation, with the simulation scaled to the share of the data that was
+read (100,000 of its 61.5 million events):
 
 ```python
 import matplotlib.pyplot as plt
@@ -473,11 +511,11 @@ read, total = f.sample_columns["events_read"], f.sample_columns["events_total"]
 share = read[0] / total[0]
 
 bins = np.linspace(60, 120, 31)
-mass, scaled, sample = f["mass"], f["scaled"], f["sample"]
+mass, weight, sample = f["mass"], f["weight"], f["sample"]
 counts, _ = np.histogram(mass[sample == 0], bins)
 plt.errorbar((bins[1:] + bins[:-1]) / 2, counts, yerr=np.sqrt(counts), fmt="ko", label="data")
-plt.hist([mass[sample == 2], mass[sample == 1]], bins, stacked=True, label=["TT", "DY"],
-         weights=[scaled[sample == 2] * share, scaled[sample == 1] * share])
+plt.hist([mass[sample == 2], mass[sample == 1]], bins, stacked=True, label=["tt̄", "Drell-Yan"],
+         weights=[weight[sample == 2] * share, weight[sample == 1] * share])
 plt.xlabel("dimuon mass [GeV]")
 plt.ylabel("events")
 plt.legend()
@@ -493,26 +531,26 @@ in other forms; the [Python README](../../crates/rowver-py/README.md) lists them
 
 The first 100,000 events were for a start. `rvr samples plan` says what a press would read, from
 the lock alone, before you commit to it: every event, or a number chosen at random from every file
-(the first events of a dataset are those of its first files, which can be a biased few).
+(the first events of a sample are those of its first files, which can be a biased few).
 
 ```text
 $ rvr samples plan samples.lock --events all
 What a press would read (--events all: every sample whole), planned from the lock in 0.0 ms:
-  data                                                 all 513,909,894 events   194 of 194 files
-  DY                                                   all 195,510,810 events   204 of 204 files
-  TT                                                   all 145,020,000 events   155 of 155 files
-854,440,704 of 854,440,704 events in all.
+  data                                                  all 61,540,413 events   1 of 1 files
+  DY                                                    all 30,458,871 events   1 of 1 files
+  TT                                                     all 6,423,106 events   1 of 1 files
+98,422,390 of 98,422,390 events in all.
 $ rvr samples plan samples.lock --events 50000 --random --seed 7
-What a press would read (--events 50000 --random), planned from the lock in 439.1 ms:
-  data                                     50,000 of 513,909,894 events (random)   194 of 194 files
-  DY                                       50,000 of 195,510,810 events (random)   204 of 204 files
-  TT                                       50,000 of 145,020,000 events (random)   155 of 155 files
-150,000 of 854,440,704 events in all.
+What a press would read (--events 50000 --random --seed 7), planned from the lock in 51.7 ms:
+  data                                     50,000 of 61,540,413 events (random)   1 of 1 files
+  DY                                       50,000 of 30,458,871 events (random)   1 of 1 files
+  TT                                       50,000 of 6,423,106 events (random)   1 of 1 files
+150,000 of 98,422,390 events in all.
 ```
 
 `rvr press --events all` (or `--events 50000 --random --seed 7`) then presses that. To make it
 the study's own choice, set `events` (and `choose = "random"`, `seed = 7`) in `samples.toml`
-instead. A large press is best run on the LPC or lxplus (see 10).
+instead. A large press is best run close to the files, on the LPC or lxplus (step 10).
 
 ## 9. Share it, check it, sign it
 
@@ -522,10 +560,16 @@ It carries all three texts, so `rvr reproduce` makes it again from the file alon
 ```text
 $ rvr reproduce zmumu.rvr
 Wrote zmumu.reproduced/ with the recipe.toml, samples.toml and samples.lock zmumu.rvr holds.
-…
-Wrote zmumu.reproduced/zmumu.rvr (21,257 rows, 5 columns and 2 derived, 0.9 MB) in 11.8 s.
+Pressing 3 samples, 3 files, 300,000 entries, 3 at a time:
+  1/3      100,000 entries     14,483 kept   DYJetsToLL.root
+  2/3      100,000 entries      1,746 kept   TTbar.root
+  3/3      100,000 entries     10,420 kept   Run2012BC_DoubleMuParked_Muons.root
+Read 300,000 entries; kept after each cut:
+  two_muons                             29,302
+  opposite_charge                       26,649
+Wrote zmumu.reproduced/zmumu.rvr (26,649 rows, 4 columns and 2 derived, 0.5 MB) in 4.2 s.
 Comparing the two with rvr diff:
-The headers show no difference in rows, samples, columns, derived columns, by_sample or sample columns.
+The headers show no difference in rows, samples, labels, columns, derived columns, by_sample or sample columns.
 ```
 
 `rvr key new` makes a signing key once; every file you press after that is signed, and
@@ -537,31 +581,42 @@ folder shortened to `~`.
 $ rvr key new "A. Physicist"
 Made your key ~/.config/rvr/key (keep it private). Every file you press is signed with it from now on.
 Your public key, for whoever reads your files:
-  14a6fd0688010cc25f72f9a2297dcb08c3f3bc6710ec3d364c526b7fd180f180
+  a916435b5d41b65072cf70beeb506da0bc9f68842d74f7458dd273fad2eaac46
 They trust your files with:
-  rvr key trust 14a6fd0688010cc25f72f9a2297dcb08c3f3bc6710ec3d364c526b7fd180f180 A. Physicist
+  rvr key trust a916435b5d41b65072cf70beeb506da0bc9f68842d74f7458dd273fad2eaac46 A. Physicist
 $ rvr press --full
-…
-Signed with your key 14a6fd0688010cc2…
-Wrote zmumu.rvr (21,257 rows, 5 columns and 2 derived, 0.9 MB) in 15.1 s.
+Pressing 3 samples, 3 files, 300,000 entries, 3 at a time:
+  1/3      100,000 entries     14,483 kept   DYJetsToLL.root
+  2/3      100,000 entries      1,746 kept   TTbar.root
+  3/3      100,000 entries     10,420 kept   Run2012BC_DoubleMuParked_Muons.root
+Read 300,000 entries; kept after each cut:
+  two_muons                             29,302
+  opposite_charge                       26,649
+Signed with your key a916435b5d41b650…
+Wrote zmumu.rvr (26,649 rows, 4 columns and 2 derived, 0.5 MB) in 3.6 s.
 $ rvr validate zmumu.rvr
-zmumu.rvr: valid, 21257 rows, 5 columns, 2 derived, read 300000 of 854440704 entries, signed by you
+zmumu.rvr: valid, 26649 rows, 4 columns, 2 derived, read 300,000 of 98,422,390 entries, signed by you
 ```
 
 ## 10. Your own ntuples, and pressing on the LPC
 
-The same study works for files that are not a dataset: `files` in place of `dataset`, with `*` in
-the file name to match several. The path below is made up, to show the form; put the folder of
-your own ntuples there.
+The same study works for your own files. A file on your computer is named by its path
+(`files = "~/data/DY.root"`, or relative to the folder of `samples.toml`), with no proxy needed.
+A file on grid storage is named by its `root://` path (or a `davs://` or `https://` URL), with `*`
+and `?` in the file name to match several; rvr reads it over HTTPS from the storage's door, which
+needs your grid proxy (`rvr proxy init`, [setup](../SETUP.md#3-make-a-grid-proxy)). The path below
+is made up, to show the form; put the folder of your own ntuples there.
 
 ```toml
+[places]
+lpc = "root://cmseos.fnal.gov//store/user/YOUR_USERNAME/MADE_UP_FOLDER"   # a made-up path
+
 [[sample]]
 name = "DY"
-files = "root://cmseos.fnal.gov//store/user/YOUR_USERNAME/MADE_UP_FOLDER/DYJetsToLL_*.root"   # a made-up path
+files = "{lpc}/DYJetsToLL_*.root"
 tree = "Events"
 ```
 
-A file on your computer is named by its path (`files = "~/data/DY.root"`), with no proxy needed.
 `rvr samples check samples.lock` asks whether the files have changed since the lock was written.
 
 On the LPC or lxplus, the Linux download runs as it is (no CMSSW). Press where the press survives
@@ -578,31 +633,43 @@ tmux new -s press                    # detach with Ctrl-b d; come back with tmux
 
 ## 11. When something goes wrong
 
-Every error says what went wrong and what to do. A misspelt branch names the nearest ones; here
-`mass` was written with `Muon_ptt[good_muon]`:
+Every error says what went wrong and what to do. A flag rvr does not know is wrong use: the command
+does nothing, names the nearest flag, prints its usage, and exits 2.
 
 ```text
-$ rvr press --events 1000
+$ rvr press --event 1000
+rvr press: --event is not one of its flags. Did you mean: --events?
+usage:
+  rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N] [--full]
+            [--fill [KINDS]] [--restart]
 …
-rvr press: root://cms-xrd-global.cern.ch//store/mc/RunIISummer20UL18NanoAODv9/TTTo2L2Nu_…/0804DEBA-97D5-BE46-BB9D-B1125570966E.root, tree Events, entries 0 to 999: [columns] mass: There is no column named Muon_ptt. Did you mean: Muon_pt, Muon_eta, Muon_phi? rvr branches lists every branch the file has.
 ```
 
-A dataset name with the wrong version at its end names the ones that exist:
+Everything a press is given is checked before it reads an event: a misspelt branch names the
+nearest ones (here `mass` was written with `Muon_ptt[good_muon]`), and nothing is read.
 
 ```text
-$ rvr samples resolve samples.toml
-  ok    data                                     194 files   449.3 GB   100,000 of 513,909,894 events
-  ok    DY                                       204 files   257.3 GB   100,000 of 195,510,810 events
-  FAIL  TT: the dataset /TTTo2L2Nu_TuneCP5_13TeV-powheg-pythia8/RunIISummer20UL18NanoAODv9-106X_upgrade2018_realistic_v16_L1v1-v2/NANOAODSIM has no valid files in DBS. Did you mean: /TTTo2L2Nu_TuneCP5_13TeV-powheg-pythia8/RunIISummer20UL18NanoAODv9-106X_upgrade2018_realistic_v16_L1v1-v1/NANOAODSIM, …?
-…
-1 of 3 samples could not be resolved; samples.lock was not written. Fix the lines marked FAIL and run resolve again.
+$ rvr press
+rvr press: [columns] mass: There is no column named Muon_ptt. Did you mean: Muon_pt, Muon_eta, Muon_phi? (samples data, DY, TT, over the branches samples.lock lists for each)
+```
+
+A value in the data that the recipe cannot take stops the press, naming the file, the entry, the
+column and the value. Here a column was to hold the leading muon's pt in tenths of a GeV, in one
+byte (`pt_tenths = { value = "first(Muon_pt[good_muon], 0) * 10", stored = "u1" }`), which holds 0
+to 255 only:
+
+```text
+$ rvr press
+zmumu.rvr has the events this recipe keeps (26,649) and 4 of its 5 columns.
+Reading only pt_tenths for those events, 3 files, 3 at a time:
+rvr press: root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/Run2012BC_DoubleMuParked_Muons.root, tree Events, entry 6: [columns] pt_tenths: 576.0670166015625 does not fit in u1, which holds 0 to 255. The recipe cannot take this value: mend the recipe (or the file), then press again. zmumu.rvr was not written.
 ```
 
 A storage that is busy is waited for (each wait printed), and the press carries on where it was.
 
-A file that cannot be read (gone, changed since the lock, damaged, on tape only, or at a storage
-that kept failing) does not stop the press: the file is written without its events, records the
-**hole** with why, and the press exits with status 3. (Building on an earlier file to add a
+A file that cannot be read (gone, changed since the lock, damaged, or at a storage that kept
+failing or refuses it) does not stop the press: the file is written without its events, records
+the **hole** with why, and the press exits with status 3. (Building on an earlier file to add a
 column, it does stop; `rvr press --full` makes holes of it.) `rvr status` shows what each sample is
 missing, and `rvr press --fill` reads only the holes once they can be read. Here a study of local
 files (90 copies of one skim, in three samples) lost one file, which was then put back:
@@ -617,12 +684,12 @@ Pressing 3 samples, 90 files, 636,390 entries, 10 at a time:
 Read 629,319 of 636,390 entries; kept after each cut:
   met                                  313,547
   leptons                              313,547
-Signed with your key 14a6fd0688010cc2…
+Signed with your key a916435b5d41b650…
 Wrote three.rvr (313,547 rows, 7 columns, 0.8 MB) in 0.5 s, with 1 hole:
   gone        late_and_long_named_sample  files/f45.root no longer exists: put it back and run rvr press --fill (if it moved, run rvr samples resolve samples.toml again, then rvr press).
 rvr press --fill reads them again once they can be read.
 $ rvr status
-three.rvr: pressed 2026-10-31T17:24:54Z by rvr 15.0.0
+three.rvr: pressed 2026-11-03T20:17:30Z by rvr 15.0.0
   recipe.toml   as the file holds it
   samples.toml  as the file holds it
   samples.lock  as the file holds it
@@ -644,10 +711,10 @@ Filling three.rvr: reading 1 hole of 1 file, 7,071 entries, 1 at a time; every o
 Read 7,071 entries in the holes; kept after each cut:
   met                                    3,523
   leptons                                3,523
-Signed with your key 14a6fd0688010cc2…
+Signed with your key a916435b5d41b650…
 Wrote three.rvr (317,070 rows, 7 columns, 0.8 MB) in 0.1 s.
 $ rvr validate three.rvr --complete
-three.rvr: valid, 317070 rows, 7 columns, read all 636390 entries, signed by you
+three.rvr: valid, 317070 rows, 7 columns, read all 636,390 entries, signed by you
 ```
 
 The filled file is the one a press of all 90 files writes. A press that stops part way (Ctrl-C, a
@@ -655,6 +722,6 @@ laptop asleep, the network gone, a disk not mounted) keeps what it read beside i
 `three.rvr.partial/` for `three.rvr`), and the next `rvr press` carries on from there;
 `rvr status` says how far it got ([Stopped part way](../../crates/rvr/README.md#stopped-part-way)).
 
-The [rvr README](../../crates/rvr/README.md#when-something-goes-wrong) lists every message, and
-describes every command and every key of `samples.toml`; the
-[recipe reference](../../crates/rvr-recipe/README.md) lists everything a recipe can say.
+The [rvr README](../../crates/rvr/README.md) describes every command, the
+[specification](../SPEC.md) every rule of `samples.toml` and of a press, and the
+[recipe reference](../../crates/rvr-recipe/README.md) everything a recipe can say.

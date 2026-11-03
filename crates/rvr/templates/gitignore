@@ -1,7 +1,7 @@
 # The pressed files: made again from recipe.toml, samples.toml and samples.lock.
 *.rvr
 # What a press holds while it runs, and leaves behind if it is stopped.
-*.rvr.partial*
+*.rvr.partial/
 # What rvr writes before it puts a file in place, and what rvr reproduce makes.
 *.rvr.derive
 *.rvr.refill

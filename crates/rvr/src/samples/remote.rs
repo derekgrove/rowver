@@ -296,7 +296,7 @@ impl Watch {
             }
             let known: Vec<_> = last.doors.iter().filter(|(_, (_, addresses))| addresses.is_some()).collect();
             let up: Vec<_> = known.iter().copied().filter(|(_, (up, _))| *up).collect();
-            let sites: BTreeSet<&str> = known.iter().map(|(door, _)| domain(door)).collect();
+            let sites: BTreeSet<String> = known.iter().map(|(door, _)| domain(door)).collect();
             let one_site = up.is_empty() && sites.len() == 1;
             let asked = match (up.is_empty(), known.is_empty()) {
                 (false, _) => up,
@@ -356,13 +356,16 @@ pub fn host_port(url: &str) -> Option<String> {
     }
 }
 
-/// The site a door (`host:port`) is at: the last two labels of its name (`fnal.gov`), or its address.
-fn domain(door: &str) -> &str {
-    let host = door.rsplit_once(':').map_or(door, |(host, _)| host);
-    let numeric = host.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '[' || c == ']' || c == ':');
-    match host.rmatch_indices('.').nth(1) {
-        Some((at, _)) if !numeric => &host[at + 1..],
-        _ => host,
+/// The site a door (`host:port`) is at, as the WLCG door list groups its doors: the list's own
+/// site for a door it lists, else the site the list would give the host, else the host itself.
+fn domain(door: &str) -> String {
+    static SITES: std::sync::OnceLock<HashMap<(String, u16), String>> = std::sync::OnceLock::new();
+    let sites = SITES.get_or_init(|| wlcg_doors::snapshot().doors.iter().map(|d| ((d.host.to_ascii_lowercase(), d.port), d.site.clone())).collect());
+    let (host, port) = door.rsplit_once(':').map_or((door, None), |(host, port)| (host, port.parse::<u16>().ok()));
+    let listed = port.and_then(|port| sites.get(&(host.to_ascii_lowercase(), port)));
+    match listed {
+        Some(site) => site.clone(),
+        None => wlcg_doors::site_of(host).unwrap_or_else(|| host.to_owned()),
     }
 }
 
@@ -591,10 +594,12 @@ impl Storage {
     }
 
     /// A storage file's size and adler32 as its storage reports them, without reading it.
-    pub fn digest(&self, url: &str) -> Result<Digest, Failed> {
+    pub fn digest(&self, shown: &str) -> Result<Digest, Failed> {
+        let https = https(shown).map_err(|why| Failed::new(Fault::Unreachable, why))?;
         digest_seen(
             &self.agent,
-            url,
+            shown,
+            &https,
             self.waits,
             self.proxy.is_some(),
             &self.watch,
@@ -638,20 +643,18 @@ pub type Digest = (Option<u64>, Option<String>);
 /// means for the file.
 pub fn digest_seen(
     agent: &ureq::Agent,
-    url: &str,
+    shown: &str,
+    https: &str,
     waits: &[u64],
     proxied: bool,
     watch: &Watch,
 ) -> Result<Digest, Failed> {
-    // The agreement check found every host's door: one gone since is a storage that cannot be reached.
-    let (origin, path) = door(url).map_err(|why| Failed::new(Fault::Unreachable, why))?;
-    let at = format!("{origin}{path}");
-    let reply = patiently(waits, watch, url, |e| watch.passing(e, proxied), || head(agent, &at, watch));
+    let reply = patiently(waits, watch, shown, |e| watch.passing(e, proxied), || head(agent, https, watch));
     if reply.is_err() && watch.stop.load(Ordering::Acquire) {
-        return Err(Failed::new(Fault::Stopped, format!("{url}: {STOPPED}")));
+        return Err(Failed::new(Fault::Stopped, format!("{shown}: {STOPPED}")));
     }
     let seen = reply.as_ref().err().map_or(Fault::Unreachable, |e| fault(e, proxied));
-    digested(url, reply).map_err(|why| Failed::new(seen, why))
+    digested(shown, reply).map_err(|why| Failed::new(seen, why))
 }
 
 /// What a failed request means for its file.
@@ -734,23 +737,32 @@ pub struct HttpsFile {
     host: Option<String>,
 }
 
+/// The HTTPS URL a storage location is read from: its door's, and its path there.
+pub fn https(at: &str) -> Result<String, String> {
+    door(at).map(|(origin, path)| format!("{origin}{path}"))
+}
+
 impl HttpsFile {
     pub fn new(storage: &Storage, at: &str, len: u64) -> Result<Self, String> {
-        let (origin, path) = door(at)?;
-        Ok(HttpsFile {
+        Ok(Self::reading(storage, at, &https(at)?, len))
+    }
+
+    /// The file named `at`, read from the HTTPS URL `url` (its door's, as `https` gives it).
+    pub fn reading(storage: &Storage, shown: &str, https: &str, len: u64) -> Self {
+        HttpsFile {
             agent: storage.agent.clone(),
-            door: format!("{origin}{path}"),
+            door: https.to_string(),
             multipart: true.into(),
-            url: Mutex::new(format!("{origin}{path}")),
-            shown: at.to_string(),
+            url: Mutex::new(https.to_string()),
+            shown: shown.to_string(),
             len,
             proxied: storage.proxy.is_some(),
             requests: Default::default(),
             bytes: Default::default(),
             seen: Default::default(),
             watch: storage.watch.clone(),
-            host: host_port(&origin),
-        })
+            host: host_port(https),
+        }
     }
 
     /// The same, noting its failed requests in `seen`.
@@ -883,12 +895,14 @@ impl HttpsFile {
             .map(|(at, len)| format!("{at}-{}", at + *len as u64 - 1))
             .collect();
         let header = format!("bytes={}", asked.join(","));
+        let (count, total): (String, u64) = (format!("{} ranges", ranges.len()), ranges.iter().map(|(_, len)| *len as u64).sum());
         let ask = |url: &str| {
             follow(url, |url| {
                 self.requests
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let reply = self.agent.get(url).set("Range", &header).call();
                 self.watch.note(self.host.as_deref().filter(|_| url == self.door), &reply);
+                trace(&count, total, &self.shown, &reply);
                 reply
             })
         };
@@ -909,7 +923,6 @@ impl HttpsFile {
             .header("Content-Type")
             .and_then(super::multipart::boundary)
             .filter(|_| reply.status() == 206 && reply.content_type() == "multipart/byteranges");
-        let total: u64 = ranges.iter().map(|(_, len)| *len as u64).sum();
         let parts = match boundary {
             Some(boundary) => {
                 super::multipart::parts(reply.into_reader(), &boundary, total).map_err(fail)?
@@ -939,13 +952,6 @@ impl HttpsFile {
         };
         self.bytes
             .fetch_add(total as usize, std::sync::atomic::Ordering::Relaxed);
-        if std::env::var_os("RVR_TRACE").is_some() {
-            eprintln!(
-                "  GET {} ranges ({total} bytes) of {}",
-                ranges.len(),
-                self.shown.rsplit('/').next().unwrap_or("")
-            );
-        }
         ranges
             .iter()
             .map(|&(at, len)| {
@@ -964,6 +970,24 @@ impl HttpsFile {
     }
 }
 
+/// With `RVR_TRACE` set, one line for a byte-range request: what it asked of which file, and what
+/// answered it (its status, or why it failed).
+fn trace(asked: &str, bytes: u64, shown: &str, reply: &Result<ureq::Response, ureq::Error>) {
+    if std::env::var_os("RVR_TRACE").is_some() {
+        eprintln!("{}", traced(asked, bytes, shown, reply));
+    }
+}
+
+/// The line `trace` prints.
+fn traced(asked: &str, bytes: u64, shown: &str, reply: &Result<ureq::Response, ureq::Error>) -> String {
+    let answer = match reply {
+        Ok(reply) => reply.status().to_string(),
+        Err(ureq::Error::Status(status, _)) => status.to_string(),
+        Err(e) => format!("failed: {}", why(e)),
+    };
+    format!("  GET {asked} ({bytes} bytes) of {}: {answer}", shown.rsplit('/').next().unwrap_or(""))
+}
+
 impl ByteSource for HttpsFile {
     fn len(&self) -> u64 {
         self.len
@@ -980,6 +1004,7 @@ impl ByteSource for HttpsFile {
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let reply = self.agent.get(url).set("Range", &range).call();
                 self.watch.note(self.host.as_deref().filter(|_| url == self.door), &reply);
+                trace(&range, buf.len() as u64, &self.shown, &reply);
                 reply
             })
         };
@@ -996,13 +1021,6 @@ impl ByteSource for HttpsFile {
                 use std::io::Read;
                 self.bytes
                     .fetch_add(buf.len(), std::sync::atomic::Ordering::Relaxed);
-                if std::env::var_os("RVR_TRACE").is_some() {
-                    eprintln!(
-                        "  GET {range} ({} bytes) of {}",
-                        buf.len(),
-                        self.shown.rsplit('/').next().unwrap_or("")
-                    );
-                }
                 reply
                     .into_reader()
                     .read_exact(buf)
@@ -1169,11 +1187,23 @@ mod tests {
     }
 
     #[test]
+    fn a_traced_request_says_what_answered_it() {
+        let ok = ureq::Response::new(206, "Partial Content", "");
+        assert_eq!(traced("bytes=0-9", 10, "root://h//d/f.root", &ok), "  GET bytes=0-9 (10 bytes) of f.root: 206");
+        let refused = Err(ureq::Error::Status(403, ureq::Response::new(403, "Forbidden", "").unwrap()));
+        assert_eq!(traced("2 ranges", 20, "f.root", &refused), "  GET 2 ranges (20 bytes) of f.root: 403");
+        let failed = ureq::get("https://exa mple/").call();
+        assert!(traced("bytes=0-9", 10, "f.root", &failed).starts_with("  GET bytes=0-9 (10 bytes) of f.root: failed: "));
+    }
+
+    #[test]
     fn the_network_is_gone_only_when_no_host_that_answered_can_be_reached() {
         assert_eq!(host_port("https://eos.example:9000/store/f.root").as_deref(), Some("eos.example:9000"));
         assert_eq!(host_port("https://Door.Example").as_deref(), Some("door.example:443"));
-        assert_eq!((domain("cmseos.fnal.gov:443"), domain("eos.cms.rcac.purdue.edu:9000")), ("fnal.gov", "purdue.edu"));
-        assert_eq!((domain("127.0.0.1:0"), domain("[::1]:0")), ("127.0.0.1", "[::1]"));
+        assert_eq!((domain("cmseos.fnal.gov:443"), domain("eos.cms.rcac.purdue.edu:9000")), ("fnal.gov".into(), "purdue.edu".into()));
+        assert_eq!((domain("127.0.0.1:0"), domain("[::1]:0")), ("127.0.0.1".into(), "[::1]".into()));
+        // As the door list groups them: two doors under ac.uk are two sites, as it says.
+        assert_eq!((domain("antares.stfc.ac.uk:9000"), domain("ceph-dev-gw4.gridpp.rl.ac.uk:1094")), ("stfc.ac.uk".into(), "rl.ac.uk".into()));
         // A door that takes connections, and two that never do (port 0).
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let door = listener.local_addr().unwrap().to_string();

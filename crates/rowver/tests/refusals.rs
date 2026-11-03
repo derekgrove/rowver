@@ -42,6 +42,9 @@ enum Change {
     Derived(fn(&mut Value)),
     /// As `Derived`, of the file emptied.
     EmptyDerived(fn(&mut Value)),
+    /// Sample B's file split in two (`two_files`), the lock's two takes swapped; its own choice the
+    /// file's (true), or another seed (false).
+    SwappedTakes(bool),
 }
 
 use Change::*;
@@ -117,6 +120,51 @@ fn derived() -> (Value, Vec<Vec<u8>>) {
     (header, arrays)
 }
 
+/// The fixture with sample B's file split in two, of 11 and 9 entries: its four chosen entries
+/// (1, 8, 10, 17) are 1, 8 and 10 of the first and 6 of the second, and its rows entries 1 and 6.
+/// The lock chooses as the file did (`same`), or by another seed, one whose takes differ; with
+/// `swapped`, the lock's two takes trade places, their sum unchanged.
+fn two_files(header: &mut Value, arrays: &mut [Vec<u8>], same: bool, swapped: bool) {
+    let entries = [11, 9];
+    let seed = match same {
+        true => 7,
+        false => (8..).find(|&s| { let c = rowver::choice::per_file(&entries, 4, s); c[0].len() != c[1].len() }).unwrap(),
+    };
+    let samples = common::SAMPLES
+        .replace("files = \"./fixture-b.root\"", "files = [\"./fixture-b.root\", \"./fixture-b2.root\"]")
+        .replace("seed = 7", &format!("seed = {seed}"));
+    let lock = common::lock_with(|lock| {
+        lock.samples_toml_sha256 = rowver::write::text_checksum(&samples);
+        let b = &mut lock.samples[1];
+        b.asked = vec!["./fixture-b.root".into(), "./fixture-b2.root".into()];
+        b.files[0].entries = entries[0];
+        let mut second = b.files[0].clone();
+        (second.at, second.bytes, second.adler32, second.uuid, second.entries) =
+            ("./fixture-b2.root".into(), 5005, Some("0a1b2c05".into()), "31e851e4-b994-11f1-ba5c-000000000005".into(), entries[1]);
+        b.files.push(second);
+        b.events = rowver::study::samples::Events::Random { n: 4, seed };
+        *b = b.planned(b.events);
+        if swapped {
+            let (first, second) = (b.files[0].take, b.files[1].take);
+            (b.files[0].take, b.files[1].take) = (second, first);
+        }
+    });
+    set_text(header, "samples", &samples);
+    set_text(header, "lock", &lock);
+    let taken: Vec<usize> = rowver::choice::per_file(&entries, 4, 7).iter().map(Vec::len).collect();
+    let files = &mut header["made"]["files"]["B"]["files"];
+    files["./fixture-b.root"]["entries"] = entries[0].into();
+    files["./fixture-b.root"]["take"] = taken[0].into();
+    files["./fixture-b2.root"] = json!({"tree": "Events", "uuid": "31e851e4-b994-11f1-ba5c-000000000005", "entries": entries[1], "take": taken[1]});
+    let listed = header["data"]["files"].as_array_mut().unwrap();
+    listed[3]["rows"] = 1.into();
+    listed.push(json!({"sample": "B", "path": "./fixture-b2.root", "rows": 1}));
+    let entry = |values: &[i64]| values.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+    put(header, arrays, 1, &entry(&[0, 2, 4, 1, 6]), 8);
+    header["data"]["entry"]["by_sample"][1] = sha(&entry(&[1, 6])).into();
+    relaid(header, arrays);
+}
+
 /// The fixture's bytes with `change` made to them.
 fn bytes(change: Change) -> Vec<u8> {
     let (mut header, mut arrays) = rebuilt(10.);
@@ -179,6 +227,10 @@ fn bytes(change: Change) -> Vec<u8> {
         Signed(f) => {
             rowver::sign::sign(&mut header, &[3; 32]).unwrap();
             f(&mut header);
+        }
+        SwappedTakes(same) => {
+            two_files(&mut header, &mut arrays, same, true);
+            header = sealed(header);
         }
         Derived(f) | EmptyDerived(f) => {
             let (mut with, arrays) = derived();
@@ -464,6 +516,8 @@ fn full_validation_refuses_each_rule_it_alone_checks() {
         ("§3 R15", "entries strictly increasing within a file", Arrays(|h, a| put(h, a, 1, &[2_i64, 0, 4, 1, 17].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), 8)), "data.entry: row 1 holds entry 0 of data.files[0] after entry 2"),
         ("§3 §6.1", "each entry chosen", Arrays(|h, a| put(h, a, 1, &[0_i64, 2, 6, 1, 17].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), 8)), "data.entry: row 2 holds entry 6 of data.files[2] (./fixture-a2.root), which the event choice did not choose"),
         ("§3 §6.1", "a random choice made again", Header(|h| h["made"]["files"]["B"]["events"]["seed"] = 8.into()), "data.entry: row 3 holds entry 1 of data.files[3] (./fixture-b.root), which the event choice did not choose"),
+        ("§6.3", "each file's random take its share, the choice the file made again", SwappedTakes(true), "made.lock.text: sample B's file ./fixture-b.root has take 1, and its random choice takes 3 of it"),
+        ("§6.3", "each file's random take its share, the lock's own choice made again", SwappedTakes(false), "made.lock.text: sample B's file ./fixture-b.root has take"),
         ("§3 §7", "entry is i8[rows]", Arrays(|h, a| put(h, a, 1, &[0_i64, 2, 4, 1].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), 8)), "data.entry: its zstd frame decodes to 32 bytes, and its record's values take 40"),
         // §4 Columns, against their values and the lock
         ("§4", "a copied column keeps its branch's kind", Lock(|l| met_as(l, "f8")), "data.cols[\"MET\"] is f4, and the recipe makes it f8"),
@@ -541,11 +595,11 @@ fn full_validation_refuses_each_rule_it_alone_checks() {
         ("§6.3 L2", "format and version", LockText(|t| *t = t.replace("version = 1", "version = 2")), "samples.lock's version is not 1"),
         ("§6.3 L3", "resolved: YYYY-MM-DDTHH:MM:SSZ", Lock(|l| l.resolved = "yesterday".into()), "samples.lock's resolved \"yesterday\" is not YYYY-MM-DDTHH:MM:SSZ"),
         ("§6.3 L4", "one sample or more", Lock(|l| l.samples.clear()), "samples.lock has no sample"),
-        ("§6.3 L5", "a sample exactly its fields", LockText(|t| *t = t.replacen("tree = \"Events\"\n", "tree = \"Events\"\nx = 1\n", 1)), "samples.lock sample 1 has a field \"x\", which a lock does not"),
+        ("§6.3 L5", "a sample exactly its fields", LockText(|t| *t = t.replacen("tree = \"Events\"\n", "tree = \"Events\"\nx = 1\n", 1)), "samples.lock sample 1 has no key \"x\""),
         ("§6.3 L6", "the samples samples.toml makes", Lock(|l| l.samples[1].label = "Bee".into()), "samples.lock sample \"B\" is not the sample samples.toml makes"),
         ("§6.3 L7", "events_total the sum of entries", Lock(|l| l.samples[0].events_total = 31), "samples.lock sample \"A\": events_total is not the sum of its files' entries"),
         ("§6.3 L8", "branches names one of the lists", Lock(|l| l.samples[0].branches = ZEROS.into()), "samples.lock sample \"A\": its branches names no branch list of the lock"),
-        ("§6.3 L9", "a file exactly its fields", LockText(|t| *t = t.replacen("entries = 10\n", "entries = 10\nmodified = 1\n", 1)), "samples.lock sample 1 file 1 has a field \"modified\", which a lock does not"),
+        ("§6.3 L9", "a file exactly its fields", LockText(|t| *t = t.replacen("entries = 10\n", "entries = 10\nmodified = 1\n", 1)), "samples.lock sample 1 file 1 has no key \"modified\""),
         ("§6.3 L10", "stop exactly when first N reads fewer", Lock(|l| l.samples[0].files[2].stop = None), "samples.lock sample \"A\": ./fixture-a2.root's stop and take are not what its event choice reads"),
         ("§6.3 L11", "files in SPEC §3.8's order", Lock(|l| l.samples[0].files.swap(0, 1)), "samples.lock sample \"A\": ./fixture-a.root is not where the lock lists it"),
         ("§6.3 L12", "no two files with the same at", Lock(|l| l.samples[0].files[1].at = "./fixture-a.root".into()), "samples.lock sample \"A\" names ./fixture-a.root twice"),
@@ -683,4 +737,14 @@ fn reading_a_column_checks_its_frame_length_and_sha256() {
     relaid(&mut header, &arrays);
     let path = written(&to_bytes(&header, &arrays), "column");
     assert!(Reader::open(&path).unwrap().column("MET").unwrap_err().to_string().contains("not the sha256 its record states"));
+}
+
+#[test]
+fn a_two_file_random_sample_whose_takes_are_the_choices_shares_is_valid() {
+    for same in [true, false] {
+        let (mut header, mut arrays) = rebuilt(10.);
+        two_files(&mut header, &mut arrays, same, false);
+        let path = written(&to_bytes(&sealed(header), &arrays), "two-files");
+        validate_file(&path).unwrap_or_else(|e| panic!("same choice {same}: {e}"));
+    }
 }

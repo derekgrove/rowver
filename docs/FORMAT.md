@@ -1,16 +1,13 @@
 # The `.rvr` format
 
-> **Being built.** This page is the agreed format of RowVer 15.0 (2026-11-02). The code reaches it
-> in the commits that follow; until then, where the two differ, this page is the target, and its
-> running example, `tiny.rvr`, is pressed again once they agree.
-
 Version 15 (rowver 15.0). This page specifies every byte of a `.rvr` file. `crates/rowver` reads
 and writes all of it and is the reference builder; `rvr press` writes pressed files with it.
 [The features](FEATURES.md) describe what the tools around the format do.
 
 **The running example.** Every example below is from one real file, `tiny.rvr`, unless it says
-otherwise. It is 6,202 bytes, pressed from two copies of a five-entry test ntuple (one sample
-each, `signal` and `background`) with this recipe, and signed with a throwaway key:
+otherwise. It is 7,427 bytes, pressed from two copies of a five-entry test ntuple
+(`crates/rvr/tests/fixtures/uproot_flat.root`, tree `analysis`; one sample each, `signal` and
+`background`) with this recipe, and signed with a throwaway key:
 
 ```toml
 format = "rvr-recipe"
@@ -47,16 +44,16 @@ Checksums are cut to their first 8 hex digits here; a file holds all 64.
 The first bytes of `tiny.rvr`:
 
 ```
-00000000: 8952 5652 0d0a 1a0a e216 0000 7b22 726f  .RVR........{"ro
+00000000: 8952 5652 0d0a 1a0a ab1b 0000 7b22 726f  .RVR........{"ro
           └──────magic──────┘ └length─┘ └─header…
 ```
 
 - **The magic** is `89 52 56 52 0D 0A 1A 0A` (`\x89RVR\r\n\x1a\n`): a high byte, the letters
   `RVR`, then CR LF, Ctrl-Z and LF. A transfer that strips the eighth bit or rewrites line endings
   therefore breaks the file visibly.
-- **The header length** is `E2 16 00 00`, that is 0x16E2 = 5,858 bytes. A reader parses that many
+- **The header length** is `AB 1B 00 00`, that is 0x1BAB = 7,083 bytes. A reader parses that many
   bytes of JSON and has every fact about the file without touching any array.
-- **The arrays** start at byte 12 + 5,858 = 5,870 and fill the rest of the file: 332 bytes here.
+- **The arrays** start at byte 12 + 7,083 = 7,095 and fill the rest of the file: 332 bytes here.
   Each is compressed on its own (§7), so a reader decompresses only the arrays it needs. A program
   that changes only the header writes the new header and copies the arrays byte for byte.
 
@@ -342,14 +339,14 @@ metadata has any of these names (SPEC.md §3.5.10, §2.3).
 ```json
 "made": {
   "study": "tiny",
-  "built": "2026-10-31T07:03:04Z",
+  "built": "2026-11-03T20:10:19Z",
   "by": "rvr 15.0.0",
-  "toolchain": {"rvr": "15.0.0", "rowver": "15", "commit": "ad9d3e6a…",
+  "toolchain": {"rvr": "15.0.0", "rowver": "15", "commit": "76ab18e2…",
                 "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
   "recipe":  {"sha256": "937f05be", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
               "columns": ["nJet", "Jet_pt", "ht"]},
-  "samples": {"sha256": "aa22df20", "text": "…the whole samples.toml…"},
-  "lock":    {"sha256": "8c29824e", "text": "…the whole samples.lock…"},
+  "samples": {"sha256": "a960276a", "text": "…the whole samples.toml…"},
+  "lock":    {"sha256": "459558ea", "text": "…the whole samples.lock…"},
   "files": {
     "signal": {
       "events": {"choose": "all"},
@@ -359,7 +356,7 @@ metadata has any of these names (SPEC.md §3.5.10, §2.3).
     },
     "background": { … }
   },
-  "sha256": "d5e24c11"
+  "sha256": "56c8177d"
 }
 ```
 
@@ -371,7 +368,7 @@ metadata has any of these names (SPEC.md §3.5.10, §2.3).
 | `title` | the recipe's `title`; present exactly when the recipe sets one, and equal to it |
 | `built` | when the file was written, UTC to the second: `YYYY-MM-DDTHH:MM:SSZ`, a real date and time |
 | `by` | nonempty text naming the program that wrote the file |
-| `toolchain` | what built that program: exactly `rvr` (its version, `15.MINOR.PATCH`), `rowver` (`"15"`), `commit` (below), `rustc` (the compiler's `rustc -V`, nonempty) and `target` (the platform, nonempty) |
+| `toolchain` | what built that program: exactly `rvr` (its version, `15.MINOR.PATCH`, each number in digits with no leading zero), `rowver` (`"15"`), `commit` (below), `rustc` (the compiler's `rustc -V`, nonempty) and `target` (the platform, nonempty) |
 | `recipe`, `samples`, `lock` | the study's three files, each exactly its whole `text` and the `sha256` of that text as UTF-8; `recipe` also has `format` (`"rvr-recipe"`) and `columns` (every column the recipe stores, in the file's order, each named once) |
 | `files` | every sample of `data.samples`, by name (below) |
 | `sha256` | the checksum of `made` (§8) |
@@ -389,7 +386,7 @@ be read.
   lists exactly the columns of `derived` (§10); its `title` is `made.title`;
 - `samples` is a `samples.toml` [SPEC.md §3](SPEC.md#3-samplestoml) accepts;
 - `lock` is a `samples.lock` §6.3 accepts, resolved from that `samples.toml`: its
-  `samples_toml_sha256` is the `sha256` of `made.samples` (in `tiny.rvr`, `aa22df20…`), and its
+  `samples_toml_sha256` is the `sha256` of `made.samples` (in `tiny.rvr`, `a960276a…`), and its
   samples are what that `samples.toml` makes (names, labels, trees, metadata, event choices, the
   paths asked);
 - `data` and `made.files` agree with the lock, as §3, §6.3 and below say: the samples, their names,
@@ -445,8 +442,9 @@ The choice is what the press did: what `samples.toml` asked, unless `rvr press -
 and the file records it). `events` has exactly the fields its row above shows.
 
 A sample's files hold at most 2^40 entries in all (about 1.1 × 10^12), so that every reader can make
-a random choice again in bounded time; a file whose samples hold more is refused, on opening and
-before any choice is made again, and no sum of entries can overflow.
+a random choice again in bounded time, and no sum of entries can overflow. A reader refuses a file
+whose samples hold more: on opening, counted over the files the file records (`made.files`), before
+any choice is made again; in full validation, over every file of the lock.
 
 **First N.** The files, in `data.files` order, read `min(entries, left)` each, with `left`
 starting at N and going down by what each file read. A row's entry is below what its file read.
@@ -538,15 +536,15 @@ The lock of `tiny.rvr`, cut short:
 
 format = "rvr-samples-lock"
 version = 1
-resolved = "2026-10-31T07:03:01Z"
-samples_toml_sha256 = "aa22df20…"
+resolved = "2026-11-03T20:10:19Z"
+samples_toml_sha256 = "a960276a…"
 
 [[sample]]
 name = "signal"
 label = "Signal"
 asked = ["./signal.root"]
 tree = "analysis"
-branches = "5d1a…"
+branches = "2fccd77d…"
 events = "all"
 events_total = 5
 events_read = 5
@@ -554,16 +552,19 @@ metadata = { kind = "signal", xsec = 2.5 }
 
 [[sample.file]]
 at = "./signal.root"
-bytes = 5281
-adler32 = "0a1b2c3d"
+bytes = 39262
+adler32 = "bbc43743"
 uuid = "31e851e4-b994-11f1-ba5c-1a45bb13c76a"
 entries = 5
 
 [[branches]]
-sha256 = "5d1a…"
+sha256 = "2fccd77d…"
 list = [
+  { name = "Jet_eta", kind = "f4", shape = "jagged" },
   { name = "Jet_pt", kind = "f4", shape = "jagged" },
+  # … 7 more
   { name = "nJet", kind = "i4", shape = "flat" },
+  # … 7 more, among them { name = "pv", kind = "f4", shape = 3 }
 ]
 ```
 
@@ -756,7 +757,7 @@ A press signs the file when the person pressing it has a key. A file without a `
 unsigned, and still valid.
 
 ```json
-"signature": {"ed25519": "228e7cf8…", "key": "7c10dc33…", "sha256": "df704d52…"}
+"signature": {"ed25519": "52b538dd…", "key": "7355b0e5…", "sha256": "1f7b41f3…"}
 ```
 
 It has exactly these three members:

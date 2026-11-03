@@ -47,26 +47,17 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
     let stopped = crate::journal::folder(&target);
     if crate::journal::under_way(&stopped) {
         println!("{}: a press is under way there now.", stopped.display());
-    } else if let Some((press, done)) = crate::journal::unfinished(&stopped).filter(|(_, done)| !done.inputs.is_empty()) {
-        let inputs = press["inputs"].as_u64().unwrap_or(0) as usize;
-        println!(
-            "{}: a press stopped there with {} of {} done (journal from {}). rvr press carries on from there when the study and the press are the same, and --restart starts over.",
-            stopped.display(),
-            done.inputs.len(),
-            some(inputs, "file", "files"),
-            done.when
-        );
     }
     // The file there, opened once for what is said of it here and for the Plan.
     let at = At::open(&target);
     let header = match &at {
         At::Opened(file, _) => file.header().clone(),
-        At::Missing => {
-            println!("{} is not there: rvr press makes it.", target.display());
-            return Ok(false);
-        }
+        At::Missing => return missing(dir, study, target, texts, choice),
         At::Unopened(e) => return Err(rowver::plain(&target, e)),
     };
+    if let Some(note) = stopped_note(&stopped) {
+        println!("{note}");
+    }
     let made = &header["made"];
     let held = |key: &str| made[key]["text"].as_str().unwrap_or_default();
     println!("{}: pressed {} by {}", target.display(), made["built"].as_str().unwrap_or("?"), made["by"].as_str().unwrap_or("?"));
@@ -128,6 +119,65 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
     completeness(&header, every, fillable);
     // The Plan alone says whether rvr press would have nothing to do.
     Ok(matches!(plan.from, Base::Current(0)))
+}
+
+/// With no file at the target: what rvr press would read (the Plan's reads), or why it would
+/// refuse, then that there is no file yet. Never current.
+fn missing(dir: PathBuf, study: String, target: PathBuf, texts: crate::texts::Texts, choice: Choice) -> Result<bool, String> {
+    let place = Place { base: dir, study, target: target.clone(), at: At::Missing };
+    let asked = Asked { choose: Choose::Options(choice), on: On::Earlier, workers: 1, sign: true };
+    let stopped = crate::journal::folder(&target);
+    match crate::plan::build(place, texts, asked) {
+        Ok(plan) => match crate::journal::read(&stopped, &plan.identity) {
+            // The press stopped there is this one: what is left of it, in one statement.
+            crate::journal::Found::Same(done) if !done.inputs.is_empty() => {
+                let left: Vec<&crate::plan::Input> = plan.reads().iter().enumerate().filter(|(at, _)| !done.inputs.contains_key(at)).map(|(_, input)| input).collect();
+                let entries: u64 = left.iter().map(|input| crate::take::chosen_of(input)).sum();
+                println!(
+                    "{}: a press stopped there with {} of {} done (journal from {}); rvr press carries it on, reading the {} left, {}.",
+                    stopped.display(),
+                    done.inputs.len(),
+                    some(plan.reads().len(), "file", "files"),
+                    done.when,
+                    some(left.len(), "file", "files"),
+                    some(entries as usize, "entry", "entries")
+                );
+            }
+            _ => {
+                if let Some(note) = stopped_note(&stopped) {
+                    println!("{note}");
+                }
+                println!("rvr press would press every column: {}.", crate::core::pressed(&plan));
+            }
+        },
+        Err(why) => {
+            if let Some(note) = stopped_note(&stopped) {
+                println!("{note}");
+            }
+            println!("rvr press would refuse:");
+            for line in why.lines() {
+                println!("  {line}");
+            }
+        }
+    }
+    println!("{} is not there yet: rvr press makes it.", target.display());
+    Ok(false)
+}
+
+/// A press stopped in `stopped` (its staging folder) with files done, said; none, nothing.
+fn stopped_note(stopped: &std::path::Path) -> Option<String> {
+    if crate::journal::under_way(stopped) {
+        return None;
+    }
+    let (press, done) = crate::journal::unfinished(stopped).filter(|(_, done)| !done.inputs.is_empty())?;
+    let inputs = press["inputs"].as_u64().unwrap_or(0) as usize;
+    Some(format!(
+        "{}: a press stopped there with {} of {} done (journal from {}). rvr press carries on from there when the study and the press are the same, and --restart starts over.",
+        stopped.display(),
+        done.inputs.len(),
+        some(inputs, "file", "files"),
+        done.when
+    ))
 }
 
 /// How much of what it chose the file holds, from its header: one bar per sample with the files its

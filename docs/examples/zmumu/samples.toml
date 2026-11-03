@@ -1,0 +1,34 @@
+# The study of the step-by-step guide (README.md here), as it is at step 7: Z → μμ in CMS Open
+# Data of 2012, the data beside Drell-Yan and tt̄ simulation, all readable with no grid proxy.
+# A first press: rvr press (100,000 events of each sample).
+
+format = "rvr-samples"
+version = 1
+
+[places]
+opendata = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool"
+
+[defaults]
+tree = "Events"
+events = 100_000
+metadata = { kind = "simulation", lumi = 11.6 }   # fb⁻¹: Run 2012 B and C
+
+[eras]
+
+[[sample]]
+name = "data"
+label = "Data, Run 2012 B and C"
+files = "{opendata}/Run2012BC_DoubleMuParked_Muons.root"
+metadata = { kind = "data" }
+
+[[sample]]
+name = "DY"
+label = "Drell-Yan"
+files = "{opendata}/DYJetsToLL.root"
+metadata = { xsec = 3503.7 }                       # pb
+
+[[sample]]
+name = "TT"
+label = "tt̄"
+files = "{opendata}/TTbar.root"
+metadata = { xsec = 225.2 }

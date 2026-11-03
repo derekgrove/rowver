@@ -1,13 +1,13 @@
 # rowver (Python)
 
 Read `.rvr` files in Python, through the same Rust reader as the `rvr` command, which this
-package also installs.
+package also installs: `pip install rowver` (Python 3.11 or later).
 
 ```python
 import rowver
 
 f = rowver.open("higgs_tautau.rvr")
-f                         # <rowver.File 'higgs_tautau.rvr': 2248 rows, 11 columns, 2 samples>
+f                         # <rowver.File 'higgs_tautau.rvr': 2248 rows, 11 columns, 1 derived, 2 samples>
 f.samples, f.columns      # names, in the file's order
 f["MET_pt"]               # NumPy array, one value per row (no copy)
 f["Muon_pt"]              # Awkward array, a list per row
@@ -30,7 +30,7 @@ f.holes                   # what it could not read: [{"sample", "file", "entries
 f.arrays()                # every column as one Awkward record array, sample and entry first
 f.arrays(["MET_pt"])      # sample, entry, then the columns named
 f.to_arrow()              # a pyarrow Table (list columns as Arrow lists), sample and entry first
-f.to_pandas()             # a pandas DataFrame, sample and entry first
+f.to_pandas()             # a pandas DataFrame, sample (a categorical) and entry first
 f.to_parquet("out.parquet")
 ```
 

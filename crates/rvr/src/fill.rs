@@ -394,7 +394,7 @@ mod tests {
             files: Vec::new(),
         };
         let lock = Lock { resolved: String::new(), samples_toml_sha256: String::new(), samples: vec![sample], branches: Vec::new() };
-        let input = |file: &File| Input { sample: 0, tree: "t".into(), file: file.clone(), chosen: None, kept: None, before: None, ranges: None, order: 0, unsummed: false };
+        let input = |file: &File| Input { sample: 0, tree: "t".into(), file: file.clone(), read_at: file.at.clone(), chosen: None, kept: None, before: None, ranges: None, order: 0, unsummed: false };
         let plan = |rows: std::ops::Range<usize>, read: Vec<(u64, u64)>| crate::fill::Plan { rows, read, kept: Vec::new(), record: Value::Null, unread: false };
         let plans = HashMap::from([
             (("s".to_string(), "f.root".to_string()), plan(0..5, vec![(3, 5), (6, 8)])),

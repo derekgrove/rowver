@@ -8,7 +8,7 @@ Maybe it's best to first say what problems a `.rvr` file solves:
 
 ### Speed
 
-Much of the time a HEP analysis takes goes into opening and reading `.root` files. The usual answer is to split a dataset into chunks, send the chunks to batch computing (condor), and process each one there. With a lot of data that looks like the obvious, fastest way to work. But every chunk is opened, read, turned into an output, and closed again, every time the analysis runs. Splitting the files further makes that overhead worse, not better.
+Much of the time a HEP analysis takes goes into opening and reading `.root` files. The usual answer is to split the files into chunks, send the chunks to batch computing (condor), and process each one there. With a lot of data that looks like the obvious, fastest way to work. But every chunk is opened, read, turned into an output, and closed again, every time the analysis runs. Splitting the files further makes that overhead worse, not better.
 
 `.rvr` takes the opposite approach (not a new idea, but rarely the one taken): instead of keeping the files apart and splitting them further, *merge them*. Read the ROOT files once, keep only the events and branches you need, and put them in a single file. From then on you open one file, once.
 
@@ -61,12 +61,12 @@ A `.rvr` file also describes itself: it carries the whole text of the `samples.t
 
 ### Local analysis
 
-Because the file is small and opens in milliseconds, the analysis itself moves to your laptop. The grid is used once, to press the file, and `rvr press` reads only the branches the recipe uses, from wherever the dataset is stored. Everything after that (plots, cuts, fits, trying out ideas) runs on your own processor, in Python, with no batch jobs, no queue and no grid proxy. When you change your mind about what to store, change the recipe and press again: `rvr` reads only the new branches, and only for the events it already kept ([step 5 of the examples](examples/README.md#5-add-a-column-you-forgot)).
+Because the file is small and opens in milliseconds, the analysis itself moves to your laptop. The grid is used once, to press the file (when the files are there), and `rvr press` reads only the branches the recipe uses, from wherever the files are stored. Everything after that (plots, cuts, fits, trying out ideas) runs on your own processor, in Python, with no batch jobs, no queue and no grid proxy. When you change your mind about what to store, change the recipe and press again: `rvr` reads only the new branches, and only for the events it already kept ([step 5 of the examples](examples/README.md#5-add-a-column-you-forgot)).
 
 ### The rules
 
 1) **One study, one file.** Every sample of a study lives in one `.rvr` file, each sample in its own block of rows.
 2) **The file says how it was made.** The recipe and the samples are inside it. You never edit a `.rvr` file by hand: you change the recipe and press again.
-3) **Store what you use.** A `.rvr` holds the columns of your analysis, not a copy of the dataset. When you need another branch, add it to the recipe.
+3) **Store what you use.** A `.rvr` holds the columns of your analysis, not a copy of the ntuples. When you need another branch, add it to the recipe.
 
 To make your first one, follow [the examples](examples/README.md).

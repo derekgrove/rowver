@@ -37,9 +37,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   while it was read …`). A `Reader` reads through the handle it opened, so a file renamed over it
   meanwhile is read as it was.
 - `rowver::choice`: the random event choice a file can record.
+- `rowver::study`: the study texts a file carries, read on rails: `samples.toml`
+  (`study::samples::read`, as [docs/SPEC.md §3](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#3-samplestoml)
+  says) and `samples.lock` (`study::lock::Lock::read`), and whether a lock was resolved from a
+  `samples.toml` (`study::lock::agree`).
 
-Arrays are byte-shuffled and compressed with Zstandard in pure Rust; reading a column is one read
-and one decode. The format is specified in
+Arrays are byte-shuffled and compressed with Zstandard in pure Rust; reading a flat column is one
+read and one decode, a jagged one two (its offsets and its content). The format is specified in
 [docs/FORMAT.md](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md).
 
 The [`rvr`](https://crates.io/crates/rvr) command makes `.rvr` files from ROOT files and

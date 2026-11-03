@@ -20,18 +20,28 @@ pub fn lock(texts: &Texts, lock: &Lock) -> Vec<String> {
     }
 }
 
-/// Every storage file of the lock is on a host rvr reads through a WebDAV door (a `root://`
-/// host the WLCG registry it knows lists one); each host that is not, once.
-pub fn doors(lock: &Lock) -> Vec<String> {
+/// Where each lock file is read (its path, or its door's HTTPS URL), or each host with no door.
+pub fn doors(lock: &Lock) -> Result<Vec<Vec<String>>, Vec<String>> {
     let mut said: Vec<(String, &str)> = Vec::new();
-    for file in lock.samples.iter().flat_map(|s| &s.files).filter(|f| f.at.contains("://")) {
-        if let Err(why) = crate::samples::remote::door(&file.at) {
-            if !said.iter().any(|(was, _)| *was == why) {
-                said.push((why, &file.at));
+    let mut read_at = Vec::new();
+    for sample in &lock.samples {
+        let mut files = Vec::new();
+        for file in &sample.files {
+            match file.at.contains("://") {
+                false => files.push(file.at.clone()),
+                true => match crate::samples::remote::https(&file.at) {
+                    Ok(url) => files.push(url),
+                    Err(why) if !said.iter().any(|(was, _)| *was == why) => said.push((why, &file.at)),
+                    Err(_) => {}
+                },
             }
         }
+        read_at.push(files);
     }
-    said.into_iter().map(|(why, at)| format!("samples.lock names {at}: {why}; then run rvr samples resolve samples.toml.")).collect()
+    match said.is_empty() {
+        true => Ok(read_at),
+        false => Err(said.into_iter().map(|(why, at)| format!("samples.lock names {at}: {why}; then run rvr samples resolve samples.toml.")).collect()),
+    }
 }
 
 /// The lock with each sample's event choice applied, and those choices; or every way the choice
@@ -57,7 +67,13 @@ pub fn choices(mut lock: Lock, choose: &Choose) -> (Lock, Vec<Events>, Vec<Strin
             said.push(why);
             sample.events
         });
-        *sample = sample.planned(want);
+        let planned = sample.planned(want);
+        // The lock's own random choice, made again as it is planned: each file takes its share.
+        if want == sample.events && matches!(want, Events::Random { .. }) {
+            let counts: Vec<u64> = planned.files.iter().map(|f| f.take.unwrap_or(0)).collect();
+            said.extend(sample.takes(&counts).err().map(|why| format!("samples.lock does not check out: {why}.")));
+        }
+        *sample = planned;
         asked.push(want);
     }
     (lock, asked, said)

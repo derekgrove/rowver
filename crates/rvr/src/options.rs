@@ -18,8 +18,8 @@ pub enum Takes {
 pub struct Command {
     /// Its name as written after `rvr`, as `samples plan`.
     pub name: &'static str,
-    /// Its flags, each with what follows it.
-    pub flags: &'static [(&'static str, Takes)],
+    /// Its flags: each with what follows it, and its short alias (`-f` for `--force`), if any.
+    pub flags: &'static [(&'static str, Takes, Option<&'static str>)],
     /// The fewest and the most words it takes, and what they are, as its usage writes them.
     pub words: (usize, usize, &'static str),
     /// Whether a word that reads as a short flag (`-x`) is a word all the same (an expression).
@@ -83,9 +83,10 @@ fn slipped(word: &str) -> Option<String> {
 pub fn read(command: &Command, args: &[&str]) -> Result<Options, String> {
     let mut options = Options::default();
     let mut args = args.iter().copied().peekable();
-    let names: Vec<&str> = command.flags.iter().map(|(name, _)| *name).collect();
+    let names: Vec<&str> = command.flags.iter().map(|(name, _, _)| *name).collect();
     while let Some(word) = args.next() {
-        let Some(&(name, takes)) = command.flags.iter().find(|(name, _)| *name == word) else {
+        // A short flag is its long one (SPEC §5.1.2): the one flag, however it is written.
+        let Some(&(name, takes, short)) = command.flags.iter().find(|(name, _, short)| *name == word || *short == Some(word)) else {
             if word.starts_with("--") || (short(word) && !command.dashes) {
                 let (flag, value) = word.split_once('=').unwrap_or((word, ""));
                 if !value.is_empty() && names.contains(&flag) {
@@ -100,7 +101,8 @@ pub fn read(command: &Command, args: &[&str]) -> Result<Options, String> {
             continue;
         };
         if options.has(name) && name != "--drop" {
-            return Err(format!("{name} is given twice: give it once"));
+            let written = short.map_or(name.to_owned(), |short| format!("{name} (or {short})"));
+            return Err(format!("{written} is given twice: give it once"));
         }
         let value = match takes {
             Takes::No => None,
@@ -177,7 +179,7 @@ mod tests {
 
     const PRESS: Command = Command {
         name: "press",
-        flags: &[("--events", Takes::Value), ("--random", Takes::No), ("--fill", Takes::Kinds), ("--drop", Takes::No)],
+        flags: &[("--events", Takes::Value, None), ("--random", Takes::No, None), ("--fill", Takes::Kinds, None), ("--drop", Takes::No, None)],
         words: (0, 1, "at most one study folder"),
         dashes: false,
         usage: "",
@@ -202,6 +204,9 @@ mod tests {
         assert!(read(&["--events", "--random"]).unwrap_err().contains("needs a value"));
         assert!(read(&["--random", "--random"]).unwrap_err().contains("given twice"));
         assert!(read(&["--drop", "--drop"]).is_ok(), "--drop may be given again");
+        let empty = Command { name: "empty", flags: &[("--force", Takes::No, Some("-f"))], words: (1, 9, "files"), dashes: false, usage: "" };
+        assert!(super::read(&empty, &["a", "-f"]).unwrap().has("--force"));
+        assert!(super::read(&empty, &["a", "-f", "--force"]).unwrap_err().contains("--force (or -f) is given twice"));
         assert!(read(&["a", "b"]).unwrap_err().contains("takes at most one study folder"));
         assert!(read(&["-y"]).unwrap_err().contains("not one of its flags"));
         assert_eq!(count("--events", "50_000", 100_000), Ok(50_000));

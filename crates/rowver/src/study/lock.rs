@@ -177,6 +177,17 @@ pub(crate) fn reads(entries: &[u64], events: Events) -> Vec<Read> {
 }
 
 impl Sample {
+    /// Why a file's `take` is not its share (`counts`) of the sample's random choice, if one is not.
+    pub fn takes(&self, counts: &[u64]) -> Result<(), String> {
+        for (file, count) in self.files.iter().zip(counts) {
+            if file.take != Some(*count) {
+                let take = file.take.map_or("no take".to_owned(), |t| format!("take {t}"));
+                return Err(format!("sample {}'s file {} has {take}, and its random choice takes {count} of it (docs/FORMAT.md §6.3): the lock was edited, or written by something other than rvr samples resolve; resolve again", self.name, file.at));
+            }
+        }
+        Ok(())
+    }
+
     /// The sample as a press with `events` reads it: each file's stop or take, its events_read,
     /// and its events_total.
     pub fn planned(&self, events: Events) -> Sample {
@@ -312,8 +323,8 @@ impl Lock {
                 p.say(format!("{place}'s files hold more than 2^40 entries in all, more than a file may"));
                 continue;
             }
-            // A random choice is made again where a press makes it (its time grows with the
-            // entries); here, that it takes what it chose in all.
+            // A random choice is made again where it is made anyway (full validation, the Plan):
+            // its time grows with the entries. Here, that it takes what it chose in all.
             let planned = match s.events {
                 Events::Random { n, .. } => {
                     let taken = s.files.iter().try_fold(0u64, |sum, f| sum.checked_add(f.take.unwrap_or(0)));
@@ -593,6 +604,9 @@ fn branch_list(table: &toml::Table, place: &str, p: &mut Problems) -> Option<Bra
         if shape.is_none() {
             b.p.say(format!("{place}: shape is \"flat\", \"jagged\", \"jagged N\" (N values per element, from 2) or a whole number from 1"));
         }
+        if none && shape.is_some_and(|shape| shape != Shape::Flat) {
+            b.p.say(format!("{place}: a branch rvr cannot read has shape \"flat\""));
+        }
         let why = none.then(|| b.text("why")).flatten();
         if let (Some(name), Some(kind), Some(shape)) = (b.text("name"), kind, shape) {
             list.push(Branch { name, kind, shape, why });
@@ -610,8 +624,9 @@ struct Fields<'a, 'p> {
 
 impl<'a, 'p> Fields<'a, 'p> {
     fn new(table: &'a toml::Table, place: &str, required: &[&str], optional: &[&str], p: &'p mut Problems) -> Self {
-        for key in table.keys().filter(|k| !required.contains(&k.as_str()) && !optional.contains(&k.as_str())) {
-            p.say(format!("{place} has a field {key:?}, which a lock does not"));
+        let known: Vec<&str> = required.iter().chain(optional).copied().collect();
+        for key in table.keys().filter(|k| !known.contains(&k.as_str())) {
+            p.say(super::unknown(place, key, &known));
         }
         for key in required.iter().filter(|k| !table.contains_key(**k)) {
             p.say(format!("{place} has no {key}"));
@@ -725,10 +740,30 @@ mod tests {
     }
 
     #[test]
+    fn each_file_of_a_random_choice_takes_its_share() {
+        let mut lock = lock(TOML);
+        let s = &mut lock.samples[0];
+        s.events = Events::Random { n: 3, seed: 7 };
+        s.events_read = 3;
+        let counts = crate::choice::counts(&[5, 5], 3, 7);
+        for (f, count) in s.files.iter_mut().zip(&counts) {
+            (f.stop, f.take) = (None, Some(*count));
+        }
+        assert_eq!(s.takes(&counts), Ok(()));
+        // Swapped, the takes add up as before (Lock::read's check), and each is not its share.
+        let swapped = [counts[1], counts[0]];
+        let said = s.takes(&swapped).unwrap_err();
+        assert!(said.contains("sample a's file ./a.root has take") && said.contains("resolve again"), "{said}");
+        let text = lock.write().unwrap();
+        assert!(Lock::read(&text.replacen(&format!("take = {}\n", counts[0]), "TAKE\n", 1).replacen(&format!("take = {}\n", counts[1]), &format!("take = {}\n", counts[0]), 1).replacen("TAKE\n", &format!("take = {}\n", counts[1]), 1)).is_ok(), "Lock::read checks only the sum");
+    }
+
+    #[test]
     fn a_lock_off_its_rails_is_refused_with_every_problem() {
         let text = lock(TOML).write().unwrap();
         let said = |text: String| Lock::read(&text).unwrap_err().to_string();
-        assert!(said(text.replace("entries = 5\n", "entries = 5\nmodified = \"x\"\n")).contains("field \"modified\""));
+        assert!(said(text.replace("entries = 5\n", "entries = 5\nmodified = \"x\"\n")).contains("no key \"modified\""));
+        assert!(said(text.replace("entries = 5\n", "entires = 5\n")).contains("has no key \"entires\"; it takes at, bytes, uuid, entries, adler32, stop. Did you mean: entries?"));
         assert!(said(text.replace("stop = 2\n", "")).contains("not what its event choice reads"));
         assert!(said(text.replace("events_read = 7", "events_read = 8")).contains("events_read"));
         assert!(said(text.replace("bytes = 100", "bytes = 0")).contains("bytes 0"));
@@ -738,6 +773,7 @@ mod tests {
         assert!(said(text.replace("era = 3 }", "era = 3, when = 2026-11-02 }")).contains("date or time"));
         assert!(said(text.replace("31e851e4", "31E851E4")).contains("uuid"));
         assert!(said(text.replace("kind = \"f4\"", "kind = \"f16\"")).contains("kind is a .rvr kind"));
+        assert!(said(text.replace("kind = \"none\", shape = \"flat\"", "kind = \"none\", shape = \"jagged\"")).contains("a branch rvr cannot read has shape \"flat\""));
         for shape in ["\"jagged 03\"", "\"jagged 1\"", "\"jagged3\"", "0"] {
             assert!(said(text.replace("\"jagged 3\"", shape)).contains("shape is \"flat\""), "{shape}");
         }

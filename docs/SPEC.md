@@ -1,8 +1,5 @@
 # RowVer: the specification
 
-> **Being built.** This is RowVer 15.0 as agreed on 2026-11-02. The code reaches it in the commits
-> that follow; until then, where the two differ, this page is the target.
-
 Every numbered statement is a requirement. Three documents together specify RowVer, each rule in
 one place:
 
@@ -93,7 +90,12 @@ validator reads only its input: none reads an event or opens a ROOT file.
 - the recipe, checked: the cuts, the stored columns with the kind of each, the totals, the derived
   columns;
 - what is taken from the earlier file (columns copied, rows kept, holes to fill);
-- the number of files read at once, and the toolchain the file will name.
+- the number of files read at once, and the toolchain the file will name;
+- whether the file is signed (with your key, when you have one), whether the press keeps a journal
+  and what its first line says the press is;
+- every name the recipe reads, so that the branches it names are fetched ahead;
+- the study's name and the folder a relative path in the lock is read from;
+- the earlier file, as opened (§2.1), and its tool keys, which the new file carries (FORMAT.md §11).
 
 **2.5 The pressing core** takes only a Plan. It checks nothing a validator or the agreement check has
 checked. It reads the entries the Plan names, evaluates the cuts and columns, and writes the file.
@@ -107,7 +109,9 @@ checked. It reads the entries the Plan names, evaluates the cuts and columns, an
 | a value in the data the recipe cannot take (the recipe reference's list): a conversion out of the target kind's range, a mask or two lists taken member by member whose lengths differ in one event, an event past the pair limit, a whole number to a negative power, a total that is not finite | stops, naming the file, entry, column and value, and keeps what it read |
 | a file that lacks the tree a `[totals]` total over another tree names, or a branch that total reads in it, or has one there of a type rvr cannot read | stops, naming the file, the tree and the branch, and keeps what it read; a failure reading that tree's bytes is a hole, as for the event tree |
 
-Floats may be NaN or infinite anywhere; no value of a float ever stops the core.
+Floats may be NaN or infinite anywhere, stored and derived alike; a float stops the core only as
+the row above says (a total that is not finite, or a NaN or infinite value converted to a whole
+kind).
 
 **2.7** Before the file is put in place, its header passes the file validator; full
 validation, every array decompressed, is `rvr validate`.
@@ -160,7 +164,8 @@ with those tables added, and goes on.
 
 ### 3.2 `[places]`
 
-**3.2.1** Each key is a place name: one or more ASCII letters, digits and `_`.
+**3.2.1** Each key is a place name: one or more ASCII letters, digits and `_`, and not `era` or
+`file`, which §3.6 gives.
 
 **3.2.2** Each value is text: a folder, a path or a URL. One trailing `/` is dropped.
 
@@ -215,13 +220,16 @@ where it is 1 when left out. A sample that gives it without choosing at random i
 
 **3.5.10** `metadata`: a table. Each key is a name a recipe can read as `sample.KEY`: a letter or `_`,
 then letters, digits and `_`. Not `events_read`, `events_total`, `events_missing` or `file`, which
-rvr gives. Each value is text, a whole number (TOML's 64-bit integers), a finite float, `true` or
+rvr gives, nor `sample` or a word of the recipe language (`and`, `in`, `true` and the rest: the
+recipe reference's). Each value is text, a whole number (TOML's 64-bit integers), a finite float, `true` or
 `false`, or a list or table of these. A date or time is refused: write it as text.
 
 ### 3.6 Placeholders
 
-**3.6.1** In `files` and in the text values of metadata, `{NAME}` is replaced by, first match first:
-`{era}`, the era's name (for a sample made by `eras`); a key of that era's table; a place.
+**3.6.1** In `files` and in the text values of metadata, `{NAME}` is replaced by: `{era}`, the
+era's name (for a sample made by `eras`); a key of that era's table; or a place. An era key named
+like a place is refused, so that a name means one thing. In an era's own text values, a
+placeholder is a place, or `{era}`.
 
 **3.6.2** An era value put into text must be text or a whole number (its digits).
 
@@ -258,6 +266,9 @@ later key replacing an earlier one.
 | `/path/file.root`, `~/path/file.root`, `path/file.root` | a file on this computer: absolute, under the home folder, or relative to the folder holding `samples.toml` | from the file system |
 | `root://host[:port]//path/file.root` | a file at a grid storage | through that host's HTTPS door, from the WLCG door list built into rvr |
 | `davs://host[:port]/path/file.root`, `https://host[:port]/path/file.root` | a file behind an HTTPS door | over HTTPS, as written (`davs` read as `https`) |
+
+An `https://` or `davs://` entry holding a query (a `?` followed later by `=`) is refused: rvr
+names a storage file by its path, and storage access goes by the grid proxy.
 
 **3.8.2** `*` (any run of characters, also none) and `?` (one character) may appear in the file
 name, not in its folder. Nothing else is special. A name is matched whole, byte for byte, case
@@ -484,7 +495,8 @@ type, and its shape (`flat`, `jagged`, `N per event`, or `jagged, N per element`
 ### 5.5 `rvr try`
 
 **5.5.1** Evaluates one expression, with the recipe's defined names, on the first `--events N`
-events (10 when not given) of the first file of the study's first sample, or of `--sample NAME`,
+events (10 when not given) of the first file that has entries of the study's first sample, or of
+`--sample NAME`,
 reading only the branches it names; `--kept` shows only the events the cuts keep.
 
 **5.5.2** It reads `samples.lock`, `samples.toml` and `recipe.toml` through their validators and the
@@ -536,8 +548,9 @@ the trees a file has for a tree it lacks.
 **6.2.8** The lock is written through a file beside it, then put in its place, so it is whole or the
 old one.
 
-**6.2.9** It then lists the `.root` files in the folders it read, on this computer and on storage,
-that no sample reads, as a check that none was forgotten; this is not a failure.
+**6.2.9** It then names the `.root` files in the folders it read, on this computer and on storage,
+that no sample reads, as a check that none was forgotten: the first 3 in byte order, then
+`… and N more`. This is not a failure.
 
 ### 6.3 `rvr samples check LOCK`
 
@@ -573,7 +586,7 @@ order, or N chosen at random from a seed (FORMAT.md §6.1).
 | `--events all` | every entry |
 | `--events N --random` | N chosen at random, seed 1 |
 | `--events N --random --seed S` | N chosen at random, seed S |
-| `--random` | its own N, chosen at random, seed 1; refused when a sample reads every entry |
+| `--random` | its own N, chosen at random: a sample already random with its own seed, any other with seed 1; refused when a sample reads every entry |
 | `--seed S` | its own choice, with seed S for a random one; refused when no sample is random |
 
 `--events all --random` is refused. S is a whole number from 0 to 2^64 − 1.
@@ -598,9 +611,10 @@ connection waits at most 15 s to open, and a read 120 s for its answer.
 
 **7.2.5** Before each run (§4.2.1) of a remote file, every basket of the run that the recipe reads is
 asked for in `multipart/byteranges` requests: at most 256 ranges a request, 6 requests at once,
-ranges within 16 kB of each other joined. A storage that answers such a request with `400` or `416`,
-or not as multiple parts, is asked one range a request for the rest of that file, ranges within
-512 KiB joined up to 32 MiB.
+ranges within 16 KiB of each other joined. A `206` that answers every range asked in one part (its
+`Content-Range` covering them all, at most twice their bytes and 1 MiB more) is taken as it is. A
+storage that answers such a request with `400` or `416`, or otherwise not as the parts asked, is
+asked one range a request for the rest of that file, ranges within 512 KiB joined up to 32 MiB.
 
 **7.2.6** A fetch ahead of need is never waited for or asked again: the read that needs the bytes
 is.
@@ -641,8 +655,8 @@ or a host name that does not resolve is asked again after 5, 15, 30, 60, 120, 24
 eight tries over 770 s. Each wait is printed:
 `  waiting W s to ask again for FILE (K of 8 tries made): WHY`.
 
-**7.4.2** A read whose eight tries fail makes an `unreachable` hole, or a `refused` one when every
-answer was `403`.
+**7.4.2** A read whose eight tries fail makes an `unreachable` hole, or a `refused` one when the
+last answer was `403` (with a proxy).
 
 **7.4.3** Answered at once:
 
@@ -676,7 +690,8 @@ at all.
 **7.5.3** At most every 2 seconds while files finish, the spool and then the journal are made safe
 on disk (a checkpoint). A press stopped by anything (Ctrl-C, a killed process, a laptop asleep, a
 failure that is not a file's own, a data error) loses at most the files finished since the last
-checkpoint.
+checkpoint. A press that builds on columns (§8.2) and is stopped by a file it cannot read keeps
+nothing, since only `rvr press --full` goes on from there.
 
 **7.5.4** The next press with the same Plan (the same three texts, event choices, columns read, file
 built on, toolchain and number of files) carries on from the files finished at the last checkpoint,
@@ -703,21 +718,31 @@ columns at a time.
 ### 7.7 What a press shows
 
 **7.7.1** It first says what it presses: `Pressing S samples, F files, E entries, W at a time:`.
+A press that builds on columns says `FILE has the events this recipe keeps (K) and C of its N
+columns.`, then `Reading only NAMES for those events, F files, W at a time:` (or `Nothing to read:
+every column is copied from it.`); one that builds on samples, `FILE holds the rows of H of the S
+samples as samples.lock has them.`, then `Reading only the new samples NAMES, F files, E entries,
+W at a time:`; a fill, `Filling FILE: reading H holes of F files, E entries, W at a time; every
+other row is the file's own:`.
 
-**7.7.2** On a terminal (standard output a terminal, `TERM` not `dumb`, at least 7 rows and 41
-columns), it draws one bar per sample under way (at most 10, or the terminal's rows less 5), with
-the entries read of those chosen, the events kept so far, the holes, the read rate and the time,
-redrawn every 200 ms and cut to the terminal's width; what happens meanwhile (a wait, a hole) is
+**7.7.2** On a terminal (standard output a terminal, `TERM` not `dumb`, `RVR_TRACE` not set, at
+least 7 rows and 41 columns), it draws one bar for each sample the press reads, finished ones
+too, with the entries read of those chosen; when they are more than fit (10, or the terminal's
+rows less 5), those under way and then those to come get a bar, one fewer than fit, and the rest
+one line, `and N more: D done, C to come, U under way`. Under the bars, one line has the events
+kept so far, the holes, the read rate and the time. They are redrawn every 200 ms, each line cut
+to 79 characters or the terminal's width less one; what happens meanwhile (a wait, a hole) is
 printed above the bars. Elsewhere it prints one line per file as it finishes:
 `  N/F  ENTRIES entries  KEPT kept   FILE`.
 
 **7.7.3** Then the cutflow, `Read E entries; kept after each cut:` and one line per cut, or `with no
 cuts, every one is kept.`; then, when the file is signed, `Signed with your key K…`; then
 `Wrote FILE (R rows, C columns[ and D derived], S MB) in T s.`, with its holes listed when it has
-any.
+any. A press that builds on columns, or on samples with none new, prints no cutflow, as it runs no
+cut.
 
-**7.7.4** `RVR_TRACE` set (to anything) prints every byte-range request, for looking into a storage's
-answers.
+**7.7.4** `RVR_TRACE` set (to anything) prints every byte-range request on standard error, with what
+answered it (its status, or why it failed), for looking into a storage's answers.
 
 ### 7.8 What a press writes
 
@@ -764,8 +789,9 @@ every column.
 
 **8.7 `rvr press --fill [KINDS]`** reads only the holes of the file at the target (`KINDS`: a
 comma-separated list of hole kinds, every part one, to read only those) and writes the file again
-with their rows in place, merged by entry within each file. It presses the recipe the file carries,
-with its event choices. The lock may have been resolved again for the files it fills (put back, or
+with their rows in place, merged by entry within each file. The study's `recipe.toml` and
+`samples.toml`, and the options' event choices, must be the ones the file carries, so that the
+recipe it presses is the file's own; it says which differs otherwise. The lock may have been resolved again for the files it fills (put back, or
 another copy in their place). A hole that fails again stays a hole, with its new kind and why; when
 none can be read, the file is left as it was. A file's totals gain the sum over the entries filled.
 
@@ -822,7 +848,10 @@ when they do, 2 when one cannot be read.
 **9.5 `rvr status [DIR]`** says, from the study's texts and the file's header alone (no input is read),
 whether the file holds the study as it is: what changed in each text, what a press would do (§8), how
 much each sample holds of what it chose, and its holes by kind; `--holes` lists every hole. It shows a
-press stopped part way, or under way. It exits 0 only when `rvr press` with the same options would
+press stopped part way, or under way. With no file at the target, it says what a press would read
+(`rvr press would press every column: S samples, F files, E entries.`, or why it would refuse; for
+a stopped press that `rvr press` carries on, the files left of it and their entries), then
+`FILE is not there yet: rvr press makes it.`, and exits 1. It exits 0 only when `rvr press` with the same options would
 have nothing to do: the file current (§8.1) and without holes.
 
 **9.6 `rvr reproduce FILE [DIR]`** writes the three texts FILE carries into DIR (`FILE`'s name with
@@ -845,7 +874,8 @@ with it from then on. It prints your public key, and the `rvr key trust` line ot
 `trusted` in that folder; `#` lines and blank lines are passed over. KEY is 64 lowercase
 hexadecimal characters, as `rvr key show` prints it. A key trusted already stays under its name:
 trusting it by that name says so (exit 0), and by another is refused (exit 1), saying which line to
-take out. `rvr validate` names a signer from it: `signed by you`, `signed by NAME (trusted)`, or `signed by key K…, which you do not trust yet`.
+take out. `rvr validate` names a signer from it: `signed by you`, `signed by NAME (trusted)`, or `signed by key K…, which you do not trust yet`, followed by the `rvr key trust` line that trusts it
+(` (rvr key trust KEY NAME)`).
 
 **10.4 `rvr proxy`** shows the grid proxy rvr uses (`$X509_USER_PROXY`, else
 `/tmp/x509up_u<your uid>`): its file, whose it is, its VO and how long its attributes last, the time
@@ -887,7 +917,8 @@ against its record. An unknown name raises `KeyError`, listing the columns.
 Columns asked for together (`f.read([…])`, `arrays`, `to_*`) are read in parallel.
 
 **11.6** `f.arrays()` gives an Awkward record array; `f.to_arrow()` a pyarrow Table and
-`f.to_pandas()` a pandas DataFrame, each with `sample` (its names) and `entry` first;
+`f.to_pandas()` a pandas DataFrame, each with `sample` (its names, as a categorical: an Arrow
+dictionary in `to_arrow()`) and `entry` first;
 `f.to_parquet(path)` writes `to_arrow()`.
 
 **11.7** `rowver.validate(path)` checks the file in full, as `rvr validate` does, and returns its

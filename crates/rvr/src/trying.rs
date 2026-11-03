@@ -20,7 +20,7 @@ const RUN: u64 = 10_000;
 
 /// `rvr try` with its options: the exit status.
 pub fn main(options: &Options) -> u8 {
-    let wanted = match options.value("--events").map(|n| crate::options::count("--events", n, u64::MAX)).transpose() {
+    let wanted = match options.value("--events").map(|n| crate::options::count("--events", n, i64::MAX as u64)).transpose() {
         Ok(wanted) => usize::try_from(wanted.unwrap_or(10)).unwrap_or(usize::MAX),
         Err(why) => return crate::wrong("try", &why),
     };

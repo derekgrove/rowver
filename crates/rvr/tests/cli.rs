@@ -178,6 +178,10 @@ fn new_makes_a_study_that_expands_and_never_overwrites() {
     }
     let recipe = std::fs::read_to_string(study.join("recipe.toml")).unwrap();
     assert!(recipe.contains("title = \"higgs_tautau\""));
+    // The .gitignore leaves out exactly what SPEC 5.3.3 names.
+    let ignored = std::fs::read_to_string(study.join(".gitignore")).unwrap();
+    let lines: Vec<&str> = ignored.lines().filter(|l| !l.starts_with('#')).collect();
+    assert_eq!(lines, ["*.rvr", "*.rvr.partial/", "*.rvr.derive", "*.rvr.refill", "*.rvr.refilled", "*.rvr-new", "*.reproduced/"]);
     let (code, said) = rvr(&[
         "samples",
         "expand",

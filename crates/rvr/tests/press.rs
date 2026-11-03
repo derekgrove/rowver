@@ -834,7 +834,7 @@ branches = ["weight", "nJet"]
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     let (code, said) = rvr(&dir, &["status"]);
     assert_eq!(code, 1, "{said}");
-    assert!(said.contains("is not there: rvr press makes it"), "{said}");
+    assert!(said.contains("rvr press would press every column: 1 sample, 1 file, 5 entries.\n") && said.contains(".rvr is not there yet: rvr press makes it."), "{said}");
     assert_eq!(rvr(&dir, &["press"]).0, 0);
     let (code, said) = rvr(&dir, &["status"]);
     assert_eq!(code, 0, "{said}");
@@ -1202,6 +1202,8 @@ fn a_press_stopped_part_way_is_picked_up_where_it_stopped() {
     let (code, said) = rvr(&dir, &["status"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains(".rvr.partial: a press stopped there with 1 of 3 files done (journal from "), "{said}");
+    // With no file yet, what is left of the press it carries on, in one statement.
+    assert!(said.contains("); rvr press carries it on, reading the 2 files left, 10 entries.") && !said.contains("would press every column"), "{said}");
     // While a press holds the journal, another press of it, or a restart, is refused.
     let held = std::fs::File::open(staged.join("journal.jsonl")).unwrap();
     held.lock().unwrap();
