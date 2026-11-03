@@ -6,12 +6,16 @@ like `MET_pt > 30` or `count(good_muon) >= 1`. This page is the lookup for all o
 operator and function you can use, each with an example and what it actually gives you.
 
 A quick note before we start: expressions look a lot like Python, but they aren't Python. `rvr`
-reads every one of them before it opens a single file, so a typo shows up right away and not an
-hour into a press. It then works on whole columns of 50,000 events at a time (there is no loop
-over events), and the numbers follow NumPy's rules, so a cut keeps exactly the events the same
-formula would keep in NumPy or Awkward. Only the branches you mention are read from the file.
+reads every one of them before it opens a single file, so a typo, a function that does not exist
+or a wrong number of values shows up right away, every one of them at once, and not an hour into a
+press. It then works on whole columns of events at a time (there is no loop over events, and no
+result depends on how many are worked on at once). The kinds of number follow NumPy's type
+promotion, with the differences [stated below](#kinds-exactly), and every result is defined here to
+the bit, the same on every platform: [Kinds, exactly](#kinds-exactly) and
+[Functions, exactly](#functions-exactly) are the rules a second implementation would follow. Only the
+branches you mention are read from the file.
 
-If you already write your selections in Python with Awkward, [the last section](#from-python-to-rvr)
+If you already write your selections in Python with Awkward, [a later section](#from-python-to-rvr)
 puts some common ones side by side with how you'd write them here.
 
 ## The example events
@@ -43,8 +47,10 @@ LHCb one.
 | `MET_phi` | `-0.5` | `2.0` | `1.0` |
 | `Flags` | `11` (binary 1011) | `4` (0100) | `1` (0001) |
 
-The sample these events come from has `era = 3`, `kind = "signal"` and `xsec = 0.386` in its
-`samples.toml` entry.
+`Muon_tightId` holds true-or-false values (`b1`), `nJet` unsigned 32-bit whole numbers (`u4`),
+`Muon_charge`, `Electron_charge` and `Flags` signed ones (`i4`), and every other branch 32-bit
+floats (`f4`), as NanoAOD stores them. The sample these events come from has `era = 3`,
+`kind = "signal"` and `xsec = 0.386` in its `samples.toml` entry.
 
 Results are written one value per event: `[31.5, 85, 16]` is a flat result (a number for each of
 the three events), and `[[65, 41], [], [120, 35]]` is a jagged one (a list for each).
@@ -82,6 +88,40 @@ weight = "genWeight / sample.sumw"  # a total, read as sample.NAME
 | `[totals]` | `NAME = "expression"`: the expression summed over every event read, before the cuts, one number for each sample, such as `sumw = "genWeight"` to normalize simulation, which needs the sum over every event, not only those kept. `NAME = { value = "expression", tree = "Runs" }` sums over every entry of another tree of each file instead (NanoAOD's `genEventSumw`, for a skim whose events were filtered before), for a sample that reads its files whole. A total is stored as a sample column, and only `[derived]` can use it, as `sample.NAME`: it is known once every event is read. |
 | `[derived]` | `NAME = "expression"`: a column the file keeps as its expression, not as an array, worked out when it is read. It uses only what the file holds: the columns under `[columns]`, the derived columns above it, and `sample.KEY`. A stored column costs space in the file; a derived one costs a moment each time it is worked out. |
 
+### The keys, exactly
+
+A recipe holds these keys and no others; any other, at the top or in a table, is refused, with the
+known key nearest to it when there is one ("Did you mean: keep?"):
+
+| where | keys |
+|---|---|
+| the top | `format = "rvr-recipe"` and `version = 1`, both required; `title`, text, optional; the five tables |
+| `[define]` | `NAME = "expression"`, as many as wanted |
+| `[keep]` | `NAME = "condition"`, or `NAME = { if = "condition", apply = "condition" }`: `apply` required, `if` optional, no other key |
+| `[columns]` | `branches = ["…", …]`, each a branch's name as the file spells it (nonempty, not a defined name); `NAME = "expression"`, or `NAME = { value = "expression", stored = "KIND" }`: `value` required, `stored` optional (one of the [kinds](#kinds-exactly)) |
+| `[totals]` | `NAME = "expression"`, or `NAME = { value = "expression", tree = "TREE" }`: `value` required, `tree` optional (a tree's name, nonempty) |
+| `[derived]` | `NAME = "expression"` |
+
+Every `NAME` is a **plain name**: a letter or `_`, then letters, digits and `_`, and not one of the
+words `and`, `or`, `not`, `in`, `true`, `false`, `pi`, `inf`. A defined name is not `sample`; a
+column, total or derived column is not `sample`, `entry` or `file`, and a total is not
+`events_read`, `events_total` or `events_missing`. No two columns share a name (a branch listed
+twice is two), and a total or derived column has a name no column, defined name, total or earlier
+derived column has. A defined name uses only the names defined above it; a derived column uses only
+the stored columns and the derived columns above it. Every expression is written as text in quotes.
+
+`rvr` reads the whole recipe before it opens a file, and refuses it with every problem it finds,
+one a line, each naming where it is (`[columns] ht: sum takes 1 value, not 2`). Two checks need the
+files' branches, and are made against the branch lists of `samples.lock` before anything is read: a
+defined name is never the name of a branch of any sample, so that each name means one thing; and
+each column has one kind in every sample: `if(sample.is_data, 1, genWeight)` is `i8` for data and
+`f4` for simulation, and is refused; store it as one kind, as
+`weight = { value = "if(sample.is_data, 1, genWeight)", stored = "f4" }`.
+
+A total is, for each file, its expression's value at each entry the press chose, before any cut,
+as an `f8`, added in entry order from +0.0; a sample's total is its files' added from +0.0 in the
+order `samples.lock` lists them. A total of `b1` values counts the true ones.
+
 Every recipe writes all five tables, even the ones it leaves empty, so that it says at a glance
 what it does and does not use: an empty `[define]` defines nothing, an empty `[keep]` keeps every
 event, an empty `[totals]` sums nothing, and an empty `[derived]` adds nothing. `rvr press`,
@@ -105,7 +145,10 @@ sample's events go straight through:
 hem = { if = "sample.era == 3", apply = "hem_veto" }
 ```
 
-A sample that has no `era` at all isn't cut either.
+A sample that has no `era` at all isn't cut either: a comparison with a field the sample doesn't
+have is false. An `if` that is a field alone, as `if = "sample.vbf"`, does not apply to a sample
+without that field. An `if` may also be one true-or-false value per event, as
+`if = "MET_pt > 100"`: the cut then applies to those events only.
 
 ## Values
 
@@ -119,22 +162,43 @@ A sample that has no `era` at all isn't cut either.
 | `sample.kind` | a text field | `"signal"` |
 | `sample.missing` | a field this sample's metadata does not have | missing |
 
-A comparison with a field the sample doesn't have is always false (even `!=`), and doing
-arithmetic with one is an error, as is giving one alone to the function `if`: `if(sample.isData, …)`
-needs every sample to have `isData` (give it to all of them in `[defaults]` of `samples.toml`),
-while `if(sample.isData == true, …)` takes a sample without it as false. (A cut's own `if`, above,
-lets a sample without the field through.)
+A field the sample doesn't have is **missing**, and has one rule: any comparison with it is false,
+`!=` included, against a fixed value or a column alike, and anything else with it is refused.
 
-You can write numbers (`30`, `2.5`, `1e3`, `1_000`), text in single or double quotes
-(`'signal'`), and `true` or `false` straight into an expression.
+| a missing field used | gives |
+|---|---|
+| in a comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`), or `in` | false, value by value: `MET_pt > sample.cut` is false for every event |
+| in `contains` | false |
+| in arithmetic, `-`, `and`, `or`, `not`, or a function that takes a number | refused, saying which sample lacks it |
+| as the condition of `if(…)` or of a cut | refused: `if(sample.isData, …)` needs every sample to have `isData` (give it to all of them in `[defaults]` of `samples.toml`), while `if(sample.isData == true, …)` takes a sample without it as false |
+| as a cut's own `if` | the cut does not apply to that sample |
+
+A field's value is what `samples.toml` writes: a whole number (`xsec = 2`) is whole, a number with
+a `.` or an exponent (`xsec = 2.0`) a float, `true` or `false` a truth value, and text text; a list
+or table is missing. So `xsec = 2` and `xsec = 2.0` can give a column two kinds. `sample.file` is
+the path of the row's file, as `samples.lock` names it; `events_read`, `events_total` and
+`events_missing`, which a press records of each sample, are no expression's to read.
+
+Written into an expression:
+
+| you write | it is |
+|---|---|
+| `30`, `1_000` | a whole number: digits, with any `_` after the first ignored, up to 9223372036854775807 |
+| `2.5`, `.5`, `5.`, `1e3`, `1.5E-3` | a float: digits with a `.` or an exponent (`e` or `E`, an optional sign, then digits), read as the nearest double |
+| `'signal'`, `"signal"` | text, which holds no quote of the kind around it (there are no escapes) |
+| `true`, `false` | the two truth values |
+| `pi`, `inf` | π and infinity, as doubles (NaN has no name: `inf - inf` is one) |
+| `Jet_pt`, `good_jet` | a name: a letter or `_`, then letters, digits and `_` (any alphabet), a branch or a defined name; `and`, `or`, `not`, `in`, `true`, `false`, `pi` and `inf` are words of the language, so a branch named so is read as `branch('in')` |
+
+There is no unary `+`, and no hexadecimal. Spaces of any kind may stand between the parts.
 
 ## Operators
 
 These work the way you'd expect. From loosest to tightest binding they are: `or`; `and`; `not`;
 the comparisons and `in`; `+ -`; `* / %`; unary `-`; `**`; and then `sample.name`, `[...]` and
-function calls. When in doubt, use parentheses. When you combine a flat value with a jagged one,
-the flat value is used for every member: `Jet_pt - MET_pt` subtracts the event's MET from each of
-its jets.
+function calls. Each level works left to right, but `**` right to left (`2 ** 3 ** 2` is `2 ** 9`).
+When in doubt, use parentheses. When you combine a flat value with a jagged one, the flat value is
+used for every member: `Jet_pt - MET_pt` subtracts the event's MET from each of its jets.
 
 | expression | result |
 |---|---|
@@ -155,7 +219,21 @@ its jets.
 | `sample.kind == 'signal'` | `true` |
 | `MET_pt * sample.xsec` | `[12.159, 32.81, 6.176]` |
 
-The comparisons are `==`, `!=`, `<`, `<=`, `>` and `>=`.
+The comparisons are `==`, `!=`, `<`, `<=`, `>` and `>=`; one compares two values, and they do not
+chain (`a < b < c` is refused: write `a < b and b < c`). `x in [a, b, …]` is
+`(x == a) or (x == b) or …`, and `x in []` is false; a list, like a call's values, may end with a
+comma. `not`, `and` and `or` take only true-or-false values: a number is refused (write `x != 0`).
+`and` with `false` written on its left, or `or` with `true`, gives that without working out its
+right side. `not` comes at the start of what it turns over, never straight after an operator
+(`a == not b` is refused: write `a == (not b)`).
+
+Text compares only with `==` and `!=`: two texts are equal when they are the same characters, and
+text against a number or a truth value is never equal. Any other operator refuses text.
+
+`-x` turns a float's sign over (`-0.0` from `0.0`), and takes a whole number from 0 in its own kind,
+wrapping as every whole-number operation does (`-nJet` of a `u4` 3 is 4294967293); a true-or-false
+value is refused. Arithmetic on two true-or-false values is refused (use `and`, `or` or `count`); a
+true-or-false value beside a number takes the number's kind, true being 1.
 
 ## Choosing members of a list
 
@@ -175,15 +253,19 @@ members of a list you care about, event by event.
 | `count(good_muon) >= 1` | a cut on it | `[true, true, false]` |
 
 One mask picks the same members of every list it is the same shape as: `good_jet` works for
-`Jet_pt`, `Jet_eta`, `Jet_phi` and every other jet branch. A mask must hold a list of the same
-length as each list it picks from, event by event, and is refused otherwise. That is all rvr can
+`Jet_pt`, `Jet_eta`, `Jet_phi` and every other jet branch. A mask is a true-or-false list of the
+same length as the list it picks from, event by event: one of another length in an event stops the
+press there, naming the event (a [data error](#values-the-recipe-cannot-take)). That is all rvr can
 check: in an event with as many muons as jets, a muon mask would pick jets without complaint, so
 pick each particle's branches with a mask made from that particle's branches.
 
 ## Functions
 
-Some functions take an `otherwise`: that's what you get back for an event whose list is empty.
-Event 1 has no jets, so keep an eye on it in the examples.
+Some functions take an `otherwise`: that's what you get back where there is nothing to give, as for
+an event whose list is empty. It is a fixed value: a number or truth written in, or a sample's
+field. Event 1 has no jets, so keep an eye on it in the examples. Every function's exact
+definition, its kinds, its order of work and what it does with NaN, is in
+[Functions, exactly](#functions-exactly).
 
 ### Reducing a jagged list to a flat value
 
@@ -238,11 +320,12 @@ in `order(lep_pt, 'descending')`.
 
 ### Math, value by value
 
-These work on flat and jagged values alike, value by value, and keep whatever float type you
-give them. Each gives the same bits on every platform: `sqrt` is exact in IEEE arithmetic, and
-the rest that a math library computes (logarithms, trigonometry, `hypot`, `**` and the others)
-come from the `libm` crate, not from the platform's own, which differs from one system to another
-in the last bit.
+These work on flat and jagged values alike, value by value. A float keeps its kind, and a whole
+number gives a float (`f4` or `f8`, as [Functions, exactly](#functions-exactly) says). Each gives
+the same bits on every platform: `sqrt` and the remainder of `%` are exact in IEEE arithmetic, and
+the rest that a math library computes (logarithms, trigonometry, `hypot`, `**` and the others) come
+from the `libm` crate, at exactly version 0.2.16, not from the platform's own, which differs from
+one system to another in the last bit.
 
 | function | example | result |
 |---|---|---|
@@ -266,8 +349,8 @@ in the last bit.
 | `if(condition, yes, no)` | `if(MET_pt > 30, MET_pt, 0)` | `[31.5, 85, 0]` |
 
 `tanh(Jet_eta)` is each jet's cos θ. `floor`, `ceil` and `round` leave whole numbers as they
-are and keep a float's type; `round` takes no true-or-false values, which NumPy rounds as floats. `round` takes 6.5 to 6 and 3.5 to 4, as NumPy does, not up every
-time.
+are and keep a float's kind; `round` takes no true-or-false values. `round` takes 6.5 to 6 and 3.5
+to 4, as NumPy does, not up every time.
 
 Careful with `min` and `max`: they compare two values, member by member. To find the smallest
 member *within* a list, use `least` (and `greatest` for the largest).
@@ -321,7 +404,9 @@ Notice event 1: its muon has no jet to match to, so it gets infinity or -1.
 ### Pairs within a list
 
 These go over every pair of members in each event's list, in the order (0, 1), (0, 2), …, (1, 2),
-…, so event 0's three jets make three pairs.
+…, so event 0's three jets make three pairs. A list of n members makes n(n − 1)/2 pairs, and one
+event may make at most 65,536 (a list of 362 members makes 65,341): an event past that stops the press,
+naming it, so select the members first, as `pair_mass(Jet_pt[good_jet], …)`.
 
 | function | gives | example | result |
 |---|---|---|---|
@@ -344,17 +429,19 @@ member's.
 |---|---|---|---|
 | `contains(text, part)` | whether a text holds another; false when the sample lacks the field | `contains(sample.kind, 'sig')` | `true` |
 | `branch(name)` | the branch of that name, often a name from the sample's metadata | `branch(sample.rho)`, with `rho = "MET_pt"` | `[31.5, 85, 16]` |
-| `stored(x, kind)` | `x` converted to another type | `stored(nJet, 'u1')` | `[3, 0, 2]`, as `u1` |
+| `stored(x, kind)` | `x` converted to another kind, by [the conversion rule](#conversions) | `stored(nJet, 'u1')` | `[3, 0, 2]`, as `u1` |
 
-The types are `f4`, `f8` (floats); `i1`, `i2`, `i4`, `i8` (signed whole numbers); `u1`, `u2`,
-`u4`, `u8` (unsigned); and `b1` (true or false). A comparison gives `b1`; `count` of a list gives `i8`;
-`sum` of whole numbers gives `i8`, and of floats the float type it was given.
+The kinds are `f4`, `f8` (floats); `i1`, `i2`, `i4`, `i8` (signed whole numbers); `u1`, `u2`,
+`u4`, `u8` (unsigned); and `b1` (true or false). A comparison gives `b1`; `count` of a list gives
+`i8`; `sum` of true-or-false values and signed whole numbers gives `i8`, of unsigned ones `u8`, and
+of floats the float kind it was given. [Kinds, exactly](#kinds-exactly) gives the rest.
 
 ## Defined names
 
 When you find yourself writing the same thing twice, give it a name under `[define]`, and use the
-name anywhere below it, as if it were a branch. A defined name hides a function of the same name,
-so name a list of leptons' η `lep_eta`, not `eta`, to keep `eta(…)`:
+name anywhere below it, as if it were a branch. A defined name may have a function's name, but that
+function is then refused where it is called, so name a list of leptons' η `lep_eta`, not `eta`, to
+keep `eta(…)`:
 
 ```toml
 [define]
@@ -372,22 +459,52 @@ hem_veto = "count(Jet_eta < -1.3 and Jet_phi > 2.5) == 0"
 A defined name is worked out once for each run of events, however many times it is used, so
 writing `Muon_pt[good_muon]`, `Muon_eta[good_muon]` and `Muon_phi[good_muon]` costs no more than
 writing the condition once. A name is never a branch's name, so each name means one thing: `rvr
-press` refuses a defined name it uses that a file also has as a branch. Long branch names can be given a
-short one the same way: `trig = "HLT_IsoMu17_eta2p1_LooseIsoPFTau20"`.
+press` refuses a defined name that is a branch of any sample, as `samples.lock` lists them, before
+it reads anything. Long branch names can be given a short one the same way:
+`trig = "HLT_IsoMu17_eta2p1_LooseIsoPFTau20"`.
 
 ## Mistakes
 
 If something in the recipe doesn't make sense, `rvr press` stops before it reads anything and
-tells you what's wrong, in plain words:
+tells you what's wrong, in plain words, every problem at once, one a line:
 
 | expression | `rvr` says |
 |---|---|
 | `Jet_pt >` | Expected a value at the end (column 9) |
 | `count(Jet_pt, 3)` | count takes 1 value, not 2 |
-| `count(Jet where pt > 30)` | where is not part of an expression (column 11): to keep some members of each list, use a mask, such as Jet_pt[Jet_pt > 30] |
+| `cuont(Jet_pt)` | There is no function named cuont. Did you mean: count? |
 | `Jet.pt` | Only sample has a field after a dot, as in sample.era (the dot at column 4). Name a branch in full, such as Jet_pt, and keep some members of it with a mask, such as Jet_pt[good_jet]; a branch whose name holds a dot is written branch('Jet.pt') |
 | `good_jet()` | good_jet is a defined name, not a function: write it without brackets, as good_jet |
-| `select = "…"` at the top of the recipe | A recipe has no setting named select; it takes format, version, title, define, keep, columns, totals, derived |
+| `not nJet` | not needs a true-or-false value, not u4: to test a number, compare it, as x != 0 |
+| `nJet > -1` | -1 does not fit beside a u4 column |
+| `MET_pt < 'high'` | Text can only be compared with == and !=, not < |
+| `select = "…"` at the top of the recipe | A recipe has no key "select"; it takes format, version, title, define, keep, columns, totals, derived. |
+
+A name that is not a branch (`Jet_ptt`) is answered with the nearest branches the samples have,
+before anything is read.
+
+### How deep
+
+An expression is at most 100 levels deep. A value (a number, text, a name, `sample.FIELD`) is one
+level, a defined name as many as its own expression, and each operator, call, pair of brackets, mask
+and `in` list one more than the deepest part it holds: `a + b + c` is 3 levels, `abs(-x)` 3, and
+`(x)` 2. A derived column is as deep as its expression, counting each derived column it uses as deep
+as that one's. A deeper expression is refused as it is read.
+
+### Values the recipe cannot take
+
+A few mistakes lie in the events, not in the recipe's text, so `rvr` meets them only as it works an
+expression out: the press stops there, naming the file, the entry, the column and the value.
+
+- a value [converted](#conversions) to a kind that cannot hold it, or NaN made whole or `b1`;
+- a mask, or two lists taken member by member (in an operator, `if`, or the lists of a kinematic or
+  matching function), whose lengths differ in an event;
+- an event whose list would make more than 65,536 pairs in a pair function;
+- a whole number raised to a negative power;
+- a total whose sum is not a finite number.
+
+NaN and the infinities are values, never mistakes: a float column may hold them, and every function
+says what it gives for them.
 
 ## From Python to rvr
 
@@ -586,3 +703,190 @@ clean_jet = "Jet_pt > 30 and dr_nearest(Jet_eta, Jet_phi, Muon_eta[good_muon], M
 | expression | gives | result |
 |---|---|---|
 | `count(clean_jet)` | how many clean jets each event has | `[1, 0, 2]` |
+
+## Kinds, exactly
+
+This section and the next are the language's arithmetic in full: with them, a reader can say what
+any expression gives, kind and bits, and which it refuses.
+
+### Two kinds together
+
+Every column holds one of the eleven kinds: `b1`; the whole-number kinds `i1`, `i2`, `i4`, `i8`
+(signed, 8 to 64 bits) and `u1`, `u2`, `u4`, `u8` (unsigned); and the floats `f4` and `f8`
+(IEEE single and double). Where two values meet, in an operator, `min`, `max`, `clip`, `if`, `join`
+or a function's `otherwise`, both are brought to the kind they combine in, `numpy.result_type` of
+NumPy 2.5.1:
+
+| combined with | b1 | i1 | i2 | i4 | i8 | u1 | u2 | u4 | u8 | f4 | f8 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| b1 | b1 | i1 | i2 | i4 | i8 | u1 | u2 | u4 | u8 | f4 | f8 |
+| i1 | i1 | i1 | i2 | i4 | i8 | i2 | i4 | i8 | f8 | f4 | f8 |
+| i2 | i2 | i2 | i2 | i4 | i8 | i2 | i4 | i8 | f8 | f4 | f8 |
+| i4 | i4 | i4 | i4 | i4 | i8 | i4 | i4 | i8 | f8 | f8 | f8 |
+| i8 | i8 | i8 | i8 | i8 | i8 | i8 | i8 | i8 | f8 | f8 | f8 |
+| u1 | u1 | i2 | i2 | i4 | i8 | u1 | u2 | u4 | u8 | f4 | f8 |
+| u2 | u2 | i4 | i4 | i4 | i8 | u2 | u2 | u4 | u8 | f4 | f8 |
+| u4 | u4 | i8 | i8 | i8 | i8 | u4 | u4 | u4 | u8 | f8 | f8 |
+| u8 | u8 | f8 | f8 | f8 | f8 | u8 | u8 | u8 | u8 | f8 | f8 |
+| f4 | f4 | f4 | f4 | f8 | f8 | f4 | f4 | f8 | f8 | f4 | f8 |
+| f8 | f8 | f8 | f8 | f8 | f8 | f8 | f8 | f8 | f8 | f8 | f8 |
+
+A whole-number value brought to a wider whole kind is unchanged; one brought to a float is rounded
+once to the nearest float, ties to even. Then:
+
+- `+ - * % **` give that kind; `/` gives it too when it is a float, and `f8` when it is whole (two
+  whole numbers divide as doubles); arithmetic on two `b1` values is refused.
+- A comparison gives `b1`. Two whole-number values compare exactly as the numbers they are, each in
+  its own kind, never through a float (an `i8` 2^53 + 1 is not a `u8` 2^53, where the table's `f8`
+  would make them equal); any other two compare in the kind of the table.
+- `and`, `or` and `not` take `b1` values and give `b1`.
+
+### Fixed values beside a column
+
+A number, a truth value or a sample's field written into an expression is a **fixed value**, and is
+weak: it takes the kind of the column beside it, rather than combining by the table.
+
+| fixed value | beside a `b1` column | beside a whole-number kind K | beside a float kind K |
+|---|---|---|---|
+| a whole number | `i8` | K, refused when K cannot hold it | K, rounded once to it |
+| a float | `f8` | `f8` | K, rounded once to it (so `MET_pt > 0.15` compares with 0.15 rounded to `f4`) |
+| a truth value | `b1` | K, true being 1 | K, true being 1 |
+
+Fixed values together are worked out as `i8` (whole numbers), `f8` (floats) or `b1`, and the result
+is fixed and weak again; so is a function of fixed values only: `pi / 2`, `sqrt(2)`, `cos(pi)` and
+`delta_r(0, 0, 1, 1)` are weak floats, and `MET_pt * sqrt(2)` is `f4`. Where a column is needed
+(a column of `[columns]`, a total, a derived column) a fixed value alone becomes one value per event
+of `i8`, `f8` or `b1`; text is refused.
+
+| expression | kind | result |
+|---|---|---|
+| `nJet + 1` | `u4` | `[4, 1, 3]` |
+| `nJet - 4` | `u4` | `[4294967295, 4294967292, 4294967294]` |
+| `nJet * 0.5` | `f8` | `[1.5, 0, 1]` |
+| `nJet / 2` | `f8` | `[1.5, 0, 1]` |
+| `nJet * sample.era` | `u4` | `[9, 0, 6]` |
+| `MET_pt * 0.5` | `f4` | `[15.75, 42.5, 8]` |
+| `MET_pt * sqrt(2)` | `f4` | `[44.547726, 120.20815, 22.627417]` |
+| `MET_pt * nJet` | `f8` | `[94.5, 0, 32]` |
+| `Flags + 0.5` | `f8` | `[11.5, 4.5, 1.5]` |
+| `Muon_charge * Muon_tightId` | `i4` | `[[1, 0], [-1], []]` |
+| `if(MET_pt > 30, 1, 0.5)` | `f8` | `[1, 1, 0.5]` |
+| `first(Muon_charge, 0.5)` | `f8` | `[1, -1, 0.5]` |
+| `least(Jet_pt, -1)` | `f4` | `[22, -1, 35]` |
+| `2 ** 3 ** 2` | | `512` |
+| `-7 % 3` | | `2` |
+| `7 % -3` | | `-2` |
+
+### Numbers
+
+**Whole numbers** are worked in 64 bits and brought back to their kind after each operation, by
+wrapping (a `u1` 250 + 10 is 4). `%` is Python's: the remainder takes the divisor's sign, and
+`x % 0` is 0. `**` with a negative exponent is a [data error](#values-the-recipe-cannot-take).
+
+**Floats** are worked as doubles. An `f4` operation is done in `f8` and rounded once to `f4` after
+it, which is exactly IEEE single arithmetic for `+ - * /` and `sqrt`. `%` is Python's: r is the
+exact `fmod(x, y)`; a nonzero r whose sign is not y's has y added; a zero r takes y's sign; y = 0
+gives NaN. `x ** y` is `x * x` for y exactly 2, else libm's `pow(x, y)`. NaN is not equal to
+anything, itself included (`!=` is true), nor less or greater than anything; arithmetic on it gives
+NaN.
+
+### Conversions
+
+`stored(x, 'K')` and `stored = "K"` convert each value to K:
+
+| from | to | the value |
+|---|---|---|
+| a float | a whole-number kind | truncated toward zero (2.9 is 2, -2.9 is -2); NaN, or a truncated value K cannot hold, is a data error |
+| a whole number | a whole-number kind | unchanged; one K cannot hold is a data error |
+| a whole number | `f4` or `f8` | rounded once to the nearest, ties to even (straight to `f4`, not through `f8`) |
+| `f8` | `f4` | rounded to the nearest `f4`, ties to even; past the largest `f4`, an infinity |
+| `f4` | `f8` | exact |
+| any number | `b1` | whether it is not zero (-0.0 is zero); NaN is a data error |
+| `b1` | any kind | 0 or 1 |
+
+| expression | kind | result |
+|---|---|---|
+| `stored(MET_pt, 'i4')` | `i4` | `[31, 85, 16]` |
+| `stored(-MET_pt / 10, 'i1')` | `i1` | `[-3, -8, -1]` |
+| `stored(nJet, 'f4')` | `f4` | `[3, 0, 2]` |
+
+### Signed zeros
+
+`-x` of 0.0 is -0.0; a zero remainder takes the divisor's sign (`-4.0 % 2` is +0.0); `sign` of
+either zero is +0.0; `abs` of either is +0.0; and of two equal values `min` and `max` give the right
+one, so `min(0.0, -0.0)` is -0.0.
+
+### What differs from NumPy
+
+The kinds above are NumPy's type promotion, but for these differences:
+
+- a fixed value that a whole-number column's kind cannot hold is refused, in a comparison too
+  (NumPy takes `u1 < 300` as true); a function of fixed values, and a sample's field, stays weak
+  (NumPy's `np.sqrt(2)` is a strong `f8`, so `MET_pt * np.sqrt(2)` is `f8` there);
+- there is no `f2`: a float function of `b1`, `i1` or `u1` gives `f4` (NumPy `f2`); `floor` and
+  `ceil` of `b1` keep `b1`, and `round` refuses it (NumPy gives `f2`);
+- arithmetic on two `b1` values is refused (NumPy's `+` is or, `*` and, `/` gives `f8`);
+- a float function of two values takes the float of the kind they combine in: `atan2` of an `i1` and
+  a `u2` is `f8` (they combine in `i4`), where NumPy gives `f4`;
+- an `f4` function works in `f8` and rounds once, where NumPy's single-precision routines can differ
+  in the last bit; `x ** 0.5` is `pow` here and `sqrt` there (they differ only for -0 and -inf);
+- `sum` of `f4` adds in list order (as Awkward does; NumPy adds pairwise);
+- a conversion of a value the kind cannot hold is refused (NumPy wraps it, or leaves it undefined).
+
+## Functions, exactly
+
+The float kind of a function's result is its input's kind, made a float: `f4` for `b1`, `i1`, `u1`,
+`i2`, `u2` and `f4`, `f8` for `i4`, `u4`, `i8`, `u8` and `f8`. For a function of several values it
+is that of the kind they combine in (the table), a fixed one weak beside it. Every float function
+works on its values as doubles and rounds its double result once to that kind. "libm" is the `libm`
+crate at 0.2.16; `sqrt` is IEEE's.
+
+| function | exactly |
+|---|---|
+| `count(list)` | per event, of a `b1` list the number of true members, of any other the number of members; `i8` |
+| `sum(list)` | per event, the members added one at a time from 0 in list order: floats in the list's kind, rounded to it after each addition; whole numbers in 64 bits, wrapping, giving `i8` for `b1` and signed kinds and `u8` for unsigned ones; 0 for an empty list |
+| `any(list)`, `all(list)` | of a `b1` list, whether any (every) member is true; `b1`; `any` of an empty list is false, `all` true |
+| `least(list, otherwise)`, `greatest` | per event, scanning from the first member, the first that is less (greater) than every one before it: of equal ones the first; a NaN is kept when it comes first and passed over after; whole numbers, `u8` too, compared exactly; `otherwise` for an empty list; the kind of the list with `otherwise` beside it |
+| `least_index(list, otherwise)`, `greatest_index` | the position, from 0, of the member `least` (`greatest`) chooses; `i8`; `otherwise` a whole number |
+| `first(list, otherwise)` | `nth(list, 0, otherwise)` |
+| `nth(list, n, otherwise)` | the member at position n (a fixed whole number from 0), or `otherwise` when the list has n members or fewer; the kind as `least` |
+| `index(list)` | each member's position, 0, 1, …; `i8` |
+| `sorted(list)`, `sorted(list, 'descending')` | per event, the members in ascending (descending) order by a stable sort: equal members keep their order, and NaN comes first either way; whole numbers compared exactly; the list's kind |
+| `order(list)`, `order(list, 'descending')` | the positions, from 0, of that sort's members; `i8` |
+| `take(list, positions, otherwise)` | per event, for each of its whole-number positions the list's member there, or `otherwise` for a negative position or one past the end; shaped like the positions; the kind as `least` |
+| `listed(list, positions)` | `b1` shaped like the list: whether each member's position is among the event's whole-number positions |
+| `join(list, list, …)` | per event, every member of the first list, then of the second, and on; the kind they combine in |
+| `abs(x)` | a float's magnitude (its sign bit cleared); a signed whole number's, wrapping (an `i1` -128 stays -128); an unsigned or `b1` value unchanged |
+| `sign(x)` | of a float, 1 above 0, -1 below, +0.0 for either zero, NaN for NaN; of a whole number -1, 0 or 1 in its kind (0 or 1 when unsigned); `b1` unchanged |
+| `sqrt(x)` | the square root, in the float kind |
+| `exp`, `log`, `log10`, `cos`, `sin`, `tan`, `acos`, `asin`, `atan`, `cosh`, `sinh`, `tanh` | libm's function of x, in the float kind |
+| `atan2(y, x)`, `hypot(x, y)` | libm's function of the two, in the float kind of the kind they combine in |
+| `floor(x)`, `ceil(x)` | libm's `floor`, `ceil`, in the float's kind; whole numbers and `b1` unchanged |
+| `round(x)` | libm's `rint`: to the nearest whole number, halves to even, in the float's kind (`round(-0.5)` is -0.0); whole numbers unchanged; `b1` refused |
+| `min(x, y)`, `max(x, y)` | value by value, in the kind they combine in: NaN when either is (x when both), else x when it is less (greater) than y, else y; whole numbers compared exactly |
+| `clip(x, low, high)` | `min(max(x, low), high)`, so `low` above `high` gives `high` |
+| `isfinite(x)` | `b1`: false for NaN and the infinities; true for every whole number and `b1` |
+| `if(condition, yes, no)` | the condition a `b1` value (or a fixed truth, which works out only the value it chooses and gives it as it is); value by value, yes where it is true and no elsewhere, in the kind yes and no combine in; shaped like the first list among the three, and a list among them must have the others' members |
+| `bit_and(x, mask)` | x & mask, in x's whole-number kind; mask a fixed whole number x's kind can hold |
+| `shift_right(x, n)` | x shifted right n bits, n a fixed whole number from 0 that x's kind can hold: arithmetic for a signed kind, logical for an unsigned one; n of 64 or more gives 0 (-1 for a negative signed x) |
+| `delta_phi(a, b)` | in doubles, r = `fmod(a - b + π, 2π)`, plus 2π when r is negative, minus π; in the float kind. It lies in [-π, π]: rounding can give +π, and in `f4` 3.1415927 |
+| `delta_r(eta1, phi1, eta2, phi2)` | in doubles, d = eta1 - eta2 and p = `delta_phi(phi1, phi2)`, then `sqrt(d * d + p * p)`; in the float kind |
+| `mass`, `pt`, `eta`, `phi`, `rapidity` of `(pt, eta, phi)` or `(pt, eta, phi, mass)` | per event, in doubles: each member's four-momentum, with q = pt · cosh(eta), is E = sqrt(q · q + m · \|m\|) (m 0 without a mass), px = pt · cos(phi), py = pt · sin(phi), pz = pt · sinh(eta); the members' four-momenta are added component by component from 0, in list order. Of the sum S: `mass` is copysign(sqrt(\|m2\|), m2) with m2 = ((E · E - px · px) - py · py) - pz · pz; `pt` is sqrt(px · px + py · py); `phi` is atan2(py, px); `eta` is asinh(pz / pt), but 0 where that is NaN and pz is 0; `rapidity` is 0.5 · log((E + pz) / (E - pz)). In the float kind of the lists. An event with no members has the sum 0: mass, pt, eta and phi 0, rapidity NaN. cosh, cos, sin, sinh, atan2, asinh and log are libm's; the lists must have the same members |
+| `dr_nearest`, `dr_second_nearest`, `dr_farthest`, `dr_second_farthest` of `(eta1, phi1, eta2, phi2)` or with a fifth value | for each member of the first list, `delta_r` (in doubles) to each member of the second list of the same event, a NaN distance passed over, sorted by a stable sort, nearest first (farthest first): the first of them (the second); in the float kind of the four lists, or where there is none the fifth value (a fixed number or truth), by default inf |
+| `nearest_index`, `second_nearest_index`, `farthest_index`, `second_farthest_index` | the position, from 0, in the second list of the member the `dr_` function of the same name chooses; `i8`; where there is none the fifth value (a fixed whole number), by default -1 |
+| `pair_first(list)`, `pair_second(list)` | per event, for each pair of members (0, 1), (0, 2), …, (0, n - 1), (1, 2), …, its first (second) member; the list's kind |
+| `pair_dr(eta, phi)` | each pair's `delta_r`; in the float kind of the two |
+| `pair_mass`, `pair_pt`, `pair_eta`, `pair_phi`, `pair_rapidity` of `(pt, eta, phi)` or `(pt, eta, phi, mass)` | each pair's two four-momenta added from 0, first then second, and measured as `mass`, `pt`, … measure a sum; a pair with no transverse momentum has phi 0 |
+| `contains(text, part)` | whether the text holds the part; false when the sample lacks either field |
+| `branch(name)` | the branch of that name (text, written in or a sample's text field) |
+| `stored(x, kind)` | x, a column, converted to the kind by the [conversion rule](#conversions) |
+
+A pair function (`pair_…`) refuses an event whose list would make more than 65,536 pairs, a
+[data error](#values-the-recipe-cannot-take); every list two values are taken member by member from
+must have the same number of members in each event, or it is one too.
+
+Every function works event by event, so no result depends on how many events are worked on at
+once. That number is only how much is held: a press reads up to 50,000 entries at a time, a reader
+works a derived column out a million rows at a time, and either works on fewer at once (halving
+until they fit) where the events' lists would make more than 67,108,864 (2^26) pairs together. Only
+the limit of one event, 65,536 pairs, ever stops a press.

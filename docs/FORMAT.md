@@ -802,9 +802,11 @@ infinite. In `tiny.rvr`, `mean_jet_pt` is `ht / nJet` on each row, `[33.90104166
 An expression uses only what the file holds: its stored columns, the derived columns above it,
 and `sample.KEY` (the metadata of the row's sample, as a press gives it to an expression: without
 `events_read`, `events_total` and `events_missing`, with its totals, and with `sample.file` the
-path of the row's file in the lock). It is worked out a file's rows at a time, as the press reads
-them, and every function of the recipe language computes the same bits on every platform (none
-calls the platform's own math library), so it has the same values whoever works it out. A reader
+path of the row's file in the lock). Its values do not depend on how many rows are worked out at
+once, and every function of the recipe language computes the same bits on every platform (its
+exponentials, logarithms, trigonometry, roundings, `hypot` and `**` come from the `libm` crate, and
+`sqrt` and the remainders of `%` and `delta_phi` are exact in IEEE arithmetic), so it has the same
+values whoever works it out. A reader
 that works one out checks its values against the record, and refuses the column when they differ.
 A later rvr may add functions to the language; a reader that meets one it does not know, in a
 file whose `made.toolchain.rvr` is newer than its own version, says that the file needs a newer

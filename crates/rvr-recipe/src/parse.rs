@@ -118,18 +118,24 @@ fn tokens(text: &str) -> Result<Vec<(Token, usize)>> {
     Ok(out)
 }
 
-struct Parser {
+struct Parser<'a> {
     tokens: Vec<(Token, usize)>,
     at: usize,
     length: usize,
-    /// How many brackets and calls are open.
+    /// How many levels the expression being read is inside of: brackets, calls, masks, lists,
+    /// `not`, unary `-` and `**`.
     nested: usize,
+    /// How many levels deep a name is: a defined name its expression's, any other one.
+    named: &'a dyn Fn(&str) -> usize,
 }
 
-/// How deeply brackets and calls may nest.
-const DEEPEST: usize = 100;
+/// How many levels deep an expression may be, by the README's "How deep".
+pub const DEEPEST: usize = 100;
 
-impl Parser {
+/// An expression and how many levels deep it is.
+type Parsed = (Expression, usize);
+
+impl Parser<'_> {
     /// Look at the next token without taking it.
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.at).map(|(token, _)| token)
@@ -157,22 +163,36 @@ impl Parser {
         found
     }
 
-    /// What to say of a `where` after a value, where the language once had it: how to write the
-    /// same with a mask.
-    fn stray(&self) -> Option<crate::Error> {
-        matches!(self.peek(), Some(Token::Name(word)) if word == "where").then(|| {
-            problem(format!("where is not part of an expression ({}): to keep some members of each list, use a mask, such as Jet_pt[Jet_pt > 30]", self.place()))
-        })
-    }
-
     /// Require a symbol.
     fn expect(&mut self, symbol: &str) -> Result<()> {
-        if self.symbol(symbol) {
-            return Ok(());
+        match self.symbol(symbol) {
+            true => Ok(()),
+            false => Err(problem(format!("Expected {symbol} at {}", self.place()))),
         }
-        Err(self
-            .stray()
-            .unwrap_or_else(|| problem(format!("Expected {symbol} at {}", self.place()))))
+    }
+
+    /// One level around something `inner` levels deep, refused past the deepest.
+    fn level(&self, inner: usize) -> Result<usize> {
+        match inner < DEEPEST {
+            true => Ok(inner + 1),
+            false => Err(self.too_deep()),
+        }
+    }
+
+    /// What an expression deeper than the deepest is refused with.
+    fn too_deep(&self) -> crate::Error {
+        problem(format!("The expression is more than {DEEPEST} levels deep at {} (a defined name as deep as its own expression): write it with fewer", self.place()))
+    }
+
+    /// Read what `read` reads one level further in, refused before it is read past the deepest.
+    fn inside(&mut self, read: fn(&mut Self) -> Result<Parsed>) -> Result<Parsed> {
+        if self.nested + 1 >= DEEPEST {
+            return Err(self.too_deep());
+        }
+        self.nested += 1;
+        let parsed = read(self);
+        self.nested -= 1;
+        parsed
     }
 
     /// The dotted name that begins at the next token, `obj.m_state.fPt` of `….obj.m_state.fPt`.
@@ -190,54 +210,57 @@ impl Parser {
     }
 
     /// A chain of one binary operator level, built left to right.
-    fn chain(
-        &mut self,
-        next: fn(&mut Self) -> Result<Expression>,
-        operator: fn(&mut Self) -> Option<Operator>,
-    ) -> Result<Expression> {
-        let mut left = next(self)?;
+    fn chain(&mut self, next: fn(&mut Self) -> Result<Parsed>, operator: fn(&mut Self) -> Option<Operator>) -> Result<Parsed> {
+        let (mut left, mut depth) = next(self)?;
         while let Some(found) = operator(self) {
-            left = Expression::Binary(found, Box::new(left), Box::new(next(self)?));
+            let (right, deep) = next(self)?;
+            depth = self.level(depth.max(deep))?;
+            left = Expression::Binary(found, Box::new(left), Box::new(right));
         }
-        Ok(left)
+        Ok((left, depth))
     }
 
     /// A whole expression: `and-expression (or and-expression)*`.
-    fn expression(&mut self) -> Result<Expression> {
-        self.chain(Self::both, |parser| {
-            parser.word("or").then_some(Operator::Or)
-        })
+    fn expression(&mut self) -> Result<Parsed> {
+        self.chain(Self::both, |parser| parser.word("or").then_some(Operator::Or))
     }
 
     /// `not-expression (and not-expression)*`.
-    fn both(&mut self) -> Result<Expression> {
-        self.chain(Self::negation, |parser| {
-            parser.word("and").then_some(Operator::And)
-        })
+    fn both(&mut self) -> Result<Parsed> {
+        self.chain(Self::negation, |parser| parser.word("and").then_some(Operator::And))
     }
 
     /// `not not-expression`, or a comparison.
-    fn negation(&mut self) -> Result<Expression> {
+    fn negation(&mut self) -> Result<Parsed> {
         if self.word("not") {
-            return Ok(Expression::Not(Box::new(self.negation()?)));
+            let (inner, depth) = self.inside(Self::negation)?;
+            return Ok((Expression::Not(Box::new(inner)), self.level(depth)?));
         }
         self.comparison()
     }
 
+    /// The members of a bracketed list, closed by `close`, each a whole expression; the deepest.
+    fn members(&mut self, close: &str) -> Result<(Vec<Expression>, usize)> {
+        let (mut members, mut depth) = (Vec::new(), 0);
+        while !self.symbol(close) {
+            let (member, deep) = self.inside(Self::expression)?;
+            members.push(member);
+            depth = depth.max(deep);
+            if !self.symbol(",") {
+                self.expect(close)?;
+                break;
+            }
+        }
+        Ok((members, depth))
+    }
+
     /// `sum [comparison sum]`, or `sum in [list]`.
-    fn comparison(&mut self) -> Result<Expression> {
-        let left = self.sum()?;
+    fn comparison(&mut self) -> Result<Parsed> {
+        let (left, depth) = self.sum()?;
         if self.word("in") {
             self.expect("[")?;
-            let mut members = Vec::new();
-            while !self.symbol("]") {
-                members.push(self.expression()?);
-                if !self.symbol(",") {
-                    self.expect("]")?;
-                    break;
-                }
-            }
-            return Ok(Expression::In(Box::new(left), members));
+            let (members, deep) = self.members("]")?;
+            return Ok((Expression::In(Box::new(left), members), self.level(depth.max(deep))?));
         }
         let pairs = [
             ("<=", Operator::LessEqual),
@@ -249,29 +272,24 @@ impl Parser {
         ];
         for (symbol, operator) in pairs {
             if self.symbol(symbol) {
-                return Ok(Expression::Binary(
-                    operator,
-                    Box::new(left),
-                    Box::new(self.sum()?),
-                ));
+                let (right, deep) = self.sum()?;
+                let compared = Expression::Binary(operator, Box::new(left), Box::new(right));
+                return Ok((compared, self.level(depth.max(deep))?));
             }
         }
-        Ok(left)
+        Ok((left, depth))
     }
 
     /// `term ((+|-) term)*`.
-    fn sum(&mut self) -> Result<Expression> {
-        self.chain(Self::term, |parser| {
-            if parser.symbol("+") {
-                Some(Operator::Add)
-            } else {
-                parser.symbol("-").then_some(Operator::Subtract)
-            }
+    fn sum(&mut self) -> Result<Parsed> {
+        self.chain(Self::term, |parser| match parser.symbol("+") {
+            true => Some(Operator::Add),
+            false => parser.symbol("-").then_some(Operator::Subtract),
         })
     }
 
     /// `unary ((*|/|%) unary)*`.
-    fn term(&mut self) -> Result<Expression> {
+    fn term(&mut self) -> Result<Parsed> {
         self.chain(Self::unary, |parser| {
             if parser.symbol("*") {
                 Some(Operator::Multiply)
@@ -284,25 +302,23 @@ impl Parser {
     }
 
     /// `- unary`, or a power.
-    fn unary(&mut self) -> Result<Expression> {
+    fn unary(&mut self) -> Result<Parsed> {
         if self.symbol("-") {
-            return Ok(Expression::Negate(Box::new(self.unary()?)));
+            let (inner, depth) = self.inside(Self::unary)?;
+            return Ok((Expression::Negate(Box::new(inner)), self.level(depth)?));
         }
-        let base = self.postfix()?;
+        let (base, depth) = self.postfix()?;
         if self.symbol("**") {
-            let power = self.unary()?;
-            return Ok(Expression::Binary(
-                Operator::Power,
-                Box::new(base),
-                Box::new(power),
-            ));
+            let (power, deep) = self.inside(Self::unary)?;
+            let raised = Expression::Binary(Operator::Power, Box::new(base), Box::new(power));
+            return Ok((raised, self.level(depth.max(deep))?));
         }
-        Ok(base)
+        Ok((base, depth))
     }
 
     /// A primary followed by any number of `[mask]`, or `sample.name`.
-    fn postfix(&mut self) -> Result<Expression> {
-        let mut value = self.primary()?;
+    fn postfix(&mut self) -> Result<Parsed> {
+        let (mut value, mut depth) = self.primary()?;
         loop {
             let dot = self.place();
             if self.symbol(".") {
@@ -317,78 +333,61 @@ impl Parser {
                 value = Expression::Sample(field);
                 self.at += 1;
             } else if self.symbol("[") {
-                let mask = self.expression()?;
+                let (mask, deep) = self.inside(Self::expression)?;
                 self.expect("]")?;
                 value = Expression::Pick(Box::new(value), Box::new(mask));
+                depth = self.level(depth.max(deep))?;
             } else {
-                return Ok(value);
+                return Ok((value, depth));
             }
         }
     }
 
     /// A number, text, name, call, or parenthesised expression.
-    fn primary(&mut self) -> Result<Expression> {
+    fn primary(&mut self) -> Result<Parsed> {
         let place = self.place();
         let token = self.tokens.get(self.at).map(|(token, _)| token.clone());
         self.at += 1;
-        self.nested += 1;
-        if self.nested > DEEPEST {
-            return Err(problem(format!("Too many nested brackets at {place}")));
-        }
-        let value = self.inner(token, place)?;
-        self.nested -= 1;
-        Ok(value)
-    }
-
-    /// The value a primary's first token begins.
-    fn inner(&mut self, token: Option<Token>, place: String) -> Result<Expression> {
-        Ok(match token {
+        let value = match token {
             Some(Token::Number(number)) => Expression::Constant(number),
             Some(Token::Text(text)) => Expression::Constant(Constant::Text(text)),
             Some(Token::Symbol("(")) => {
-                let inner = self.expression()?;
+                let (inner, depth) = self.inside(Self::expression)?;
                 self.expect(")")?;
-                inner
+                return Ok((inner, self.level(depth)?));
             }
             Some(Token::Name(name)) => match name.as_str() {
                 "true" => Expression::Constant(Constant::Truth(true)),
                 "false" => Expression::Constant(Constant::Truth(false)),
                 "pi" => Expression::Constant(Constant::Float(std::f64::consts::PI)),
                 "inf" => Expression::Constant(Constant::Float(f64::INFINITY)),
-                "and" | "or" | "not" | "in" => {
-                    return Err(problem(format!("Unexpected {name} at {place}")))
-                }
+                "and" | "or" | "not" | "in" => return Err(problem(format!("Unexpected {name} at {place}"))),
                 _ if self.symbol("(") => {
-                    let mut arguments = Vec::new();
-                    while !self.symbol(")") {
-                        arguments.push(self.expression()?);
-                        if !self.symbol(",") {
-                            self.expect(")")?;
-                            break;
-                        }
-                    }
-                    Expression::Call(name, arguments)
+                    let (arguments, depth) = self.members(")")?;
+                    return Ok((Expression::Call(name, arguments), self.level(depth)?));
                 }
-                _ => Expression::Name(name),
+                _ => {
+                    let depth = (self.named)(&name);
+                    return Ok((Expression::Name(name), self.level(depth.max(1) - 1)?));
+                }
             },
             _ => return Err(problem(format!("Expected a value at {place}"))),
-        })
+        };
+        Ok((value, 1))
     }
 }
 
 /// Read one expression, refusing anything left over after it.
 pub fn parse(text: &str) -> Result<Expression> {
-    let mut parser = Parser {
-        tokens: tokens(text)?,
-        at: 0,
-        length: text.chars().count(),
-        nested: 0,
-    };
-    let expression = parser.expression()?;
+    parsed(text, &|_| 1).map(|(expression, _)| expression)
+}
+
+/// Read one expression, and how many levels deep it is with each name as deep as `named` says.
+pub(crate) fn parsed(text: &str, named: &dyn Fn(&str) -> usize) -> Result<Parsed> {
+    let mut parser = Parser { tokens: tokens(text)?, at: 0, length: text.chars().count(), nested: 0, named };
+    let parsed = parser.expression()?;
     if parser.at < parser.tokens.len() {
-        return Err(parser
-            .stray()
-            .unwrap_or_else(|| problem(format!("Unexpected text at {}", parser.place()))));
+        return Err(problem(format!("Unexpected text at {}", parser.place())));
     }
-    Ok(expression)
+    Ok(parsed)
 }

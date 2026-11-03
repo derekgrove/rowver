@@ -39,7 +39,7 @@ const SPOOLED: usize = 16 << 20;
 const GAP: u64 = 2_000;
 
 /// The recipe reference, which lists every function an expression can call.
-const RECIPES: &str = "https://gitlab.cern.ch/dgrove/rowver/-/blob/main/crates/rvr-recipe/README.md";
+const RECIPES: &str = rvr_recipe::REFERENCE;
 
 pub(crate) use rowver::rvr::derived::ADDED;
 
@@ -273,7 +273,7 @@ pub fn plan(
 /// A study's recipe.toml, refused unless it writes all five tables, even empty, so that it says
 /// what it does not use.
 pub fn study_recipe(source: &str) -> Result<Recipe, String> {
-    let recipe = Recipe::read(source).map_err(|e| format!("recipe.toml: {}", e.0))?;
+    let recipe = Recipe::read(source).map_err(|e| format!("recipe.toml: {}", e.0.replace('\n', "\nrecipe.toml: ")))?;
     let root: toml::Table = source.parse().map_err(|e: toml::de::Error| format!("recipe.toml: {e}"))?;
     let missing = crate::tables::lacking(&root);
     match missing.is_empty() {
@@ -403,7 +403,7 @@ impl<S: ByteSource> Columns for Branches<'_, S> {
         let values = match self.file.read_range(branch, self.first, self.last) {
             Ok(values) => values,
             Err(e) => {
-                let said = rvr_recipe::Error(format!("{name}: {e}"));
+                let said = rvr_recipe::problem(format!("{name}: {e}"));
                 self.failure.borrow_mut().get_or_insert(e);
                 return Err(said);
             }
@@ -449,13 +449,13 @@ pub(crate) struct Taken {
 pub(crate) use rowver::rvr::derived::fields;
 
 /// Which events one cut lets through: those it does not apply to, and those that pass it.
-fn lets_through(cut: &rvr_recipe::Cut, scope: &Scope, entries: usize) -> Result<Vec<bool>, String> {
-    let named = |error: rvr_recipe::Error| format!("[keep] {}: {}", cut.name, error.0);
+fn lets_through(cut: &rvr_recipe::Cut, scope: &Scope, entries: usize) -> Result<Vec<bool>, rvr_recipe::Error> {
+    let place = format!("[keep] {}", cut.name);
     let applies = match &cut.when {
         None => None,
-        Some(when) => match scope.evaluate(when).map_err(named)? {
+        Some(when) => match scope.evaluate(when).map_err(|e| e.at(&place))? {
             Array::Constant(Constant::Missing(_)) => return Ok(vec![true; entries]),
-            _ => Some(scope.mask(when, entries).map_err(named)?),
+            value => Some(Scope::condition(value, entries).map_err(|e| e.at(&place))?),
         },
     };
     if applies
@@ -464,7 +464,7 @@ fn lets_through(cut: &rvr_recipe::Cut, scope: &Scope, entries: usize) -> Result<
     {
         return Ok(vec![true; entries]);
     }
-    let mut pass = scope.mask(&cut.pass, entries).map_err(named)?;
+    let mut pass = scope.mask(&cut.pass, entries).map_err(|e| e.at(&place))?;
     for (pass, applies) in pass.iter_mut().zip(applies.iter().flatten()) {
         *pass |= !applies;
     }
@@ -477,7 +477,7 @@ pub(crate) fn kept(
     scope: &Scope,
     mut keep: Vec<bool>,
     cutflow: &mut [u64],
-) -> Result<Vec<bool>, String> {
+) -> Result<Vec<bool>, rvr_recipe::Error> {
     let entries = keep.len();
     for (index, cut) in recipe.keep.iter().enumerate() {
         for (keep, through) in keep.iter_mut().zip(lets_through(cut, scope, entries)?) {
@@ -490,7 +490,7 @@ pub(crate) fn kept(
 
 /// Add a run to each total of `[totals]` over the tree read: its value at each entry `read` marks,
 /// before any cut, one at a time in entry order, so a file's sum does not depend on its runs.
-fn summed(recipe: &Recipe, scope: &Scope, read: &[bool], totals: &mut [f64]) -> Result<(), String> {
+fn summed(recipe: &Recipe, scope: &Scope, read: &[bool], totals: &mut [f64]) -> Result<(), rvr_recipe::Error> {
     let lines = recipe.totals.iter().filter(|total| total.tree.is_none());
     for (total, sum) in lines.zip(totals) {
         add_to(sum, &total.name, scope.evaluate(&total.value).and_then(|v| rvr_recipe::per_event(v, read.len())), read)?;
@@ -498,27 +498,29 @@ fn summed(recipe: &Recipe, scope: &Scope, read: &[bool], totals: &mut [f64]) -> 
     Ok(())
 }
 
-/// Add to `sum` the values `read` marks, in order: one number per entry.
-fn add_to(sum: &mut f64, name: &str, array: rvr_recipe::Result<Array>, read: &[bool]) -> Result<(), String> {
-    let values = match array.map_err(|e| format!("[totals] {name}: {}", e.0))? {
+/// Add to `sum` the values `read` marks, in order: one number per entry, and a sum that stays
+/// finite (a data error at the entry whose value makes it not).
+fn add_to(sum: &mut f64, name: &str, array: rvr_recipe::Result<Array>, read: &[bool]) -> Result<(), rvr_recipe::Error> {
+    let place = format!("[totals] {name}");
+    let values = match array.map_err(|e| e.at(&place))? {
         Array::Event(values) => values,
-        _ => return Err(format!("[totals] {name}: a total sums one number per event, and this gives a list for each: sum the list, as sum(...)")),
+        _ => return Err(rvr_recipe::problem(format!("{place}: a total sums one number per event, and this gives a list for each: sum the list, as sum(...)"))),
     };
     for (index, _) in read.iter().enumerate().filter(|(_, read)| **read) {
         *sum += values.number(index);
+        if !sum.is_finite() {
+            return Err(rvr_recipe::data(index, format!("{place}: its sum is not a finite number once this entry's value, {:?}, is added, and a file holds only finite totals: give such events a finite value, as if(isfinite(x), x, 0)", values.number(index))));
+        }
     }
     Ok(())
 }
 
-/// Give an output column the kind the recipe asks it to be stored as.
-fn stored(recipe: &Recipe, column: &str, array: Array) -> Array {
-    match (recipe.stored.get(column), array) {
-        (Some(kind), Array::Event(values)) => Array::Event(values.cast(*kind)),
-        (Some(kind), Array::Object { offsets, values }) => Array::Object {
-            offsets,
-            values: values.cast(*kind),
-        },
-        (_, array) => array,
+/// Give an output column the kind the recipe asks it to be stored as, by the recipe reference's
+/// conversion rule.
+fn stored(recipe: &Recipe, column: &str, array: Array) -> rvr_recipe::Result<Array> {
+    match recipe.stored.get(column) {
+        Some(kind) => array.convert(*kind),
+        None => Ok(array),
     }
 }
 
@@ -550,6 +552,26 @@ fn gather(held: &mut Gathered, column: Array, keep: &[bool], at: &str) -> Result
     Ok(())
 }
 
+/// How much each column has gathered: its bytes and its lists.
+fn held_lengths(gathered: &[Option<Gathered>]) -> Vec<Option<(usize, usize)>> {
+    gathered.iter().map(|g| g.as_ref().map(|g| (g.bytes.len(), g.counts.as_ref().map_or(0, Vec::len)))).collect()
+}
+
+/// Put each column back to what it had gathered at `before`.
+fn put_back(gathered: &mut [Option<Gathered>], before: &[Option<(usize, usize)>]) {
+    for (held, before) in gathered.iter_mut().zip(before) {
+        match (held.as_mut(), before) {
+            (Some(held), Some((bytes, counts))) => {
+                held.bytes.truncate(*bytes);
+                if let Some(held) = &mut held.counts {
+                    held.truncate(*counts);
+                }
+            }
+            _ => *held = None,
+        }
+    }
+}
+
 /// One run's kept events as an expression reads them: its stored columns, and the derived ones so far.
 struct Run(RefCell<BTreeMap<String, Array>>);
 
@@ -571,8 +593,9 @@ struct Tried {
     seen: BTreeMap<String, Option<(Kind, bool)>>,
 }
 
-/// Work the derived columns out over the `rows` events a run kept, gathered since `before`.
-fn derived_tried(recipe: &Recipe, gathered: &[Option<Gathered>], before: &[Option<(usize, usize)>], sample: &BTreeMap<String, Constant>, rows: usize, seen: &mut BTreeMap<String, Option<(Kind, bool)>>) -> Result<(), String> {
+/// Work the derived columns out over the events a run kept (its `entries`), gathered since `before`.
+fn derived_tried(recipe: &Recipe, gathered: &[Option<Gathered>], before: &[Option<(usize, usize)>], sample: &BTreeMap<String, Constant>, entries: &[u64], seen: &mut BTreeMap<String, Option<(Kind, bool)>>) -> Result<(), String> {
+    let rows = entries.len();
     let mut held = BTreeMap::new();
     for (column, from) in gathered.iter().zip(before) {
         let Some(column) = column else { continue };
@@ -600,7 +623,8 @@ fn derived_tried(recipe: &Recipe, gathered: &[Option<Gathered>], before: &[Optio
     for (name, expression) in &recipe.derived {
         let parsed = rvr_recipe::parse(expression).map_err(|e| format!("derived column {name}: {}", e.0))?;
         let seen = seen.entry(name.clone()).or_default();
-        let array = rowver::rvr::derived::evaluate(&format!("derived column {name}"), &parsed, &run, sample, rows, seen).map_err(|e| e.to_string())?;
+        let entry = |row: usize| format!("entry {}", count(entries[row]));
+        let array = rowver::rvr::derived::evaluate(&format!("derived column {name}"), &parsed, &run, sample, rows, seen, &entry).map_err(|e| e.to_string())?;
         run.0.borrow_mut().insert(name.clone(), array);
     }
     Ok(())
@@ -983,21 +1007,25 @@ fn opened(
     Ok(root)
 }
 
+/// Where a failure is among entries from `first`: its event's entry, or the entries of the `part` it was read in.
+pub(crate) fn entries(error: &rvr_recipe::Error, first: u64, part: &std::ops::Range<usize>) -> String {
+    match error.1 {
+        Some(row) => format!("entry {}", count(first + row as u64)),
+        None if part.end > part.start => format!("entries {} to {}", count(first + part.start as u64), count(first + part.end as u64 - 1)),
+        None => "no entries".into(),
+    }
+}
+
 /// What to do about a failure reading a file's events: a name that is not a branch, with the
-/// nearest branches and defined names; a function that is not one, with the nearest functions;
-/// a damaged file (hep-root says `decompression failed`).
+/// nearest branches and defined names; a damaged file (hep-root says `decompression failed`).
 pub(crate) fn hint(error: &str, branches: &[String], recipe: &Recipe) -> String {
     if let Some((_, name)) = error.rsplit_once("There is no column named ") {
         let defined = recipe.defines.keys().map(String::as_str);
         let mut names: Vec<&str> = branches.iter().map(String::as_str).chain(defined).collect();
         names.sort();
         names.dedup();
-        let near = rowver::study::meant(name.trim(), names.into_iter());
+        let near = rvr_recipe::meant(name.trim(), names.into_iter());
         return format!(".{near} rvr branches lists every branch the file has.");
-    }
-    if let Some((_, name)) = error.rsplit_once("There is no function named ") {
-        let near = rowver::study::meant(name.trim(), rvr_recipe::FUNCTIONS.iter().copied());
-        return format!(".{near} Every function, with an example, is in the recipe reference: {RECIPES}");
     }
     match error.contains("decompression failed") {
         false => String::new(),
@@ -1176,14 +1204,17 @@ fn take(
             Ok(other) => other,
             Err(e) => return unread(failed(e)),
         };
-        let n = other.entries.max(0);
-        let branches = Branches::over(&file, &other, 0, n);
+        let n = other.entries.max(0) as usize;
         let defines = BTreeMap::new();
-        let scope = Scope::new(&branches, &sample, &defines);
+        let branches = Branches::over(&file, &other, 0, n as i64);
         let mut sum = 0.0;
-        let array = scope.evaluate(&total.value).and_then(|v| rvr_recipe::per_event(v, n as usize));
-        if let Err(why) = add_to(&mut sum, &total.name, array, &vec![true; n as usize]) {
+        let mut work = |run: &dyn Columns, from: usize, to: usize| {
+            let array = Scope::new(run, &sample, &defines).evaluate(&total.value).and_then(|v| rvr_recipe::per_event(v, to - from));
+            add_to(&mut sum, &total.name, array, &vec![true; to - from])
+        };
+        if let Err((why, part)) = rvr_recipe::over_runs(&branches, n, &mut work) {
             let fault = branches.failure().map_or(Fault::Mistake, |e| fault_of(&e, file.source().inner().seen()));
+            let why = format!("tree {name:?}, {}: {}", self::entries(&why, 0, &part), why.0);
             return unread(Failed::new(fault, located(why)));
         }
         others.push((total.name.clone(), sum));
@@ -1270,76 +1301,72 @@ fn take(
                     seen.clear();
                 }
             }
-            let branches = Branches::over(&file, &tree, first as i64, last as i64);
-            let scope = Scope::new(&branches, &sample, &recipe.defines);
-            // A failure reading the events says where they are, and what to do when the file is damaged.
-            let within = |error: String| {
-                format!(
-                    "{at}, tree {}, entries {} to {}: {error}{}",
-                    input.tree,
-                    self::count(first),
-                    self::count(last - 1),
-                    hint(&error, &names, recipe)
-                )
-            };
+            // A failure reading the events says where they are (a value the recipe cannot take, its
+            // entry), and what to do when the file is damaged.
+            let within = |error: rvr_recipe::Error, part| format!("{at}, tree {}, {}: {}{}", input.tree, self::entries(&error, first, &part), error.0, hint(&error.0, &names, recipe));
             // What each column held before the run, put back if the run fails part way: a run is
             // kept whole or not at all.
-            let before: Vec<Option<(usize, usize)>> = gathered
-                .iter()
-                .map(|g| g.as_ref().map(|g| (g.bytes.len(), g.counts.as_ref().map_or(0, Vec::len))))
-                .collect();
+            let before = held_lengths(&gathered);
             let mut counted = vec![0_u64; recipe.keep.len()];
             let mut sums = totals.clone();
-            let read = summed(recipe, &scope, &start, &mut sums).and_then(|()| kept(recipe, &scope, start, &mut counted)).and_then(|keep| {
-                for (index, (column, from)) in outputs.iter().enumerate() {
-                    let array = scope
-                        .evaluate(from)
-                        .and_then(|value| rvr_recipe::per_event(value, count))
-                        .map_err(|e| e.0);
-                    // An error that begins with the column's name already (a branch of that name
-                    // that could not be read) is not named again.
-                    let named = |e: String| match e.starts_with(&format!("{column}: ")) {
-                        true => e,
-                        false => format!("[columns] {column}: {e}"),
-                    };
-                    let array = stored(recipe, column, array.map_err(named)?);
-                    let (kind, listed) = match &array {
-                        Array::Event(values) => (values.kind, false),
-                        Array::Object { values, .. } => (values.kind, true),
-                        Array::Constant(_) => return Err(format!("{column} is a fixed value, not a column")),
-                    };
-                    let held = gathered[index].get_or_insert_with(|| Gathered {
-                        name: (*column).clone(),
-                        kind,
-                        bytes: Vec::new(),
-                        counts: listed.then(Vec::new),
-                    });
-                    gather(held, array, &keep, at)?;
+            // Entries `a..b` of the run, read in fewer at a time where their pairs would be too
+            // many together; each part is kept whole or put back.
+            let branches = Branches::over(&file, &tree, first as i64, last as i64);
+            let mut work = |run: &dyn Columns, a: usize, b: usize| -> rvr_recipe::Result<Vec<bool>> {
+                let scope = Scope::new(run, &sample, &recipe.defines);
+                let part = held_lengths(&gathered);
+                let (mut part_sums, mut part_counted) = (sums.clone(), vec![0_u64; recipe.keep.len()]);
+                let read = summed(recipe, &scope, &start[a..b], &mut part_sums).and_then(|()| kept(recipe, &scope, start[a..b].to_vec(), &mut part_counted)).and_then(|keep| {
+                    for (index, (column, from)) in outputs.iter().enumerate() {
+                        // An error that begins with the column's name already (a branch of that name
+                        // that could not be read) is not named again.
+                        let named = |e: rvr_recipe::Error| match e.0.starts_with(&format!("{column}: ")) {
+                            true => e,
+                            false => e.at(&format!("[columns] {column}")),
+                        };
+                        let array = scope
+                            .evaluate(from)
+                            .and_then(|value| rvr_recipe::per_event(value, b - a))
+                            .and_then(|array| stored(recipe, column, array))
+                            .map_err(named)?;
+                        let (kind, listed) = match &array {
+                            Array::Event(values) => (values.kind, false),
+                            Array::Object { values, .. } => (values.kind, true),
+                            Array::Constant(_) => return Err(rvr_recipe::problem(format!("{column} is a fixed value, not a column"))),
+                        };
+                        let held = gathered[index].get_or_insert_with(|| Gathered {
+                            name: (*column).clone(),
+                            kind,
+                            bytes: Vec::new(),
+                            counts: listed.then(Vec::new),
+                        });
+                        gather(held, array, &keep, at).map_err(rvr_recipe::problem)?;
+                    }
+                    Ok(keep)
+                });
+                match read {
+                    Ok(keep) => {
+                        sums = part_sums;
+                        counted.iter_mut().zip(part_counted).for_each(|(total, kept)| *total += kept);
+                        Ok(keep)
+                    }
+                    Err(error) => {
+                        put_back(&mut gathered, &part);
+                        Err(error)
+                    }
                 }
-                Ok(keep)
-            });
+            };
+            let read = rvr_recipe::over_runs(&branches, count, &mut work).map(|keeps| keeps.concat());
             let keep = match read {
                 Ok(keep) => {
                     totals = sums;
                     keep
                 }
-                Err(error) => {
-                    for (held, before) in gathered.iter_mut().zip(&before) {
-                        match (held.as_mut(), before) {
-                            (Some(held), Some((bytes, counts))) => {
-                                held.bytes.truncate(*bytes);
-                                if let Some(held) = &mut held.counts {
-                                    held.truncate(*counts);
-                                }
-                            }
-                            _ => *held = None,
-                        }
-                    }
+                Err((error, part)) => {
+                    put_back(&mut gathered, &before);
                     // A branch that could not be read is the file's; anything else is the recipe's.
-                    let fault = branches
-                        .failure()
-                        .map_or(Fault::Mistake, |e| fault_of(&e, file.source().inner().seen()));
-                    let mut failed = Failed::new(fault, within(error));
+                    let fault = branches.failure().map_or(Fault::Mistake, |e| fault_of(&e, file.source().inner().seen()));
+                    let mut failed = Failed::new(fault, within(error, part));
                     // A local file that cannot be opened now at all (a mount gone) is not the file's
                     // fault; one that can, but not read there, is damaged there.
                     if !remote && matches!(fault, Fault::Damaged | Fault::Save) {
@@ -1373,7 +1400,8 @@ fn take(
                 tried = true;
                 let mut held = shared.tried.lock().unwrap_or_else(|e| e.into_inner());
                 if held.samples.insert(input.sample) {
-                    derived_tried(recipe, &gathered, &before, &sample, kept_here, &mut held.seen).map_err(|e| Failed::new(Fault::Mistake, located(e)))?;
+                    let entries: Vec<u64> = (first..last).filter(|event| keep[(event - first) as usize]).collect();
+                    derived_tried(recipe, &gathered, &before, &sample, &entries, &mut held.seen).map_err(|e| Failed::new(Fault::Mistake, located(e)))?;
                 }
             }
             let before = entry.len();

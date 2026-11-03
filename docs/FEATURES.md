@@ -319,19 +319,22 @@ the last bits.
 
 ### 6.2 Semantics
 
-Expressions are evaluated over whole columns, 50,000 events at a time, with no loop over events.
-Arithmetic follows NumPy's rules, so a cut keeps exactly the events that the same formula keeps in
-NumPy or Awkward. When a flat value meets a jagged one, the flat value is used for every member.
-The type rules are explicit: a comparison gives `b1`, a count gives `i8`, a sum of integers gives
-`i8`, and floating-point functions keep the float kind they were given. Missing metadata has a
-defined meaning. A comparison with a field the sample lacks is false (even `!=`), and arithmetic
-with it is an error. A conditional cut lets such a sample through.
+Expressions are evaluated over whole columns, many events at a time, with no loop over events and
+no result that depends on how many. The kinds follow NumPy's type promotion, with the differences
+the recipe reference states, and every result is defined there to the bit: the promotion table,
+fixed values beside a column, rounding, conversions, signed zeros, and each function's exact
+definition. When a flat value meets a jagged one, the flat value is used for every member. A
+comparison gives `b1`, a count gives `i8`, a sum of whole numbers `i8` (`u8` of unsigned ones), and
+floating-point functions keep the float kind they were given. Missing metadata has a defined
+meaning. A comparison with a field the sample lacks is false (even `!=`), and arithmetic with it is
+an error. A conditional cut lets such a sample through.
 
 ### 6.3 Static checking and minimal reads
 
-The whole recipe is parsed and checked before any input is opened. A syntax error, a wrong number
-of arguments, a defined name used above the line that defines it, or an unknown top-level key is
-reported at once, with its position, and not an hour into a press. A branch name the input does
+The whole recipe is parsed and checked before any input is opened. A syntax error, an unknown
+function or a wrong number of arguments, a number where a true-or-false value is needed, a defined
+name used above the line that defines it, or an unknown key is reported at once, every problem
+together, each with its place, and not an hour into a press. A branch name the input does
 not have is answered with the nearest branches. Only the branches an expression names are read,
 and a defined name is worked out once per run of events, however often it is used.
 

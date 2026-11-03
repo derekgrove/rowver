@@ -19,7 +19,7 @@ pub(super) fn validate(header: &Value, reads: &Reads) -> Result<()> {
     let (data, made) = (&header["data"], &header["made"]);
     let source = made["recipe"]["text"].as_str().unwrap_or_default();
     let recipe = Recipe::read(source).map_err(|e| {
-        invalid(format!("made.recipe.text cannot be read as a recipe the recipe reference accepts ({}). {}", e.0, super::derived::remedy(header)))
+        invalid(format!("made.recipe.text cannot be read as a recipe the recipe reference accepts ({}). {}", e.line(), super::derived::remedy(header)))
     })?;
     let root: toml::Table = source.parse().map_err(|e| invalid(format!("made.recipe.text is not TOML ({e}): {MEND}")))?;
     if let Some(table) = super::RECIPE_TABLES.iter().find(|table| !root.get(**table).is_some_and(toml::Value::is_table)) {
@@ -150,6 +150,7 @@ impl Columns for Branches<'_> {
 
 /// Each `[columns]` column's kind and whether it is a list per row, worked out over every sample's branch list (SPEC.md §2.3).
 pub fn kinds(recipe: &Recipe, lock: &Lock) -> Result<Vec<(Kind, bool)>> {
+    defines_apart(recipe, lock)?;
     let mut found: Vec<Option<(Kind, bool, &str)>> = vec![None; recipe.columns.len()];
     let shape = |kind: Kind, listed: bool| if listed { format!("a list of {}", kind.name()) } else { kind.name().to_owned() };
     for sample in &lock.samples {
@@ -159,18 +160,22 @@ pub fn kinds(recipe: &Recipe, lock: &Lock) -> Result<Vec<(Kind, bool)>> {
         metadata.insert("file".into(), Constant::Text(sample.files.first().map(|f| f.at.clone()).unwrap_or_default()));
         let scope = Scope::new(&branches, &metadata, &recipe.defines);
         let fails = |what: String| move |e: rvr_recipe::Error| {
-            let near = e.0.strip_prefix("There is no column named ").map(|name| crate::study::meant(name, list.list.iter().map(|b| b.name.as_str())));
+            let near = e.0.strip_prefix("There is no column named ").map(|name| rvr_recipe::meant(name, list.list.iter().map(|b| b.name.as_str())));
             let said = if e.0.ends_with(['.', '?']) { e.0 } else { format!("{}.", e.0) };
             invalid(format!("{what}: {said}{} (sample {}, over the branches samples.lock lists for it)", near.unwrap_or_default(), sample.name))
         };
         for cut in &recipe.keep {
+            let place = format!("[keep] {}", cut.name);
             // A cut whose samples (`when`) leave this one out is not worked out for it.
             let applies = match &cut.when {
                 None => true,
-                Some(when) => !matches!(scope.evaluate(when).map_err(fails(format!("[keep] {}", cut.name)))?, Array::Constant(Constant::Truth(false) | Constant::Missing(_))),
+                Some(when) => match scope.evaluate(when).map_err(fails(place.clone()))? {
+                    Array::Constant(Constant::Truth(false) | Constant::Missing(_)) => false,
+                    value => Scope::condition(value, 0).map(|_| true).map_err(fails(place.clone()))?,
+                },
             };
             if applies {
-                scope.evaluate(&cut.pass).and_then(|v| per_event(v, 0)).map_err(fails(format!("[keep] {}", cut.name)))?;
+                scope.mask(&cut.pass, 0).map_err(fails(place))?;
             }
         }
         for total in recipe.totals.iter().filter(|total| total.tree.is_none()) {
@@ -194,6 +199,26 @@ pub fn kinds(recipe: &Recipe, lock: &Lock) -> Result<Vec<(Kind, bool)>> {
         }
     }
     Ok(found.into_iter().map(|held| held.map_or((Kind::F8, false), |(kind, listed, _)| (kind, listed))).collect())
+}
+
+/// Refuse each `[define]` named like a branch of a sample's list, with the samples whose lists have
+/// it: a name means one thing (SPEC.md §2.3).
+fn defines_apart(recipe: &Recipe, lock: &Lock) -> Result<()> {
+    let names: Vec<(&str, std::collections::HashSet<&str>)> = lock.samples.iter().map(|s| {
+        let list = lock.branches_of(s).map(|list| list.list.iter().map(|b| b.name.as_str()).collect()).unwrap_or_default();
+        (s.name.as_str(), list)
+    }).collect();
+    let mut said = Vec::new();
+    for name in recipe.defines.keys() {
+        let samples: Vec<&str> = names.iter().filter(|(_, list)| list.contains(name.as_str())).map(|(sample, _)| *sample).collect();
+        if !samples.is_empty() {
+            said.push(format!("[define] {name} is also the name of a branch of sample {} in samples.lock, and a name means one thing: rename the defined name, as {name}_sel, where the recipe uses it", samples.join(", ")));
+        }
+    }
+    match said.is_empty() {
+        true => Ok(()),
+        false => Err(invalid(said.join("; "))),
+    }
 }
 
 /// Check each column's record has the kind the recipe makes it over every sample's branch list.

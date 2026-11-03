@@ -1,8 +1,5 @@
-//! The number kinds of `.rvr` columns and how two of them combine.
-//!
-//! Ported from: NumPy 2.5.1 type promotion (`numpy.result_type`) for the eleven kinds an
-//! `.rvr` array may have, with Python numbers treated as weak (NEP 50).
-//! Documentation: <https://numpy.org/doc/stable/reference/arrays.promotion.html>
+//! The number kinds of `.rvr` columns and how two of them combine: `numpy.result_type` (NumPy
+//! 2.5.1) over the eleven kinds, the table in the README's "Kinds" section.
 
 use crate::{problem, Result};
 
@@ -24,6 +21,9 @@ pub enum Kind {
 
 use Kind::*;
 
+/// Every kind's `.rvr` spelling.
+const NAMES: [&str; 11] = ["b1", "i1", "i2", "i4", "i8", "u1", "u2", "u4", "u8", "f4", "f8"];
+
 impl Kind {
     /// Read the `.rvr` spelling of a kind.
     pub fn named(name: &str) -> Result<Self> {
@@ -39,7 +39,10 @@ impl Kind {
             "u8" => U8,
             "f4" => F4,
             "f8" => F8,
-            other => return Err(problem(format!("{other} is not a number kind"))),
+            other => {
+                let near = crate::meant(other, NAMES.into_iter());
+                return Err(problem(format!("{other:?} is not a number kind: the kinds are {}.{near}", NAMES.join(", "))));
+            }
         })
     }
 
@@ -78,6 +81,29 @@ impl Kind {
     /// Whether a whole-number kind has no sign.
     pub fn unsigned(self) -> bool {
         matches!(self, B1 | U1 | U2 | U4 | U8)
+    }
+
+    /// The least and greatest value a whole-number kind holds.
+    pub(crate) fn bounds(self) -> (i128, i128) {
+        match self {
+            B1 => (0, 1),
+            I1 => (i8::MIN.into(), i8::MAX.into()),
+            I2 => (i16::MIN.into(), i16::MAX.into()),
+            I4 => (i32::MIN.into(), i32::MAX.into()),
+            U1 => (0, u8::MAX.into()),
+            U2 => (0, u16::MAX.into()),
+            U4 => (0, u32::MAX.into()),
+            U8 => (0, u64::MAX.into()),
+            _ => (i64::MIN.into(), i64::MAX.into()),
+        }
+    }
+
+    /// A whole number held in 64 bits as this kind holds it (a `u8` by its bits), at full width.
+    pub(crate) fn widen(self, value: i64) -> i128 {
+        match self {
+            U8 => value as u64 as i128,
+            _ => value as i128,
+        }
     }
 
     /// Bring a whole number computed in 64 bits back into this kind, wrapping as NumPy does.

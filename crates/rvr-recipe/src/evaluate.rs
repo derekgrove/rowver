@@ -1,6 +1,6 @@
 //! Walk an expression's tree over the columns of one run of events.
 
-use crate::array::{lacking, Array, Constant, Operator};
+use crate::array::{lacking, not_truth, Array, Constant, Operator};
 use crate::functions as f;
 use crate::kind::Kind;
 use crate::parse::Expression;
@@ -8,20 +8,50 @@ use crate::{problem, Result};
 use hep_columns::vectors::Momentum;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::ops::Range;
 
-/// Every function an expression can call, as the README lists them.
-pub const FUNCTIONS: &[&str] = &[
-    "count", "sum", "any", "all", "least", "greatest", "least_index", "greatest_index", "first",
-    "nth", "index", "sorted", "order", "take", "listed", "join", "abs", "sign", "sqrt", "exp", "log",
-    "log10", "cos", "sin", "tan", "acos", "asin", "atan", "atan2", "cosh", "sinh", "tanh", "hypot",
-    "floor", "ceil", "round", "min", "max", "clip", "isfinite", "if", "bit_and", "shift_right",
-    "delta_phi", "delta_r", "mass", "pt", "eta", "phi", "rapidity", "dr_nearest",
-    "dr_second_nearest", "dr_farthest", "dr_second_farthest", "nearest_index",
-    "second_nearest_index", "farthest_index", "second_farthest_index", "pair_first",
-    "pair_second", "pair_dr", "pair_mass", "pair_pt", "pair_eta", "pair_phi", "pair_rapidity",
-    "contains", "branch", "stored",
+/// Every function an expression can call, as the README lists them, with the fewest and the most
+/// values it takes (`usize::MAX`: as many as wanted).
+pub const FUNCTIONS: &[(&str, usize, usize)] = &[
+    ("count", 1, 1), ("sum", 1, 1), ("any", 1, 1), ("all", 1, 1), ("least", 2, 2), ("greatest", 2, 2),
+    ("least_index", 2, 2), ("greatest_index", 2, 2), ("first", 2, 2), ("nth", 3, 3), ("index", 1, 1),
+    ("sorted", 1, 2), ("order", 1, 2), ("take", 3, 3), ("listed", 2, 2), ("join", 2, usize::MAX),
+    ("abs", 1, 1), ("sign", 1, 1), ("sqrt", 1, 1), ("exp", 1, 1), ("log", 1, 1), ("log10", 1, 1),
+    ("cos", 1, 1), ("sin", 1, 1), ("tan", 1, 1), ("acos", 1, 1), ("asin", 1, 1), ("atan", 1, 1),
+    ("atan2", 2, 2), ("cosh", 1, 1), ("sinh", 1, 1), ("tanh", 1, 1), ("hypot", 2, 2), ("floor", 1, 1),
+    ("ceil", 1, 1), ("round", 1, 1), ("min", 2, 2), ("max", 2, 2), ("clip", 3, 3), ("isfinite", 1, 1),
+    ("if", 3, 3), ("bit_and", 2, 2), ("shift_right", 2, 2), ("delta_phi", 2, 2), ("delta_r", 4, 4),
+    ("mass", 3, 4), ("pt", 3, 4), ("eta", 3, 4), ("phi", 3, 4), ("rapidity", 3, 4), ("dr_nearest", 4, 5),
+    ("dr_second_nearest", 4, 5), ("dr_farthest", 4, 5), ("dr_second_farthest", 4, 5),
+    ("nearest_index", 4, 5), ("second_nearest_index", 4, 5), ("farthest_index", 4, 5),
+    ("second_farthest_index", 4, 5), ("pair_first", 1, 1), ("pair_second", 1, 1), ("pair_dr", 2, 2),
+    ("pair_mass", 3, 4), ("pair_pt", 3, 4), ("pair_eta", 3, 4), ("pair_phi", 3, 4),
+    ("pair_rapidity", 3, 4), ("contains", 2, 2), ("branch", 1, 1), ("stored", 2, 2),
 ];
+
+/// Why `name` cannot be called with `count` values, when it cannot: no function has that name, or
+/// it takes another number of values.
+pub(crate) fn uncallable(name: &str, count: usize) -> Option<String> {
+    let Some(&(_, least, most)) = FUNCTIONS.iter().find(|(known, ..)| *known == name) else {
+        let near = crate::meant(name, FUNCTIONS.iter().map(|(known, ..)| *known));
+        return Some(format!("There is no function named {name}.{near} Every function, with an example, is in the recipe reference: {}", crate::REFERENCE));
+    };
+    if (least..=most).contains(&count) {
+        return None;
+    }
+    let takes = match (least, most) {
+        (1, 1) => "1 value".to_owned(),
+        (n, m) if n == m => format!("{n} values"),
+        (n, usize::MAX) => format!("{n} values or more"),
+        (n, m) => format!("{n} or {m} values"),
+    };
+    let which = match (least, most) {
+        (3, 4) => " (pt, eta, phi, and optionally a mass)",
+        (4, 5) => " (eta and phi of one list, eta and phi of the other, and optionally the value for a member with none to match)",
+        _ => "",
+    };
+    Some(format!("{name} takes {takes}{which}, not {count}"))
+}
 
 /// Where an expression's columns come from.
 pub trait Columns {
@@ -29,6 +59,51 @@ pub trait Columns {
     fn column(&self, name: &str) -> Result<Option<Array>>;
     /// Whether there is a column of this name, without reading it.
     fn has(&self, name: &str) -> bool;
+}
+
+/// Rows `from..to` of other columns, each sliced once, when an expression first asks for it; the
+/// columns themselves when they are all of it.
+pub struct Slice<'a> {
+    columns: &'a dyn Columns,
+    from: usize,
+    to: usize,
+    whole: bool,
+    cut: RefCell<BTreeMap<String, Option<Array>>>,
+}
+
+impl<'a> Slice<'a> {
+    /// Rows `from..to` of `columns`, which cover `rows`.
+    pub fn new(columns: &'a dyn Columns, from: usize, to: usize, rows: usize) -> Self {
+        Slice { columns, from, to, whole: from == 0 && to == rows, cut: RefCell::default() }
+    }
+}
+
+impl Columns for Slice<'_> {
+    fn column(&self, name: &str) -> Result<Option<Array>> {
+        if self.whole {
+            return self.columns.column(name);
+        }
+        if let Some(held) = self.cut.borrow().get(name) {
+            return Ok(held.clone());
+        }
+        let held = self.columns.column(name)?.map(|array| array.rows(self.from, self.to));
+        self.cut.borrow_mut().insert(name.to_owned(), held.clone());
+        Ok(held)
+    }
+
+    fn has(&self, name: &str) -> bool {
+        self.columns.has(name)
+    }
+}
+
+/// `work` over the `rows` rows of `columns` with `in_runs`, each part its slice; a failure with the rows it lies in.
+pub fn over_runs<T>(columns: &dyn Columns, rows: usize, work: &mut dyn FnMut(&dyn Columns, usize, usize) -> Result<T>) -> std::result::Result<Vec<T>, (crate::Error, Range<usize>)> {
+    let mut part = 0..rows;
+    let done = crate::in_runs(0, rows, &mut |from, to| {
+        part = from..to;
+        work(&Slice::new(columns, from, to, rows), from, to).map_err(|e| e.later(from))
+    });
+    done.map_err(|e| (e, part))
 }
 
 /// Everything an expression can refer to: the columns, the sample's metadata, and the names a
@@ -41,12 +116,7 @@ pub struct Scope<'a> {
     pub defines: &'a BTreeMap<String, Expression>,
     /// Each defined name's value, or why it has none, once worked out, so that a name used many
     /// times is worked out once; `None` while it is being worked out.
-    known: RefCell<BTreeMap<String, Option<std::result::Result<Array, String>>>>,
-}
-
-/// How many values, in words: `1 value`, `2 values`.
-fn how_many(count: usize) -> String {
-    format!("{count} value{}", if count == 1 { "" } else { "s" })
+    known: RefCell<BTreeMap<String, Option<Result<Array>>>>,
 }
 
 /// What a name that is no column is refused with.
@@ -72,17 +142,19 @@ impl<'a> Scope<'a> {
 
     /// Evaluate a condition to one truth value for each of `events` events.
     pub fn mask(&self, expression: &Expression, events: usize) -> Result<Vec<bool>> {
-        match self.evaluate(expression)? {
+        Self::condition(self.evaluate(expression)?, events)
+    }
+
+    /// A condition's value as one truth value for each of `events` events.
+    pub fn condition(value: Array, events: usize) -> Result<Vec<bool>> {
+        match value {
             Array::Constant(Constant::Truth(truth)) => Ok(vec![truth; events]),
             Array::Constant(Constant::Missing(key)) => Err(lacking(&key, "a condition")),
-            Array::Event(values) if values.len() == events => Ok(values
-                .truths("A condition")?
-                .iter()
-                .map(|truth| *truth != 0)
-                .collect()),
-            _ => Err(problem(
-                "A condition must give one true-or-false value per event",
-            )),
+            Array::Constant(Constant::Text(text)) => Err(problem(format!("A condition needs a true-or-false value, not the text {text:?}"))),
+            Array::Constant(_) => Err(not_truth("A condition", "a number")),
+            Array::Event(values) if values.len() == events => Ok(values.truths("A condition")?.iter().map(|truth| *truth != 0).collect()),
+            Array::Event(_) => Err(problem("A condition must give one true-or-false value per event")),
+            Array::Object { .. } => Err(problem("A condition must give one true-or-false value per event, not a list: reduce the list, as any(…), all(…) or count(…) > 0")),
         }
     }
 
@@ -103,20 +175,8 @@ impl<'a> Scope<'a> {
                     .cloned()
                     .unwrap_or_else(|| crate::Constant::Missing(field.clone())),
             ),
-            Negate(inner) => match self.evaluate(inner)? {
-                Array::Constant(crate::Constant::Float(value)) => {
-                    Array::Constant(crate::Constant::Float(-value))
-                }
-                Array::Constant(crate::Constant::Whole(value)) => {
-                    Array::Constant(crate::Constant::Whole(-value))
-                }
-                other => Array::Constant(crate::Constant::Whole(-1))
-                    .combine(Operator::Multiply, &other)?,
-            },
-            Not(inner) => self.evaluate(inner)?.combine(
-                Operator::Equal,
-                &Array::Constant(crate::Constant::Truth(false)),
-            )?,
+            Negate(inner) => f::negated(&self.evaluate(inner)?)?,
+            Not(inner) => f::denied(&self.evaluate(inner)?)?,
             Binary(operator, left, right) => {
                 let left = self.evaluate(left)?;
                 let truth = |wanted: bool| matches!(&left, Array::Constant(crate::Constant::Truth(found)) if *found == wanted);
@@ -149,7 +209,7 @@ impl<'a> Scope<'a> {
         };
         if let Some(known) = self.known.borrow().get(name) {
             return match known {
-                Some(value) => value.clone().map_err(problem),
+                Some(value) => value.clone(),
                 None => Err(problem(format!(
                     "{name} refers to itself, directly or through other defined names"
                 ))),
@@ -162,50 +222,40 @@ impl<'a> Scope<'a> {
                 self.evaluate(defined)
             }
         };
-        let kept = match &value {
-            Ok(array) => Ok(array.clone()),
-            Err(error) => Err(error.0.clone()),
-        };
-        self.known.borrow_mut().insert(name.to_owned(), Some(kept));
+        self.known.borrow_mut().insert(name.to_owned(), Some(value.clone()));
         value
     }
 
-    /// Call a function.
+    /// Call a function: its name and number of values are checked before any value is worked out.
     fn call(&self, name: &str, arguments: &[Expression]) -> Result<Array> {
-        if name == "if" && arguments.len() == 3 {
-            if let Array::Constant(crate::Constant::Truth(truth)) = self.evaluate(&arguments[0])? {
-                return self.evaluate(&arguments[if truth { 1 } else { 2 }]);
-            }
-        }
         if self.defines.contains_key(name) {
-            return Err(problem(format!(
-                "{name} is a defined name, not a function: write it without brackets, as {name}"
-            )));
+            return Err(problem(format!("{name} is a defined name, not a function: write it without brackets, as {name}")));
         }
-        let arrays: Vec<Array> = arguments
-            .iter()
-            .map(|argument| self.evaluate(argument))
-            .collect::<Result<_>>()?;
-        let arity = |count: usize| {
-            if arrays.len() == count {
-                Ok(())
-            } else {
-                Err(problem(format!(
-                    "{name} takes {}, not {}",
-                    how_many(count),
-                    arrays.len()
-                )))
-            }
-        };
-        let one =
-            |function: fn(&Array) -> Result<Array>| arity(1).and_then(|_| function(&arrays[0]));
-        let float =
-            |function: fn(f64) -> f64| arity(1).and_then(|_| f::float_map(&arrays[0], function));
+        if let Some(why) = uncallable(name, arguments.len()) {
+            return Err(problem(why));
+        }
+        // A fixed condition works out only the value it chooses.
+        if name == "if" {
+            let condition = self.evaluate(&arguments[0])?;
+            return match condition {
+                Array::Constant(crate::Constant::Truth(truth)) => self.evaluate(&arguments[if truth { 1 } else { 2 }]),
+                condition => f::choose(&condition, &self.evaluate(&arguments[1])?, &self.evaluate(&arguments[2])?),
+            };
+        }
+        let arrays: Vec<Array> = arguments.iter().map(|argument| self.evaluate(argument)).collect::<Result<_>>()?;
+        self.apply(name, &arrays)
+    }
+
+    /// Work a function out over its values, once each is worked out: a frame of its own, off the
+    /// path an expression's depth is walked along.
+    #[inline(never)]
+    fn apply(&self, name: &str, arrays: &[Array]) -> Result<Array> {
+        let one = |function: fn(&Array) -> Result<Array>| function(&arrays[0]);
+        let float = |function: fn(f64) -> f64| f::float_map(&arrays[0], function);
         // What `of` measures of each event's list added together, or of each pair of it.
-        let kinematic = |of: fn(Momentum) -> f64, pairs: bool| match arrays.len() {
-            3 | 4 if pairs => f::pair_summed(&arrays, name, of),
-            3 | 4 => f::summed(&arrays, name, of),
-            _ => Err(problem(format!("{name} takes pt, eta, phi, and optionally a mass"))),
+        let kinematic = |of: fn(Momentum) -> f64, pairs: bool| match pairs {
+            true => f::pair_summed(arrays, name, of),
+            false => f::summed(arrays, name, of),
         };
         let text = |array: &Array, what: &str| match array {
             Array::Constant(crate::Constant::Text(text)) => Ok(text.clone()),
@@ -236,125 +286,77 @@ impl<'a> Scope<'a> {
             "asin" => float(libm::asin)?,
             "atan" => float(libm::atan)?,
             "tanh" => float(libm::tanh)?,
-            // floor and ceil keep whole numbers and true-or-false values, as NumPy does; round
-            // takes no true-or-false values, which NumPy rounds as 16-bit floats.
-            "floor" => one(|array| f::kept_whole(array, libm::floor))?,
-            "ceil" => one(|array| f::kept_whole(array, libm::ceil))?,
+            // floor and ceil keep whole numbers and true-or-false values; round takes no
+            // true-or-false values.
+            "floor" => f::kept_whole(&arrays[0], "floor", libm::floor)?,
+            "ceil" => f::kept_whole(&arrays[0], "ceil", libm::ceil)?,
             "round" => one(f::rounded)?,
-            "atan2" => arity(2).and_then(|_| f::float_pair(&arrays[0], &arrays[1], libm::atan2))?,
-            "min" => {
-                arity(2).and_then(|_| f::pairwise(&arrays[0], &arrays[1], f::Extreme::Least))?
-            }
-            "max" => {
-                arity(2).and_then(|_| f::pairwise(&arrays[0], &arrays[1], f::Extreme::Greatest))?
-            }
-            "hypot" => arity(2).and_then(|_| f::float_pair(&arrays[0], &arrays[1], libm::hypot))?,
-            "least" => arity(2).and_then(|_| f::extreme(&arrays[0], &arrays[1], false))?,
-            "greatest" => arity(2).and_then(|_| f::extreme(&arrays[0], &arrays[1], true))?,
-            "first" => arity(2).and_then(|_| f::nth(&arrays[0], 0, &arrays[1]))?,
+            "atan2" => f::float_pair(&arrays[0], &arrays[1], libm::atan2)?,
+            "min" => f::pairwise(&arrays[0], &arrays[1], f::Extreme::Least)?,
+            "max" => f::pairwise(&arrays[0], &arrays[1], f::Extreme::Greatest)?,
+            "hypot" => f::float_pair(&arrays[0], &arrays[1], libm::hypot)?,
+            "least" => f::extreme(&arrays[0], &arrays[1], false)?,
+            "greatest" => f::extreme(&arrays[0], &arrays[1], true)?,
+            "first" => f::nth(&arrays[0], 0, &arrays[1], "first")?,
             "nth" => {
-                arity(3)?;
                 let Array::Constant(crate::Constant::Whole(position)) = &arrays[1] else {
-                    return Err(problem(
-                        "nth needs a whole number for the position, counting from 0",
-                    ));
+                    return Err(problem("nth needs a whole number for the position, counting from 0, such as nth(Jet_pt, 1, -1)"));
                 };
-                let position = usize::try_from(*position)
-                    .map_err(|_| problem("nth counts positions from 0"))?;
-                f::nth(&arrays[0], position, &arrays[2])?
+                let position = usize::try_from(*position).map_err(|_| problem("nth counts positions from 0, so its position is 0 or more"))?;
+                f::nth(&arrays[0], position, &arrays[2], "nth")?
             }
-            "listed" => arity(2).and_then(|_| f::listed(&arrays[0], &arrays[1]))?,
-            "if" => arity(3).and_then(|_| f::choose(&arrays[0], &arrays[1], &arrays[2]))?,
-            "dr_nearest"
-            | "dr_second_nearest"
-            | "dr_farthest"
-            | "dr_second_farthest"
-            | "nearest_index"
-            | "second_nearest_index"
-            | "farthest_index"
-            | "second_farthest_index" => {
-                if arrays.len() != 4 && arrays.len() != 5 {
-                    return Err(problem(format!(
-                        "{name} takes 4 or 5 values, not {}",
-                        arrays.len()
-                    )));
-                }
+            "listed" => f::listed(&arrays[0], &arrays[1])?,
+            "dr_nearest" | "dr_second_nearest" | "dr_farthest" | "dr_second_farthest" | "nearest_index"
+            | "second_nearest_index" | "farthest_index" | "second_farthest_index" => {
                 let rank = name.contains("second") as usize;
                 let farthest = name.contains("farthest");
                 let position = name.ends_with("_index");
-                f::ranked(&arrays, rank, farthest, position, name)?
+                f::ranked(arrays, rank, farthest, position, name)?
             }
-            "delta_phi" => arity(2).and_then(|_| {
-                f::formula(&[&arrays[0], &arrays[1]], "delta_phi", |v| {
-                    hep_columns::angles::delta_phi(v[0], v[1])
-                })
-            })?,
-            "delta_r" => arity(4).and_then(|_| {
+            "delta_phi" => f::formula(&[&arrays[0], &arrays[1]], "delta_phi", |v| hep_columns::angles::delta_phi(v[0], v[1]))?,
+            "delta_r" => {
                 let parts = [&arrays[0], &arrays[1], &arrays[2], &arrays[3]];
-                f::formula(&parts, "delta_r", |v| {
-                    hep_columns::angles::delta_r(v[0], v[1], v[2], v[3])
-                })
-            })?,
+                f::formula(&parts, "delta_r", |v| hep_columns::angles::delta_r(v[0], v[1], v[2], v[3]))?
+            }
             "clip" => {
-                arity(3)?;
                 let floor = f::pairwise(&arrays[0], &arrays[1], f::Extreme::Greatest)?;
                 f::pairwise(&floor, &arrays[2], f::Extreme::Least)?
             }
-            "bit_and" => arity(2).and_then(|_| {
-                f::bits(&arrays[0], &arrays[1], "bit_and", |v, m, _| {
-                    hep_columns::bits::bit_and(v, m)
-                })
-            })?,
+            "bit_and" => f::bits(&arrays[0], &arrays[1], "bit_and", |v, m, _| hep_columns::bits::bit_and(v, m))?,
             "shift_right" => {
-                arity(2)?;
-                if matches!(arrays[1], Array::Constant(crate::Constant::Whole(places)) if places < 0)
-                {
-                    return Err(problem("shift_right cannot shift by a negative number"));
+                if matches!(arrays[1], Array::Constant(crate::Constant::Whole(places)) if places < 0) {
+                    return Err(problem("shift_right cannot shift by a negative number of bits"));
                 }
-                f::bits(&arrays[0], &arrays[1], "shift_right", |v, n, unsigned| {
-                    hep_columns::bits::shift_right(v, n.min(64) as u32, unsigned)
-                })?
+                f::bits(&arrays[0], &arrays[1], "shift_right", |v, n, unsigned| hep_columns::bits::shift_right(v, n.min(64) as u32, unsigned))?
             }
-            "least_index" => arity(2).and_then(|_| f::extreme_at(&arrays[0], &arrays[1], false))?,
-            "greatest_index" => {
-                arity(2).and_then(|_| f::extreme_at(&arrays[0], &arrays[1], true))?
-            }
+            "least_index" => f::extreme_at(&arrays[0], &arrays[1], false)?,
+            "greatest_index" => f::extreme_at(&arrays[0], &arrays[1], true)?,
             "order" | "sorted" => {
-                let descending = match arrays.len() {
-                    1 => false,
-                    2 => match text(&arrays[1], "the direction")?.as_str() {
+                let descending = match arrays.get(1) {
+                    None => false,
+                    Some(direction) => match text(direction, "the direction")?.as_str() {
                         "descending" => true,
                         "ascending" => false,
-                        _ => {
-                            return Err(problem(format!(
-                                "{name} takes 'ascending' or 'descending' as its direction"
-                            )))
-                        }
+                        other => return Err(problem(format!("{name} takes 'ascending' or 'descending' as its direction, not {other:?}"))),
                     },
-                    _ => return Err(problem(format!("{name} takes 1 or 2 values"))),
                 };
                 f::order(&arrays[0], descending, name == "order")?
             }
-            "take" => arity(3).and_then(|_| f::take(&arrays[0], &arrays[1], &arrays[2]))?,
-            "join" => f::join(&arrays)?,
+            "take" => f::take(&arrays[0], &arrays[1], &arrays[2])?,
+            "join" => f::join(arrays)?,
             "pair_first" => one(|array| f::pair_member(array, false))?,
             "pair_second" => one(|array| f::pair_member(array, true))?,
-            "pair_dr" => arity(2).and_then(|_| f::pair_dr(&arrays[0], &arrays[1]))?,
+            "pair_dr" => f::pair_dr(&arrays[0], &arrays[1])?,
             "pair_mass" => kinematic(Momentum::mass, true)?,
             "pair_pt" => kinematic(Momentum::pt, true)?,
             "pair_eta" => kinematic(Momentum::eta, true)?,
             "pair_phi" => kinematic(Momentum::phi, true)?,
             "pair_rapidity" => kinematic(Momentum::rapidity, true)?,
             "contains" => {
-                arity(2)?;
                 let found = match (&arrays[0], &arrays[1]) {
-                    (
-                        Array::Constant(crate::Constant::Text(whole)),
-                        Array::Constant(crate::Constant::Text(part)),
-                    ) => whole.contains(part.as_str()),
-                    (Array::Constant(crate::Constant::Missing(_)), _)
-                    | (_, Array::Constant(crate::Constant::Missing(_))) => false,
-                    _ => return Err(problem("contains needs two pieces of text")),
+                    (Array::Constant(crate::Constant::Text(whole)), Array::Constant(crate::Constant::Text(part))) => whole.contains(part.as_str()),
+                    (Array::Constant(crate::Constant::Missing(_)), _) | (_, Array::Constant(crate::Constant::Missing(_))) => false,
+                    _ => return Err(problem("contains needs two pieces of text, as contains(sample.kind, 'sig')")),
                 };
                 Array::Constant(crate::Constant::Truth(found))
             }
@@ -363,26 +365,12 @@ impl<'a> Scope<'a> {
             "eta" => kinematic(Momentum::eta, false)?,
             "phi" => kinematic(Momentum::phi, false)?,
             "rapidity" => kinematic(Momentum::rapidity, false)?,
-            "branch" => arity(1).and_then(|_| self.column(&text(&arrays[0], "a branch name")?))?,
+            "branch" => self.column(&text(&arrays[0], "a branch name")?)?,
             "stored" => {
-                arity(2)?;
                 let kind = Kind::named(&text(&arrays[1], "a number kind")?)?;
-                match &arrays[0] {
-                    Array::Constant(_) => {
-                        return Err(problem("stored needs a column, not a fixed value"))
-                    }
-                    Array::Event(values) => Array::Event(values.cast(kind)),
-                    Array::Object { offsets, values } => Array::Object {
-                        offsets: Arc::clone(offsets),
-                        values: values.cast(kind),
-                    },
-                }
+                arrays[0].convert(kind)?
             }
-            _ => {
-                return Err(problem(format!(
-                    "There is no function named {name}"
-                )))
-            }
+            _ => unreachable!("uncallable refuses every name FUNCTIONS does not hold"),
         })
     }
 }

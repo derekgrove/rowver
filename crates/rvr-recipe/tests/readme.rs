@@ -152,13 +152,17 @@ fn every_function_is_known_and_in_the_readme() {
     let recipe = Recipe::read(RECIPE).unwrap();
     let (events, sample) = (events(), BTreeMap::new());
     let scope = Scope::new(&events, &sample, &recipe.defines);
-    for name in rvr_recipe::FUNCTIONS {
-        let said = scope.evaluate(&parse(&format!("{name}(MET_pt)")).unwrap());
-        assert!(!matches!(&said, Err(e) if e.0.contains("no function named")), "{name} is listed but unknown");
+    // Each is called with the fewest values it takes, so that every name listed is one the
+    // evaluator knows (it has no other: a name not listed is refused before it is looked up).
+    for (name, least, _) in rvr_recipe::FUNCTIONS {
+        let arguments = vec!["MET_pt"; *least].join(", ");
+        let said = scope.evaluate(&parse(&format!("{name}({arguments})")).unwrap());
+        assert!(!matches!(&said, Err(e) if e.0.contains("no function named") || e.0.contains(" takes ")), "{name}: {said:?}");
         assert!(text.contains(&format!("`{name}(")) || text.contains(&format!("`{name}`")), "{name} is not in the README");
     }
     let said = scope.evaluate(&parse("cnt(MET_pt)").unwrap()).unwrap_err();
-    assert!(said.0.contains("There is no function named cnt"), "{said:?}");
+    assert!(said.0.starts_with("There is no function named cnt. Did you mean: ") && said.0.contains("count"), "{said:?}");
+    assert!(said.0.ends_with(&format!("? Every function, with an example, is in the recipe reference: {}", rvr_recipe::REFERENCE)), "{said:?}");
 }
 
 #[test]
@@ -187,6 +191,16 @@ fn every_readme_example_gives_the_result_it_shows() {
             None => parse(expression).and_then(|e| scope.evaluate(&e)),
         };
         checked += 1;
+        // A row that says the result's kind is checked for it too.
+        let kind = |array: &Array| match array {
+            Array::Event(values) | Array::Object { values, .. } => values.kind.name(),
+            Array::Constant(_) => "",
+        };
+        if let (Some(want), Ok(ours)) = (row.get("kind").and_then(|cell| code(cell)), &result) {
+            if kind(ours) != want {
+                wrong.push(format!("{expression}: README says kind {want}, rvr gives {}", kind(ours)));
+            }
+        }
         match (said, result) {
             (Some(said), Err(error)) if error.0.contains(said.as_str()) => {}
             (Some(said), other) => wrong.push(format!("{expression}: expected the mistake {said:?}, got {other:?}")),
@@ -212,4 +226,18 @@ fn every_readme_example_gives_the_result_it_shows() {
     }
     assert!(checked > 100, "only {checked} examples were found in the README");
     assert!(wrong.is_empty(), "{} of {checked} README examples are wrong:\n{}", wrong.len(), wrong.join("\n"));
+}
+
+#[test]
+fn the_readme_promotion_table_is_how_kinds_combine() {
+    let text = std::fs::read_to_string(format!("{}/README.md", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let rows: Vec<_> = tables(&text).into_iter().filter(|row| row.contains_key("combined with")).collect();
+    assert_eq!(rows.len(), 11);
+    let names = ["b1", "i1", "i2", "i4", "i8", "u1", "u2", "u4", "u8", "f4", "f8"];
+    for row in rows {
+        let left = Kind::named(&row["combined with"]).unwrap();
+        for right in names {
+            assert_eq!(left.with(Kind::named(right).unwrap()).name(), row[right], "{} with {right}", left.name());
+        }
+    }
 }

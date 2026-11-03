@@ -4,7 +4,7 @@
 
 use crate::press::{self, count, fields, hint, kept, Branches};
 use crate::Words;
-use rvr_recipe::{parse, per_event, Array, Constant, Kind, Scope, Store, Values};
+use rvr_recipe::{per_event, Array, Columns, Constant, Kind, Scope, Store, Values};
 use std::path::Path;
 
 const USAGE: &str = "usage:
@@ -44,7 +44,6 @@ fn run(args: &[&str]) -> Result<(), String> {
         })?,
     };
     let only_kept = words.has("--kept");
-    let expression = parse(text).map_err(|e| format!("the expression: {}", e.0))?;
     let dir = Path::new(dir);
     let (mut texts, mut lock) = press::texts(dir)?;
     press::agreed(&texts, &lock)?;
@@ -53,6 +52,7 @@ fn run(args: &[&str]) -> Result<(), String> {
         (texts, lock) = press::texts(dir)?;
     }
     let recipe = press::study_recipe(&texts.recipe)?;
+    let expression = recipe.expression(text).map_err(|e| format!("the expression: {}", e.0.replace('\n', "\nthe expression: ")))?;
     let sample = &lock.samples[index];
     let (root, file) = press::first_readable(&lock, index, dir)?;
     let at = &file.at;
@@ -72,27 +72,27 @@ fn run(args: &[&str]) -> Result<(), String> {
     let total = tree.entries.max(0) as u64;
     let shown_name = at.rsplit('/').next().unwrap_or(at);
     let (mut shown, mut first, mut kind) = (0, 0, None);
-    let mut cutflow = vec![0; recipe.keep.len()];
     while shown < wanted && first < total {
         let last = match only_kept {
             true => (first + RUN).min(total),
             false => (first + (wanted - shown) as u64).min(total),
         };
         let entries = (last - first) as usize;
+        let within = |(error, part): (rvr_recipe::Error, std::ops::Range<usize>)| format!("{shown_name}, {}: {}{}", press::entries(&error, first, &part), error.0, hint(&error.0, &names, &recipe));
+        // In fewer entries at a time where their pairs would be too many together.
         let branches = Branches::over(&root, &tree, first as i64, last as i64);
-        let scope = Scope::new(&branches, &metadata, &recipe.defines);
-        let within = |error: String| {
-            let entries = format!("entries {} to {}", count(first), count(last - 1));
-            format!("{shown_name}, {entries}: {error}{}", hint(&error, &names, &recipe))
+        let mut work = |run: &dyn Columns, from: usize, to: usize| {
+            let scope = Scope::new(run, &metadata, &recipe.defines);
+            let keep = match only_kept {
+                true => kept(&recipe, &scope, vec![true; to - from], &mut vec![0; recipe.keep.len()]),
+                false => Ok(vec![true; to - from]),
+            };
+            keep.and_then(|keep| Ok((keep, scope.evaluate(&expression).and_then(|value| per_event(value, to - from))?)))
         };
-        let keep = match only_kept {
-            true => kept(&recipe, &scope, vec![true; entries], &mut cutflow).map_err(within)?,
-            false => vec![true; entries],
-        };
-        let result = scope
-            .evaluate(&expression)
-            .and_then(|value| per_event(value, entries))
-            .map_err(|e| within(e.0))?;
+        let runs = rvr_recipe::over_runs(&branches, entries, &mut work).map_err(within)?;
+        let (keeps, results): (Vec<Vec<bool>>, Vec<Array>) = runs.into_iter().unzip();
+        let keep = keeps.concat();
+        let result = Array::joined(results).map_err(|e| within((e, 0..entries)))?;
         if kind.is_none() {
             let described = described(&result);
             println!("{}: {shown_name}, tree {} ({described})", sample.name, sample.tree);
@@ -126,8 +126,9 @@ fn described(array: &Array) -> String {
 fn value(array: &Array, event: usize) -> String {
     let one = |values: &Values, at: usize| match &values.store {
         Store::Whole(held) if values.kind == Kind::B1 => (held[at] != 0).to_string(),
+        Store::Whole(held) if values.kind == Kind::U8 => (held[at] as u64).to_string(),
         Store::Whole(held) => held[at].to_string(),
-        Store::Float(held) if values.kind == Kind::named("f4").unwrap() => (held[at] as f32).to_string(),
+        Store::Float(held) if values.kind == Kind::F4 => (held[at] as f32).to_string(),
         Store::Float(held) => held[at].to_string(),
     };
     match array {

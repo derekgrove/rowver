@@ -77,6 +77,8 @@ validator reads only its input: none reads an event or opens a ROOT file.
   which the lock does not list);
 - every expression of the recipe type-checks against those branches' kinds, and every column has
   one kind in every file;
+- no name `[define]` gives is the name of a branch in a sample's branch list, so that each name
+  means one thing;
 - no name of the recipe's `[totals]` or `[derived]` is a key of a sample's metadata;
 - the options fit the samples (`--seed` needs a random choice; `--events` and `--random` as §5);
 - what the earlier file can give: rows and columns to build on, holes to fill, or why not (§8).
@@ -102,7 +104,7 @@ checked. It reads the entries the Plan names, evaluates the cuts and columns, an
 |---|---|
 | a file cannot be read: gone, changed since the lock, damaged, its storage unreachable or refusing it | makes a hole of what could not be read and goes on (§7) |
 | a failure that is not one file's: the network gone, a proxy or certificate refused, a disk not mounted or full, a permission refused, the process stopped | stops, keeps what it read, and the next press carries on (§7) |
-| a value in the data the recipe cannot take: a conversion out of the target kind's range, a mask whose length differs from its list in one event, an event past the pair limit | stops, naming the file, entry, column and value, and keeps what it read |
+| a value in the data the recipe cannot take (the recipe reference's list): a conversion out of the target kind's range, a mask or two lists taken member by member whose lengths differ in one event, an event past the pair limit, a whole number to a negative power, a total that is not finite | stops, naming the file, entry, column and value, and keeps what it read |
 
 Floats may be NaN or infinite anywhere; no value of a float ever stops the core.
 
@@ -277,21 +279,40 @@ The recipe language (every table, operator and function, its kinds and its bits)
 
 ### 4.1 The document
 
-**4.1.1** `recipe.toml` writes all five tables, `[define]`, `[keep]`, `[columns]`, `[totals]` and
-`[derived]`, each possibly empty except `[columns]`, which stores at least one column.
+**4.1.1** `recipe.toml` holds exactly these keys at its top: `format = "rvr-recipe"` and
+`version = 1` (both required), `title` (text, optional), and the five tables `[define]`, `[keep]`,
+`[columns]`, `[totals]` and `[derived]`. Any other key is refused, with the nearest known key when
+one is within the slip a "Did you mean" names (§1.4).
 
-**4.1.2** A recipe that leaves a table out is refused by `rvr press`, `rvr try` and `rvr status`. At a
-terminal, `rvr press` and `rvr try` first offer to write the missing tables in, empty, in their
-places, check that the recipe then reads as before with those tables added, and go on. They do not
-offer when `[columns]` is missing or stores nothing, which only the recipe's author can mend, nor for
-`rvr press --fill`, which presses the recipe the file carries.
+**4.1.2** The tables hold these, and nothing else:
 
-**4.1.3** A cut's name and a computed column's name are plain names: a letter or `_`, then letters,
-digits and `_`. A column `branches` names keeps the branch's name as the file spells
-it.
+| table | entries |
+|---|---|
+| `[define]` | `NAME = "expression"` |
+| `[keep]` | `NAME = "condition"`, or `NAME = { if = "condition", apply = "condition" }`: `apply` required, `if` optional |
+| `[columns]` | `branches = ["…", …]`, nonempty texts each naming a branch as the file spells it; `NAME = "expression"`, or `NAME = { value = "expression", stored = "KIND" }`: `value` required, `stored` optional, one of the eleven kinds (FORMAT.md §4) |
+| `[totals]` | `NAME = "expression"`, or `NAME = { value = "expression", tree = "TREE" }`: `value` required, `tree` optional, nonempty |
+| `[derived]` | `NAME = "expression"` |
+
+**4.1.3** Every `NAME` is a plain name: a letter or `_`, then letters, digits and `_`, and no word of
+the language. A column `branches` names keeps the branch's name as the file spells it. The other
+rules of names (which are reserved, which may not repeat) are the recipe reference's.
 
 **4.1.4** No two columns share a name; none is `sample`, `entry` or `file`; none shares a name with a
 derived column.
+
+**4.1.5** The recipe validator (`Recipe::read`) refuses a recipe with every problem it finds, one a
+line, each naming its place (`[columns] ht: …`). It checks every expression as the recipe reference
+says a recipe is read: its syntax, its depth, that every function it calls exists and is given a
+number of values it takes, the fixed values some functions take, and true-or-false values wherever
+one is needed, as far as the text tells.
+
+**4.1.6** Each table may be empty but `[columns]`, which stores at least one column. A recipe that
+leaves a table out is refused by `rvr press`, `rvr try` and `rvr status`. At a terminal,
+`rvr press` and `rvr try` first offer to write the missing tables in, empty, in their places, check
+that the recipe then reads as before with those tables added, and go on. They do not offer when
+`[columns]` is missing or stores nothing, which only the recipe's author can mend, nor for
+`rvr press --fill`, which presses the recipe the file carries.
 
 ### 4.2 What the core evaluates
 
@@ -311,8 +332,10 @@ column only in a kept event.
 **4.3.1** The cuts of `[keep]` apply in the order written. An event is kept when it passes every one.
 
 **4.3.2** A cut written `{ if = "…", apply = "…" }` applies only where `if` is true: to the samples
-whose metadata makes it true, or, when `if` is one truth value per event, to those events. A sample
-whose metadata lacks a field `if` reads passes the cut.
+whose metadata makes it true, or, when `if` is one truth value per event, to those events. A
+comparison with a field a sample's metadata lacks is false, so such a sample passes a cut whose `if`
+compares it (`if = "sample.era == 3"`); an `if` that gives a field the sample lacks
+(`if = "sample.vbf"`) does not apply to it either.
 
 **4.3.3** The cutflow is the number of chosen events left after each cut, in order, summed over the
 files read.

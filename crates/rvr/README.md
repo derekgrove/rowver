@@ -255,11 +255,11 @@ A column under `[derived]` in `recipe.toml` is kept in the file as its expressio
 a reader (`rvr dump`, the Python package) works it out from the file's columns when it is asked for.
 The Python package then holds it as it holds every column it has read, until `f.forget(...)` lets it
 go or the file object goes; asked for again, it is worked out again. Its expression uses the columns
-the file stores, the derived columns above it, and `sample.KEY` (the keys of `samples.toml`; not
-what the press adds to them, `events_read`, `events_total` and `events_missing`). While it reads,
-the press works each one out over the events one run of each sample kept, so that a mistake in one
-(a division by zero, a type that differs between samples) stops it then, not once every file is
-read; this costs nothing measurable on the bench. It works each one out once more, from the arrays
+the file stores, the derived columns above it, and `sample.KEY` (the keys of `samples.toml`, the
+sample's totals, and `sample.file`, the path of the row's file; not the counts the press records,
+`events_read`, `events_total` and `events_missing`). While it reads, the press works each one out
+over the events one run of each sample kept, so that a mistake in one (a value it cannot convert,
+a type that differs between samples) stops it then, not once every file is read; this costs nothing measurable on the bench. It works each one out once more, from the arrays
 it has packed for the file (holding the columns they use in memory), to record its kind, its
 checksums and its facts, so that a reader can check what it works out and `rvr diff` can compare it,
 and then writes the file with those records. Should one fail there, the file is written without its

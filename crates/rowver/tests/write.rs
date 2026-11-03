@@ -245,11 +245,11 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
         let reader = rowver::rvr::Reader::open(&path).unwrap();
         let stored = reader.column("MET").unwrap().is_some();
         let said = [reader.column("again").unwrap_err().to_string(), rowver::rvr::validate_file(&path).unwrap_err().to_string()];
-        // Emptied, it fails for that, and says nothing of updating.
+        // Emptied, it fails as before: a function's name is checked before any column it reads.
         rowver::write::empty(&path).unwrap();
         let emptied = rowver::rvr::Reader::open(&path).unwrap().column("again").unwrap_err().to_string();
         drop(path);
-        assert!(stored && emptied.contains("empty") && !emptied.contains("newer"), "{emptied}");
+        assert!(stored && emptied.contains("There is no function named later") && emptied.contains("newer") == newer, "{emptied}");
         for refused in said {
             let updates = refused.matches("The file was made by rvr 15.99.0, newer than this one").count();
             assert!(refused.contains("There is no function named later") && updates == usize::from(newer), "{refused}");

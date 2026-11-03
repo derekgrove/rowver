@@ -1,15 +1,11 @@
 //! Columns of numbers, one per event or a list per event, and the arithmetic between them.
 //!
-//! Ported from: NumPy 2.5.1 elementwise arithmetic, comparison, and logical operators, and
-//! awkward 2.12.0 broadcasting of one value per event over that event's list.
-//! Documentation: <https://numpy.org/doc/stable/reference/ufuncs.html>;
-//! <https://awkward-array.org/doc/main/user-guide/how-to-math-broadcasting.html>
-//! Method: floats are held in 64 bits and rounded to their kind after every operation, which
-//! gives exactly the 32-bit result for `+ - * /` and square root. Whole numbers are held in
-//! 64 bits and wrapped to their kind.
+//! Floats are held in 64 bits and rounded to their kind after every operation, which gives exactly
+//! the 32-bit result for `+ - * /`. Whole numbers are held in 64 bits (a `u8` by its bits) and
+//! wrapped to their kind. The README's "Kinds" and "Numbers, exactly" sections state every rule.
 
 use crate::kind::Kind;
-use crate::{problem, Result};
+use crate::{data, problem, Error, Result};
 use std::sync::Arc;
 
 /// The numbers of one column, all of one kind.
@@ -61,7 +57,7 @@ pub enum Array {
     },
 }
 
-/// The arithmetic and comparison operators of an expression.
+/// The arithmetic, comparison and truth operators of an expression.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Operator {
     Add,
@@ -78,6 +74,35 @@ pub enum Operator {
     NotEqual,
     And,
     Or,
+}
+
+impl Operator {
+    /// Whether it computes a number: `+ - * / % **`.
+    pub fn arithmetic(self) -> bool {
+        use Operator::*;
+        matches!(self, Add | Subtract | Multiply | Divide | Remainder | Power)
+    }
+
+    /// The word or symbol an expression writes it with.
+    pub fn word(self) -> &'static str {
+        use Operator::*;
+        match self {
+            Add => "+",
+            Subtract => "-",
+            Multiply => "*",
+            Divide => "/",
+            Remainder => "%",
+            Power => "**",
+            Less => "<",
+            LessEqual => "<=",
+            Greater => ">",
+            GreaterEqual => ">=",
+            Equal => "==",
+            NotEqual => "!=",
+            And => "and",
+            Or => "or",
+        }
+    }
 }
 
 impl Values {
@@ -178,10 +203,7 @@ impl Values {
     pub fn truths(&self, what: &str) -> Result<&[i64]> {
         match (&self.store, self.kind) {
             (Store::Whole(values), Kind::B1) => Ok(values),
-            _ => Err(problem(format!(
-                "{what} needs a true-or-false value, not {}",
-                self.kind.name()
-            ))),
+            _ => Err(not_truth(what, self.kind.name())),
         }
     }
 
@@ -201,40 +223,77 @@ impl Values {
         }
     }
 
-    /// Convert every value to another kind, as NumPy's `astype` does.
-    pub fn cast(&self, kind: Kind) -> Values {
+    /// Every value in a kind it is promoted to, by `convert`'s checked rule.
+    pub(crate) fn cast(&self, kind: Kind) -> Result<Values> {
+        self.convert(kind)
+    }
+
+    /// Every value converted to `kind` by the README's conversion rule, refusing one it cannot take.
+    pub fn convert(&self, kind: Kind) -> Result<Values> {
         if kind == self.kind {
-            return self.clone();
+            return Ok(self.clone());
         }
-        match (&self.store, kind.float()) {
-            (_, true) => Values::float(
-                kind,
-                self.numbers()
-                    .into_iter()
-                    .map(|value| kind.round(value))
-                    .collect(),
-            ),
-            (Store::Whole(values), false) => {
-                Values::whole(kind, values.iter().map(|value| kind.wrap(*value)).collect())
-            }
-            (Store::Float(values), false) => Values::whole(
-                kind,
-                values
-                    .iter()
-                    .map(|value| {
-                        if kind == Kind::B1 {
-                            (*value != 0.0) as i64
-                        } else if kind == Kind::U8 && (0.0..u64::MAX as f64).contains(value) {
-                            // u64::MAX rounds to 2^64 as f64, the exclusive upper bound.
-                            // Convert valid magnitudes before storing their bits in i64.
-                            *value as u64 as i64
-                        } else {
-                            kind.wrap(*value as i64)
+        let (low, high) = kind.bounds();
+        let named = kind.name();
+        match &self.store {
+            Store::Whole(values) => {
+                let from = self.kind;
+                if kind.float() {
+                    let round = |value: &i64| match (from, kind) {
+                        (Kind::U8, Kind::F4) => *value as u64 as f32 as f64,
+                        (Kind::U8, _) => *value as u64 as f64,
+                        (_, Kind::F4) => *value as f32 as f64,
+                        _ => *value as f64,
+                    };
+                    return Ok(Values::float(kind, values.iter().map(round).collect()));
+                }
+                let mut out = Vec::with_capacity(values.len());
+                for (at, value) in values.iter().enumerate() {
+                    let wide = from.widen(*value);
+                    out.push(match kind {
+                        Kind::B1 => (wide != 0) as i64,
+                        _ if wide < low || wide > high => {
+                            return Err(data(at, format!("{wide} does not fit in {named}, which holds {low} to {high}")))
                         }
-                    })
-                    .collect(),
-            ),
+                        _ => wide as i64,
+                    });
+                }
+                Ok(Values::whole(kind, out))
+            }
+            Store::Float(values) if kind.float() => Ok(Values::float(kind, values.iter().map(|v| kind.round(*v)).collect())),
+            Store::Float(values) => {
+                let mut out = Vec::with_capacity(values.len());
+                for (at, value) in values.iter().enumerate() {
+                    if value.is_nan() {
+                        let said = match kind {
+                            Kind::B1 => "NaN is neither true nor false, so it has no b1 value".to_owned(),
+                            _ => format!("NaN is no number, so it has no {named} value"),
+                        };
+                        return Err(data(at, said));
+                    }
+                    let whole = value.trunc();
+                    out.push(match kind {
+                        Kind::B1 => (*value != 0.0) as i64,
+                        // Every bound is a power of two, or one less, so that above is the next one up.
+                        _ if whole < low as f64 || whole >= high as f64 + 1.0 => {
+                            return Err(data(at, format!("{value:?} does not fit in {named}, which holds {low} to {high}")))
+                        }
+                        Kind::U8 => whole as u64 as i64,
+                        _ => whole as i64,
+                    });
+                }
+                Ok(Values::whole(kind, out))
+            }
         }
+    }
+
+    /// The values at positions `from..to`.
+    pub fn slice(&self, from: usize, to: usize) -> Values {
+        let store = match &self.store {
+            Store::Whole(held) => Store::Whole(Arc::new(held[from..to].to_vec())),
+            Store::Float(held) => Store::Float(Arc::new(held[from..to].to_vec())),
+        };
+        Values { kind: self.kind, store }
     }
 
     /// Keep the values at the given positions.
@@ -280,7 +339,7 @@ impl Constant {
     }
 
     /// Repeat a constant as a column of a kind.
-    pub(crate) fn repeat(&self, kind: Kind, count: usize) -> Values {
+    pub(crate) fn repeat(&self, kind: Kind, count: usize) -> Result<Values> {
         match self {
             Constant::Float(value) => Values::float(Kind::F8, vec![*value; count]).cast(kind),
             Constant::Whole(value) => Values::whole(Kind::I8, vec![*value; count]).cast(kind),
@@ -294,9 +353,9 @@ impl Constant {
     /// The column a lone constant becomes: a whole number is `i8`, a float `f8`, a truth `b1`.
     pub fn alone(&self, count: usize) -> Result<Values> {
         Ok(match self {
-            Constant::Float(_) => self.repeat(Kind::F8, count),
-            Constant::Whole(_) => self.repeat(Kind::I8, count),
-            Constant::Truth(_) => self.repeat(Kind::B1, count),
+            Constant::Float(_) => self.repeat(Kind::F8, count)?,
+            Constant::Whole(_) => self.repeat(Kind::I8, count)?,
+            Constant::Truth(_) => self.repeat(Kind::B1, count)?,
             Constant::Text(text) => {
                 return Err(problem(format!("\"{text}\" is text, not a number")))
             }
@@ -306,121 +365,131 @@ impl Constant {
 }
 
 /// Bring two columns of equal length to the kind they combine in.
-pub(crate) fn together(left: &Values, right: &Values) -> (Values, Values) {
+pub(crate) fn together(left: &Values, right: &Values) -> Result<(Values, Values)> {
     let kind = left.kind.with(right.kind);
-    (left.cast(kind), right.cast(kind))
+    Ok((left.cast(kind)?, right.cast(kind)?))
 }
 
-/// Python's remainder, which takes the sign of the divisor.
+/// Python's remainder, which takes the sign of the divisor (a zero too), from libm's exact `fmod`.
 fn remainder(left: f64, right: f64) -> f64 {
-    let rest = left % right;
-    if rest != 0.0 && (rest < 0.0) != (right < 0.0) {
+    let rest = libm::fmod(left, right);
+    if rest == 0.0 {
+        libm::copysign(0.0, right)
+    } else if (rest < 0.0) != (right < 0.0) {
         rest + right
     } else {
         rest
     }
 }
 
+/// `base` to a whole power, wrapping in 64 bits, by squaring.
+fn power(mut base: i64, mut exponent: u64) -> i64 {
+    let mut out: i64 = 1;
+    while exponent > 0 {
+        if exponent & 1 == 1 {
+            out = out.wrapping_mul(base);
+        }
+        base = base.wrapping_mul(base);
+        exponent >>= 1;
+    }
+    out
+}
+
+/// Whether `a OPERATOR b` holds, for a comparison.
+fn holds<T: PartialOrd>(operator: Operator, a: T, b: T) -> bool {
+    use Operator::*;
+    match operator {
+        Less => a < b,
+        LessEqual => a <= b,
+        Greater => a > b,
+        GreaterEqual => a >= b,
+        Equal => a == b,
+        _ => a != b,
+    }
+}
+
+/// The words a truth operator refuses a number with.
+pub(crate) fn not_truth(what: &str, kind: &str) -> Error {
+    problem(format!("{what} needs a true-or-false value, not {kind}: to test a number, compare it, as x != 0"))
+}
+
 /// Apply one operator to two columns of the same length.
 fn apply(operator: Operator, left: &Values, right: &Values) -> Result<Values> {
     use Operator::*;
     if matches!(operator, And | Or) {
-        let (a, b) = (left.truths("and/or")?, right.truths("and/or")?);
+        let (a, b) = (left.truths(operator.word())?, right.truths(operator.word())?);
         let join = |(a, b): (&i64, &i64)| if operator == And { a & b } else { a | b };
-        return Ok(Values::whole(
-            Kind::B1,
-            a.iter().zip(b.iter()).map(join).collect(),
-        ));
+        return Ok(Values::whole(Kind::B1, a.iter().zip(b.iter()).map(join).collect()));
     }
-    let (mut left, mut right) = together(left, right);
-    let arithmetic = matches!(
-        operator,
-        Add | Subtract | Multiply | Divide | Remainder | Power
-    );
+    let arithmetic = operator.arithmetic();
+    // Two whole numbers compare exactly, each as its own kind holds it, never through a float.
+    if let (false, Some(a), Some(b)) = (arithmetic, left.wholes(), right.wholes()) {
+        let (from, to) = (left.kind, right.kind);
+        let compare = |(a, b): (&i64, &i64)| holds(operator, from.widen(*a), to.widen(*b)) as i64;
+        return Ok(Values::whole(Kind::B1, a.iter().zip(b).map(compare).collect()));
+    }
+    let (mut left, mut right) = together(left, right)?;
     if arithmetic && left.kind == Kind::B1 {
-        return Err(problem(
-            "Arithmetic on two true-or-false values; use and, or, or count",
-        ));
+        return Err(problem("Arithmetic on two true-or-false values: use and, or, or count, or make one a number, as if(x, 1, 0)"));
     }
     if operator == Divide && !left.kind.float() {
-        (left, right) = (left.cast(Kind::F8), right.cast(Kind::F8));
+        (left, right) = (left.cast(Kind::F8)?, right.cast(Kind::F8)?);
     }
     let kind = left.kind;
     match (&left.store, &right.store) {
         (Store::Float(a), Store::Float(b)) => {
             let pairs = a.iter().zip(b.iter());
-            if arithmetic {
-                let compute = |(a, b): (&f64, &f64)| match operator {
-                    Add => a + b,
-                    Subtract => a - b,
-                    Multiply => a * b,
-                    Divide => a / b,
-                    Remainder => remainder(*a, *b),
-                    _ if *b == 2.0 => a * a,
-                    _ => libm::pow(*a, *b),
-                };
-                return Ok(Values::float(
-                    kind,
-                    pairs.map(compute).map(|value| kind.round(value)).collect(),
-                ));
+            if !arithmetic {
+                return Ok(Values::whole(Kind::B1, pairs.map(|(a, b)| holds(operator, a, b) as i64).collect()));
             }
-            let compare = |(a, b): (&f64, &f64)| match operator {
-                Less => a < b,
-                LessEqual => a <= b,
-                Greater => a > b,
-                GreaterEqual => a >= b,
-                Equal => a == b,
-                _ => a != b,
+            let compute = |(a, b): (&f64, &f64)| match operator {
+                Add => a + b,
+                Subtract => a - b,
+                Multiply => a * b,
+                Divide => a / b,
+                Remainder => remainder(*a, *b),
+                _ if *b == 2.0 => a * a,
+                _ => libm::pow(*a, *b),
             };
-            Ok(Values::whole(
-                Kind::B1,
-                pairs.map(compare).map(i64::from).collect(),
-            ))
+            Ok(Values::float(kind, pairs.map(compute).map(|value| kind.round(value)).collect()))
         }
         (Store::Whole(a), Store::Whole(b)) => {
-            let wide = |value: i64| {
-                if kind == Kind::U8 {
-                    value as u64 as i128
-                } else {
-                    value as i128
-                }
-            };
-            let pairs = a.iter().zip(b.iter());
-            if arithmetic {
-                let compute = |(a, b): (&i64, &i64)| -> Result<i64> {
-                    Ok(match operator {
-                        Add => a.wrapping_add(*b),
-                        Subtract => a.wrapping_sub(*b),
-                        Multiply => a.wrapping_mul(*b),
-                        Remainder => whole_remainder(kind, *a, *b),
-                        _ => {
-                            let power = u32::try_from(*b).map_err(|_| {
-                                problem("A whole number cannot be raised to a negative power")
-                            })?;
-                            a.wrapping_pow(power)
-                        }
-                    })
+            let mut out = Vec::with_capacity(a.len());
+            for (at, (a, b)) in a.iter().zip(b.iter()).enumerate() {
+                let value = match operator {
+                    Add => a.wrapping_add(*b),
+                    Subtract => a.wrapping_sub(*b),
+                    Multiply => a.wrapping_mul(*b),
+                    Remainder => whole_remainder(kind, *a, *b),
+                    _ if kind != Kind::U8 && *b < 0 => {
+                        return Err(data(at, format!("{a} ** {b}: a whole number cannot be raised to a negative power; make it a float first, as {a}.0 ** {b}")))
+                    }
+                    _ => power(*a, *b as u64),
                 };
-                let values = pairs
-                    .map(compute)
-                    .map(|value| value.map(|value| kind.wrap(value)));
-                return Ok(Values::whole(kind, values.collect::<Result<_>>()?));
+                out.push(kind.wrap(value));
             }
-            let compare = |(a, b): (&i64, &i64)| match operator {
-                Less => wide(*a) < wide(*b),
-                LessEqual => wide(*a) <= wide(*b),
-                Greater => wide(*a) > wide(*b),
-                GreaterEqual => wide(*a) >= wide(*b),
-                Equal => a == b,
-                _ => a != b,
-            };
-            Ok(Values::whole(
-                Kind::B1,
-                pairs.map(compare).map(i64::from).collect(),
-            ))
+            Ok(Values::whole(kind, out))
         }
         _ => unreachable!("together gives one kind"),
     }
+}
+
+/// The first event whose list has another length in `a` than in `b`, offsets over the same events.
+pub(crate) fn differs(a: &[usize], b: &[usize]) -> Option<usize> {
+    (0..a.len().min(b.len()).saturating_sub(1)).find(|&e| a[e + 1] - a[e] != b[e + 1] - b[e])
+}
+
+/// Refuse two lists `what` needs alike, at the first event where their lengths differ.
+pub(crate) fn unlike(a: &[usize], b: &[usize], what: &str) -> Error {
+    match differs(a, b) {
+        Some(e) => data(e, format!("{what}, and in this event one has {} members and the other {}", a[e + 1] - a[e], b[e + 1] - b[e])),
+        None => problem(format!("{what}, and they cover {} and {} events", a.len() - 1, b.len() - 1)),
+    }
+}
+
+/// The event of the list a member of `offsets` lies in.
+pub(crate) fn event_of(offsets: &[usize], member: usize) -> usize {
+    offsets.partition_point(|offset| *offset <= member) - 1
 }
 
 impl Array {
@@ -463,13 +532,104 @@ impl Array {
     }
 
     /// Apply an operator between two arrays, spreading constants and per-event values as needed.
+    /// A comparison with a sample field the sample does not have is false, value by value.
     pub fn combine(&self, operator: Operator, other: &Array) -> Result<Array> {
+        let compares = !matches!(operator, Operator::And | Operator::Or) && !operator.arithmetic();
+        match (self, other) {
+            (Array::Constant(Constant::Missing(_)), beside) | (beside, Array::Constant(Constant::Missing(_))) if compares => {
+                return Ok(beside.all(false));
+            }
+            // Text beside a column of numbers: never equal, and nothing else.
+            (Array::Constant(Constant::Text(_)), beside) | (beside, Array::Constant(Constant::Text(_))) if beside.events().is_some() => {
+                return match operator {
+                    Operator::Equal => Ok(beside.all(false)),
+                    Operator::NotEqual => Ok(beside.all(true)),
+                    _ if operator.arithmetic() => Err(problem(format!("Text cannot be combined with a number: {} takes numbers", operator.word()))),
+                    Operator::And | Operator::Or => Err(problem(format!("{} needs a true-or-false value, not text", operator.word()))),
+                    _ => Err(problem(format!("Text can only be compared with == and !=, not {}", operator.word()))),
+                };
+            }
+            _ => {}
+        }
         self.zip(
             other,
             &|constant, beside| beside_column(operator, constant, beside),
             &|left, right| constants(operator, left, right),
             &|left, right| apply(operator, left, right),
         )
+    }
+
+    /// One truth value in the shape of this array: one per event, or per member of each list.
+    fn all(&self, truth: bool) -> Array {
+        let every = |values: &Values| Values::whole(Kind::B1, vec![truth as i64; values.len()]);
+        match self {
+            Array::Constant(_) => Array::Constant(Constant::Truth(truth)),
+            Array::Event(values) => Array::Event(every(values)),
+            Array::Object { offsets, values } => Array::Object { offsets: offsets.clone(), values: every(values) },
+        }
+    }
+
+    /// Events `from..to` of this array; a fixed value is the same for all.
+    pub fn rows(&self, from: usize, to: usize) -> Array {
+        match self {
+            Array::Constant(_) => self.clone(),
+            Array::Event(values) => Array::Event(values.slice(from, to)),
+            Array::Object { offsets, values } => {
+                let (start, end) = (offsets[from], offsets[to]);
+                let offsets: Vec<usize> = offsets[from..=to].iter().map(|o| o - start).collect();
+                Array::Object { offsets: Arc::new(offsets), values: values.slice(start, end) }
+            }
+        }
+    }
+
+    /// The events of every one of `runs`, one after another, of one kind and shape; one run as it is.
+    pub fn joined(mut runs: Vec<Array>) -> Result<Array> {
+        if runs.len() == 1 {
+            return Ok(runs.remove(0));
+        }
+        let differ = || problem("The runs of one expression gave columns of different kinds or shapes");
+        // Each run's values, only those its lists cover, and its lists counted from 0.
+        let mut parts: Vec<(Values, Option<Vec<usize>>)> = Vec::with_capacity(runs.len());
+        for run in &runs {
+            parts.push(match run {
+                Array::Event(values) => (values.clone(), None),
+                Array::Object { offsets, values } => {
+                    let (start, end) = (offsets[0], offsets[offsets.len() - 1]);
+                    (values.slice(start, end), Some(offsets.iter().map(|o| o - start).collect()))
+                }
+                Array::Constant(_) => return Err(differ()),
+            });
+        }
+        let (kind, listed) = (parts[0].0.kind, parts[0].1.is_some());
+        if parts.iter().any(|(values, lists)| values.kind != kind || lists.is_some() != listed) {
+            return Err(differ());
+        }
+        let store = match &parts[0].0.store {
+            Store::Whole(_) => Store::Whole(Arc::new(parts.iter().flat_map(|(v, _)| v.wholes().into_iter().flatten().copied()).collect())),
+            Store::Float(_) => Store::Float(Arc::new(parts.iter().flat_map(|(v, _)| v.floats().into_iter().flatten().copied()).collect())),
+        };
+        let values = Values { kind, store };
+        if !listed {
+            return Ok(Array::Event(values));
+        }
+        let mut offsets = vec![0];
+        for (_, own) in &parts {
+            let end = offsets[offsets.len() - 1];
+            offsets.extend(own.iter().flatten().skip(1).map(|o| end + o));
+        }
+        Ok(Array::Object { offsets: Arc::new(offsets), values })
+    }
+
+    /// Every value converted to `kind` (`Values::convert`), a data error naming its event.
+    pub fn convert(&self, kind: Kind) -> Result<Array> {
+        match self {
+            Array::Constant(_) => Err(problem("stored needs a column, not a fixed value")),
+            Array::Event(values) => Ok(Array::Event(values.convert(kind)?)),
+            Array::Object { offsets, values } => match values.convert(kind) {
+                Ok(values) => Ok(Array::Object { offsets: offsets.clone(), values }),
+                Err(Error(said, at, crowded)) => Err(Error(said, at.map(|member| event_of(offsets, member)), crowded)),
+            },
+        }
     }
 
     /// Pair two arrays value by value: `adopt` turns a constant into a column beside the other
@@ -482,31 +642,28 @@ impl Array {
         apply: &dyn Fn(&Values, &Values) -> Result<Values>,
     ) -> Result<Array> {
         use Array::*;
-        let listed = |offsets: &Arc<Vec<usize>>, values: Values| Object {
-            offsets: offsets.clone(),
-            values,
+        // A list's values are its members: a data error among them is of the event they are in.
+        let listed = |offsets: &Arc<Vec<usize>>, values: Result<Values>| match values {
+            Ok(values) => Ok(Object { offsets: offsets.clone(), values }),
+            Err(Error(said, at, crowded)) => Err(Error(said, at.map(|member| event_of(offsets, member)), crowded)),
         };
         match (self, other) {
             (Constant(a), Constant(b)) => both(a, b).map(Constant),
             (Constant(a), Event(b)) => Ok(Event(apply(&adopt(a, b)?, b)?)),
             (Event(a), Constant(b)) => Ok(Event(apply(a, &adopt(b, a)?)?)),
-            (Constant(a), Object { offsets, values }) => {
-                Ok(listed(offsets, apply(&adopt(a, values)?, values)?))
-            }
-            (Object { offsets, values }, Constant(b)) => {
-                Ok(listed(offsets, apply(values, &adopt(b, values)?)?))
-            }
+            (Constant(a), Object { offsets, values }) => listed(offsets, apply(&adopt(a, values)?, values)),
+            (Object { offsets, values }, Constant(b)) => listed(offsets, apply(values, &adopt(b, values)?)),
             (Event(a), Event(b)) => {
                 same(a.len(), b.len())?;
                 Ok(Event(apply(a, b)?))
             }
             (Event(a), Object { offsets, values }) => {
                 same(a.len(), offsets.len() - 1)?;
-                Ok(listed(offsets, apply(&Self::spread(a, offsets), values)?))
+                listed(offsets, apply(&Self::spread(a, offsets), values))
             }
             (Object { offsets, values }, Event(b)) => {
                 same(offsets.len() - 1, b.len())?;
-                Ok(listed(offsets, apply(values, &Self::spread(b, offsets))?))
+                listed(offsets, apply(values, &Self::spread(b, offsets)))
             }
             (
                 Object { offsets, values },
@@ -516,11 +673,9 @@ impl Array {
                 },
             ) => {
                 if offsets != others {
-                    return Err(problem(
-                        "Two list columns with different numbers of members per event cannot be combined",
-                    ));
+                    return Err(unlike(offsets, others, "Two lists are combined member by member"));
                 }
-                Ok(listed(offsets, apply(values, b)?))
+                listed(offsets, apply(values, b))
             }
         }
     }
@@ -530,12 +685,13 @@ impl Array {
 fn beside_column(operator: Operator, constant: &Constant, beside: &Values) -> Result<Values> {
     if matches!(operator, Operator::And | Operator::Or) {
         return match constant {
-            Constant::Truth(_) => Ok(constant.repeat(Kind::B1, beside.len())),
+            Constant::Truth(_) => constant.repeat(Kind::B1, beside.len()),
             Constant::Missing(key) => Err(lacking(key, "a true-or-false value")),
-            _ => Err(problem("and/or needs true-or-false values")),
+            Constant::Text(text) => Err(problem(format!("{} needs a true-or-false value, not the text {text:?}", operator.word()))),
+            _ => Err(not_truth(operator.word(), "a number")),
         };
     }
-    Ok(constant.repeat(constant.beside(beside.kind)?, beside.len()))
+    constant.repeat(constant.beside(beside.kind)?, beside.len())
 }
 
 /// Python's remainder for whole numbers, which takes the sign of the divisor; zero for a zero divisor.
@@ -581,18 +737,22 @@ fn constants(operator: Operator, left: &Constant, right: &Constant) -> Result<Co
         return match operator {
             Equal => Ok(Constant::Truth(a == b)),
             NotEqual => Ok(Constant::Truth(a != b)),
-            _ => Err(problem("Text can only be compared with == and !=")),
+            _ if operator.arithmetic() => Err(problem(format!("Text cannot be combined with a number: {} takes numbers", operator.word()))),
+            And | Or => Err(problem(format!("{} needs a true-or-false value, not text", operator.word()))),
+            _ => Err(problem(format!("Text can only be compared with == and !=, not {}", operator.word()))),
         };
     }
     if matches!(left, Constant::Text(_)) || matches!(right, Constant::Text(_)) {
         return match operator {
             Equal => Ok(Constant::Truth(false)),
             NotEqual => Ok(Constant::Truth(true)),
-            _ => Err(problem("Text cannot be combined with a number")),
+            _ if operator.arithmetic() => Err(problem(format!("Text cannot be combined with a number: {} takes numbers", operator.word()))),
+            And | Or => Err(problem(format!("{} needs a true-or-false value, not text", operator.word()))),
+            _ => Err(problem(format!("Text can only be compared with == and !=, not {}", operator.word()))),
         };
     }
     let (a, b) = (left.alone(1)?, right.alone(1)?);
-    let result = apply(operator, &a, &b)?;
+    let result = apply(operator, &a, &b).map_err(|e| problem(e.0))?;
     Ok(match (&result.store, result.kind) {
         (Store::Whole(values), Kind::B1) => Constant::Truth(values[0] != 0),
         (Store::Whole(values), _) => Constant::Whole(values[0]),

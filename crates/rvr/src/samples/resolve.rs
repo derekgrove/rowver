@@ -6,7 +6,7 @@
 use super::remote::{HttpsFile, Storage};
 use hep_root::columns::{inventory, Kind, Shape};
 use rowver::study::lock::{self, Branch, Branches, File};
-use rowver::study::meant;
+use rvr_recipe::meant;
 pub use rowver::study::{join, matches, split};
 use rowver::study::samples::Sample;
 use std::path::{Path, PathBuf};

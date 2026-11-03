@@ -216,13 +216,13 @@ fn mistakes_are_refused_with_a_reason() {
     assert!(message("Jet.pt")
         .contains("Only sample has a field after a dot, as in sample.era (the dot at column 4)"));
     assert!(message("sample.").contains("Expected a name after sample."));
-    assert!(message("count(Jet where pt > 30)")
-        .starts_with("where is not part of an expression (column 11)"));
+    assert_eq!(message("count(Jet where pt > 30)"), "Expected ) at column 11");
     assert!(message("nothing(3)").contains("There is no function named nothing"));
+    assert!(message("nothing(MET)").contains("There is no function named nothing"), "the name is checked before its values");
     assert!(message("sqrt(1, 2)").contains("takes 1 value, not 2"));
     assert!(message("'a' + 1").contains("Text"));
     assert!(message("sample.absent + 1").contains("sample.absent is used as a number, but this sample has no absent: give it one in samples.toml"));
-    assert!(message(&"(".repeat(500)).contains("Too many nested brackets"));
+    assert!(message(&"(".repeat(500)).contains("more than 100 levels deep"));
     assert_eq!(
         per_event(Array::Constant(Constant::Truth(true)), 2).unwrap(),
         Array::Event(Values::whole(Kind::B1, vec![1, 1]))
@@ -294,18 +294,21 @@ fn edge_cases_follow_the_documented_rules() {
     assert!(run("event > -1").unwrap_err().0.contains("does not fit"));
     assert_eq!(whole("max(ratio, 0)"), [-99, 25, 0]);
     assert_eq!(whole("min(ratio, 0)"), [-99, 0, -200]);
-    assert_eq!(whole("stored(ratio, 'b1')"), [1, 1, 1]);
+    // NaN is neither true nor false: made b1, it is a data error of its event.
+    assert_eq!(run("stored(ratio, 'b1')").unwrap_err().1, Some(0));
     assert_eq!(whole("count(Jet_pt > 30)"), [1, 0, 1]);
     assert!(
         run("count(Jet_pt[Muon_pt > 3])").is_err(),
         "a mask of other lists"
     );
     // join takes lists only, two or more; the kinematics take three or four of one list.
-    assert_eq!(run("join(Jet_pt)").unwrap_err().0, "join takes two lists or more");
+    assert_eq!(run("join(Jet_pt)").unwrap_err().0, "join takes 2 values or more, not 1");
     assert!(run("join(Jet_pt, nJet)").unwrap_err().0.contains("join needs a list per event"));
-    assert!(run("pt(Jet_pt, Jet_pt)").unwrap_err().0.contains("pt takes pt, eta, phi, and optionally a mass"));
-    assert!(run("pair_rapidity(Jet_pt)").unwrap_err().0.contains("pair_rapidity takes pt, eta, phi"));
-    assert!(run("rapidity(Jet_pt, Jet_pt, Muon_pt)").unwrap_err().0.contains("rapidity needs pt, eta, phi, and any mass of the same list"));
+    assert_eq!(run("pt(Jet_pt, Jet_pt)").unwrap_err().0, "pt takes 3 or 4 values (pt, eta, phi, and optionally a mass), not 2");
+    assert!(run("pair_rapidity(Jet_pt)").unwrap_err().0.contains("pair_rapidity takes 3 or 4 values (pt, eta, phi"));
+    let unlike = run("rapidity(Jet_pt, Jet_pt, Muon_pt)").unwrap_err();
+    assert!(unlike.0.starts_with("rapidity needs pt, eta, phi, and any mass of the same list, member by member, and in this event one has 2 members and the other 1"), "{unlike:?}");
+    assert_eq!(unlike.1, Some(0));
     assert!(run("floor(Jet_pt > 30)").is_ok(), "floor keeps true-or-false values, as NumPy");
 }
 
@@ -557,11 +560,8 @@ n_negative = "count(negative)"
     let both: BTreeMap<String, _> = [("PT_lep".to_owned(), parse("Eta_lep").unwrap())].into();
     let shadowed = Scope::new(&counted, &sample, &both);
     assert!(shadowed.evaluate(&parse("PT_lep > 1").unwrap()).unwrap_err().0.contains("PT_lep is a name [define] gives an expression, and also the name of a branch of this file"));
-    // A `where` after a value is refused, saying how to write it; the word is a name elsewhere.
-    assert!(run("count(PT_lep where PT_lep > 1)")
-        .unwrap_err()
-        .0
-        .starts_with("where is not part of an expression (column 14)"));
+    // `where` is a name like any other: after a value it is text left over.
+    assert_eq!(run("count(PT_lep where PT_lep > 1)").unwrap_err().0, "Expected ) at column 14");
     assert!(parse("sample.where == 'x'").is_ok() && parse("branch('where') > 1").is_ok());
     // A name with several dots is suggested whole.
     assert!(parse("sum(recoMuons_muons__RECO.obj.pt_)")
@@ -585,29 +585,22 @@ n_negative = "count(negative)"
     assert!(refused("[define]\nsample = \"PT_lep\"\n").contains("one plain name"));
     assert!(refused("[define.good]\nvalue = \"PT_lep\"\n")
         .contains("[define] good must be an expression in quotes"));
+    // The earlier language's tables and keys are refused as any unknown name is.
     assert_eq!(
         refused("[object.good]\nfrom = \"lep\"\n"),
-        "A recipe has no [object] table: write it as a line of [define], a mask: good_muon = \"Muon_pt > 20 and Muon_tightId\", used as Muon_pt[good_muon]. A recipe's tables are [define], [keep], [columns], [totals] and [derived]."
+        "A recipe has no key \"object\"; it takes format, version, title, define, keep, columns, totals, derived."
     );
-    for (table, became) in [
-        ("copy", "branches = [...]"),
-        ("column", "lines of [columns]"),
-        ("helper", "a line of [define]"),
-        ("collection", "name each branch in full"),
-    ] {
-        assert!(refused(&format!("[{table}]\n")).contains(became), "{table}");
-    }
-    assert!(refused("[derive]\n").contains("A recipe has no setting named derive; it takes format, version, title, define, keep, columns, totals, derived"));
-    assert!(
-        refused("[keep]\nx = { if = \"sample.y == 1\", pass = \"PT_lep\" }\n").contains(
-            "[keep] x: a cut for some samples says what it applies with apply = \"…\", not pass"
-        )
+    assert!(refused("[column]\n").ends_with("Did you mean: columns?"));
+    assert!(refused("[derive]\n").contains("A recipe has no key \"derive\"; it takes format, version, title, define, keep, columns, totals, derived. Did you mean: derived, define?"));
+    assert_eq!(
+        refused("[keep]\nx = { if = \"sample.y == 1\", pass = \"PT_lep > 1\" }\n"),
+        "[keep] x has no key \"pass\"; it takes if, apply.\n[keep] x needs apply = \"…\": the cut, for the samples its if is true for"
     );
     assert!(refused("[keep]\nx = { if = \"sample.y == 1\" }\n").contains("[keep] x needs apply"));
     assert!(refused("[columns]\nbranches = [\"\"]\n")
         .contains("branches must be a list of branch names"));
     assert!(refused("[columns]\nbranches = [\"a\"]\na = \"PT_lep\"\n")
-        .contains("Two columns are named a"));
+        .contains("Two columns are named a: give one another name"));
     // Text is not a name: a defined name may hold text that another, later, name spells.
     let quoted = "[define]\nis_mu = \"sample.channel == 'mu'\"\nmu = \"PT_lep > 20\"\n";
     let head = "format = \"rvr-recipe\"\nversion = 1\n";
@@ -755,15 +748,11 @@ fn stored_float_to_u64_preserves_values_above_signed_range() {
         ))
     );
 
-    // This correction does not choose a new policy for values outside that range.
-    let outside = Values::float(
-        Kind::F8,
-        vec![-1.0, f64::NAN, f64::INFINITY, 18446744073709551616.0],
-    );
-    assert_eq!(
-        outside.cast(Kind::U8),
-        Values::whole(Kind::U8, vec![-1, 0, i64::MAX, i64::MAX])
-    );
+    // A value outside the kind, or NaN, is a data error of its value.
+    for (value, said) in [(-1.0, "-1.0 does not fit in u8"), (f64::NAN, "NaN is no number"), (f64::INFINITY, "inf does not fit in u8"), (18446744073709551616.0, "1.8446744073709552e19 does not fit in u8")] {
+        let error = Values::float(Kind::F8, vec![0.0, value]).convert(Kind::U8).unwrap_err();
+        assert!(error.0.starts_with(said) && error.1 == Some(1), "{value}: {error:?}");
+    }
 }
 
 /// A missing or nonfinite particle coordinate must not become a plausible zero mass.
@@ -807,7 +796,7 @@ fn totals_are_sums_only_derived_columns_use() {
         ("[keep]\nx = \"sample.sumw > 0\"\n[totals]\nsumw = \"w\"\n", "[keep] x uses sample.sumw, a total of [totals], known only once every event is read: use it under [derived]"),
         ("[columns]\ny = \"w / sample.sumw\"\n[totals]\nsumw = \"w\"\n", "[columns] y uses sample.sumw"),
         ("[totals]\nsumw = \"w\"\n[derived]\nsumw = \"w\"\n", "[derived] sumw: sumw is already the name of a column, a total or a line of [define]"),
-        ("[columns]\nbranches = [\"w\"]\n[totals]\nw = \"w\"\n", "[totals] w: w is already the name of a column, a total or a line of [define]"),
+        ("[columns]\nbranches = [\"w\"]\n[totals]\nw = \"w\"\n", "[totals] w: w is already the name of a column or a line of [define]"),
         ("[totals]\nevents_read = \"1\"\n", "[totals] events_read: a total is named with one plain name"),
         ("[define]\ng = \"w > 1\"\n[totals]\nt = { value = \"g\", tree = \"Runs\" }\n", "[totals] t reads the tree Runs, and g is a line of [define]"),
         ("[totals]\nt = { tree = \"Runs\" }\n", "[totals] t needs a value"),

@@ -330,7 +330,7 @@ fn presses_that_cannot_be_trusted_are_refused() {
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1);
     assert!(
-        said.contains("has no setting named select; it takes format, version"),
+        said.contains("recipe.toml: A recipe has no key \"select\"; it takes format, version"),
         "{said}"
     );
     std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
@@ -574,9 +574,9 @@ per_jet = "ht / nJet"
     let (code, said) = rvr(&dir, &["derive", &file, "--rename", "z", "a b"]);
     assert!(code == 1 && said.contains("\"a b\" is not a name a derived column can have"), "{said}");
     assert_eq!(rvr(&dir, &["derive", &file, "--drop", "z"]).0, 0);
-    // What a press adds to every sample's metadata is no expression's to read.
+    // What a press adds to every sample's metadata is no expression's to read: refused as it is read.
     let (code, said) = rvr(&dir, &["derive", &file, "n = sample.events_total"]);
-    assert!(code == 1 && said.contains("sample flat: derived column n: sample.events_total is used as a number, but events_total is a count rvr press records of each sample, which no expression can read"), "{said}");
+    assert!(code == 1 && said.contains("[derived] n: sample.events_total is a count rvr press records of each sample, which no expression can read"), "{said}");
     // A key the sample lacks is named, with where to give it one.
     let (code, said) = rvr(&dir, &["derive", &file, "n = nJet * sample.xsec"]);
     assert!(code == 1 && said.contains("sample flat: derived column n: sample.xsec is used as a number, but this sample has no xsec: give it one in samples.toml, or give every sample one under [defaults]"), "{said}");
@@ -606,7 +606,7 @@ per_jet = "ht / nJet"
     // A derived column that cannot be worked out stops the press on the first run of a file.
     std::fs::write(dir.join("recipe.toml"), recipe.replace("per_jet = \"ht / nJet\"", "per_jet = \"ht / sample.file\"")).unwrap();
     let (code, said) = rvr(&dir, &["press", "--full"]);
-    assert!(code == 1 && said.contains("uproot_flat.root: derived column per_jet: \"./uproot_flat.root\" is text, not a number") && !said.contains("could not be written"), "{said}");
+    assert!(code == 1 && said.contains("uproot_flat.root: derived column per_jet: Text cannot be combined with a number: / takes numbers") && !said.contains("could not be written"), "{said}");
     // A float may be NaN or infinite: a derived column dividing by zero is written as it is.
     std::fs::write(dir.join("recipe.toml"), recipe.replace("per_jet = \"ht / nJet\"", "per_jet = \"ht / (nJet - nJet)\"")).unwrap();
     let (code, said) = rvr(&dir, &["press", "--full"]);
@@ -928,7 +928,7 @@ fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_co
     assert_eq!(rvr(&dir, &["key", "new", "Tester"]).0, 0);
     // One worker reads flat_a.root first, where the trial passes; flat_b.root's values fail at the end.
     let (code, said) = rvr(&dir, &["press", "--workers", "1"]);
-    assert!(code == 1 && said.contains("derived column r: \"./flat_b.root\" is text, not a number") && said.contains("is written without its derived columns"), "{said}");
+    assert!(code == 1 && said.contains("derived column r: Text cannot be combined with a number: * takes numbers") && said.contains("is written without its derived columns"), "{said}");
     let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     let (code, said) = rvr(&dir, &["validate", &file]);
     assert!(code == 0 && said.contains("10 rows, 2 columns, read all") && said.contains("signed by you"), "{said}");
@@ -1323,15 +1323,22 @@ fn a_mistake_in_the_recipe_stops_the_press_with_no_file_and_no_holes() {
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("[columns] npv: There is no column named PV_npvs."), "{said}");
-    // A defined name the press uses that is also a branch is refused: a name means one thing.
+    // A defined name that is also a branch of a sample's list is refused before anything is read,
+    // used or not: a name means one thing.
     let both = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\nweight = \"nJet > 1\"\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\nheavy = \"weight\"\n\n[totals]\n\n[derived]\n";
-    std::fs::write(dir.join("recipe.toml"), both).unwrap();
+    for recipe in [both.to_owned(), both.replace("heavy = \"weight\"\n", "")] {
+        std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
+        let (code, said) = rvr(&dir, &["press"]);
+        assert_eq!(code, 1, "{said}");
+        assert!(said.contains("[define] weight is also the name of a branch of sample flat in samples.lock, and a name means one thing: rename the defined name, as weight_sel, where the recipe uses it"), "{said}");
+        assert!(!said.contains("hole") && !said.contains("Pressing"), "{said}");
+    }
+    // Every such name at once, on one line.
+    std::fs::write(dir.join("recipe.toml"), both.replace("[define]\n", "[define]\nrun = \"1\"\n")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
-    assert_eq!(code, 1, "{said}");
-    assert!(said.contains("weight is a name [define] gives an expression, and also the name of a branch of this file: give the defined name another"), "{said}");
-    assert!(!said.contains("hole"), "{said}");
-    // One nothing uses is never evaluated, and stands in for no branch.
-    std::fs::write(dir.join("recipe.toml"), both.replace("heavy = \"weight\"\n", "")).unwrap();
+    assert!(code == 1 && said.contains("[define] run is also the name of a branch of sample flat in samples.lock, and a name means one thing: rename the defined name, as run_sel, where the recipe uses it; [define] weight is also"), "{said}");
+    let both = both.replace("weight", "heavy_event");
+    std::fs::write(dir.join("recipe.toml"), &both).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 0, "{said}");
     // A recipe.toml writes its five tables, even empty; one left out is refused by press and try.
@@ -1396,10 +1403,7 @@ branches = ["nJet"]
     let (code, said) = rvr(&dir, &["try", "count(Jet_pt"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("the expression: Expected )"), "{said}");
-    // The old ways of naming members are refused, each saying what to write instead.
-    let (code, said) = rvr(&dir, &["try", "count(Jet where pt > 30)"]);
-    assert_eq!(code, 1, "{said}");
-    assert!(said.contains("where is not part of an expression (column 11): to keep some members of each list, use a mask, such as Jet_pt[Jet_pt > 30]"), "{said}");
+    // A dotted name says how to name a branch whose name holds a dot.
     let (code, said) = rvr(&dir, &["try", "Jet.pt"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("Only sample has a field after a dot, as in sample.era"), "{said}");
@@ -1674,4 +1678,46 @@ fn a_file_under_the_home_folder_is_pinned_and_read_as_samples_toml_writes_it() {
     assert!(lock.contains("at = \"~/data/uproot_flat.root\"\n"), "{lock}");
     let (code, said) = rvr_at_home(&dir, &home, &["press"]);
     assert_eq!(code, 0, "{said}");
+}
+
+#[test]
+fn a_value_the_recipe_cannot_take_stops_the_press_naming_its_file_entry_column_and_value() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\nn = { value = \"nJet * 100\", stored = \"u1\" }\n\n[totals]\n\n[derived]\n";
+    let dir = study("unfit", FLAT, recipe);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("uproot_flat.root, tree analysis, entry 0: [columns] n: 300 does not fit in u1, which holds 0 to 255"), "{said}");
+    assert!(!said.contains("hole"), "{said}");
+    // A total whose sum stops being finite names the entry whose value made it so.
+    let total = recipe.replace("n = { value = \"nJet * 100\", stored = \"u1\" }\n", "").replace("[totals]\n", "[totals]\ninverse = \"1 / (nJet - 3)\"\n");
+    std::fs::write(dir.join("recipe.toml"), total).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 1 && said.contains("uproot_flat.root, tree analysis, entry 0: [totals] inverse: its sum is not a finite number once this entry's value, inf, is added"), "{said}");
+    // A total over another tree of the file is read through runs the same way, and names that tree's entry.
+    let other = recipe.replace("n = { value = \"nJet * 100\", stored = \"u1\" }\n", "").replace("[totals]\n", "[totals]\nsum_x = { value = \"x\", tree = \"other\" }\ninverse = { value = \"1 / (x - 1)\", tree = \"other\" }\n");
+    std::fs::write(dir.join("recipe.toml"), &other).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 1 && said.contains("uproot_flat.root: tree \"other\", entry 1: [totals] inverse: its sum is not a finite number once this entry's value, inf, is added"), "{said}");
+    std::fs::write(dir.join("recipe.toml"), other.replace("inverse = { value = \"1 / (x - 1)\", tree = \"other\" }\n", "")).unwrap();
+    let made = pressed(&dir, &[]);
+    assert_eq!(made["made"]["files"]["flat"]["metadata"]["sum_x"], 3.0, "{made}");
+}
+
+#[test]
+fn derive_says_every_problem_of_the_recipe_a_file_carries_in_one_sentence() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[totals]\n\n[derived]\n";
+    let dir = study("carried", FLAT, recipe);
+    let mut header = pressed(&dir, &[]);
+    let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    // Its recipe written by hand with two problems this rvr refuses.
+    let wrong = recipe.replace("[keep]\n", "[keep]\na = \"cnt(nJet)\"\nb = \"count(nJet, 1)\"\n");
+    header["made"]["recipe"]["text"] = wrong.as_str().into();
+    header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(&wrong).into();
+    header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
+    rowver::write::rewrite(dir.join(&file), dir.join("carried.rvr"), &header).unwrap();
+    let (code, said) = rvr(&dir, &["derive", "carried.rvr", "twice = nJet * 2"]);
+    assert_eq!(code, 1, "{said}");
+    let line = said.lines().find(|line| line.contains("cannot be read by this rvr")).unwrap_or_else(|| panic!("{said}"));
+    assert!(line.contains("([keep] a: There is no function named cnt") && line.contains("; [keep] b: count takes 1 value, not 2)"), "{said}");
 }

@@ -173,7 +173,7 @@ fn read(
     let text = |key: &str| made[key]["text"].as_str();
     same_build(made)?;
     let old = Recipe::read(text("recipe").unwrap_or_default())
-        .map_err(|e| format!("its recipe cannot be read ({})", e.0))?;
+        .map_err(|e| format!("its recipe cannot be read ({})", e.line()))?;
     if cuts(&old) != cuts(recipe) {
         return Err("the cuts under [keep], or what they use, have changed".into());
     }
