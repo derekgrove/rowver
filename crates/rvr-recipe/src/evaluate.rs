@@ -96,6 +96,40 @@ impl Columns for Slice<'_> {
     }
 }
 
+/// The rows at `positions` (ascending, distinct) of other columns, each picked once, when an
+/// expression first asks for it; the columns themselves when every row is picked.
+pub struct Picked<'a> {
+    columns: &'a dyn Columns,
+    positions: &'a [usize],
+    whole: bool,
+    picked: RefCell<BTreeMap<String, Option<Array>>>,
+}
+
+impl<'a> Picked<'a> {
+    /// The rows at `positions` of `columns`, which cover `rows`.
+    pub fn new(columns: &'a dyn Columns, positions: &'a [usize], rows: usize) -> Self {
+        Picked { columns, positions, whole: positions.len() == rows, picked: RefCell::default() }
+    }
+}
+
+impl Columns for Picked<'_> {
+    fn column(&self, name: &str) -> Result<Option<Array>> {
+        if self.whole {
+            return self.columns.column(name);
+        }
+        if let Some(held) = self.picked.borrow().get(name) {
+            return Ok(held.clone());
+        }
+        let held = self.columns.column(name)?.map(|array| array.picked(self.positions));
+        self.picked.borrow_mut().insert(name.to_owned(), held.clone());
+        Ok(held)
+    }
+
+    fn has(&self, name: &str) -> bool {
+        self.columns.has(name)
+    }
+}
+
 /// `work` over the `rows` rows of `columns` with `in_runs`, each part its slice; a failure with the rows it lies in.
 pub fn over_runs<T>(columns: &dyn Columns, rows: usize, work: &mut dyn FnMut(&dyn Columns, usize, usize) -> Result<T>) -> std::result::Result<Vec<T>, (crate::Error, Range<usize>)> {
     let mut part = 0..rows;
@@ -121,7 +155,7 @@ pub struct Scope<'a> {
 
 /// What a name that is no column is refused with.
 fn unknown(name: &str) -> crate::Error {
-    problem(format!("There is no column named {name}"))
+    crate::missing(name)
 }
 
 impl<'a> Scope<'a> {
@@ -138,6 +172,17 @@ impl<'a> Scope<'a> {
             defines,
             known: RefCell::default(),
         }
+    }
+
+    /// Each defined name worked out so far without fault, with its value.
+    pub fn worked_out(&self) -> Vec<(String, Array)> {
+        self.known.borrow().iter().filter_map(|(name, value)| Some((name.clone(), value.clone()?.ok()?))).collect()
+    }
+
+    /// The same scope, the defined names `known` already worked out over these same events.
+    pub fn knowing(self, known: impl IntoIterator<Item = (String, Array)>) -> Self {
+        self.known.borrow_mut().extend(known.into_iter().map(|(name, value)| (name, Some(Ok(value)))));
+        self
     }
 
     /// Evaluate a condition to one truth value for each of `events` events.
@@ -216,7 +261,7 @@ impl<'a> Scope<'a> {
             };
         }
         let value = match self.columns.has(name) {
-            true => Err(problem(format!("{name} is a name [define] gives an expression, and also the name of a branch of this file: give the defined name another, so that each name means one thing"))),
+            true => Err(crate::clash(name)),
             false => {
                 self.known.borrow_mut().insert(name.to_owned(), None);
                 self.evaluate(defined)

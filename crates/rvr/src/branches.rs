@@ -2,24 +2,20 @@
 //! branch list in the lock (its first file's tree), in alphabetical order, with the kind rvr reads it
 //! as and whether it holds one value or a list per event. No file is opened.
 
-use crate::press::{self, count};
-use crate::Words;
+use crate::options::Options;
+use crate::press::count;
 use std::path::Path;
 
-const USAGE: &str = "usage:
+pub(crate) const USAGE: &str = "usage:
   rvr branches [DIR] [--sample NAME] [--find TEXT]
       the branches of the first file of the first sample (or NAME) of the study in DIR (.),
       in alphabetical order; --find shows only the branches whose name holds TEXT (in any
       case)";
 
-/// `rvr branches …` with the words after `branches`: the exit status (2 for a wrong use of it).
-pub fn main(args: &[&str]) -> u8 {
-    match run(args) {
+/// `rvr branches` with its options: the exit status.
+pub fn main(options: &Options) -> u8 {
+    match run(options) {
         Ok(()) => 0,
-        Err(error) if error.ends_with(USAGE) => {
-            eprintln!("rvr branches: {error}");
-            2
-        }
         Err(error) => {
             eprintln!("rvr branches: {error}");
             1
@@ -27,21 +23,16 @@ pub fn main(args: &[&str]) -> u8 {
     }
 }
 
-fn run(args: &[&str]) -> Result<(), String> {
-    let words = Words::read(args, &["--sample", "--find"], &[], USAGE)?;
-    let find = words.value("--find").map(str::to_lowercase);
-    let dir = match words.plain[..] {
-        [] => Path::new("."),
-        [dir] => Path::new(dir),
-        _ => return Err(format!("branches takes at most one study folder.\n{USAGE}")),
-    };
-    let (_, lock) = press::lock(dir)?;
+fn run(options: &Options) -> Result<(), String> {
+    let find = options.value("--find").map(str::to_lowercase);
+    let dir = Path::new(options.words.first().map_or(".", String::as_str));
+    let lock = crate::texts::lock(dir)?;
     // It needs only the lock, but says when the lock is not of samples.toml as it is now.
     let samples = std::fs::read_to_string(dir.join("samples.toml")).unwrap_or_default();
     if rowver::write::text_checksum(&samples) != lock.samples_toml_sha256 {
         println!("samples.toml has changed since samples.lock was written: these are the files of the lock ({}).", lock.resolved);
     }
-    let index = press::sample_at(&lock, words.value("--sample"))?;
+    let index = crate::open::sample_at(&lock, options.value("--sample"))?;
     let sample = &lock.samples[index];
     let list = lock.branches_of(sample).ok_or_else(|| format!("samples.lock has no branch list for {}: run rvr samples resolve samples.toml again", sample.name))?;
     let first = sample.files.first().map_or("", |f| f.at.rsplit('/').next().unwrap_or(&f.at));

@@ -1,7 +1,7 @@
 //! `rvr derive FILE`: add, drop and rename the derived columns of a pressed file, keeping the
 //! recipe it carries in step; and the records of a press's derived columns. rowver works them out.
 
-use crate::Words;
+use crate::options::Options;
 use rowver::rvr::derived::records;
 use rowver::rvr::Reader;
 use rowver::write::Laid;
@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::Path;
 
-const USAGE: &str = "usage:
+pub(crate) const USAGE: &str = "usage:
   rvr derive FILE 'NAME = EXPRESSION'...
       add derived columns to a pressed file: each kept as its expression over the file's columns
   rvr derive FILE --drop NAME...
@@ -26,11 +26,10 @@ pub(crate) fn attach(laid: &Laid, derived: &[(String, String)], header: &mut Val
     sealed(header, None)
 }
 
-/// Take the derived columns out of a press's header, and empty the `[derived]` table of the
-/// recipe it carries: what a press read, kept when its derived columns failed.
-pub(crate) fn without(header: &mut Value) -> Result<(), String> {
+/// Take the derived columns `names` out of a press's header, and empty the `[derived]` table of
+/// the recipe it carries: what a press read, kept when its derived columns failed.
+pub(crate) fn without(header: &mut Value, names: Vec<String>) -> Result<(), String> {
     let text = header["made"]["recipe"]["text"].as_str().unwrap_or_default().to_owned();
-    let names = Recipe::read(&text).map_err(|e| e.line())?.derived.into_iter().map(|(name, _)| name).collect();
     // A [derived] table not written a line per column is emptied in the recipe's TOML instead,
     // written again whole: the recipe loses its comments and layout.
     let text = edited(&text, &dropping(names), &[]).or_else(|_| {
@@ -102,19 +101,58 @@ fn free(header: &Value, recipe: &Recipe, name: &str, path: &Path) -> Result<(), 
     Err(format!("{name} is already the name of {whose}: give the derived column another name"))
 }
 
-/// `rvr derive …` with the words after `derive`: the exit status (2 for a wrong use of it).
-pub fn main(args: &[&str]) -> u8 {
-    match run(args) {
+/// `rvr derive` with its options: the exit status (2 for a wrong use of it).
+pub fn main(options: &Options) -> u8 {
+    let (path, change) = match asked(options) {
+        Ok(asked) => asked,
+        Err(why) => return crate::wrong("derive", &why),
+    };
+    match run(path, change) {
         Ok(()) => 0,
-        Err(error) if error.ends_with(USAGE) => {
-            eprintln!("rvr derive: {error}");
-            2
-        }
         Err(error) => {
             eprintln!("rvr derive: {error}");
             1
         }
     }
+}
+
+/// What `rvr derive` is asked to change, its words read.
+enum Asked<'a> {
+    /// `--drop NAME…`, each name once.
+    Drop(Vec<&'a str>),
+    /// `--rename OLD NEW`.
+    Rename(&'a str, &'a str),
+    /// `'NAME = EXPRESSION'…`, each split at its first `=`.
+    Add(Vec<(&'a str, &'a str)>),
+}
+
+/// The file derive changes and what it changes, or how its words do not fit its flags (wrong use).
+fn asked(options: &Options) -> Result<(&Path, Asked<'_>), String> {
+    let (path, rest) = options.words.split_first().ok_or("derive takes a file and what to change of it")?;
+    let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+    let change = match (options.has("--drop"), options.has("--rename"), rest.as_slice()) {
+        (true, true, _) => return Err("derive takes --drop or --rename, not both".into()),
+        (false, true, [old, new]) => Asked::Rename(old, new),
+        (false, true, _) => return Err("--rename takes the derived column's name and its new one".into()),
+        (true, false, _) => {
+            let mut once = Vec::new();
+            for name in rest {
+                if !once.contains(&name) {
+                    once.push(name);
+                }
+            }
+            Asked::Drop(once)
+        }
+        (false, false, lines) => {
+            let mut added = Vec::new();
+            for line in lines {
+                let (name, expression) = line.split_once('=').ok_or_else(|| format!("{line:?} is not NAME = EXPRESSION"))?;
+                added.push((name.trim(), expression.trim()));
+            }
+            Asked::Add(added)
+        }
+    };
+    Ok((Path::new(path), change))
 }
 
 /// The line of `[derived]` that holds `name`, by its index among `lines`, if there is one.
@@ -166,12 +204,7 @@ fn edited(text: &str, change: &Change, expected: &[(String, String)]) -> Result<
     Ok(text)
 }
 
-fn run(args: &[&str]) -> Result<(), String> {
-    let words = Words::read(args, &[], &["--drop", "--rename"], USAGE)?;
-    let (path, rest) = match words.plain.split_first() {
-        Some((path, rest)) if !rest.is_empty() => (Path::new(*path), rest),
-        _ => return Err(format!("derive takes a file and what to change of it.\n{USAGE}")),
-    };
+fn run(path: &Path, change: Asked) -> Result<(), String> {
     let file = Reader::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     // A file is changed, and signed again, only when its derived columns are what it records.
     let secret = crate::key::secret()?;
@@ -188,15 +221,8 @@ fn run(args: &[&str]) -> Result<(), String> {
             used.contains(name).then(|| other.clone())
         })
     };
-    let (text, said, kept) = match (words.has("--drop"), words.has("--rename")) {
-        (true, true) => return Err(format!("derive takes --drop or --rename, not both.\n{USAGE}")),
-        (true, false) => {
-            let mut once = Vec::new();
-            for name in rest {
-                if !once.contains(name) {
-                    once.push(*name);
-                }
-            }
+    let (text, said, kept) = match change {
+        Asked::Drop(once) => {
             let rest = &once;
             for name in rest {
                 if !derived.iter().any(|(n, _)| n == name) {
@@ -213,10 +239,7 @@ fn run(args: &[&str]) -> Result<(), String> {
             let change = dropping(names.iter().map(|n| (*n).to_owned()).collect());
             (edited(&text, &change, &derived)?, format!("Dropped {} from", names.join(", ")), before.clone())
         }
-        (false, true) => {
-            let [old, new] = rest else {
-                return Err(format!("--rename takes the derived column's name and its new one.\n{USAGE}"));
-            };
+        Asked::Rename(old, new) => {
             let at = derived.iter().position(|(n, _)| n == old).ok_or_else(|| format!("{} has no derived column named {old}", path.display()))?;
             if let Some(user) = users(old, &derived) {
                 return Err(format!("{user} uses {old}: drop {user} first, or keep the name"));
@@ -243,13 +266,9 @@ fn run(args: &[&str]) -> Result<(), String> {
                 .collect();
             (edited(&text, &change, &derived)?, format!("Renamed {old} to {new} in"), kept)
         }
-        (false, false) => {
+        Asked::Add(lines) => {
             let mut added = Vec::new();
-            for line in rest {
-                let Some((name, expression)) = line.split_once('=') else {
-                    return Err(format!("{line:?} is not NAME = EXPRESSION.\n{USAGE}"));
-                };
-                let (name, expression) = (name.trim(), expression.trim());
+            for (name, expression) in lines {
                 // Written as in recipe.toml, NAME = "EXPRESSION", it is that string.
                 let quoted = expression.starts_with('"').then(|| format!("v = {expression}").parse::<toml::Table>().ok()).flatten();
                 let quoted = quoted.and_then(|t| t.get("v")?.as_str().map(str::to_owned));
@@ -286,13 +305,9 @@ fn run(args: &[&str]) -> Result<(), String> {
         false => root.insert("derived".into(), json!({ "columns": records })),
     };
     let was = root.shift_remove("signature");
-    let signed = match &secret {
-        Some(secret) => format!("signed with your key {}", crate::key::short(&rowver::sign::public_key(secret))),
-        None if was.is_some() => "no longer signed (it was, and you have no key: rvr key new makes one)".into(),
-        None => "not signed".into(),
-    };
+    let signed = crate::key::resigned(secret.as_ref(), was.as_ref().and_then(|s| s["key"].as_str()));
     // The file is replaced only by one every reader opens, and only once it is on disk.
-    let staged = path.with_extension("rvr.derive");
+    let staged = crate::empty::beside(path, ".derive");
     let written = rewritten(path, &staged, &mut header, secret.as_ref())
         .and_then(|()| std::fs::File::open(&staged).and_then(|f| f.sync_all()).map_err(|e| e.to_string()))
         .and_then(|()| std::fs::rename(&staged, path).map_err(|e| e.to_string()));

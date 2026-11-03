@@ -39,7 +39,7 @@ pub fn door(url: &str) -> Result<(String, String), String> {
     }
     let doors = wlcg_doors::serving(&wlcg_doors::snapshot().doors, &host);
     let door = doors.first().ok_or_else(|| {
-        format!("{host} has no WebDAV door in the WLCG registry ({}), so its folders cannot be listed from here. Name its files one by one, or copy them somewhere listable.", wlcg_doors::snapshot().taken)
+        format!("{host} has no WebDAV door in the WLCG registry ({}), and rvr reads storage over HTTPS only: name its files by an https:// or davs:// URL of a door that serves them, or copy them somewhere that has one", wlcg_doors::snapshot().taken)
     })?;
     Ok((format!("https://{}:{}", door.host, door.port), path))
 }
@@ -643,7 +643,8 @@ pub fn digest_seen(
     proxied: bool,
     watch: &Watch,
 ) -> Result<Digest, Failed> {
-    let (origin, path) = door(url).map_err(Failed::from)?;
+    // The agreement check found every host's door: one gone since is a storage that cannot be reached.
+    let (origin, path) = door(url).map_err(|why| Failed::new(Fault::Unreachable, why))?;
     let at = format!("{origin}{path}");
     let reply = patiently(waits, watch, url, |e| watch.passing(e, proxied), || head(agent, &at, watch));
     if reply.is_err() && watch.stop.load(Ordering::Acquire) {

@@ -9,9 +9,8 @@
 //! even a power cut gives it values that never reached the disk. The folder goes once the file is
 //! in place.
 
-use crate::press::Taken;
+use crate::take::Taken;
 use rowver::write::Spool;
-use rvr_recipe::Kind;
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -31,9 +30,7 @@ const SPOOL: &str = "spool";
 
 /// The folder a press stages `target` in: its name with `.partial` added.
 pub fn folder(target: &Path) -> PathBuf {
-    let mut name = target.as_os_str().to_owned();
-    name.push(".partial");
-    PathBuf::from(name)
+    crate::empty::beside(target, ".partial")
 }
 
 /// The folder `target` is in.
@@ -315,10 +312,8 @@ fn differs(was: &Value, now: &Value) -> String {
 
 /// The journal line of input `input`, finished as `taken` says, its values in the spool as `held`.
 pub fn line(input: usize, taken: &Taken, held: Value) -> Value {
-    let kinds: Vec<Value> = taken.kinds.iter().map(|(kind, listed)| json!([kind.name(), listed])).collect();
     json!({
         "input": input,
-        "kinds": kinds,
         "rows": taken.rows,
         "record": taken.record,
         "entries": taken.entries,
@@ -330,15 +325,8 @@ pub fn line(input: usize, taken: &Taken, held: Value) -> Value {
 
 /// What a journal line says an input gave, or `None` when it is not a line `line` wrote.
 pub fn taken(line: &Value) -> Option<Taken> {
-    let kind = |pair: &Value| -> Option<(Kind, bool)> {
-        let [kind, listed] = pair.as_array()?.as_slice() else {
-            return None;
-        };
-        Some((Kind::named(kind.as_str()?).ok()?, listed.as_bool()?))
-    };
     let numbers = line["cutflow"].as_array()?.iter().map(Value::as_u64);
     Some(Taken {
-        kinds: line["kinds"].as_array()?.iter().map(kind).collect::<Option<_>>()?,
         rows: usize::try_from(line["rows"].as_u64()?).ok()?,
         record: line.get("record").filter(|r| r.is_object())?.clone(),
         entries: line["entries"].as_u64()?,
@@ -447,7 +435,6 @@ mod tests {
         let target = dir.join("study.rvr");
         let press = json!({"recipe": "abc", "inputs": 3, "toolchain": crate::press::toolchain()});
         let taken = |rows| Taken {
-            kinds: vec![(Kind::named("f4").unwrap(), true)],
             rows,
             record: json!({"tree": "t", "uuid": null, "entries": 10}),
             entries: 10,

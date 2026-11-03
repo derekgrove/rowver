@@ -1,6 +1,6 @@
 //! What a press does when it cannot read something: a file, or a run of its entries, becomes a
-//! hole of one kind (docs/FORMAT.md, "Holes"), or the press ends. A mistake in the study or the
-//! recipe ends it; so does a failure that is not the file's own (a proxy or certificate refused, a
+//! hole of one kind (docs/FORMAT.md, "Holes"), or the press ends: a value the recipe cannot take
+//! (a data error), or a failure that is not the file's own (a proxy or certificate refused, a
 //! local file that cannot be read for want of rights), which would fail every later file the same,
 //! and so makes no holes.
 
@@ -22,11 +22,13 @@ pub enum Fault {
     /// Not the file's fault, and every later file would fail the same: the press stops, and
     /// makes no hole of it.
     Save,
-    /// A mistake in the study or the recipe: the press stops, and writes nothing.
-    Mistake,
+    /// A value in the data the recipe cannot take (docs/SPEC.md §2.6): the press stops, and keeps
+    /// what it read.
+    Data,
     /// Another input ended the press.
     Stopped,
-    /// A bug in rvr: the press stops, and keeps what it read.
+    /// A bug in rvr, a broken invariant no recipe, study or storage reaches: the press stops, keeps
+    /// what it read, and asks to be reported.
     Bug,
     /// A file the press needs but cannot read, with no entry to make a hole of (one of no entries
     /// read for its totals): the press stops, and keeps what it read.
@@ -42,7 +44,7 @@ impl Fault {
             Fault::Gone => "gone",
             Fault::Changed => "changed",
             Fault::Refused => "refused",
-            Fault::Save | Fault::Mistake | Fault::Stopped | Fault::Bug | Fault::Needed => return None,
+            Fault::Save | Fault::Data | Fault::Stopped | Fault::Bug | Fault::Needed => return None,
         })
     }
 
@@ -72,12 +74,6 @@ impl Failed {
     }
 }
 
-/// A mistake (the default for what is not known to be a read failure).
-impl From<String> for Failed {
-    fn from(why: String) -> Self {
-        Failed::new(Fault::Mistake, why)
-    }
-}
 
 /// What the last request to a remote file that failed means for the file.
 #[derive(Default)]
@@ -101,8 +97,9 @@ impl Seen {
 }
 
 /// What a hep-root error reading a file means for it (for a remote file, as `seen` says).
-// A branch of a type hep-root cannot read, or a name or entry it does not have, is the recipe's
-// or rvr's mistake, not the file's.
+// A layout hep-root cannot read, or an object a file lacks, is the file's: the agreement check and
+// the check against the lock found every branch and tree it should have. An entry or a branch
+// asked for outside what those checks found is a bug in rvr.
 pub fn fault_of(error: &hep_root::Error, seen: Option<&Seen>) -> Fault {
     use hep_root::Error as E;
     let remote = seen.and_then(Seen::last);
@@ -118,7 +115,8 @@ pub fn fault_of(error: &hep_root::Error, seen: Option<&Seen>) -> Fault {
         E::Io(e) if matches!(e.kind(), std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::InvalidData) => Fault::Damaged,
         E::Io(_) => Fault::Save,
         E::Format { .. } | E::Compression { .. } | E::NoBasket { .. } => Fault::Damaged,
-        E::Unsupported(_) | E::EntryOutOfRange { .. } | E::BranchNotFound(_) | E::KeyNotFound(_) => Fault::Mistake,
+        E::Unsupported(_) | E::KeyNotFound(_) => Fault::Damaged,
+        E::EntryOutOfRange { .. } | E::BranchNotFound(_) => Fault::Bug,
     }
 }
 
@@ -137,7 +135,8 @@ mod tests {
         assert_eq!(fault_of(&busy, Some(&seen)), Fault::Refused);
         let stopped = hep_root::Error::Remote(crate::samples::remote::STOPPED.into());
         assert_eq!(fault_of(&stopped, Some(&seen)), Fault::Stopped);
-        assert_eq!(fault_of(&hep_root::Error::Unsupported("TObjArray".into()), None), Fault::Mistake);
+        assert_eq!(fault_of(&hep_root::Error::Unsupported("TObjArray".into()), None), Fault::Damaged);
+        assert_eq!(fault_of(&hep_root::Error::BranchNotFound("x".into()), None), Fault::Bug);
         seen.note(Fault::Gone);
         let deleted = hep_root::Error::SourceChanged("f.root no longer exists".into());
         assert_eq!(fault_of(&deleted, Some(&seen)), Fault::Gone);
@@ -147,7 +146,7 @@ mod tests {
     #[test]
     fn every_kind_of_hole_is_one_the_reader_knows() {
         use Fault::*;
-        let kinds: Vec<&str> = [Unreachable, Damaged, Gone, Changed, Refused, Save, Mistake, Stopped, Bug]
+        let kinds: Vec<&str> = [Unreachable, Damaged, Gone, Changed, Refused, Save, Data, Stopped, Bug, Needed]
             .iter()
             .filter_map(|fault| fault.kind())
             .collect();

@@ -8,10 +8,10 @@ use voms_proxy::user::Source;
 use voms_proxy::{make, Credentials, Places};
 
 /// What `rvr proxy` takes.
-pub const USAGE: &str = "usage:
+pub(crate) const USAGE: &str = "usage:
   rvr proxy                                your grid proxy: whose, for which VO, how long it lasts
-  rvr proxy init [--hours H] [--vo VO]     make one from your certificate in ~/.globus
-                                           (192 hours and cms unless told otherwise)";
+  rvr proxy init [--hours H]               make one for the VO cms from your certificate in
+                                           ~/.globus, lasting H hours (1 to 720; 192 when not given)";
 
 /// A proxy, or VOMS attributes, with less than this many seconds left is warned of.
 pub const SHORT: i64 = 6 * 3600;
@@ -27,45 +27,22 @@ pub fn left(seconds: i64) -> String {
     }
 }
 
-/// `rvr proxy …` with the words after `proxy`: the exit status.
-pub fn main(words: &[&str]) -> u8 {
-    let result = match words {
-        [] => show(),
-        ["init", given @ ..] => options(given).and_then(|(hours, vo)| init(hours, vo)),
-        _ => Err(String::new()),
+/// `rvr proxy` or `rvr proxy init` (`name`) with its options: the exit status.
+pub fn main(name: &str, options: &crate::options::Options) -> u8 {
+    let result = match name {
+        "proxy" => show(),
+        _ => match options.value("--hours").map(|h| crate::options::count("--hours", h, 720)).transpose() {
+            Ok(hours) => init(hours.unwrap_or(192) as u32),
+            Err(why) => return crate::wrong(name, &why),
+        },
     };
     match result {
         Ok(true) => 0,
         Ok(false) => 1,
-        Err(why) if why.is_empty() => {
-            eprintln!("{USAGE}");
-            2
-        }
         Err(why) => {
-            eprintln!("rvr proxy: {why}");
+            eprintln!("rvr {name}: {why}");
             1
         }
-    }
-}
-
-/// `init`'s options, each a flag and its value: the hours and the VO; empty text for a usage error.
-fn options<'a>(mut words: &[&'a str]) -> Result<(u32, &'a str), String> {
-    let (mut hours, mut vo) = (192, "cms");
-    while let [flag, value, rest @ ..] = words {
-        match *flag {
-            "--hours" => {
-                hours = value.parse().ok().filter(|h| (1..=24 * 30).contains(h)).ok_or_else(|| {
-                    format!("--hours is how long the proxy lasts, a whole number of hours from 1 to 720, not {value}")
-                })?
-            }
-            "--vo" => vo = value,
-            _ => return Err(String::new()),
-        }
-        words = rest;
-    }
-    match words {
-        [] => Ok((hours, vo)),
-        _ => Err(String::new()),
     }
 }
 
@@ -116,8 +93,9 @@ fn show() -> Result<bool, String> {
     Ok(usable)
 }
 
-/// Make a proxy valid `hours` with the attributes of `vo`, write it, and show it.
-fn init(hours: u32, vo: &str) -> Result<bool, String> {
+/// Make a proxy valid `hours` with the attributes of the VO cms, write it, and show it.
+fn init(hours: u32) -> Result<bool, String> {
+    let vo = "cms";
     let home = std::env::var_os("HOME").ok_or("HOME is not set, so ~/.globus cannot be found")?;
     let globus = PathBuf::from(home).join(".globus");
     let named = |name: &str| std::env::var(name).ok();
@@ -168,21 +146,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn init_takes_each_flag_with_its_value() {
-        assert_eq!(options(&[]), Ok((192, "cms")));
-        assert_eq!(
-            options(&["--vo", "atlas", "--hours", "12"]),
-            Ok((12, "atlas"))
-        );
-        assert_eq!(
-            options(&["12", "--hours"]),
-            Err(String::new()),
-            "a value before its flag"
-        );
-        assert_eq!(options(&["--hours"]), Err(String::new()));
-        assert!(options(&["--hours", "0"])
-            .unwrap_err()
-            .contains("from 1 to 720"));
+    fn a_length_of_time_is_said_in_its_two_largest_units() {
         assert_eq!(left(3 * 86400 + 2 * 3600), "3 days 2 hours");
         assert_eq!(left(3600 + 60), "1 hour 1 minute");
         assert_eq!(left(30), "0 minutes");

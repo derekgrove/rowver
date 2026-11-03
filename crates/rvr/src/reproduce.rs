@@ -1,8 +1,9 @@
 //! `rvr reproduce`: write a file's study back out of it, press it again, and compare the two.
 
-use crate::press::{self, Texts};
-use rowver::study::lock::{Lock, Sample as Locked};
-use rowver::choice::Events;
+use crate::options::Options;
+use crate::plan::{Asked, Choose, On, Place};
+use crate::texts::Texts;
+use rowver::study::lock::Lock;
 use std::path::{Path, PathBuf};
 
 pub const USAGE: &str = "usage:
@@ -87,20 +88,11 @@ fn run(
         dir.display()
     );
     let target = dir.join(format!("{name}.rvr"));
-    let files = made["files"].clone();
-    let asked = |sample: &Locked| {
-        Events::read(&files[&sample.name]["events"]).map_err(|e| format!("{}: {e}", sample.name))
-    };
-    press::press(
-        &press::inputs(&dir)?,
-        &base,
-        name,
-        &target,
-        &asked,
-        workers,
-        press::On::Once,
-    )
-    .map_err(|why| format!("{why}\nTo press it again, remove {} and run rvr reproduce again.", dir.display()))?;
+    let place = Place { base, study: name.to_owned(), target: target.clone() };
+    let asked = Asked { choose: Choose::Recorded(made["files"].clone()), on: On::Once, workers, sign: true };
+    let again = |why: String| format!("{why}\nTo press it again, remove {} and run rvr reproduce again.", dir.display());
+    let plan = crate::plan::build(place, texts, asked).map_err(again)?;
+    crate::core::press(plan).map_err(again)?;
     println!("Comparing the two with rvr diff:");
     Ok(crate::diff::main(
         &file.to_string_lossy(),
@@ -108,50 +100,15 @@ fn run(
     ))
 }
 
-/// `rvr reproduce …` with the words after `reproduce`: the exit status.
-pub fn main(args: &[&str]) -> u8 {
-    let mut words = args.iter();
-    let (mut paths, mut workers, mut study) = (Vec::new(), None, None);
-    while let Some(&word) = words.next() {
-        match word {
-            "--workers" => match words
-                .next()
-                .and_then(|n| n.parse::<usize>().ok())
-                .filter(|n| *n > 0)
-            {
-                Some(n) => workers = Some(n),
-                None => {
-                    eprintln!(
-                        "--workers is how many files are read at once, a whole number from 1"
-                    );
-                    return 2;
-                }
-            },
-            "--study" => match words.next() {
-                Some(folder) => study = Some(PathBuf::from(folder)),
-                None => {
-                    eprintln!("--study needs the study folder the lock's relative paths are from");
-                    return 2;
-                }
-            },
-            flag if flag.starts_with("--") => {
-                eprintln!("reproduce does not know {flag}.\n{USAGE}");
-                return 2;
-            }
-            path => paths.push(PathBuf::from(path)),
-        }
-    }
-    let workers =
-        workers.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
-    let (file, dir) = match paths.as_slice() {
-        [file] => (file.clone(), None),
-        [file, dir] => (file.clone(), Some(dir.clone())),
-        _ => {
-            eprintln!("{USAGE}");
-            return 2;
-        }
+/// `rvr reproduce` with its options: the exit status.
+pub fn main(options: &Options) -> u8 {
+    let workers = match crate::options::workers(options) {
+        Ok(workers) => workers,
+        Err(why) => return crate::wrong("reproduce", &why),
     };
-    match run(&file, dir, study, workers) {
+    let file = PathBuf::from(&options.words[0]);
+    let dir = options.words.get(1).map(PathBuf::from);
+    match run(&file, dir, options.value("--study").map(PathBuf::from), workers) {
         Ok(code) => code,
         Err(why) => {
             eprintln!("rvr reproduce: {why}");

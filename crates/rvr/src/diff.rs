@@ -167,9 +167,10 @@ fn compare(a: &str, b: &str, headers: [&Value; 2]) -> Vec<String> {
 }
 
 /// Print one line per difference; the exit status is 0 when the headers show none, 1 when they
-/// show some, and 2 when the files cannot be compared.
+/// show some (a header that fails its checks, or one file empty and the other not, is one), and 2
+/// when the files cannot be compared.
 pub fn main(a: &str, b: &str) -> u8 {
-    let read = |path: &str| rowver::rvr::read_header(path).map_err(|e| format!("{path}: {e}"));
+    let read = |path: &str| rowver::rvr::Reader::inspect(path).map_err(|e| format!("{path}: {e}"));
     let (first, second) = match (read(a), read(b)) {
         (Ok(first), Ok(second)) => (first, second),
         (Err(e), _) | (_, Err(e)) => {
@@ -177,7 +178,18 @@ pub fn main(a: &str, b: &str) -> u8 {
             return 2;
         }
     };
-    let said = compare(a, b, [&first, &second]);
+    let mut said = Vec::new();
+    for (path, (_, checked)) in [(a, &first), (b, &second)] {
+        if let Err(why) = checked {
+            said.push(format!("{path}: its header fails its checks, and is compared all the same: {why}"));
+        }
+    }
+    for (empty, full) in [((a, &first.0), (b, &second.0)), ((b, &second.0), (a, &first.0))] {
+        if empty.1.empty() && !full.1.empty() {
+            said.push(format!("{} is empty: its arrays are gone (rvr refill presses them again), and {} holds them", empty.0, full.0));
+        }
+    }
+    said.extend(compare(a, b, [first.0.header(), second.0.header()]));
     if said.is_empty() {
         println!("The headers show no difference in rows, samples, columns, derived columns, by_sample or sample columns.");
         return 0;

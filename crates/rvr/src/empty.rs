@@ -1,17 +1,16 @@
 //! `rvr empty` and `rvr refill`: let a pressed file's columns go, keeping the file as the shell of
 //! its study (its header, byte for byte), and press them again from that shell.
 
-use crate::press;
-use crate::samples::some;
+use crate::options::Options;
+use crate::plan::{Asked, Choose, On, Place};
 use crate::reproduce::{base, study_texts};
-use rowver::study::lock::{Lock, Sample as Locked};
-use crate::Words;
-use rowver::choice::Events;
+use crate::samples::some;
+use rowver::study::lock::Lock;
 use rowver::rvr::Reader;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-pub const USAGE: &str = "usage:
+pub(crate) const USAGE: &str = "usage:
   rvr empty FILE... [--study FOLDER] [--anyway] [--force | -f]
       let each file's columns go, keeping its header: its study, every checksum, its signature;
       refused unless every input its lock names is as the lock recorded it, or with --anyway;
@@ -20,52 +19,35 @@ pub const USAGE: &str = "usage:
       press an empty file's columns again from the study it carries, checked against its
       checksums; a relative path in the lock is read from FOLDER (FILE's folder when not given)";
 
-/// `rvr empty …` with the words after `empty`: the exit status.
-pub fn empty_main(args: &[&str]) -> u8 {
-    let words = match Words::read(args, &["--study"], &["--anyway", "--force", "-f"], USAGE) {
-        Ok(words) if !words.plain.is_empty() => words,
-        Ok(_) => return said(Err(format!("empty takes the files to empty.\n{USAGE}")), "empty"),
-        Err(why) => return said(Err(why), "empty"),
-    };
-    if let Some(flag) = words.plain.iter().find(|word| crate::short(word)) {
-        return said(Err(format!("{flag} is not one of its flags.\n{USAGE}")), "empty");
-    }
-    let force = words.has("--force") || words.has("-f");
+/// `rvr empty` with its options: the exit status, the worst of its files'.
+pub fn empty_main(options: &Options) -> u8 {
+    let force = options.has("--force") || options.has("-f");
     if !force && !crate::at_terminal() {
         return said(Err("nothing was emptied: rvr empty asks before it lets a file's columns go, and no one is at a terminal to answer. Give --force (or -f) to empty without asking.".into()), "empty");
     }
     let mut code = 0;
-    for file in &words.plain {
-        code = code.max(said(empty(Path::new(file), words.value("--study").map(Path::new), words.has("--anyway"), force), "empty"));
+    for file in &options.words {
+        code = code.max(said(empty(Path::new(file), options.value("--study").map(Path::new), options.has("--anyway"), force), "empty"));
     }
     code
 }
 
-/// `rvr refill …` with the words after `refill`: the exit status.
-pub fn refill_main(args: &[&str]) -> u8 {
-    let refilled = Words::read(args, &["--study", "--workers"], &[], USAGE).and_then(|words| {
-        if let Some(flag) = words.plain.iter().find(|word| crate::short(word)) {
-            return Err(format!("{flag} is not one of its flags.\n{USAGE}"));
-        }
-        let [file] = words.plain.as_slice() else {
-            return Err(format!("refill takes one file.\n{USAGE}"));
-        };
-        let workers = match words.value("--workers") {
-            Some(n) => n.parse().ok().filter(|n| *n > 0).ok_or("--workers is how many files are read at once, a whole number from 1")?,
-            None => std::thread::available_parallelism().map_or(4, |n| n.get()),
-        };
-        refill(Path::new(file), words.value("--study").map(Path::new), workers)
-    });
-    said(refilled, "refill")
+/// `rvr refill` with its options: the exit status.
+pub fn refill_main(options: &Options) -> u8 {
+    let workers = match crate::options::workers(options) {
+        Ok(workers) => workers,
+        Err(why) => return crate::wrong("refill", &why),
+    };
+    said(refill(Path::new(&options.words[0]), options.value("--study").map(Path::new), workers), "refill")
 }
 
-/// Print what stops a command, with its usage when it was not asked rightly: the exit status.
+/// Print what stops a command: the exit status.
 fn said(result: Result<(), String>, command: &str) -> u8 {
     match result {
         Ok(()) => 0,
         Err(why) => {
             eprintln!("rvr {command}: {why}");
-            if why.ends_with(USAGE) { 2 } else { 1 }
+            1
         }
     }
 }
@@ -116,11 +98,16 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result
     if Reader::open(file).ok().as_ref().map(Reader::header) != Some(reader.header()) {
         return Err(format!("{shown} changed while rvr asked: run rvr empty again."));
     }
+    let signed = reader.header().get("signature").is_some();
     drop(reader);
     let freed = rowver::write::empty(file).map_err(|e| format!("{shown}: {e}"))?;
     drop(held);
     let kept = std::fs::metadata(file).map_or(0, |m| m.len());
-    println!("Emptied {shown}: {} given back; its header ({}) keeps its study, every checksum and its signature. rvr refill {shown} presses its columns again.", amount(freed), amount(kept));
+    let signature = match signed {
+        true => ", every checksum and its signature",
+        false => " and every checksum (it is not signed)",
+    };
+    println!("Emptied {shown}: {} given back; its header ({}) keeps its study{signature}. rvr refill {shown} presses its columns again.", amount(freed), amount(kept));
     Ok(())
 }
 
@@ -158,9 +145,10 @@ fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), Strin
         return Err(format!("{} is in the way: remove it, and refill again.", there.display()));
     }
     println!("Pressing the study {shown} carries again, into {}:", staged.display());
-    let files = shell.header()["made"]["files"].clone();
-    let asked = |sample: &Locked| Events::read(&files[&sample.name]["events"]).map_err(|e| format!("{}: {e}", sample.name));
-    let pressed = press::press(&texts, &base, &name, &staged, &asked, workers, press::On::Once);
+    let place = Place { base, study: name, target: staged.clone() };
+    // The copy pressed beside it is not signed: only its arrays are kept.
+    let asked = Asked { choose: Choose::Recorded(shell.header()["made"]["files"].clone()), on: On::Once, workers, sign: false };
+    let pressed = crate::plan::build(place, texts, asked).and_then(crate::core::press);
     let settled = pressed.and_then(|holes| settle(file, &shell, &staged, &out, holes));
     let _ = std::fs::remove_file(&staged);
     let _ = std::fs::remove_file(&out);
@@ -171,14 +159,17 @@ fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), Strin
 fn settle(file: &Path, shell: &Reader, staged: &Path, out: &Path, holes: usize) -> Result<(), String> {
     let shown = file.display();
     if holes > 0 {
-        return Err(format!("pressed again, it has {} its press did not have: an input could not be read (rvr status lists why).", some(holes, "hole", "holes")));
+        return Err(format!("pressed again, it has {} its press did not have: an input could not be read, as the holes listed above say.", some(holes, "hole", "holes")));
     }
     let pressed = Reader::open(staged).map_err(|e| e.to_string())?;
     let (was, now) = (&shell.header()["data"], &pressed.header()["data"]);
     let said = if was == now {
         rowver::write::refilled(file, staged, out).map_err(|e| e.to_string())?;
-        let signer = shell.header().get("signature").map(|s| crate::key::signer(s["key"].as_str().unwrap_or_default()));
-        format!("every column is back, byte for byte as it was; {}", signer.unwrap_or_else(|| "not signed".into()))
+        let signer = shell.header().get("signature").map(|s| crate::key::whose(s["key"].as_str().unwrap_or_default()));
+        match signer {
+            Some(whose) => format!("every column is back, byte for byte as it was, and its signature, by {whose}, is as it was"),
+            None => "every column is back, byte for byte as it was; it is not signed".into(),
+        }
     } else if placeless(was) == placeless(now) {
         // The same values compressed otherwise, as by another rvr's zstd: placed anew, signed again.
         let mut header = shell.header().clone();
@@ -188,10 +179,8 @@ fn settle(file: &Path, shell: &Reader, staged: &Path, out: &Path, holes: usize) 
         }
         let signer = crate::key::secret()?;
         crate::derive::rewritten(staged, out, &mut header, signer.as_ref())?;
-        let signed = match &signer {
-            Some(secret) => format!("signed again with your key {}", crate::key::short(&rowver::sign::public_key(secret))),
-            None => "no longer signed (you have no key: rvr key new makes one)".into(),
-        };
+        let was = shell.header().get("signature").map(|s| s["key"].as_str().unwrap_or_default().to_owned());
+        let signed = crate::key::resigned(signer.as_ref(), was.as_deref());
         format!("every column's values are as its checksums say; this rvr compresses them otherwise, so its header is written again with their new places, {signed}")
     } else {
         return Err(format!("pressed again, {} not what it records: its inputs, or the rvr that reads them, have changed since it was pressed. rvr reproduce {shown} presses its study into a file of its own and compares the two.", differing(was, now).join(", ")));

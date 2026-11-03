@@ -2,12 +2,15 @@
 //! to see what it gives before pressing. It reads the recipe for the names it defines, and with
 //! `--kept` shows only the events the recipe's cuts keep.
 
-use crate::press::{self, count, fields, hint, kept, Branches};
-use crate::Words;
+use crate::gather::kept;
+use crate::open::{entries as located, first_readable, hint, sample_at, Branches};
+use crate::options::Options;
+use crate::plan::Choose;
+use rowver::rvr::derived::fields;
 use rvr_recipe::{per_event, Array, Columns, Constant, Kind, Scope, Store, Values};
 use std::path::Path;
 
-const USAGE: &str = "usage:
+pub(crate) const USAGE: &str = "usage:
   rvr try \"EXPRESSION\" [DIR] [--events N] [--sample NAME] [--kept]
       what EXPRESSION gives on the first N events (10) of the first sample (or NAME) of the
       study in DIR (.); --kept shows only the events the recipe's [keep] cuts keep";
@@ -15,14 +18,14 @@ const USAGE: &str = "usage:
 /// How many entries are read at a time while looking for kept events.
 const RUN: u64 = 10_000;
 
-/// `rvr try …` with the words after `try`: the exit status (2 for a wrong use of it).
-pub fn main(args: &[&str]) -> u8 {
-    match run(args) {
+/// `rvr try` with its options: the exit status.
+pub fn main(options: &Options) -> u8 {
+    let wanted = match options.value("--events").map(|n| crate::options::count("--events", n, u64::MAX)).transpose() {
+        Ok(wanted) => usize::try_from(wanted.unwrap_or(10)).unwrap_or(usize::MAX),
+        Err(why) => return crate::wrong("try", &why),
+    };
+    match run(options, wanted) {
         Ok(()) => 0,
-        Err(error) if error.ends_with(USAGE) => {
-            eprintln!("rvr try: {error}");
-            2
-        }
         Err(error) => {
             eprintln!("rvr try: {error}");
             1
@@ -30,31 +33,26 @@ pub fn main(args: &[&str]) -> u8 {
     }
 }
 
-fn run(args: &[&str]) -> Result<(), String> {
-    let words = Words::read(args, &["--events", "--sample"], &["--kept"], USAGE)?;
-    let (text, dir) = match words.plain[..] {
+fn run(options: &Options, wanted: usize) -> Result<(), String> {
+    let words = options.plain();
+    let (text, dir) = match words[..] {
         [text] => (text, "."),
-        [text, dir] => (text, dir),
-        _ => return Err(format!("try takes one expression and at most one study folder.\n{USAGE}")),
+        [text, dir, ..] => (text, dir),
+        [] => return Err("try takes the expression to try".into()),
     };
-    let wanted: usize = match words.value("--events") {
-        None => 10,
-        Some(n) => n.replace('_', "").parse().ok().filter(|n| *n > 0).ok_or_else(|| {
-            format!("--events takes a number of events above 0, not {n}")
-        })?,
-    };
-    let only_kept = words.has("--kept");
+    let only_kept = options.has("--kept");
     let dir = Path::new(dir);
-    let (mut texts, mut lock) = press::texts(dir)?;
-    press::agreed(&texts, &lock)?;
-    let index = press::sample_at(&lock, words.value("--sample"))?;
+    let mut texts = crate::texts::read(dir)?;
     if crate::tables::offer(dir, &texts.recipe, "try", "go on with the try")? {
-        (texts, lock) = press::texts(dir)?;
+        texts = crate::texts::read(dir)?;
     }
-    let recipe = press::study_recipe(&texts.recipe)?;
+    // Read as a press reads it: its validators, then the agreement check.
+    let checked = crate::plan::checked(&texts, &Choose::Options(Default::default()))?;
+    let (recipe, lock) = (checked.recipe, checked.lock);
+    let index = sample_at(&lock, options.value("--sample"))?;
     let expression = recipe.expression(text).map_err(|e| format!("the expression: {}", e.0.replace('\n', "\nthe expression: ")))?;
     let sample = &lock.samples[index];
-    let (root, file) = press::first_readable(&lock, index, dir)?;
+    let (root, file) = first_readable(&lock, index, dir)?;
     let at = &file.at;
     let tree = root.tree_at(&sample.tree).map_err(|e| format!("{at}: its tree {:?}: {e}", sample.tree))?;
     let names: Vec<String> = tree.walk().into_iter().map(|(_, b)| b.name.clone()).collect();
@@ -78,7 +76,7 @@ fn run(args: &[&str]) -> Result<(), String> {
             false => (first + (wanted - shown) as u64).min(total),
         };
         let entries = (last - first) as usize;
-        let within = |(error, part): (rvr_recipe::Error, std::ops::Range<usize>)| format!("{shown_name}, {}: {}{}", press::entries(&error, first, &part), error.0, hint(&error.0, &names, &recipe));
+        let within = |(error, part): (rvr_recipe::Error, std::ops::Range<usize>)| format!("{shown_name}, {}: {}{}", located(&error, first, &part), error.0, hint(&error, &names, &recipe));
         // In fewer entries at a time where their pairs would be too many together.
         let branches = Branches::over(&root, &tree, first as i64, last as i64);
         let mut work = |run: &dyn Columns, from: usize, to: usize| {
@@ -108,7 +106,7 @@ fn run(args: &[&str]) -> Result<(), String> {
     }
     if shown < wanted {
         let why = if only_kept { " the cuts keep" } else { "" };
-        println!("The file has no more events{why}: {shown} shown of its {} entries.", count(total));
+        println!("The file has no more events{why}: {shown} shown of its {}.", crate::samples::some(total as usize, "entry", "entries"));
     }
     Ok(())
 }

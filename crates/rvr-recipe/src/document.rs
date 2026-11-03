@@ -165,7 +165,8 @@ fn gather(expression: &Expression, found: &mut BTreeSet<String>, text: bool, bra
 }
 
 /// The sample fields an expression reads, `sample.KEY`, by key.
-fn fields_of(expression: &Expression, found: &mut BTreeSet<String>) {
+/// Add the sample fields an expression reads (`sample.KEY`).
+pub fn fields_of(expression: &Expression, found: &mut BTreeSet<String>) {
     use Expression::*;
     match expression {
         Sample(field) => {

@@ -1,7 +1,7 @@
 //! `rvr key`: the ed25519 key that signs every file you press, and the keys you trust.
 //!
-//! The key lives in `~/.config/rvr/key` (the folder is `$RVR_CONFIG` when set, else
-//! `$XDG_CONFIG_HOME/rvr`), one line of 64 hexadecimal characters; `trusted` beside it holds one
+//! The key lives in `~/.config/rvr/key` (the folder is `$RVR_CONFIG` when set and not empty, else
+//! `$XDG_CONFIG_HOME/rvr` when that is), one line of 64 hexadecimal characters; `trusted` beside it holds one
 //! line per trusted public key: the key, a space, and whose it is.
 
 use std::path::PathBuf;
@@ -11,12 +11,13 @@ pub const USAGE: &str = "usage:
   rvr key show                             your public key, to give to whoever reads your files
   rvr key trust KEY NAME                   trust files signed by KEY, as NAME's";
 
-/// The folder rvr keeps its key and trusted keys in.
+/// The folder rvr keeps its key and trusted keys in; a variable set but empty counts as not set.
 fn folder() -> Result<PathBuf, String> {
-    if let Some(dir) = std::env::var_os("RVR_CONFIG") {
+    let set = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    if let Some(dir) = set("RVR_CONFIG") {
         return Ok(PathBuf::from(dir));
     }
-    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+    if let Some(dir) = set("XDG_CONFIG_HOME") {
         return Ok(PathBuf::from(dir).join("rvr"));
     }
     let home =
@@ -79,6 +80,28 @@ pub fn signer(key: &str) -> String {
             "signed by key {}, which you do not trust yet (rvr key trust {key} NAME)",
             short(key)
         ),
+    }
+}
+
+/// Whose a signature is, in words: your own key, a trusted key's owner, or a key you do not trust.
+pub fn whose(key: &str) -> String {
+    if secret().ok().flatten().is_some_and(|own| rowver::sign::public_key(&own) == key) {
+        return format!("your own key {}", short(key));
+    }
+    match trusted().unwrap_or_default().into_iter().find(|(k, _)| k == key) {
+        Some((_, name)) => format!("{name} (trusted)"),
+        None => format!("key {}, which you do not trust", short(key)),
+    }
+}
+
+/// What signing a file again with `signer` (your key, when you have one) does to its signature by
+/// `was`, in words.
+pub fn resigned(signer: Option<&[u8; 32]>, was: Option<&str>) -> String {
+    match (signer, was) {
+        (Some(secret), Some(was)) => format!("signed with your key {}, which replaces the signature of {}", short(&rowver::sign::public_key(secret)), whose(was)),
+        (Some(secret), None) => format!("signed with your key {}; it was not signed before", short(&rowver::sign::public_key(secret))),
+        (None, Some(was)) => format!("no longer signed: it was signed by {}, and you have no key to sign it again (rvr key new makes one)", whose(was)),
+        (None, None) => "not signed, as it was not before".into(),
     }
 }
 
@@ -154,22 +177,18 @@ fn trust(key: &str, name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `rvr key …` with the words after `key`: the exit status.
-pub fn main(words: &[&str]) -> u8 {
-    let result = match words {
-        ["new"] => new(None),
-        ["new", name] => new(Some(name)),
-        ["show"] => show(),
-        ["trust", key, name @ ..] if !name.is_empty() => trust(key, &name.join(" ")),
-        _ => {
-            eprintln!("{USAGE}");
-            return 2;
-        }
+/// `rvr key new|show|trust` (`name`) with its words: the exit status.
+pub fn main(name: &str, words: &[&str]) -> u8 {
+    let result = match (name, words) {
+        ("key new", owner) => new(owner.first().copied()),
+        ("key show", _) => show(),
+        (_, [key, owner @ ..]) if !owner.is_empty() => trust(key, &owner.join(" ")),
+        _ => Err("rvr key trust takes a key and its owner's name".into()),
     };
     match result {
         Ok(()) => 0,
         Err(why) => {
-            eprintln!("rvr key: {why}");
+            eprintln!("rvr {name}: {why}");
             1
         }
     }

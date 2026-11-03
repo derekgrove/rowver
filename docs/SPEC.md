@@ -105,6 +105,7 @@ checked. It reads the entries the Plan names, evaluates the cuts and columns, an
 | a file cannot be read: gone, changed since the lock, damaged, its storage unreachable or refusing it | makes a hole of what could not be read and goes on (§7) |
 | a failure that is not one file's: the network gone, a proxy or certificate refused, a disk not mounted or full, a permission refused, the process stopped | stops, keeps what it read, and the next press carries on (§7) |
 | a value in the data the recipe cannot take (the recipe reference's list): a conversion out of the target kind's range, a mask or two lists taken member by member whose lengths differ in one event, an event past the pair limit, a whole number to a negative power, a total that is not finite | stops, naming the file, entry, column and value, and keeps what it read |
+| a file that lacks the tree a `[totals]` total over another tree names, or a branch that total reads in it, or has one there of a type rvr cannot read | stops, naming the file, the tree and the branch, and keeps what it read; a failure reading that tree's bytes is a hole, as for the event tree |
 
 Floats may be NaN or infinite anywhere; no value of a float ever stops the core.
 
@@ -320,9 +321,10 @@ that the recipe then reads as before with those tables added, and go on. They do
 the next chosen entry lies 2,000 entries or more past the run's end in a local file, or 50,000 in a
 remote one, and reads no run without a chosen entry.
 
-**4.2.2** On each run it evaluates the cuts, the stored columns and the totals over every entry of
-the run. An event is *chosen* when the event choice chose it, and *kept* when it is chosen and
-passes every cut.
+**4.2.2** An event is *chosen* when the event choice chose it, and *kept* when it is chosen and
+passes every cut. On each run the core evaluates the cuts and the totals over the run's chosen
+entries only, and the stored columns over its kept events only; a press that builds on columns
+(§8.2) evaluates the columns it reads over the events the file kept only.
 
 **4.2.3** A data error (§2.6) stops the core only when it lies in a chosen event, and for a stored
 column only in a kept event.
@@ -374,8 +376,10 @@ it wrote and records its kind, checksums and facts (FORMAT.md §10).
 the sample's metadata with its totals and `file` (the path of the row's file in the lock), without
 `events_read`, `events_total` and `events_missing`.
 
-**4.6.3** The core works each derived column out on the first run of each sample that keeps an event,
-so that a data error in one stops the press there, not after every file is read.
+**4.6.3** In every press that reads events with its stored columns in hand, the core works each
+derived column out on the first run of each sample that keeps an event, so that a data error in one
+stops the press there, not after every file is read. A press that builds on columns (§8.2), whose
+copied columns are not read, works them out once at the end (§4.6.4).
 
 **4.6.4** A derived column that fails when worked out over the whole file leaves the file written
 without its derived columns; the press says so and exits 1. Mending `[derived]` and pressing again
@@ -386,17 +390,31 @@ reads no input (§8).
 ### 5.1 Every command
 
 **5.1.1** A command line is `rvr COMMAND`, then words and flags in any order. The command is the
-first argument that names a command.
+first argument that is not a flag, the flags before it passed over with their values
+(`rvr --holes status` is `rvr status --holes`); a word there that names no command is wrong use,
+said with the nearest command (`rvr prss` gives `Did you mean: press?`). For `rvr samples` and
+`rvr key`, what it does is the next argument that is not a flag, and one of `expand`, `resolve`,
+`check`, `plan`, or `new`, `show`, `trust`, else wrong use; for `rvr proxy`, it is `init` or
+nothing.
 
-**5.1.2** A flag is `--NAME`, with its value, when it takes one, as the next argument; `--NAME=VALUE`
-is not read. `-f`, for `rvr empty --force`, is the only short flag.
+**5.1.2** A flag is `--NAME`, with its value, when it takes one, as the next argument (an argument
+that begins with `--` is not a value); `--NAME=VALUE` is not read. `-f`, for `rvr empty --force`, is
+the only short flag. `--fill [KINDS]` takes the next argument as its KINDS exactly when every
+comma-separated part of it is a kind of hole (§7.3.1), whatever folders there are; otherwise that
+argument is a word (the study folder). An argument after `--fill` that is not kinds, but holds a
+comma or has a part a slip of a letter or two from a kind, and is no folder there, is wrong use,
+whatever follows it: the refusal says the kinds and the nearest (`did you mean --fill damaged?`).
 
-**5.1.3** A flag the command does not take, a flag given twice (but `--drop`, §8), a flag without its
-value, or a word too many is wrong use: the command does nothing, prints its usage with the nearest
-flag, and exits 2.
+**5.1.3** A flag the command does not take (said with the nearest flag it does take), a flag given
+twice (but `--drop`, §8), a flag without its value, a value not of its flag's form (§5.1.4), or a
+word too many or too few is wrong use: the command does nothing, prints `rvr COMMAND: what is wrong`
+and its usage on standard error, and exits 2.
 
-**5.1.4** A count given as a flag's value is a whole number from 1, with `_` allowed between digits
-(`50_000`).
+**5.1.4** A count given as a flag's value (`--events N`, `--workers N`, `--hours H`, `rvr try
+--events N`) is a whole number from 1, written in digits, with `_` allowed between two digits
+(`50_000`); `--events` is at most 2^63 − 1 and `--hours` at most 720. `--seed S` is a whole number
+from 0 to 2^64 − 1, written alike. `--workers` is the number of cores when not given, and 1 when the
+system says none.
 
 **5.1.5** What a command reports goes to standard output. The line that ends a failing command goes
 to standard error, as `rvr COMMAND: what is wrong, and how to fix it`.
@@ -719,7 +737,8 @@ exits 3. An empty file (§8.7) is never current.
 and lock texts, with the same cuts, totals and event choices, and its carried recipe reads, only the
 columns new to the recipe, or whose definition changed (their expression, their stored kind, or a
 defined name they use, however deep), are read, for the events the file kept, from the runs that
-hold one of them. Every other column is copied from the file, checked against its record as it is.
+hold one of them; a file of which the earlier file kept no event is not opened, as no input that
+gives nothing is (§8.3). Every other column is copied from the file, checked against its record as it is.
 A column dropped from the recipe is dropped from the file. While building on columns, a file that
 cannot be read stops the press, as a hole would change the rows the columns are built on;
 `rvr press --full` presses everything and makes holes.

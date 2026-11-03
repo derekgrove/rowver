@@ -10,10 +10,12 @@ const GITIGNORE: &str = include_str!("../templates/gitignore");
 /// that is already there is overwritten.
 pub fn main(dir: &str) -> Result<(), String> {
     let folder = Path::new(dir);
-    let study = folder
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "study".into());
+    // Named as a press names the file: after the folder's own name, `.`'s the current folder's.
+    let named = folder.canonicalize().ok().or_else(|| std::env::current_dir().ok().map(|here| here.join(folder)));
+    let study = named.as_deref().and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if !rowver::rvr::study_name(&study) {
+        return Err(format!("{dir}: the folder's name {study:?} is not one a study can have (nonempty, not . or .., with no /, \\ or control character): name another folder"));
+    }
     let files = [
         ("samples.toml", SAMPLES.to_string()),
         ("recipe.toml", RECIPE.replace("{study}", &study)),

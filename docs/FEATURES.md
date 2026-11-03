@@ -499,8 +499,9 @@ file instead. Drawing costs under 1% (0.397 s against 0.394 s on the 30-file ben
 
 ## 8. Inspection and comparison
 
-Every command exits 0 on success, 1 on failure or difference, and 2 for an unknown command. A
-press that leaves holes exits 3.
+Every command exits 0 on success, 1 on failure or difference, and 2 for wrong use (an unknown
+command or flag, a flag given twice or without its value, a word too many). A press that leaves
+holes exits 3, and a command whose output pipe closed early exits 141.
 
 | command | question it answers |
 |---|---|

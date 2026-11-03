@@ -10,6 +10,7 @@
 //! The file written is the one a full press of the recipe writes.
 
 use crate::fill::{unplanned, Fill, Plan};
+use crate::plan::Base;
 use rowver::choice::Events;
 use rowver::study::lock::Lock;
 use rowver::rvr::Reader;
@@ -17,14 +18,6 @@ use rvr_recipe::{uses, Cut, Expression, Recipe};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
-
-/// What an earlier file gives a press.
-pub enum Base {
-    /// Its rows, and the columns it holds as the recipe defines them.
-    Columns(Earlier),
-    /// When the lock's samples changed: the rows of those it holds as they were.
-    Samples(Fill),
-}
 
 /// What an earlier press gives a new one.
 pub struct Earlier {
@@ -114,23 +107,39 @@ impl Earlier {
 }
 
 /// Whether a file's header is a press of this study's samples by this build of rvr, or why not.
-pub fn pressed_alike(header: &Value, texts: &crate::press::Texts, lock: &Lock) -> Result<(), String> {
-    let made = &header["made"];
-    if made["samples"]["text"].as_str() != Some(texts.samples.as_str()) {
+pub fn pressed_alike(header: &Value, texts: &crate::texts::Texts, lock: &Lock) -> Result<(), String> {
+    if header["made"]["samples"]["text"].as_str() != Some(texts.samples.as_str()) {
         return Err("samples.toml has changed since".into());
     }
+    same_samples(header, lock)?;
+    same_build(&header["made"])
+}
+
+/// Whether a file holds the lock's samples, by name and in order.
+fn same_samples(header: &Value, lock: &Lock) -> Result<(), String> {
     let samples = header["data"]["samples"].as_array().ok_or("it has no samples")?;
     let names: Vec<&str> = samples.iter().filter_map(|s| s["name"].as_str()).collect();
-    if names != lock.samples.iter().map(|s| s.name.as_str()).collect::<Vec<_>>() {
-        return Err("its samples are not the lock's".into());
+    match names == lock.samples.iter().map(|s| s.name.as_str()).collect::<Vec<_>>() {
+        true => Ok(()),
+        false => Err("its samples are not the lock's".into()),
     }
-    same_build(made)
+}
+
+/// Whether this build of rvr names one build: a commit that is known, and when its code had
+/// changes, with a record of them (docs/SPEC.md §12.3); or why not.
+pub fn identified() -> Result<(), String> {
+    match env!("RVR_COMMIT") {
+        "unknown" => Err("this rvr was built from no known commit (its commit is unknown), so what it made cannot be told from another build's: build it from a git checkout, or install a released rvr".into()),
+        commit if commit.ends_with("-dirty") => Err(format!("this rvr was built from changed code that left no record of the changes (its commit is {commit}): build it from a clean checkout, or install a released rvr")),
+        _ => Ok(()),
+    }
 }
 
 /// Whether this build of rvr made a file (its `made`), or why not.
 // Columns computed by another build (another version, commit or compiler) are not copied: the
 // new file names this build.
 pub fn same_build(made: &Value) -> Result<(), String> {
+    identified()?;
     if made["toolchain"] != crate::press::toolchain() {
         return Err(format!(
             "it was made by another build of rvr ({} at {})",
@@ -138,17 +147,13 @@ pub fn same_build(made: &Value) -> Result<(), String> {
             made["toolchain"]["commit"].as_str().unwrap_or("?")
         ));
     }
-    // A build of changed code whose changes could not be hashed names no one build.
-    if made["toolchain"]["commit"].as_str().is_none_or(|commit| commit.ends_with("-dirty")) {
-        return Err("it was made by an rvr built from changed code that left no record of the changes".into());
-    }
     Ok(())
 }
 
 /// What the file at `path` gives this press: nothing when there is none, or why it cannot.
 pub fn earlier(
     path: &Path,
-    texts: &crate::press::Texts,
+    texts: &crate::texts::Texts,
     recipe: &Recipe,
     lock: &Lock,
     asked: &[Events],
@@ -159,7 +164,7 @@ pub fn earlier(
 
 fn read(
     path: &Path,
-    texts: &crate::press::Texts,
+    texts: &crate::texts::Texts,
     recipe: &Recipe,
     lock: &Lock,
     asked: &[Events],
@@ -190,7 +195,7 @@ fn read(
     if text("samples") != Some(texts.samples.as_str()) || text("lock") != Some(texts.lock.as_str()) {
         return samples(file, recipe, &reused, lock, asked).map(Base::Samples);
     }
-    pressed_alike(header, texts, lock)?;
+    same_samples(header, lock)?;
     let files = made["files"].as_object().ok_or("it records no files")?;
     for (sample, want) in lock.samples.iter().zip(asked) {
         if files.get(&sample.name).map(|s| &s["events"]) != Some(&want.record()) {
@@ -200,33 +205,9 @@ fn read(
             ));
         }
     }
-
-    let failed = |e: rowver::Error| format!("it could not be read ({e})");
-    let entries = file.entry().map_err(failed)?;
-    let mut kept = HashMap::new();
-    let mut at = 0;
-    for read in header["data"]["files"]
-        .as_array()
-        .ok_or("it lists no files")?
-    {
-        let n = read["rows"].as_u64().unwrap_or(0) as usize;
-        let span = entries
-            .get(at..at + n)
-            .ok_or("its files hold more rows than it has")?;
-        let key = (read["sample"].as_str(), read["path"].as_str());
-        let (Some(sample), Some(path)) = key else {
-            return Err("it lists a file without its sample or path".into());
-        };
-        let entries = span.iter().map(|&e| e as u64).collect();
-        if kept
-            .insert((sample.to_owned(), path.to_owned()), entries)
-            .is_some()
-        {
-            return Err(format!("it read {path} twice for {sample}"));
-        }
-        at += n;
-    }
-    Ok(Base::Columns(Earlier { file, reused, kept }))
+    let rows = crate::fill::rows(file, &[], &HashSet::new()).map_err(|e| format!("it could not be read ({e})"))?;
+    let kept = rows.files.iter().map(|(key, plan)| (key.clone(), rows.entries[plan.rows.clone()].iter().map(|&e| e as u64).collect())).collect();
+    Ok(Base::Columns(Earlier { file: rows.file, reused, kept }))
 }
 
 /// When the lock's samples changed since the file was pressed, its rows of the samples the lock

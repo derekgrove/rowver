@@ -9,11 +9,11 @@
 //! A press of samples added since builds on a file the same way (`crate::reuse`): their files are
 //! read whole, and every other sample's rows are the file's own.
 
-use crate::press::{chosen_in, ranges, Input, Output, Taken};
+use crate::plan::Input;
+use crate::take::{missed, ranges, Taken};
 use rowver::study::lock::Lock;
 use rowver::write;
 use rowver::NumericBuffer;
-use rvr_recipe::Kind;
 use rowver::choice::Events;
 use rowver::rvr::{Reader, HOLE_KINDS};
 use serde_json::Value;
@@ -48,25 +48,19 @@ pub struct Fill {
     pub added: Option<Vec<String>>,
 }
 
-/// The kinds `--fill` was given (`refused,unreachable`), or every kind.
-pub fn kinds(given: Option<&str>) -> Result<Vec<String>, String> {
-    let Some(given) = given else {
-        return Ok(HOLE_KINDS.iter().map(|k| k.to_string()).collect());
-    };
-    given
-        .split(',')
-        .map(|kind| match HOLE_KINDS.contains(&kind.trim()) {
-            true => Ok(kind.trim().to_string()),
-            false => Err(format!("--fill takes kinds of hole from {}, not {kind:?}", HOLE_KINDS.join(", "))),
-        })
-        .collect()
+/// The kinds `--fill` was given (`refused,unreachable`, every part a kind), or every kind.
+pub fn kinds(given: Option<&str>) -> Vec<String> {
+    match given {
+        Some(given) => given.split(',').map(str::to_owned).collect(),
+        None => HOLE_KINDS.iter().map(|k| k.to_string()).collect(),
+    }
 }
 
 /// Whether `--fill` would fill a file with this header (the files it read none of), or why not.
 pub fn fits(
     header: &Value,
     shown: &str,
-    texts: &crate::press::Texts,
+    texts: &crate::texts::Texts,
     lock: &Lock,
     asked: &[Events],
     kinds: &[String],
@@ -154,7 +148,7 @@ pub(crate) fn unplanned(file: &rowver::study::lock::File) -> rowver::study::lock
 /// What filling the file at `path` reads, or why it cannot (see `fits`).
 pub fn plan(
     path: &Path,
-    texts: &crate::press::Texts,
+    texts: &crate::texts::Texts,
     lock: &Lock,
     asked: &[Events],
     kinds: &[String],
@@ -186,7 +180,7 @@ pub(crate) fn rows(file: Reader, kinds: &[String], unread: &HashSet<(String, Str
         let record = made["files"][sample]["files"][path].clone();
         let holes = record["holes"].as_array().into_iter().flatten();
         let (asked, kept): (Vec<&Value>, Vec<&Value>) = holes.partition(|hole| kinds.iter().any(|k| hole["kind"] == k.as_str()));
-        let read = asked.iter().map(|hole| crate::press::range(hole)).collect();
+        let read = asked.iter().map(|hole| crate::take::range(hole)).collect();
         let kept = kept.into_iter().cloned().collect();
         let rows = at..at + n;
         if rows.end > entries.len() {
@@ -201,10 +195,10 @@ pub(crate) fn rows(file: Reader, kinds: &[String], unread: &HashSet<(String, Str
 }
 
 /// How a fill writes one input: the old file's rows it keeps, in stretches between the holes it
-/// reads, each with its place among the spool's pieces and its entries; and which of the inputs
-/// read is this one, when it has holes to read.
-pub(crate) struct Laid<'p> {
-    old: Vec<(usize, std::ops::Range<usize>, &'p [i64])>,
+/// reads, each with its place among the spool's pieces; and which of the inputs read is this one,
+/// when it has holes to read.
+pub struct Laid {
+    old: Vec<(usize, Range<usize>)>,
     read: Option<usize>,
 }
 
@@ -224,12 +218,7 @@ pub(crate) fn same_kinds(filling: &Fill, lock: &Lock, reads: &[Input], read: &[T
 
 /// What a fill reads and keeps: for every input, how it is laid; and the files to read, each
 /// with the holes it reads of them.
-pub(crate) fn laid<'a, 'p>(
-    work: &[Input<'a>],
-    lock: &Lock,
-    plans: &'p HashMap<(String, String), crate::fill::Plan>,
-    entries: &'p [i64],
-) -> Result<(Vec<Input<'a>>, Vec<Laid<'p>>), String> {
+pub(crate) fn laid(work: &[Input], lock: &Lock, plans: &HashMap<(String, String), Plan>, entries: &[i64]) -> Result<(Vec<Input>, Vec<Laid>), String> {
     let (mut reads, mut all, mut order) = (Vec::new(), Vec::new(), 0);
     for input in work {
         let key = (lock.samples[input.sample].name.clone(), input.file.at.clone());
@@ -238,8 +227,8 @@ pub(crate) fn laid<'a, 'p>(
         })?;
         let (mut old, mut ranges, mut row) = (Vec::new(), Vec::new(), plan.rows.start);
         let here = &entries[plan.rows.clone()];
-        let mut keep = |rows: std::ops::Range<usize>, order: &mut usize| {
-            old.push((*order, rows.clone(), &entries[rows]));
+        let mut keep = |rows: Range<usize>, order: &mut usize| {
+            old.push((*order, rows));
             *order += 1;
         };
         for &(first, last) in &plan.read {
@@ -265,30 +254,21 @@ pub(crate) fn laid<'a, 'p>(
     Ok((reads, all))
 }
 
-/// Put the old file's rows of every stretch a fill keeps in the spool, in its place: each
-/// column, then the entries; each column's kind and whether it is a list. One column of the old
-/// file is held at a time, its stretches spooled by `workers` threads.
-pub(crate) fn spool_old(
-    spool: &write::Spool,
-    file: &rowver::rvr::Reader,
-    outputs: &[Output],
-    laid: &[Laid],
-    workers: usize,
-) -> Result<Vec<(Kind, bool)>, String> {
+/// Put the old file's rows of every stretch a fill keeps in the spool, in its place: each of the
+/// `columns` read, then the entries. One column of the old file is held at a time, its stretches
+/// spooled by `workers` threads.
+pub(crate) fn spool_old(spool: &write::Spool, fill: &Fill, columns: &[&str], laid: &[Laid], workers: usize) -> Result<(), String> {
+    let file = &fill.file;
     let shown = file.path().display();
     let failed = |e: rowver::Error| format!("{shown} could not be read ({e})");
-    let old: Vec<&(usize, std::ops::Range<usize>, &[i64])> =
-        laid.iter().flat_map(|l| &l.old).filter(|(_, rows, _)| !rows.is_empty()).collect();
-    rowver::parallel::map(&old, workers, |(order, _, entries)| {
-        spool.add(outputs.len(), (*order, 0), write::Values::Flat(write::array(entries))).map_err(failed)
+    let old: Vec<&(usize, Range<usize>)> = laid.iter().flat_map(|l| &l.old).filter(|(_, rows)| !rows.is_empty()).collect();
+    rowver::parallel::map(&old, workers, |(order, rows)| {
+        spool.add(columns.len(), (*order, 0), write::Values::Flat(write::array(&fill.entries[rows.clone()]))).map_err(failed)
     })?;
-    let mut kinds = Vec::new();
-    for (index, (name, _)) in outputs.iter().enumerate() {
+    for (index, name) in columns.iter().enumerate() {
         let held = file.column(name).map_err(failed)?.ok_or_else(|| format!("{shown} has no column {name}"))?;
-        let kind = Kind::named(&held.kind).map_err(|_| format!("{shown} holds {name} as {}, a kind rvr does not press", held.kind))?;
-        let w = kind.width();
-        kinds.push((kind, held.offsets.is_some()));
-        rowver::parallel::map(&old, workers, |(order, rows, _)| {
+        let w = rvr_recipe::Kind::named(&held.kind).map_err(|_| format!("{shown} holds {name} as {}, a kind rvr does not press", held.kind))?.width();
+        rowver::parallel::map(&old, workers, |(order, rows)| {
             let (from, to, counts) = match &held.offsets {
                 Some(offsets) => {
                     let counts = (rows.start..rows.end).map(|r| offsets[r + 1] - offsets[r]).collect();
@@ -304,7 +284,7 @@ pub(crate) fn spool_old(
             spool.add(index, (*order, 0), values).map_err(failed)
         })?;
     }
-    Ok(kinds)
+    Ok(())
 }
 
 /// Each input's whole after a fill: the old file's rows and record, with what its holes read
@@ -315,7 +295,6 @@ pub(crate) fn merged(
     filling: &Fill,
     laid: &[Laid],
     read: Vec<Taken>,
-    kinds: &[(Kind, bool)],
     recipe: &rvr_recipe::Recipe,
 ) -> Result<Vec<Taken>, String> {
     let mut out = Vec::new();
@@ -328,12 +307,9 @@ pub(crate) fn merged(
             _ => plan.record.clone(),
         };
         let mut holes: Vec<Value> = plan.kept.clone();
-        let old: usize = laid.old.iter().map(|(_, rows, _)| rows.len()).sum();
+        let old: usize = laid.old.iter().map(|(_, rows)| rows.len()).sum();
         let (mut rows, mut entries, mut cutflow) = (old, 0, Vec::new());
         if let Some(taken) = taken {
-            if !taken.kinds.is_empty() && taken.kinds != kinds {
-                return Err(format!("{}: a column is not the same kind as in {}: press with --full", input.file.at, filling.file.path().display()));
-            }
             (rows, entries, cutflow) = (old + taken.rows, taken.entries, taken.cutflow.clone());
             holes.extend(taken.record["holes"].as_array().into_iter().flatten().cloned());
             // The rows kept and the rows read must be of one ROOT file.
@@ -372,8 +348,8 @@ pub(crate) fn merged(
             true => object.shift_remove("holes"),
             false => object.insert("holes".into(), holes.into()),
         };
-        let missing = ranges(&record).iter().map(|(first, last)| chosen_in(input, *first, *last)).sum();
-        out.push(Taken { kinds: kinds.to_vec(), rows, record, entries, missing, cutflow });
+        let missing = missed(input, &ranges(&record));
+        out.push(Taken { rows, record, entries, missing, cutflow });
     }
     Ok(out)
 }
@@ -381,7 +357,7 @@ pub(crate) fn merged(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::press::Input;
+    use crate::plan::Input;
     use rowver::study::lock::File;
 
     #[test]
@@ -401,7 +377,7 @@ mod tests {
             files: Vec::new(),
         };
         let lock = Lock { resolved: String::new(), samples_toml_sha256: String::new(), samples: vec![sample], branches: Vec::new() };
-        let input = |file| Input { sample: 0, tree: "t", file, chosen: None, kept: None, before: None, ranges: None, order: 0, unsummed: false };
+        let input = |file: &File| Input { sample: 0, tree: "t".into(), file: file.clone(), chosen: None, kept: None, before: None, ranges: None, order: 0, unsummed: false };
         let plan = |rows: std::ops::Range<usize>, read: Vec<(u64, u64)>| crate::fill::Plan { rows, read, kept: Vec::new(), record: Value::Null, unread: false };
         let plans = HashMap::from([
             (("s".to_string(), "f.root".to_string()), plan(0..5, vec![(3, 5), (6, 8)])),
@@ -411,7 +387,7 @@ mod tests {
         let (reads, all) = laid(&[input(&file), input(&other)], &lock, &plans, &entries).unwrap();
         let old: Vec<Vec<String>> = all
             .iter()
-            .map(|laid| laid.old.iter().map(|(order, rows, entries)| format!("{order}: rows {rows:?} {entries:?}")).collect())
+            .map(|laid| laid.old.iter().map(|(order, rows)| format!("{order}: rows {rows:?} {:?}", &entries[rows.clone()])).collect())
             .collect();
         assert_eq!(old, [vec!["0: rows 0..3 [0, 1, 2]", "3: rows 3..5 [8, 9]"], vec!["4: rows 5..7 [0, 1]"]]);
         assert_eq!(all.iter().map(|laid| laid.read).collect::<Vec<_>>(), [Some(0), None]);
@@ -419,10 +395,10 @@ mod tests {
         assert_eq!(reads[0].ranges, Some(vec![(3, 5, 1), (6, 8, 2)]));
         // A file with no totals yet, all of whose chosen entries lay in holes, has its other
         // trees summed by the fill that first reads some of it, though it reads only some holes.
-        assert!(reads[0].unsummed && crate::press::whole(&reads[0], 10));
+        assert!(reads[0].unsummed && crate::take::whole(&reads[0], 10));
         let mut summed = plans;
         summed.get_mut(&("s".to_string(), "f.root".to_string())).unwrap().record = serde_json::json!({"totals": {"w": 1.0}});
         let (reads, _) = laid(&[input(&file), input(&other)], &lock, &summed, &entries).unwrap();
-        assert!(!reads[0].unsummed && !crate::press::whole(&reads[0], 10));
+        assert!(!reads[0].unsummed && !crate::take::whole(&reads[0], 10));
     }
 }

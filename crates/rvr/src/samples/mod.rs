@@ -369,41 +369,37 @@ fn check(path: &Path) -> Result<bool, String> {
     Ok(same)
 }
 
-/// What `--events N|all`, `--random` and `--seed S` ask of every sample, for plan and press.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Choice<'a> {
-    pub events: Option<&'a str>,
+/// What `--events N|all`, `--random` and `--seed S` ask of every sample, for plan, status and
+/// press, as the options validator read them.
+#[derive(Clone, Debug, Default)]
+pub struct Choice {
+    /// `--events N` or `all`.
+    pub events: Option<String>,
+    /// `--random`.
     pub random: bool,
+    /// `--seed S`.
     pub seed: Option<u64>,
 }
 
-impl Choice<'_> {
-    /// Read `--seed`'s value.
-    pub fn seed(text: &str) -> Result<u64, String> {
-        text.parse()
-            .map_err(|_| format!("--seed is a whole number, not {text:?}"))
-    }
-
-    /// Read `--events`' number: a whole number of events from 1 to 2^63 − 1.
-    pub fn number(text: &str) -> Result<u64, String> {
-        text.replace('_', "")
-            .parse::<u64>()
-            .ok()
-            .filter(|n| (1..=i64::MAX as u64).contains(n))
-            .ok_or_else(|| format!("--events is a number of events from 1 to 2^63 − 1, or all, not {text:?}"))
-    }
-
-    /// Refuse an option's value that can never be read, before the study is.
-    pub fn valid(&self) -> Result<(), String> {
-        match self.events {
-            Some("all") | None => Ok(()),
-            Some(n) => Self::number(n).map(drop),
+impl Choice {
+    /// The choice the options give; their values are refused unless of their form, and `--events
+    /// all --random` contradicts itself.
+    pub fn read(options: &crate::options::Options) -> Result<Choice, String> {
+        let events = options.value("--events").map(str::to_owned);
+        if let Some(events) = &events {
+            crate::options::events(events)?;
         }
+        let seed = options.value("--seed").map(crate::options::seed).transpose()?;
+        let choice = Choice { events, random: options.has("--random"), seed };
+        if choice.random && choice.events.as_deref() == Some("all") {
+            return Err("--random chooses N events at random: give it with --events N, not --events all".into());
+        }
+        Ok(choice)
     }
 
     /// The options in words.
     pub fn said(&self) -> String {
-        match (self.events, self.random) {
+        match (self.events.as_deref(), self.random) {
             (None, false) => "as samples.toml asks".to_string(),
             (Some("all"), _) => "--events all: every sample whole".to_string(),
             (Some(n), r) => format!("--events {n}{}", if r { " --random" } else { "" }),
@@ -417,10 +413,7 @@ impl Choice<'_> {
         use Events::{All, First, Random};
         let own = sample.events;
         let seed = |s| self.seed.unwrap_or(s);
-        Ok(match (self.events, self.random) {
-            (Some("all"), true) => {
-                return Err("--random chooses N events at random: give it with --events N, not --events all".into())
-            }
+        Ok(match (self.events.as_deref(), self.random) {
             (None, true) if own == All => {
                 return Err(format!("{}: --random needs a number of events to choose, and samples.toml reads all of this sample: give --events N", sample.name))
             }
@@ -429,9 +422,9 @@ impl Choice<'_> {
                 Random { n, seed: s } => Random { n, seed: seed(s) },
                 own => own,
             },
-            (Some("all"), false) => All,
+            (Some("all"), _) => All,
             (Some(n), random) => {
-                let n = Self::number(n)?;
+                let n = n.replace('_', "").parse().map_err(|_| format!("--events {n} is not a number of events"))?;
                 match random {
                     true => Random { n, seed: seed(1) },
                     false => First(n),
@@ -444,10 +437,7 @@ impl Choice<'_> {
     pub fn check(&self, samples: &[lock::Sample]) -> Result<(), String> {
         let random = |s| matches!(self.of(s), Ok(Events::Random { .. }));
         if self.seed.is_some() && !samples.iter().any(random) {
-            return Err(
-                "--seed is for a random choice, and no sample is chosen at random: add --random"
-                    .into(),
-            );
+            return Err("--seed is for a random choice, and no sample is chosen at random: add --random".into());
         }
         Ok(())
     }
@@ -456,39 +446,13 @@ impl Choice<'_> {
 /// What a press would read of each sample, from the lock alone, with the overrides a press takes:
 /// `--events N` (every sample at most N), `--events all` (every sample whole, whatever
 /// samples.toml says), `--random` (chosen at random rather than the first) and `--seed S`.
-fn plan_all(path: &Path, flags: &[&str]) -> Result<(), String> {
-    let mut lock = read_lock(path)?;
-    let value = |flag: &str| {
-        flags.iter().position(|f| *f == flag).map(|i| {
-            flags
-                .get(i + 1)
-                .copied()
-                .ok_or(format!("{flag} needs a value"))
-        })
-    };
-    let choice = Choice {
-        events: value("--events").transpose()?,
-        random: flags.contains(&"--random"),
-        seed: value("--seed").transpose()?.map(Choice::seed).transpose()?,
-    };
-    let known = ["--events", "--random", "--seed"];
-    for (i, f) in flags.iter().enumerate() {
-        let is_value = i > 0 && ["--events", "--seed"].contains(&flags[i - 1]);
-        if !is_value && !known.contains(f) {
-            return Err(format!(
-                "plan does not know {f}; it takes --events N, --events all, --random and --seed S"
-            ));
-        }
-    }
-    choice.check(&lock.samples)?;
+fn plan_all(path: &Path, choice: &Choice) -> Result<(), String> {
+    let lock = read_lock(path)?;
     let started = std::time::Instant::now();
-    let said = choice.said();
-    for sample in &mut lock.samples {
-        let want = choice.of(sample)?;
-        *sample = sample.planned(want);
-    }
+    let (lock, _) = crate::agree::planned(lock, &crate::plan::Choose::Options(choice.clone())).map_err(|said| said.join("\n"))?;
     println!(
-        "What a press would read ({said}), planned from the lock in {:.1} ms:",
+        "What a press would read ({}), planned from the lock in {:.1} ms:",
+        choice.said(),
         started.elapsed().as_secs_f64() * 1e3
     );
     for sample in &lock.samples {
@@ -507,26 +471,24 @@ fn plan_all(path: &Path, flags: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-/// `rvr samples …`: the exit status of the command named.
-pub fn main(words: &[&str]) -> u8 {
-    let result = match words {
-        ["expand", file] => expand(Path::new(file), false).map(|_| true),
-        ["expand", file, "--json"] => expand(Path::new(file), true).map(|_| true),
-        ["resolve", file] => resolve_all(Path::new(file)).map(|_| true),
-        ["check", file] => check(Path::new(file)),
-        ["plan", file, flags @ ..] => plan_all(Path::new(file), flags).map(|_| true),
-        _ => Err(USAGE.into()),
+/// `rvr samples …` (`name`, as `samples plan`) with its options read: the exit status.
+pub fn main(name: &str, options: &crate::options::Options) -> u8 {
+    let file = Path::new(&options.words[0]);
+    let result = match name {
+        "samples expand" => expand(file, options.has("--json")).map(|_| true),
+        "samples resolve" => resolve_all(file).map(|_| true),
+        "samples check" => check(file),
+        _ => match Choice::read(options) {
+            Ok(choice) => plan_all(file, &choice).map(|_| true),
+            Err(why) => return crate::wrong(name, &why),
+        },
     };
     match result {
         Ok(true) => 0,
         Ok(false) => 1,
         Err(why) => {
-            eprintln!("{why}");
-            if why == USAGE {
-                2
-            } else {
-                1
-            }
+            eprintln!("rvr {name}: {why}");
+            1
         }
     }
 }

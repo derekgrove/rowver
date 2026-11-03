@@ -124,14 +124,25 @@ The headers show no difference in rows, samples, columns, derived columns, by_sa
 ## Commands
 
 Every command prints what it did, or one sentence saying what is wrong and how to fix it. Exit
-status: 0 when all went well, 1 when something failed or differs, 2 for a command it does not know;
-`rvr press` exits 3 when the file it leaves has holes (see Holes, below).
+status: 0 when all went well, 1 when something failed or differs, 2 for wrong use (a command it
+does not know, a flag the command does not take, a flag given twice or without its value, a value
+not of its flag's form, a word too many or too few: the command does nothing, says what is wrong
+with its usage and the nearest flag, and exits 2); 141 when its output pipe closed before it
+finished, as a C tool stopped by SIGPIPE; `rvr press` exits 3 when the file it leaves has holes
+(see Holes, below).
+
+A command line is `rvr COMMAND` with its words and flags in any order, the command being the
+first argument that is not a flag (`rvr --holes status` is `rvr status --holes`); one that names no
+command is refused with the nearest (`rvr prss`: `Did you mean: press?`). A flag's value is the
+argument after it (`--events 10`; `--events=10` is not read). A count (`--events N`, `--workers N`,
+`--hours H`) is a whole number from 1, with `_` allowed between two digits (`--events 50_000`).
 
 ### `rvr new DIR`
 
 Writes `samples.toml`, `recipe.toml` and `.gitignore` into `DIR`, making the folder if needed.
 It never writes over a file: if any of the three is already there it writes nothing and says so.
-The recipe's `title` is the folder's name.
+The recipe's `title` is the folder's own name, the one a press names the file after (for `rvr new
+.`, the current folder's name), and the next steps it prints name that file.
 
 ### `rvr samples expand samples.toml [--json]`
 
@@ -190,20 +201,36 @@ Presses the study in `DIR` (the current folder when not given): reads what `samp
 keeps the events that pass every cut of `recipe.toml`, and writes `DIR/<DIR's name>.rvr`, or
 `--out FILE`. `--events`, `--random` and `--seed` are `plan`'s: the first N of every sample, every
 sample whole, or N chosen at random. `--workers` is how many files are read at once (one per core
-by default). `samples.toml` must be beside the lock, since the file carries both.
+by default, 1 when the system says none). `samples.toml` must be beside the lock, since the file
+carries both.
+
+Before anything is read, each input goes through its validator (`samples.toml`, `recipe.toml`,
+`samples.lock`, the options, and the `.rvr` already at the target), and then through one check of
+how they fit together: the lock resolved from this `samples.toml`, every branch the recipe reads in
+every sample's branch list, one kind for every column and every derived column in every sample,
+the options fitting the samples, and what the file at the target can give. A study that does not
+pass is refused with every problem at once, one a line, before any file is opened. What passes
+becomes one Plan, which the pressing core runs: from there a press fails only on what the files
+hold (a file that cannot be read is a hole; a value the recipe cannot take stops it, below).
+
+**A file that is current.** When the file at the target holds the study as it is (the same three
+texts and choice of events, pressed by this build of rvr, no holes), `rvr press` says
+`FILE is current: nothing to press.`, leaves it byte for byte, opens no input, and exits 0; with
+holes, it says so and exits 3 (`--fill` reads them). `--full` presses it all again.
 
 **Adding a column you forgot.** Add it to `recipe.toml` and run `rvr press` again (`rvr status`
 says beforehand whether the file can be built on, and what would be read). When the
 file is already there and was pressed from the same `samples.toml` and `samples.lock`, with the
 same cuts and the same choice of events, by the same build of rvr, only the columns that are new
 or whose definition changed are read, and only the events the file already kept are stored; every
-other column is copied from it, and the cuts are not run again. The file written is the one a full
+other column is copied from it, and the cuts are not run again. A file of which the earlier file
+kept no event is not opened, as no input that gives nothing is. The file written is the one a full
 press of the recipe writes, and `rvr diff` against one shows no difference:
 
 ```text
 $ rvr press
 local.rvr has the events this recipe keeps (22,325) and 10 of its 11 columns.
-Reading only Jet_pt for those events, 2 files 2 at a time:
+Reading only Jet_pt for those events, 2 files, 2 at a time:
   1/2      476,963 entries      9,362 kept   GluGluToHToTauTau.root
   2/2      491,653 entries     12,963 kept   VBF_HToTauTau.root
 Wrote local.rvr (22,325 rows, 11 columns, 2.4 MB) in 0.2 s.
@@ -238,16 +265,40 @@ On 2.1 M rows (ten samples of 30 links to the TChiWZ skim), adding an eleventh o
 1.5 s where a full press takes 4.9 s; taking one out took 0.75 s against 4.5 s, all of it the
 packing again (medians of 9, Apple M5, 2026-10-31).
 
-When the file cannot be built on, `rvr press` says why and presses every column; `--full` always
-does. Other cuts, other `--events`, a sample whose files, tree or metadata changed in the lock, a
-column changed together with the samples, or another build of rvr all mean a full press, since
-the file's rows or the code that computed them would no longer be the ones it records.
+When the file cannot be built on, `rvr press` says why
+(`Pressing every column: FILE cannot be built on, as WHY.`) and presses every column; `--full`
+always does. Other cuts, other `--events`, a sample whose files, tree or metadata changed in the
+lock, a column changed together with the samples, or another build of rvr all mean a full press,
+since the file's rows or the code that computed them would no longer be the ones it records. An
+rvr built from no known commit (`unknown`) or from changed code it kept no record of (a commit
+ending in `-dirty`) never builds on a file, fills one or calls one current, and keeps no journal.
+
+**Nothing to read.** When only `[derived]` changed, columns were only dropped, or samples were only
+taken out or put in another order, no input is opened or checked: the stored columns are copied
+from the file (each checked against its record) and the derived ones worked out, so the press
+works offline, every input gone.
 
 Before a file is read, it is checked against the lock: its size and adler32, then its ROOT UUID
-and entries. A file that changed is not read: it is a hole (below), and the file says so. A
-`samples.toml` edited since the lock was written stops the press: resolve again and review the new
-lock. Nothing is written until every file has been read or found to be a hole: the file appears
-whole, or not at all.
+and entries. A file that changed is not read: it is a hole (below), and the file says so; building
+on columns, it stops the press instead. A `samples.toml` edited since the lock was written stops
+the press: resolve again and review the new lock. Nothing is written until every file has been
+read or found to be a hole: the file appears whole, or not at all.
+
+**A value the recipe cannot take.** The cuts and the totals are worked out over each run's chosen
+entries only, and the stored columns over its kept events only, so a value the recipe cannot take
+(a conversion out of the target kind's range, a mask or two lists whose lengths differ in one
+event, an event past the pair limit, a whole number to a negative power, a total that is not
+finite) stops the press only in a chosen event, and for a stored column only in a kept one. It is
+named with its file, its entry in that file, its column (or cut, or total) and the value, and the
+press keeps what it read: a press of the same study carries on from the files done (and stops
+there again), and one of a mended recipe starts over.
+
+```text
+rvr press: ./uproot_flat.root, tree analysis, entry 3: [columns] x: inf does not fit in u1, which holds 0 to 255. The recipe cannot take this value: mend the recipe (or the file), then press again. flat.rvr was not written.
+```
+
+A file that lacks the tree a `[totals]` total over another tree sums, or a branch it reads there,
+stops the press the same way, naming the file, the tree and the branch.
 
 #### Derived columns
 
@@ -257,9 +308,12 @@ The Python package then holds it as it holds every column it has read, until `f.
 go or the file object goes; asked for again, it is worked out again. Its expression uses the columns
 the file stores, the derived columns above it, and `sample.KEY` (the keys of `samples.toml`, the
 sample's totals, and `sample.file`, the path of the row's file; not the counts the press records,
-`events_read`, `events_total` and `events_missing`). While it reads, the press works each one out
-over the events one run of each sample kept, so that a mistake in one (a value it cannot convert,
-a type that differs between samples) stops it then, not once every file is read; this costs nothing measurable on the bench. It works each one out once more, from the arrays
+`events_read`, `events_total` and `events_missing`). Each one's kind is found before anything is
+read, over every sample's stored columns and metadata: one whose kind differs between samples, or
+that cannot be worked out (text multiplied by a number), is refused then. While it reads, the press
+works each one out over the events one run of each sample kept, so that a value it cannot take
+stops it then, not once every file is read; this costs nothing measurable on the bench. A press
+that builds on columns, which reads none of the copied columns, works them out once at the end. It works each one out once more, from the arrays
 it has packed for the file (holding the columns they use in memory), to record its kind, its
 checksums and its facts, so that a reader can check what it works out and `rvr diff` can compare it,
 and then writes the file with those records. Should one fail there, the file is written without its
@@ -308,7 +362,8 @@ it with a valid proxy). A damaged basket makes a hole of the 50,000 entries read
 rest of the file is read; any other kind makes a hole of the rest of the file. What is not the
 file's fault makes no hole and stops the press: a mistake in the recipe, a grid proxy missing or
 refused, a certificate rvr does not trust, a local file that cannot be read for want of rights or
-a mount gone. The press exits 3 when the file has holes:
+a mount gone. A press whose every chosen entry lies in a hole still writes the file, with no rows
+of those files and their holes. The press exits 3 when the file has holes:
 
 ```text
 $ rvr press
@@ -330,7 +385,11 @@ and writes nothing (exit 3: the file still has holes).
 
 **`--fill`** reads only the holes, and writes the file again with their rows in place: within each
 input file, its rows and the new ones merged by entry. Every column is packed again, but nothing
-but the holes is read. `--fill tape,unreachable` reads only holes of those kinds. Holes that fail
+but the holes is read. `--fill damaged,unreachable` reads only holes of those kinds: the word after
+`--fill` is its kinds exactly when every comma-separated part is a kind of hole, whatever folders
+there are, and otherwise the study folder (one that is not there, but a slip from a kind or holding
+a comma, is refused with the kinds and the nearest, `did you mean --fill damaged?`, whatever
+follows it). Holes that fail
 again stay holes, with their new kind and reason; a fill that fills nothing, each hole failing as
 before, leaves the file as it was. A fill holds one column of the file at a time in memory. The
 study must be the one that pressed the file, except that the lock may have been resolved again for
@@ -363,8 +422,8 @@ a hole. A press that fails once every file is read
 file. A press that is not the same (another recipe, samples, lock, choice of events, columns read
 or build of rvr) starts over and says why. `--restart` always starts over. While a press runs it
 holds its journal, and another press of the same output, or a `--restart`, is refused. The folder
-goes once the file is in place, and when the press fails for a reason pressing again would not
-mend (a mistake in the recipe).
+goes once the file is in place. A value the recipe cannot take (above) keeps it too: a press of
+the same study carries on from the files done, and one of a mended recipe starts over.
 
 A press that loses the network stops and keeps what it read, instead of making a hole of every
 file it could not reach. While a read waits for a storage, once no storage has answered for 2
@@ -494,9 +553,10 @@ holds the study as it is now, from the study's three texts and the file alone (n
 the lock resolved again since, and what `rvr press` would read; then how much of what it chose
 each sample holds, and its holes by kind, each kind with what to do about it (`--holes` lists every
 hole: sample, file, entries, kind and why). A press that stopped part way is shown, with how many
-files it finished, and so is one under way. Exit status 0 when the file holds the study as it is,
-was pressed with the same `--events`, `--random` and `--seed`, and has no holes, so a script or an
-app can ask before pressing. It asks no storage: whether the input files changed since the lock is
+files it finished, and so is one under way. It builds the Plan `rvr press` would, without running
+the core: a study `rvr press` would refuse is listed, a problem a line. Exit status 0 exactly when
+`rvr press` with the same options would have nothing to do: the file current (above), with no
+holes, so a script can ask before pressing. It asks no storage: whether the input files changed since the lock is
 `rvr samples check samples.lock`.
 
 ```text
@@ -597,16 +657,18 @@ The file is written again with its arrays as they were, and the recipe it carrie
 renames the line under `[derived]`, so that `rvr reproduce` still presses the same file. The
 study's own `recipe.toml` is not changed: make the same change there, or the next `rvr press` of
 the study writes the file with the derived columns `recipe.toml` lists. Its signature is made again
-with your key; with no key, a file that was signed is no longer.
+with your key, and it says whose signature that replaces (yours, a trusted key's owner by name, or
+a key by its first characters), or that the file was not signed; with no key, a file that was
+signed is no longer, and it says whose it was.
 
 ```text
 $ rvr derive tiny.rvr 'lead = first(Jet_pt, -1)' 'lead_share = lead / ht'
-Added lead, lead_share to tiny.rvr: it has 3 derived columns; signed with your key 7c10dc33f447eb3a…
+Added lead, lead_share to tiny.rvr: it has 3 derived columns; signed with your key 7c10dc33f447eb3a…, which replaces the signature of your own key 7c10dc33f447eb3a…
 Its study's recipe.toml is as it was: make the same change under [derived] there to keep it when the study is pressed again.
 $ rvr derive tiny.rvr --drop lead
 rvr derive: lead_share uses lead: drop lead_share first, or with it
 $ rvr derive tiny.rvr --rename lead_share lead_fraction
-Renamed lead_share to lead_fraction in tiny.rvr: it has 3 derived columns; signed with your key 7c10dc33f447eb3a…
+Renamed lead_share to lead_fraction in tiny.rvr: it has 3 derived columns; signed with your key 7c10dc33f447eb3a…, which replaces the signature of your own key 7c10dc33f447eb3a…
 Its study's recipe.toml is as it was: make the same change under [derived] there to keep it when the study is pressed again.
 $ rvr derive tiny.rvr 'pt2 = Muon_pt * 2'
 rvr derive: [derived] pt2 uses Muon_pt, but the file does not store Muon_pt: a derived column uses only the columns the file stores, under [columns], and the derived columns above it
@@ -646,14 +708,18 @@ metadata, `--recipe`, `--samples` and `--lock` one text each, `--columns` the co
 
 ### `rvr header FILE`
 
-Prints the JSON header as the file holds it, without reading any array.
+Prints the header's bytes exactly as the file holds them (the JSON text between its length and its
+arrays), without reading any array. A header that fails its checks is printed all the same, and
+why is said on standard error, with exit status 1.
 
 ### `rvr diff A B`
 
 Says where two files differ from their headers alone, without decompressing anything: rows,
 samples and columns only one has, columns whose kind changed, and each column of each sample
-whose contents changed (every column carries one checksum per sample). Exit status 0 when the
-headers show no difference, 1 when they do.
+whose contents changed (every column carries one checksum per sample). It says when a header fails
+its checks (and compares it all the same), and when one file is empty and the other is not: either
+is a difference. Exit status 0 when the headers show no difference, 1 when they do, 2 when one
+cannot be read.
 
 ```text
 $ rvr diff before.rvr after.rvr
@@ -661,17 +727,18 @@ column MET: differs in sample B
 sample column xsec: differs in sample B: 2.5 in before.rvr, 3.5 in after.rvr
 ```
 
-### `rvr reproduce FILE [DIR] [--workers N]`
+### `rvr reproduce FILE [DIR] [--study FOLDER] [--workers N]`
 
 Writes the recipe.toml, samples.toml and samples.lock that FILE holds into DIR (FILE's name with
 `.reproduced` when not given), presses them again with the same event choice, and runs
 `rvr diff` on the two files: exit status 0 when they hold the same data. A relative path in the
-lock is read from FILE's folder, where `rvr press` writes it.
+lock is read from FILE's folder, where `rvr press` writes it, or FOLDER.
 
 ### `rvr empty FILE... [--study FOLDER] [--anyway] [--force | -f]`, `rvr refill FILE [--study FOLDER] [--workers N]`
 
 `rvr empty` gives back a file's space and keeps it in its place: it lets the columns go and keeps
-the header byte for byte, with the study it was pressed from, every checksum and its signature. On
+the header byte for byte, with the study it was pressed from, every checksum and its signature (when
+it has one). On
 the 2.1 M-row bench, a 39.3 MB file keeps its 114 kB header. `rvr validate`, `rvr dump`, `rvr diff`
 and the Python package read an empty file's header as ever and say it is empty; reading a column
 of it says how to fill it. A refill reads the inputs again, so `rvr empty` first checks that each
@@ -686,7 +753,9 @@ one is at a terminal to answer, as in a script.
 choice, and puts the columns back once every array has the checksum the header records: with the
 same rvr, the file is the one it was, byte for byte, its signature as it was. An rvr that
 compresses otherwise (another zstd) gives the same values in other bytes; the header then takes
-their new places and is signed again with your key. Values that differ (an input or the rvr that
+their new places and is signed again with your key, saying whose signature that replaces (or that
+it is no longer signed, when you have no key). The copy pressed beside it is not signed. Values that
+differ (an input or the rvr that
 reads it has changed) are refused, naming the columns, and the file stays empty. A relative path in
 the lock is read from FILE's folder, or FOLDER.
 
@@ -699,7 +768,7 @@ tiny.rvr: valid, 8 rows, 3 columns, 1 derived (worked out once refilled), read a
 $ rvr refill tiny.rvr
 Pressing the study tiny.rvr carries again, into tiny.rvr.refill:
 …
-Refilled tiny.rvr: every column is back, byte for byte as it was; signed by you.
+Refilled tiny.rvr: every column is back, byte for byte as it was, and its signature, by your own key 7c10dc33f447eb3a…, is as it was.
 ```
 
 `rvr press` does not build on an empty file: it presses every column. `rvr status` says a file is
@@ -711,9 +780,9 @@ empty, with exit status 1.
 file you press is signed with it, so a reader can tell who pressed it and that its header has not
 changed since. `rvr key show` prints your public key for others, and `rvr key trust KEY NAME` adds
 someone's key to `~/.config/rvr/trusted`, so `rvr validate` names them. `RVR_CONFIG` names another
-folder for both files.
+folder for both files (else `XDG_CONFIG_HOME/rvr`); one set but empty counts as not set.
 
-### `rvr proxy`, `rvr proxy init [--hours H] [--vo VO]`
+### `rvr proxy`, `rvr proxy init [--hours H]`
 
 `rvr proxy` shows the grid proxy rvr would use: its file, whose it is, its VO and how long its
 attributes last, the time left, and what to do when it is missing or ending. The exit status is 0
@@ -723,8 +792,8 @@ when it can be used.
 `~/.globus`: `usercert.pem` and `userkey.pem`, or a `.p12` file as your certificate authority
 gave it (`usercred.p12`, or the only `.p12` there; `X509_USER_CERT` and `X509_USER_KEY` name other
 files). It refuses a key file that other accounts can read, and says the `chmod` that fixes it. It
-asks your passphrase without showing it, then asks the VOMS server for your attributes (`cms`
-unless `--vo` says otherwise). It writes a proxy valid for `--hours` (192 unless told otherwise,
+asks your passphrase without showing it, then asks CMS's VOMS server for your `cms` attributes.
+It writes a proxy valid for `--hours` (1 to 720; 192 unless told otherwise,
 never past your certificate's end) to `X509_USER_PROXY`, or else `/tmp/x509up_u<your uid>`, readable
 by you alone.
 

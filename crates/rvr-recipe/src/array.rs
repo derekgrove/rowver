@@ -582,6 +582,23 @@ impl Array {
         }
     }
 
+    /// The events at `positions` of this array, in that order; a fixed value is the same for all.
+    pub fn picked(&self, positions: &[usize]) -> Array {
+        match self {
+            Array::Constant(_) => self.clone(),
+            Array::Event(values) => Array::Event(values.take(positions)),
+            Array::Object { offsets, values } => {
+                let (mut members, mut lists) = (Vec::new(), Vec::with_capacity(positions.len() + 1));
+                lists.push(0);
+                for &at in positions {
+                    members.extend(offsets[at]..offsets[at + 1]);
+                    lists.push(members.len());
+                }
+                Array::Object { offsets: Arc::new(lists), values: values.take(&members) }
+            }
+        }
+    }
+
     /// The events of every one of `runs`, one after another, of one kind and shape; one run as it is.
     pub fn joined(mut runs: Vec<Array>) -> Result<Array> {
         if runs.len() == 1 {

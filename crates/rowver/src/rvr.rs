@@ -24,7 +24,7 @@ use arrays::Arrays;
 use cancellation::{CancelReader, Cancellation};
 pub use reader::{Held, Reader};
 pub use snapshot::{study_name, toolchain};
-pub use texts::kinds;
+pub use texts::{derived_kinds, kinds};
 
 const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
 
@@ -155,8 +155,8 @@ fn listed_derived(header: &Value) -> usize {
     header["derived"]["columns"].as_array().map_or(0, Vec::len)
 }
 
-/// Read the bytes of a checkpoint's JSON header, without decoding or checking any array.
-fn header_text(path: impl AsRef<Path>) -> Result<Vec<u8>> {
+/// A file's header as the file holds it: the JSON text between its length and its arrays, unchecked.
+pub fn header_text(path: impl AsRef<Path>) -> Result<Vec<u8>> {
     let mut file = std::fs::File::open(path)?;
     let size = usize::try_from(file.metadata()?.len())
         .map_err(|_| invalid("the file is longer than this computer can address"))?;

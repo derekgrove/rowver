@@ -1,11 +1,11 @@
 //! `rvr status`: whether a study's `.rvr` file holds the study as it is now, and what `rvr press`
 //! would read to bring it up to date, from the study's texts and the file (no input is read).
 
-use crate::press;
-use crate::reuse;
-use crate::samples::Choice;
+use crate::options::Options;
+use crate::plan::{Asked, Base, Choose, On, Place};
 use crate::press::count;
-use crate::samples::some;
+use crate::reuse;
+use crate::samples::{some, Choice};
 use rvr_recipe::Recipe;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -19,9 +19,14 @@ pub const USAGE: &str = "usage:
                                            holds (--holes: every hole), and what rvr press would
                                            read; exit status 0 when it is current and complete";
 
-/// `rvr status …` with the words after `status`: 0 when the file holds the study as it is, whole.
-pub fn main(args: &[&str]) -> u8 {
-    match run(args) {
+/// `rvr status` with its options: 0 when `rvr press` with them would have nothing to do.
+pub fn main(options: &Options) -> u8 {
+    let choice = match Choice::read(options) {
+        Ok(choice) => choice,
+        Err(why) => return crate::wrong("status", &why),
+    };
+    let (dir, out) = (options.words.first().map(PathBuf::from), options.value("--out").map(PathBuf::from));
+    match run(dir, out, choice, options.has("--holes")) {
         Ok(current) => u8::from(!current),
         Err(why) => {
             eprintln!("rvr status: {why}");
@@ -30,36 +35,14 @@ pub fn main(args: &[&str]) -> u8 {
     }
 }
 
-fn run(args: &[&str]) -> Result<bool, String> {
-    let (mut dir, mut out, mut every) = (None, None, false);
-    let mut choice = Choice::default();
-    let mut words = args.iter();
-    while let Some(&word) = words.next() {
-        let mut given = || {
-            words
-                .next()
-                .copied()
-                .filter(|v| !v.starts_with("--"))
-                .ok_or(format!("{word} needs a value"))
-        };
-        match word {
-            "--events" => choice.events = Some(given()?),
-            "--random" => choice.random = true,
-            "--seed" => choice.seed = Some(Choice::seed(given()?)?),
-            "--out" => out = Some(PathBuf::from(given()?)),
-            "--holes" => every = true,
-            flag if flag.starts_with("--") => {
-                return Err(format!("status does not know {flag}.\n{USAGE}"))
-            }
-            folder if dir.is_none() => dir = Some(PathBuf::from(folder)),
-            _ => return Err(format!("status takes one study folder.\n{USAGE}")),
-        }
-    }
-    choice.valid()?;
-    let (dir, _, target) = press::study(dir, out)?;
-    let (texts, mut lock) = press::texts(&dir)?;
-    let resolved = press::resolved(&texts, &lock);
-    if !resolved {
+fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) -> Result<bool, String> {
+    let (dir, study, target) = crate::texts::study(dir, out)?;
+    let texts = crate::texts::read(&dir)?;
+    let lock = rowver::study::lock::Lock::read(&texts.lock).ok();
+    let names: Vec<String> = lock.iter().flat_map(|lock| lock.samples.iter().map(|s| s.name.clone())).collect();
+    // Said only of a lock that reads: one that does not is among what rvr press would refuse.
+    let stale = lock.as_ref().is_some_and(|lock| rowver::write::text_checksum(&texts.samples) != lock.samples_toml_sha256);
+    if stale {
         println!("samples.toml has changed since samples.lock was written: run rvr samples resolve samples.toml and review the new lock.");
     }
     let stopped = crate::journal::folder(&target);
@@ -75,112 +58,81 @@ fn run(args: &[&str]) -> Result<bool, String> {
             done.when
         );
     }
-    if !target.exists() {
-        println!("{} is not there: rvr press makes it.", target.display());
-        return Ok(false);
-    }
-    let header = rowver::rvr::read_header(&target)
-        .map_err(|e| format!("{} could not be read: {e}", target.display()))?;
+    let header = match rowver::rvr::read_header(&target) {
+        Ok(header) => header,
+        Err(rowver::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("{} is not there: rvr press makes it.", target.display());
+            return Ok(false);
+        }
+        Err(e) => return Err(format!("{} could not be read: {e}", target.display())),
+    };
     let made = &header["made"];
     let held = |key: &str| made[key]["text"].as_str().unwrap_or_default();
-    println!(
-        "{}: pressed {} by {}",
-        target.display(),
-        made["built"].as_str().unwrap_or("?"),
-        made["by"].as_str().unwrap_or("?")
-    );
-    choice.check(&lock.samples)?;
-    let asked = press::plan(&mut lock, &|s| choice.of(s))?;
-    let chosen = lock
-        .samples
-        .iter()
-        .zip(&asked)
-        // A sample the file does not hold is a change of samples.toml, not of the events chosen.
-        .all(|(sample, want)| {
-            let held = &made["files"][&sample.name];
-            held.is_null() || held["events"] == want.record()
-        });
-    let same = [
-        held("recipe") == texts.recipe,
-        held("samples") == texts.samples,
-        held("lock") == texts.lock,
-        chosen,
-    ];
+    println!("{}: pressed {} by {}", target.display(), made["built"].as_str().unwrap_or("?"), made["by"].as_str().unwrap_or("?"));
+    // The Plan rvr press would make, with these options, of the file there.
+    let place = Place { base: dir, study, target: target.clone() };
+    let asked = Asked { choose: Choose::Options(choice.clone()), on: On::Earlier, workers: 1, sign: true };
+    let plan = crate::plan::build(place, texts.clone(), asked);
+    let events = match &plan {
+        Ok(plan) => Some(plan.asked.clone()),
+        Err(_) => lock.and_then(|lock| crate::agree::planned(lock, &Choose::Options(choice)).ok()).map(|(_, asked)| asked),
+    };
+    // A sample the file does not hold is a change of samples.toml, not of the events chosen.
+    let chosen = events.as_ref().is_none_or(|events| names.iter().zip(events).all(|(name, want)| made["files"][name].is_null() || made["files"][name]["events"] == want.record()));
+    let same = [held("recipe") == texts.recipe, held("samples") == texts.samples, held("lock") == texts.lock, chosen];
     let as_held = "as the file holds it";
     let recipe_said = match same[0] {
         true => as_held.to_string(),
         false => changes(held("recipe"), &texts.recipe),
     };
     println!("  recipe.toml   {recipe_said}");
-    let said = [
-        ("samples.toml", "edited since"),
-        ("samples.lock", "resolved again since"),
-        (
-            "events",
-            "the file read others (another --events, --random or --seed)",
-        ),
-    ];
+    let said = [("samples.toml", "edited since"), ("samples.lock", "resolved again since"), ("events", "the file read others (another --events, --random or --seed)")];
     for ((what, other), same) in said.iter().zip(&same[1..]) {
         println!("  {what:13} {}", if *same { as_held } else { other });
     }
-    let current = same.iter().all(|s| *s);
-    if !resolved {
-        println!("rvr press refuses until samples.lock is resolved again.");
-        return Ok(false);
-    }
-    let new = press::read_recipe(&texts.recipe)?;
-    let said = match reuse::earlier(&target, &texts, &new, &lock, &asked) {
-        Some(Ok(reuse::Base::Samples(rows))) => {
-            let added = rows.added.unwrap_or_default();
-            let files: usize = lock.samples.iter().filter(|s| added.contains(&s.name)).map(|s| s.files.iter().filter(|f| f.stop != Some(0)).count()).sum();
+    let plan = match plan {
+        Ok(plan) => plan,
+        Err(why) => {
+            println!("rvr press would refuse:");
+            for line in why.lines() {
+                println!("  {line}");
+            }
+            return Ok(false);
+        }
+    };
+    let said = match (&plan.from, &plan.why) {
+        (Base::Samples(fill), _) => {
+            let added = fill.added.clone().unwrap_or_default();
+            let files: usize = plan.lock.samples.iter().filter(|s| added.contains(&s.name)).map(|s| s.files.iter().filter(|f| f.stop != Some(0)).count()).sum();
             match added.is_empty() {
                 true => "rvr press would read nothing: the rows of every sample are copied from it into a file that holds the study as it is now.".into(),
-                false => format!(
-                    "rvr press would read only the new {} {} ({}), and copy the rows of every other sample from it.",
-                    if added.len() == 1 { "sample" } else { "samples" },
-                    added.join(", "),
-                    some(files, "file", "files")
-                ),
+                false => format!("rvr press would read only the new {} ({}), and copy the rows of every other sample from it.", crate::core::named(&added), some(files, "file", "files")),
             }
         }
-        Some(Ok(reuse::Base::Columns(earlier))) => {
-            let reading: Vec<&str> = new
-                .columns
-                .iter()
-                .zip(&earlier.reused)
-                .filter(|(_, reused)| !**reused)
-                .map(|((name, _), _)| name.as_str())
-                .collect();
-            let holed = !rowver::rvr::holes(&header).is_empty();
-            match (reading.is_empty(), current) {
-                (true, true) if holed => "It holds the study as it is, but for its holes: rvr press --fill reads them.".to_string(),
-                (true, true) => "It is current: rvr press has nothing to read.".to_string(),
-                (true, false) => "rvr press would read nothing: every column is copied from it into a file that holds the study as it is now.".into(),
-                (false, _) => format!(
-                    "rvr press would read only {}, for the events the file kept, and copy every other column from it.",
-                    reading.join(", ")
-                ),
-            }
+        (Base::Current(0), _) => "It is current: rvr press has nothing to read.".to_string(),
+        (Base::Current(_), _) => "It holds the study as it is, but for its holes: rvr press --fill reads them.".to_string(),
+        (Base::Columns(_), _) if plan.reading.is_empty() => "rvr press would read nothing: every column is copied from it into a file that holds the study as it is now.".into(),
+        (Base::Columns(_), _) => {
+            let reading: Vec<&str> = plan.reading.iter().map(|at| plan.recipe.columns[*at].0.as_str()).collect();
+            format!("rvr press would read only {}, for the events the file kept, and copy every other column from it.", reading.join(", "))
         }
-        Some(Err(why)) if current => format!("It holds the study as it is now, but rvr press would press every column again, as {why}."),
-        Some(Err(why)) => format!("rvr press would press every column, as {why}."),
-        None => unreachable!("the file is there"),
+        (_, Some(why)) if same.iter().all(|s| *s) => format!("It holds the study as it is now, but rvr press would press every column again, as {why}."),
+        (_, Some(why)) => format!("rvr press would press every column, as {why}."),
+        (_, None) => "rvr press would press every column.".into(),
     };
     println!("{said}");
     // Whether --fill would fill it, to say so only when it would.
-    let kinds = crate::fill::kinds(None)?;
-    let shown = target.display().to_string();
-    let fillable = crate::fill::fits(&header, &shown, &texts, &lock, &asked, &kinds).map(drop);
-    let complete = completeness(&header, every, fillable);
-    // An empty file was said to be so above, as what keeps rvr press from building on it.
-    let empty = rowver::rvr::Reader::open(&target).is_ok_and(|file| file.empty());
-    Ok(current && complete && !empty)
+    let kinds = crate::fill::kinds(None);
+    let fillable = crate::fill::fits(&header, &target.display().to_string(), &plan.texts, &plan.lock, &plan.asked, &kinds).map(drop);
+    completeness(&header, every, fillable);
+    // The Plan alone says whether rvr press would have nothing to do.
+    Ok(matches!(plan.from, Base::Current(0)))
 }
 
 /// How much of what it chose the file holds, from its header alone: one bar per sample, then its
 /// holes by kind with what to do about each kind, or (with `every`) one line per hole, and what
-/// `--fill` would read (or why it cannot fill it). Whether it is complete.
-fn completeness(header: &Value, every: bool, fillable: Result<(), String>) -> bool {
+/// `--fill` would read (or why it cannot fill it). Whether status exits 0 is the Plan's to say.
+fn completeness(header: &Value, every: bool, fillable: Result<(), String>) {
     let made = &header["made"];
     let holes = rowver::rvr::holes(header);
     let names: Vec<&str> = header["data"]["samples"].as_array().into_iter().flatten().filter_map(|s| s["name"].as_str()).collect();
@@ -200,13 +152,13 @@ fn completeness(header: &Value, every: bool, fillable: Result<(), String>) -> bo
         println!("  {name:width$}  {bar} {percent:>3.0}%   {}{holed}", some(files, "file", "files"));
     }
     if holes.is_empty() {
-        return true;
+        return;
     }
     let chosen = match rowver::rvr::chosen_in_holes(header) {
         Ok(chosen) if chosen.len() == holes.len() => chosen,
         _ => {
             println!("\nIts holes cannot be counted: the file is not valid (rvr validate says why).");
-            return false;
+            return;
         }
     };
     if every {
@@ -228,17 +180,16 @@ fn completeness(header: &Value, every: bool, fillable: Result<(), String>) -> bo
                 false => format!("{} in {}", some(these.len(), "hole", "holes"), some(files.len(), "file", "files")),
             };
             let samples: Vec<&str> = samples.into_iter().collect();
-            println!("  {kind:12} {runs}, {} entries   {}", count(entries), samples.join(", "));
+            println!("  {kind:12} {runs}, {}   {}", some(entries as usize, "entry", "entries"), samples.join(", "));
             println!("      {}", first.why);
         }
         println!("(rvr status --holes lists every hole.)");
     }
     let files: BTreeSet<(&str, &str)> = holes.iter().map(|h| (h.sample.as_str(), h.file.as_str())).collect();
     match fillable {
-        Ok(()) => println!("rvr press --fill would read {} entries of {}.", count(chosen.iter().sum()), some(files.len(), "file", "files")),
+        Ok(()) => println!("rvr press --fill would read {} of {}.", some(chosen.iter().sum::<u64>() as usize, "entry", "entries"), some(files.len(), "file", "files")),
         Err(why) => println!("rvr press --fill would not: {why}"),
     }
-    false
 }
 
 /// What changed from one recipe to another, in the columns and cuts it stores and keeps.
