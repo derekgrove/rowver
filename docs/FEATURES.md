@@ -14,7 +14,7 @@ checksums of every array (globally and per sample), and optionally an Ed25519 si
 input cannot be read, the press records it as a typed *hole* and goes on. An interrupted press
 resumes from a journal, and before giving up on unreadable data the press checks whether one
 storage is busy or the whole network is gone. On a 30-file benchmark, reading the stored columns
-from the pressed file is about 350 times faster than reading them again from the ROOT files. This
+from the pressed file is about 950 times faster than reading them again from the ROOT files. This
 document describes the format, the tools around it, and the measurements behind its design.
 
 ## 1. Introduction
@@ -226,7 +226,7 @@ reproduced file holds the same data.
 
 The same study gives back a file's space without losing the file. `rvr empty FILE` keeps the header
 byte for byte, with the study, every checksum and the signature, and lets the arrays go: on the
-2.1 M-row bench, a 39.3 MB file keeps a 114 kB header (0.29%). It first checks that every input the
+2.1 M-row bench, a 39.3 MB file keeps a 122.5 kB header (0.31%). It first checks that every input the
 lock names is as the lock recorded it, since only the inputs hold the events, refuses a file with
 holes, and asks before it empties (`--force`, or `-f`, does not ask;
 [SPEC §8](SPEC.md#8-building-on-a-file)). `rvr refill FILE`
@@ -275,8 +275,8 @@ expanded samples without asking any storage. [SPEC §3](SPEC.md#3-samplestoml) g
 
 It also records each sample's branch list, from its first file's tree, so that every check of
 the recipe against the branches is made from the lock alone. The 9 files of the 8-sample CMS Open
-Data H → ττ study resolve in 3.4 s over HTTPS. If any sample fails, no lock is written, and each
-failure is reported with a suggestion where there is one. Resolve also lists any `.root` files in
+Data H → ττ study resolve in 2.9 s over HTTPS (§12). If any sample fails, no lock is written, and
+each failure is reported with a suggestion where there is one. Resolve also lists any `.root` files in
 the folders it read that no sample uses, as a check that none was left out. The lock is meant to
 be committed and reviewed like code ([SPEC §6](SPEC.md#6-resolving-rvr-samples-and-sampleslock)).
 
@@ -409,8 +409,10 @@ number of workers (§3.2).
 
 As each file is read, its kept values go to a spool on disk, compressed where that pays. Each
 column is then packed from the spool a piece at a time. Memory therefore does not grow with the
-number of kept events: pressing 12 million rows of 31 columns into a 1.5 GB file peaks at 0.3 GB,
-where holding every row took 4.9 GB. The cost is free disk space of about twice the output.
+number of kept events: pressing 12 million rows of 31 columns from 1,698 files (4 workers) peaks at
+0.14 GB, and 3 million rows from 425 files at 0.10 GB. The cost is free disk space for the spool: on
+the 2.1 M-row bench it peaked at 461 MB beside a 39.3 MB file, as the bench's 300 copies of one file
+compress far better whole than a piece at a time.
 Nothing is put in place until every file has been read or recorded as a hole, so the output
 appears whole or not at all.
 
@@ -422,15 +424,15 @@ columns that are new or whose definition changed (their expression, their stored
 defined name they use), and only for the events the file already kept. Every
 other column is copied over, and the cuts are not run again. The result is the same file a full
 press writes, as `rvr diff` confirms. Adding one jagged column to a two-sample study read 26.3 MB
-of baskets instead of 108.0 MB, in 0.2 s instead of 0.6 s.
+of baskets instead of 108.0 MB, in 0.12 s instead of 0.51 s.
 
 Adding a sample works the same way. When the columns and cuts are the same, and every sample the
 file holds is in the new lock as it was (its files, tree, metadata and event choice), only the new
 samples are read, and the others' rows are taken from the file. A sample taken out, or the samples
 reordered, reads nothing. The rows are laid out again, so every column is packed again: an array
 is compressed whole, so a sample's part of it cannot be copied as it lies. On 2.1 M rows, adding a
-sample of 30 files to ten of 30 took 1.5 s, against 4.9 s for a full press; taking one out took
-0.75 s against 4.5 s. Any other change to the rows, or to the code that computed them, means a
+sample of 30 files to ten of 30 took 2.4 s, against 3.9 s for a full press; taking one out took
+2.1 s against 3.5 s. Any other change to the rows, or to the code that computed them, means a
 full press, and the press says why. Such changes include a sample whose files changed, other
 cuts, totals or events, or another build. A file that already holds the study as it is is left as
 it is (`FILE is current: nothing to press.`), and when only `[derived]` changed, or columns were
@@ -465,7 +467,7 @@ their rows into each file's rows by entry. A hole that fails again stays a hole,
 and reason. The lock may have been resolved again, but only for the files being filled (a file put
 back where it was, or another copy of it). The filled file is then the one a full press would
 write, but for the last bits of its totals, to which the fill adds the sum of the entries it read.
-Filling one file's hole in a 30-file study took 0.16 s, against 0.39 s for a full press.
+Filling one file's hole in a 30-file study took 0.09 s, against 0.18 s for a full press.
 
 ### 7.5 Resumption
 
@@ -475,8 +477,10 @@ to sleep, or a failure that is not a file's own (a disk full or not mounted, a c
 refused). It then leaves this folder behind, and the next press of the same study carries on from
 the files it finished. The journal is made safe on disk at most every 2 s, so a stop loses at most
 the files finished since. That interval is a measured compromise. Syncing the journal after every
-file slowed the benchmark by 7%, since a full flush on macOS takes about 4 ms (3.97 ms, measured
-on an Apple M5, 2026-11-03); checkpointing every 2 s costs at most 1.5%.
+file made the 30-file benchmark 64% slower (0.304 s against 0.185 s) and 90 files on one worker 36%
+(2.80 s against 2.06 s), since a full flush on macOS takes about 4 ms (3.95 ms, measured on an Apple
+M5, 2026-11-03) and each checkpoint makes two, of the spool and of the journal; checkpointing every
+2 s costs at most 1% (3.55 s against 3.52 s on the 2.1 M-row bench).
 
 A file stopped half read is read again from its start, and so is a file that became a hole of a
 kind that may pass (`unreachable`, `refused`). Holes of kind `damaged`, `gone` and `changed` stay.
@@ -513,7 +517,8 @@ the site down from the network gone, and stops and keeps what it read, saying wh
 On a terminal, the press draws one progress bar per sample, with the events kept, the read rate
 and the time taken, five times a second and cut to the terminal's width. Events such as waits and
 holes are printed above the bars. When the output is not a terminal, the press prints one line per
-file instead. Drawing costs under 1% (0.397 s against 0.394 s on the 30-file benchmark).
+file instead. Drawing costs no more than the run-to-run spread (0.199 s against 0.195 s on the
+30-file benchmark, 2.064 s against 2.068 s on 90 files with one worker).
 
 ## 8. Inspection and comparison
 
@@ -545,10 +550,10 @@ one; `rvr diff` compares it from the headers alone, and a plot gets its axis fro
 computing anything. The reference reader does the work (`Reader::column` in `rowver`), and every
 function of the recipe language gives the same bits on every platform: its exponentials,
 logarithms, trigonometry, roundings, `hypot` and `**` come from the `libm` crate, as the platforms'
-own math libraries do not agree. Measured, Apple's and musl's disagree in the last bit of 2 to 26% of double results over
-the ranges physics columns take, and on the bench every one of twelve such columns came out
-different; the `libm` crate costs 1.6% of a press of all twelve (6.93 s against 6.82 s, within the
-run-to-run spread).
+own math libraries do not agree. On the 2.1 M-row bench, twelve columns of these functions over its
+branches came out different with Apple's than with the `libm` crate (musl's), each in 0.2 to 21% of
+its values, by one to three units in the last place; the `libm` crate costs nothing measurable (a
+press of all twelve took 3.09 s with it, 3.11 s with Apple's).
 
 A derived expression uses only what the file holds: the stored columns, the derived columns above
 it, and the sample's metadata. That is checked before anything is pressed. Derived
@@ -560,11 +565,11 @@ Changing only `[derived]` in a study reads no ROOT file: the press copies every 
 the earlier file and works the derived columns out from it.
 
 The trade is space for time, the analyst's to choose column by column. On the 2.1 M-row bench (300
-copies of the TChiWZ skim, Apple M5, 2026-10-31), seven typical computed columns take 70 bytes per
+copies of the TChiWZ skim, Apple M5, 2026-11-03), seven typical computed columns take 70 bytes per
 row stored (uncompressed; the bench's copies compress far better than real data would), 35% more
 than the ten columns they are computed from. Kept as derived columns they cost nothing in the
-file, 0.54 s more at press time to measure them (4.0 s against 3.5 s); a whole Python run that
-works all seven out takes 0.98 s, where one that reads them stored takes 0.10 s and one that only
+file, 0.6 s more at press time to measure them (4.0 s against 3.4 s); a whole Python run that
+works all seven out takes 1.0 s, where one that reads them stored takes 0.10 s and one that only
 opens the file 0.05 s, and a simple one such as `sum(PT_jet)` takes 0.11 s.
 
 ## 10. Reading files from programs
@@ -606,28 +611,29 @@ grid sites. `X509_CERT_DIR` adds others ([SPEC §10](SPEC.md#10-keys-and-proxies
 Every crate and the Python package share one version, whose major number is the format version,
 and one tag makes a release. Each release builds the command as a single binary for macOS and for
 x86_64 Linux with glibc 2.28 or later. The Linux binary is built on AlmaLinux 8, so it runs on el8
-and el9 login nodes; a static musl build was measured 3.3 times slower. `pip install rowver`
+and el9 login nodes. `pip install rowver`
 installs the Python package and the command with it.
 
 ## 12. Measured performance
 
-All times are wall times on an Apple M5 laptop in October 2026, unless noted. The *30-file study*
-is 30 copies of one TChiWZ skim (212,130 events, 4.1 GB), with a recipe that keeps events with MET
-above 150 GeV and two leptons, and stores 7 branches.
+All times are wall times on an Apple M5 laptop on 2026-11-03, medians of nine runs unless noted. The
+*30-file study* is 30 copies of one TChiWZ skim (212,130 events, 4.1 GB), with a recipe that keeps
+events with exactly two leptons and MET above 150 GeV, and stores 7 branches (`MET`, `Njet`, `Nbjet`,
+`PTISR`, `RISR`, `PT_lep`, `weight`). The *2.1 M-row bench* is 300 copies of the same skim.
 
 | measurement | result |
 |---|---|
-| reading the 7 branches from the 30 ROOT files with uproot, and applying the cut | 2.1 s, on every iteration |
-| pressing the same study with `rvr press` | 0.4 s, once |
-| opening the `.rvr` and reading all 7 columns | 6 ms, about 350 times faster than the ROOT loop |
-| one 136 MB input file (285 branches in its main tree), pressed | 157 kB |
-| incremental press adding one column (two Open Data samples, local copies) | 26.3 MB of baskets in 0.2 s, against 108.0 MB in 0.6 s |
-| `--fill` of one file's hole in the 30-file study | 0.16 s, against 0.39 s for a full press |
-| journal and checkpoints | at most 1.5% (0.395 s with, 0.397 s without; 90 files on one worker: 5.655 s with, 5.609 s without) |
-| progress display | under 1% (0.397 s with, 0.394 s without) |
-| seven computed columns on the 2.1 M-row bench: stored, or kept as derived columns | stored: 70 bytes per row (uncompressed), a Python run that reads them 0.10 s; derived: no bytes, 0.54 s more to press, a Python run that works them out 0.98 s |
-| 12 M rows of 31 columns, 1.5 GB output, 4 workers | 0.3 GB peak memory, against 4.9 GB when holding every row |
-| resolving the 9 files of the 8-sample CMS Open Data H → ττ study over HTTPS (2026-11-03) | 3.4 s |
+| reading the 7 branches from the 30 ROOT files with uproot, and applying the cut | 2.3 s, on every iteration |
+| pressing the same study with `rvr press` | 0.2 s, once |
+| opening the `.rvr` and reading all 7 columns | 2.4 ms, about 950 times faster than the ROOT loop |
+| one 136 MB input file (285 branches in its main tree), pressed | 128 kB |
+| incremental press adding one column (two Open Data samples, local copies) | 26.3 MB of baskets in 0.12 s, against 108.0 MB in 0.51 s |
+| `--fill` of one file's hole in the 30-file study | 0.09 s, against 0.18 s for a full press |
+| journal and checkpoints | at most 1% (2.1 M-row bench: 3.55 s with, 3.52 s without; 90 files on one worker: 2.06 s with and without) |
+| progress display | within the run-to-run spread (0.199 s with, 0.195 s without; 90 files on one worker: 2.064 s with, 2.068 s without) |
+| seven computed columns on the 2.1 M-row bench: stored, or kept as derived columns | stored: 70 bytes per row (uncompressed), a Python run that reads them 0.10 s; derived: no bytes, 0.6 s more to press, a Python run that works them out 1.0 s |
+| 12 M rows of 31 columns from 1,698 files, 4 workers | 0.14 GB peak memory (0.10 GB for 3 M rows from 425 files) |
+| resolving the 9 files of the 8-sample CMS Open Data H → ττ study over HTTPS (median of five) | 2.9 s |
 
 The last row depends on the network and the storage, and is given as an illustration only.
 

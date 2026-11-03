@@ -1,6 +1,6 @@
-//! What built rvr, for `made.toolchain`: the git commit (with `-dirty` and a hash of the changes
-//! when its code had changes), from the package cargo made or else this checkout, the compiler, and the
-//! target.
+//! What built rvr, for `made.toolchain`: the commit (docs/SPEC.md §12.2: from the package cargo
+//! made, this checkout, with `-dirty` and a hash of the changes when its code had changes, or the
+//! Python source package), the compiler, and the target.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -80,6 +80,24 @@ fn packaged(manifest: &str) -> Option<String> {
     })
 }
 
+/// Whether `text` is one line naming a commit: 40 lowercase hex digits.
+fn named(text: &str) -> Option<&str> {
+    let commit = text.strip_suffix('\n').unwrap_or(text);
+    let hex = commit.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    (commit.len() == 40 && hex).then_some(commit)
+}
+
+/// The commit a build names, first that applies (docs/SPEC.md §12.2): the one cargo packaged, the
+/// one the release wrote into the Python source package (its `COMMIT`, read only outside a
+/// checkout), this checkout's, or `unknown`.
+fn chosen(packaged: Option<String>, sdist: Option<&str>, checkout: Option<String>) -> String {
+    let sdist = sdist.and_then(named).filter(|_| checkout.is_none());
+    packaged
+        .or(sdist.map(str::to_owned))
+        .or(checkout)
+        .unwrap_or_else(|| "unknown".into())
+}
+
 fn main() {
     let manifest = env!("CARGO_MANIFEST_DIR");
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
@@ -94,25 +112,25 @@ fn main() {
         }
     } else {
         println!("cargo:rerun-if-changed=build.rs");
+        // Watched only when there: cargo takes a missing file for one always changed.
+        if std::path::Path::new(root).join("COMMIT").exists() {
+            println!("cargo:rerun-if-changed={root}/COMMIT");
+        }
     }
-    let commit = match packaged(manifest) {
-        Some(commit) => commit,
-        // Only this repository's own checkout: from anywhere else, git would name whatever
-        // repository happens to hold the folder.
-        None if checkout => match git(&["rev-parse", "HEAD"]) {
-            // Two builds with the same changes get the same hash, and with different changes
-            // different ones; changes that cannot be read leave `-dirty` alone.
-            Some(commit) => match changes(root) {
-                Some(bytes) if bytes.is_empty() => commit,
-                bytes => match bytes.and_then(|bytes| hashed(root, &bytes)) {
-                    Some(hash) => format!("{commit}-dirty-{hash}"),
-                    None => format!("{commit}-dirty"),
-                },
+    // Two builds with the same changes get the same hash, and with different changes different
+    // ones; changes that cannot be read leave `-dirty` alone.
+    let checkout = checkout.then(|| match git(&["rev-parse", "HEAD"]) {
+        Some(commit) => match changes(root) {
+            Some(bytes) if bytes.is_empty() => commit,
+            bytes => match bytes.and_then(|bytes| hashed(root, &bytes)) {
+                Some(hash) => format!("{commit}-dirty-{hash}"),
+                None => format!("{commit}-dirty"),
             },
-            None => "unknown".into(),
         },
         None => "unknown".into(),
-    };
+    });
+    let sdist = std::fs::read_to_string(format!("{root}/COMMIT")).ok();
+    let commit = chosen(packaged(manifest), sdist.as_deref(), checkout);
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
     let rustc = said(&rustc, &["-V"]).unwrap_or_else(|| "unknown".into());
     println!("cargo:rustc-env=RVR_COMMIT={commit}");
@@ -121,4 +139,47 @@ fn main() {
         "cargo:rustc-env=RVR_TARGET={}",
         std::env::var("TARGET").unwrap()
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chosen;
+
+    const A: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn packaged_comes_first() {
+        let packaged = Some(format!("{A}-dirty"));
+        assert_eq!(chosen(packaged.clone(), Some(A), None), format!("{A}-dirty"));
+        assert_eq!(chosen(packaged, None, Some("b".into())), format!("{A}-dirty"));
+    }
+
+    #[test]
+    fn sdist_names_a_commit_outside_a_checkout() {
+        assert_eq!(chosen(None, Some(&format!("{A}\n")), None), A);
+        assert_eq!(chosen(None, Some(A), None), A);
+    }
+
+    #[test]
+    fn sdist_file_that_names_no_commit_is_unknown() {
+        let upper = A.to_uppercase();
+        let bad = ["", "\n", &A[..39], &format!("{A}0"), &upper, &format!("{A}\n\n"), &format!(" {A}")];
+        for text in bad {
+            assert_eq!(chosen(None, Some(text), None), "unknown", "{text:?}");
+        }
+    }
+
+    #[test]
+    fn checkout_is_its_own_even_with_the_file() {
+        let dirty = format!("{A}-dirty-0123456789ab");
+        let other = "fedcba9876543210fedcba9876543210fedcba98";
+        assert_eq!(chosen(None, Some(other), Some(dirty.clone())), dirty);
+        assert_eq!(chosen(None, Some(other), Some(A.into())), A);
+        assert_eq!(chosen(None, Some(other), Some("unknown".into())), "unknown");
+    }
+
+    #[test]
+    fn nothing_is_unknown() {
+        assert_eq!(chosen(None, None, None), "unknown");
+    }
 }

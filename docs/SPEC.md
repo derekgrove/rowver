@@ -710,7 +710,8 @@ makes cannot be carried on.
 
 **7.6.1** What a press holds in memory does not grow with the events it keeps: each file's kept
 values go to the spool as they are read, and each column is packed from the spool a piece at a
-time. A press needs free disk of about twice the file it writes.
+time. A press needs free disk for the spool, the kept values compressed where that pays, a piece at a
+time, beside the file it writes.
 
 **7.6.2** A press that builds on a file (§8) also holds 8 bytes per row of that file, and one of its
 columns at a time.
@@ -934,7 +935,7 @@ version, the commit it was built from, its compiler (`rustc -V`) and its target 
 | built from | commit |
 |---|---|
 | a crate from crates.io | the commit `cargo publish` recorded |
-| the Python source package | the commit the release wrote into it |
+| the Python source package | the commit the release wrote into it (its `COMMIT`, one line of 40 lowercase hex digits; anything else is `unknown`) |
 | rowver's own git checkout, as committed | that commit |
 | that checkout with changes under `crates/`, or to `Cargo.toml` or `Cargo.lock` | the commit, `-dirty-`, and 12 hex digits of git's hash of the changes, or `-dirty` when they cannot be read |
 | anything else | `unknown` |
@@ -943,8 +944,8 @@ version, the commit it was built from, its compiler (`rustc -V`) and its target 
 
 **12.4** One tag `vX.Y.Z` on `main` makes a release of every crate and the Python package. Its
 workflow tests everything, builds the Python wheels (Linux x86_64 and aarch64, manylinux 2.28; macOS
-for both chips) and tests each on Python 3.11 and 3.14, builds the source package and checks it
-builds alone, builds the `rvr` binaries (Linux x86_64 on AlmaLinux 8, for glibc 2.28 or later;
-macOS for both chips), and checks that every binary and tested wheel names the commit it was built
-from. Only then does it publish: the crates to crates.io, the Python package to PyPI, the binaries to
+for both chips) and tests each on Python 3.11 and 3.14, builds the source package with the commit
+written into it and checks it builds alone, builds the `rvr` binaries (Linux x86_64 on AlmaLinux 8,
+for glibc 2.28 or later; macOS for both chips), and checks that every binary, every tested wheel and
+the wheel built from the source package names the commit it was built from. Only then does it publish: the crates to crates.io, the Python package to PyPI, the binaries to
 the GitLab release.

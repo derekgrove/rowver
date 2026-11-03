@@ -9,8 +9,10 @@ echo "$v"
 case $v in
   *"commit $want)") ;;
   *"commit unknown)")
-    echo "This rvr names no commit: its build.rs could not ask git about the checkout. In a container," \
-      "trust the checkout before building: git config --global --add safe.directory \"\$GITHUB_WORKSPACE\"" >&2
+    echo "This rvr names no commit: its build.rs could not ask git about the checkout, or the source" \
+      "package it was built from carries none. In a container, trust the checkout before building: git" \
+      "config --global --add safe.directory \"\$GITHUB_WORKSPACE\". A source package gets its commit" \
+      "only from the release's sdist job; one built without it says unknown." >&2
     exit 1 ;;
   *-dirty*)
     echo "This rvr was built from changed code: the job that built it changed files under crates/, or" \

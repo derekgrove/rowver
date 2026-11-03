@@ -3,6 +3,8 @@ target/
 *.so
 *.pyd
 crates/rowver-py/dist/
+# The commit the release writes into the Python source package (pyproject.toml).
+crates/rowver-py/COMMIT
 __pycache__/
 *.egg-info/
 build/

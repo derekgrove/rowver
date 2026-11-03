@@ -85,7 +85,8 @@ jobs:
       # rvr names the commit it was built from, as every file it presses records it.
       - run: bash .github/check-commit.sh rvr
 
-  # The source package conda-forge builds from, checked to build a working wheel on its own.
+  # The source package conda-forge builds from, with the commit written into it (gitignored here),
+  # checked to build a working wheel on its own that names that commit.
   sdist:
     needs: plan
     runs-on: ubuntu-24.04
@@ -95,9 +96,11 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with: { python-version: "3.11" }
       - run: rustup toolchain install $RUST --profile minimal && rustup default $RUST
-      - run: pip install maturin==$MATURIN && maturin sdist --out dist
+      # The only place COMMIT is written: fresh, from this checkout, just before the sdist is made.
+      - run: git rev-parse HEAD > COMMIT && pip install maturin==$MATURIN && maturin sdist --out dist
         working-directory: crates/rowver-py
-      - run: pip install crates/rowver-py/dist/*.tar.gz && rvr --version && python -c "import rowver"
+      - run: pip install crates/rowver-py/dist/*.tar.gz && python -c "import rowver"
+      - run: bash .github/check-commit.sh rvr
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: sdist, path: crates/rowver-py/dist }
 

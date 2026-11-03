@@ -335,8 +335,8 @@ Wrote higgs_tautau.rvr (2,248 rows, 12 columns, 0.3 MB) in 2.4 s.
 ```
 
 On local copies of the same two files, every event, a press that reads only `Jet_pt` read at most
-26.3 MB of baskets (`Jet_pt` and `nJet`) where a full press reads 108.0 MB, in 0.2 s instead of
-0.6 s (Apple M5, 2026-10-30). While building on columns, a file that cannot be read stops the
+26.3 MB of baskets (`Jet_pt` and `nJet`) where a full press reads 108.0 MB, in 0.12 s instead of
+0.51 s (Apple M5, 2026-11-03). While building on columns, a file that cannot be read stops the
 press, as a hole would change the rows the columns are built on; `rvr press --full` presses
 everything and makes holes.
 
@@ -355,8 +355,8 @@ Wrote flat.rvr (15 rows, 4 columns and 2 derived, 0.0 MB) in 0.0 s.
 ```
 
 On 2.1 M rows (ten samples of 30 links to the TChiWZ skim), adding an eleventh of 30 files took
-1.5 s where a full press takes 4.9 s; taking one out took 0.75 s against 4.5 s, all of it the
-packing again (medians of 9, Apple M5, 2026-10-31).
+2.4 s where a full press takes 3.9 s; taking one out took 2.1 s against 3.5 s, all of it the
+packing again (medians of 9, Apple M5, 2026-11-03).
 
 **Nothing to read.** When only `[derived]` changed, or columns were only dropped, no input is
 opened: the stored columns are copied from the file, and the derived ones worked out from them.
@@ -415,11 +415,11 @@ the press says so and exits 1. The rules are
 alone.
 
 Which columns to store and which to derive is a choice of space against time. On 2.1 M rows (300
-copies of the TChiWZ skim, Apple M5, 2026-10-31), seven typical computed columns (a sum, a count,
+copies of the TChiWZ skim, Apple M5, 2026-11-03), seven typical computed columns (a sum, a count,
 the leading lepton's pt, a ratio, a transverse mass, the largest jet-pair mass, jets cleaned of
 leptons) take 70 bytes per row stored, uncompressed, 35% more than the ten columns they use;
-derived, they add 0.54 s to the press (4.0 s against 3.5 s), and a Python run that works all seven
-out takes 0.98 s, where one that reads them stored takes 0.10 s and one that only opens the file
+derived, they add 0.6 s to the press (4.0 s against 3.4 s), and a Python run that works all seven
+out takes 1.0 s, where one that reads them stored takes 0.10 s and one that only opens the file
 0.05 s. A simple one, `sum(PT_jet)`, takes 0.11 s.
 
 #### While it reads
@@ -440,8 +440,9 @@ Pressing 2 samples, 2 files, 968,616 entries, 2 at a time:
   5,547 kept so far · 5 MB/s · 8.1 s
 ```
 
-Drawing costs under 1%: 0.397 s against 0.394 s without it on the TChiWZ skim (30 files, on a
-terminal; Apple M5, 2026-10-30).
+Drawing costs no more than the run-to-run spread: 0.199 s against 0.195 s without it on the TChiWZ
+skim (30 files, on a terminal), 2.064 s against 2.068 s for 90 files with `--workers 1` (Apple M5,
+2026-11-03).
 
 #### Holes
 
@@ -491,8 +492,8 @@ reads only holes of those kinds (how the word after `--fill` is read:
 event choices; the lock may have been resolved again for the files it fills (one put back, or
 another copy in its place). A hole that fails again stays a hole, with its new kind and why; when
 none can be read, the file is left as it was. On the TChiWZ skim (30 files, 212,130 entries) with
-one file's hole, a fill takes 0.16 s where a full press takes 0.39 s (0.18 s and 1.84 s with
-`--workers 1`; Apple M5, 2026-10-29).
+one file's hole, a fill takes 0.09 s where a full press takes 0.18 s (0.24 s and 0.69 s with
+`--workers 1`; Apple M5, 2026-11-03).
 
 ```text
 $ rvr press --fill
@@ -537,16 +538,16 @@ Wrote higgs_tautau.rvr (22,325 rows, 11 columns, 2.4 MB) in 19.4 s.
 ```
 
 The file picked up is the one an uninterrupted press writes (`rvr diff` finds no difference).
-Keeping the journal costs at most 1.5%: on the TChiWZ skim, 0.395 s against 0.397 s without it (30
-files, default workers), 5.655 s against 5.609 s (90 files, `--workers 1`, three checkpoints), and
-3.827 s against 3.770 s for a 50.7 MB file of 22 columns, synced before it is put in place; Apple
-M5, 2026-10-30.
+Keeping the journal costs at most 1%: on the TChiWZ skim, 0.185 s against 0.188 s without it (30
+files, default workers), 2.057 s with and without it (90 files, `--workers 1`), and 3.554 s against
+3.524 s for the 39.3 MB file of 2.1 M rows, synced before it is put in place; Apple M5, 2026-11-03.
 
 What a press holds in memory does not grow with the events it keeps: each file's kept values go to
 a spool as they are read, and each column is packed from it a piece at a time, so a press needs free
-disk of about twice the file it writes ([SPEC §7.6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#76-what-a-press-holds)).
-Pressing 12 million rows of 31 columns (a 1.5 GB file, 4 workers) peaks at 0.3 GB of memory, where
-holding every row took 4.9 GB (2026-10-20).
+disk for the spool beside the file it writes: 461 MB beside the 39.3 MB file of 2.1 M rows, whose
+300 copies of one file compress far better whole than a piece at a time ([SPEC §7.6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#76-what-a-press-holds)).
+Pressing 12 million rows of 31 columns from 1,698 files (4 workers) peaks at 0.14 GB of memory, and
+3 million rows from 425 files at 0.10 GB (Apple M5, 2026-11-03).
 
 The file carries the whole study (the three texts, every file read with its identity and how much
 of it was read, each sample's metadata with `events_read` and `events_total`, the totals, and what
@@ -783,7 +784,7 @@ refused, naming them.
 
 `rvr empty` gives back a file's space and keeps it in its place: it lets the arrays go and keeps the
 header byte for byte, with the study it was pressed from, every checksum and its signature. On the
-2.1 M-row bench, a 39.3 MB file keeps its 114 kB header. `rvr validate`, `rvr dump`, `rvr diff` and
+2.1 M-row bench, a 39.3 MB file keeps its 122.5 kB header. `rvr validate`, `rvr dump`, `rvr diff` and
 the Python package read an empty file's header as ever and say it is empty. A refill reads the
 inputs again, so `rvr empty` first checks that each one the lock names is as the lock recorded it,
 and refuses a file made by another rvr version; `--anyway` empties it all the same. A file with

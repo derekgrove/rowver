@@ -33,5 +33,8 @@ rvr = "rowver._cli:main"
 
 [tool.maturin]
 python-source = "python"
+# The commit a release builds from, which its sdist job writes here and the source package carries
+# (docs/SPEC.md §12.2); gitignored, so a checkout never has one of its own.
+include = [{ path = "COMMIT", format = "sdist" }]
 module-name = "rowver._rowver"
 features = ["pyo3/extension-module"]

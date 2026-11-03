@@ -101,7 +101,8 @@ def python_plan(version):
         run("maturin", "sdist", "--out", out, cwd="crates/rowver-py")
         with open(f"{out}/rowver-{version}.tar.gz", "rb") as f:
             ours = members(f.read())
-    changed = differences(ours, members(get(sdists[0])), skip=["PKG-INFO"])
+    # COMMIT, which the sdist job writes, names the commit, as .cargo_vcs_info.json does a crate's.
+    changed = differences(ours, members(get(sdists[0])), skip=["PKG-INFO", "COMMIT"])
     if changed:
         fail(f"rowver {version} is on PyPI with other contents ({', '.join(changed[:5])}). "
              f"Raise the version in Cargo.toml, {AGAIN}.")

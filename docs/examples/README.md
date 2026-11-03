@@ -620,7 +620,7 @@ tree = "Events"
 `rvr samples check samples.lock` asks whether the files have changed since the lock was written.
 
 On the LPC or lxplus, the Linux download runs as it is (no CMSSW). Press where the press survives
-your logout, on a disk with room for twice the file it writes:
+your logout, on a disk with room for the press's spool as well as the file it writes:
 
 ```sh
 mkdir -p ~/bin && cd ~/bin
