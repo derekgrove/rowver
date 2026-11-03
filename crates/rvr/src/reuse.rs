@@ -10,8 +10,8 @@
 //! The file written is the one a full press of the recipe writes.
 
 use crate::fill::{unplanned, Fill, Plan};
-use crate::samples::resolve::Lock;
-use crate::samples::spec::Events;
+use rowver::choice::Events;
+use rowver::study::lock::Lock;
 use rowver::rvr::Reader;
 use rvr_recipe::{uses, Cut, Expression, Recipe};
 use serde_json::Value;
@@ -121,7 +121,7 @@ pub fn pressed_alike(header: &Value, texts: &crate::press::Texts, lock: &Lock) -
     }
     let samples = header["data"]["samples"].as_array().ok_or("it has no samples")?;
     let names: Vec<&str> = samples.iter().filter_map(|s| s["name"].as_str()).collect();
-    if names != lock.sample.iter().map(|s| s.name.as_str()).collect::<Vec<_>>() {
+    if names != lock.samples.iter().map(|s| s.name.as_str()).collect::<Vec<_>>() {
         return Err("its samples are not the lock's".into());
     }
     same_build(made)
@@ -192,7 +192,7 @@ fn read(
     }
     pressed_alike(header, texts, lock)?;
     let files = made["files"].as_object().ok_or("it records no files")?;
-    for (sample, want) in lock.sample.iter().zip(asked) {
+    for (sample, want) in lock.samples.iter().zip(asked) {
         if files.get(&sample.name).map(|s| &s["events"]) != Some(&want.record()) {
             return Err(format!(
                 "it chose other events of {} (another --events, --random or --seed)",
@@ -238,24 +238,23 @@ fn samples(file: Reader, recipe: &Recipe, reused: &[bool], lock: &Lock, asked: &
         return Err(format!("samples.lock has changed since, and so have the columns ({} new or changed): a press builds on a file for a change of either, not of both", changed.join(", ")));
     }
     let made = &file.header()["made"];
-    let old: Lock = toml::from_str(made["lock"]["text"].as_str().unwrap_or_default())
-        .map_err(|e| format!("its samples.lock cannot be read ({e})"))?;
+    let old = Lock::read(made["lock"]["text"].as_str().unwrap_or_default()).map_err(|p| format!("its samples.lock does not check out ({p})"))?;
     let names = |samples: &Value| -> Vec<String> { samples.as_array().into_iter().flatten().filter_map(|s| s["name"].as_str().map(str::to_owned)).collect() };
-    if names(&file.header()["data"]["samples"]) != old.sample.iter().map(|s| s.name.clone()).collect::<Vec<_>>() {
+    if names(&file.header()["data"]["samples"]) != old.samples.iter().map(|s| s.name.clone()).collect::<Vec<_>>() {
         return Err("its samples are not its own lock's".into());
     }
     let (mut added, mut plans) = (Vec::new(), Vec::new());
-    for (sample, want) in lock.sample.iter().zip(asked) {
-        let Some(was) = old.sample.iter().find(|s| s.name == sample.name) else {
-            for f in &sample.file {
-                let read = vec![(0, f.stop.or(f.entries).unwrap_or(0))];
+    for (sample, want) in lock.samples.iter().zip(asked) {
+        let Some(was) = old.samples.iter().find(|s| s.name == sample.name) else {
+            for f in &sample.files {
+                let read = vec![(0, f.stop.unwrap_or(f.entries))];
                 let plan = Plan { rows: 0..0, read, kept: Vec::new(), record: Value::Null, unread: true };
                 plans.push(((sample.name.clone(), f.at.clone()), plan));
             }
             added.push(sample.name.clone());
             continue;
         };
-        let files = |s: &crate::samples::resolve::Locked| s.file.iter().map(unplanned).collect::<Vec<_>>();
+        let files = |s: &rowver::study::lock::Sample| s.files.iter().map(unplanned).collect::<Vec<_>>();
         if was.tree != sample.tree || was.metadata != sample.metadata || files(was) != files(sample) {
             return Err(format!("{} is another sample in samples.lock now (its files, tree or metadata)", sample.name));
         }

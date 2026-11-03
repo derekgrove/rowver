@@ -72,8 +72,8 @@ validator reads only its input: none reads an event or opens a ROOT file.
 - the lock was resolved from this `samples.toml`: its `samples_toml_sha256` is that text's SHA-256,
   and its samples are the expansion of `samples.toml` (names, labels, trees, metadata, event
   choices, the paths and patterns asked);
-- every branch the recipe reads is in the branch list (in the lock) of every file of every sample,
-  with a type rvr reads;
+- every branch the recipe reads is in the branch list (in the lock) of every sample, with a type rvr
+  reads;
 - every expression of the recipe type-checks against those branches' kinds, and every column has
   one kind in every file;
 - no name of the recipe's `[totals]` or `[derived]` is a key of a sample's metadata;
@@ -86,7 +86,7 @@ validator reads only its input: none reads an event or opens a ROOT file.
 - the three study texts, as the file will carry them;
 - every sample in order: its name, label, metadata and event choice, and every file in order: where
   to read it (a local path, or an HTTPS URL), the tree, the identity to check before reading (bytes,
-  adler32, ROOT UUID, entries, branch list), and the entries to read;
+  adler32, ROOT UUID, entries, and its sample's branch list), and the entries to read;
 - the recipe, checked: the cuts, the stored columns with the kind of each, the totals, the derived
   columns;
 - what is taken from the earlier file (columns copied, rows kept, holes to fill);
@@ -168,7 +168,8 @@ with those tables added, and goes on.
 not `name`, `label`, `files` or `trees`, which belong to one sample.
 
 **3.3.2** Each applies to every sample that does not give it. A sample's own value replaces it;
-`metadata` is merged key by key, the sample's key replacing the default's.
+`metadata` is merged key by key, the sample's key replacing the default's. `seed` applies only to
+the samples that choose at random; a default `seed` no sample uses is refused.
 
 ### 3.4 `[eras]`
 
@@ -205,7 +206,7 @@ entry: as for the mass points of a signal scan, each its own tree in the same fi
 left out. `"random"` needs `events` to be a number.
 
 **3.5.9** `seed`: a whole number from 0 to 2^63 − 1 (TOML's largest), only with `choose = "random"`,
-where it is 1 when left out. Given without `choose = "random"`, it is refused.
+where it is 1 when left out. A sample that gives it without choosing at random is refused.
 
 **3.5.10** `metadata`: a table. Each key is a name a recipe can read as `sample.KEY`: a letter or `_`,
 then letters, digits and `_`. Not `events_read`, `events_total`, `events_missing` or `file`, which
@@ -423,15 +424,16 @@ current folder's name).
 **5.3.2** It writes nothing when any of the three is already there, and says which.
 
 **5.3.3** The `.gitignore` leaves out `*.rvr`, `*.rvr.partial/`, `*.reproduced/` and rvr's staged
-files (`*.rvr.derive`, `*.rvr.refill`, `*.rvr.refilled`, `recipe.toml.rvr-new`).
+files (`*.rvr.derive`, `*.rvr.refill`, `*.rvr.refilled`, and `*.rvr-new`: those of `recipe.toml`,
+`samples.toml` and `samples.lock`).
 
 ### 5.4 `rvr branches`
 
 **5.4.1** Lists every branch of the first file of the study's first sample (or of `--sample NAME`),
-from the lock's branch list: no file is opened **(chosen here, now that the lock holds them)**.
+from the sample's branch list in the lock: no file is opened.
 
 **5.4.2** One line per branch, ordered by name ignoring case: its name as a recipe writes it, its
-type, and its shape (`flat`, `jagged`, or `N per event`). Branches rvr cannot read follow under
+type, and its shape (`flat`, `jagged`, `N per event`, or `jagged, N per element`). Branches rvr cannot read follow under
 `Not readable by rvr:`, each with why. `--find TEXT` shows only the names holding TEXT, ignoring case.
 
 ### 5.5 `rvr try`
@@ -462,15 +464,17 @@ No storage is asked.
 every file of every sample and writes `samples.lock` beside `FILE`.
 
 **6.2.2** For each file it records the identity a press checks before reading it: its size in bytes,
-its adler32 (when its storage gives one), its ROOT UUID, its tree's entries, and its tree's branch
-list.
+its adler32 (when its storage gives one), its ROOT UUID and its tree's entries. For each sample it
+records the branch list of its first file's tree, which every file of the sample must have (§7.2.3):
+a branch list needs a tree's whole record, which for a skim can be megabytes, so it is read once a
+sample.
 
 **6.2.3** It asks:
 
 | the files are | resolve asks |
 |---|---|
-| on this computer | the file system, for each folder's names and each file's size; each file's whole bytes, for its adler32; its ROOT header, for its UUID, entries and branch list |
-| on storage | its HTTPS door: one listing (`PROPFIND`, depth 1) per folder; one `HEAD` per file with `Want-Digest: adler32`; and the byte ranges that open the file and describe its tree, for its UUID, entries and branch list |
+| on this computer | the file system, for each folder's names and each file's size; each file's whole bytes, for its adler32; its ROOT header, for its UUID and entries (and, for a sample's first file, its tree's whole record, for the branch list) |
+| on storage | its HTTPS door: one listing (`PROPFIND`, depth 1) per folder; one `HEAD` per file with `Want-Digest: adler32`; and the byte ranges that open the file and begin its tree's record, for its UUID and entries (for a sample's first file, the whole record, for the branch list) |
 
 **6.2.4** No event is read.
 
@@ -539,7 +543,9 @@ recipe uses.
 sample's files in the lock, then of entries within a file.
 
 **7.2.3** Before reading a file, the core checks it against the lock: its size, then its adler32
-(when the lock has one), then its ROOT UUID, entries and branch list. A difference makes a `changed`
+(when the lock has one), then its ROOT UUID and entries, then that every branch the recipe reads is
+in its tree with the kind and shape its sample's branch list gives (other branches may differ, as a
+run's trigger menu adds `HLT_` branches). A difference makes a `changed`
 hole of every entry it chose of the file.
 
 **7.2.4** A remote file is read over HTTPS from its door (§3.8.1), following up to 4 redirects; a

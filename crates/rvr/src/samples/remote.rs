@@ -14,12 +14,11 @@ use std::time::{Duration, Instant};
 pub struct Entry {
     pub name: String,
     pub bytes: u64,
-    pub modified: Option<String>,
 }
 
 /// The HTTPS door and path of a storage location, or why it has none.
 pub fn door(url: &str) -> Result<(String, String), String> {
-    let rest = ["root://", "davs://", "https://", "xroot://"]
+    let rest = ["root://", "davs://", "https://"]
         .iter()
         .find_map(|s| url.strip_prefix(s))
         .ok_or_else(|| format!("{url:?} is not a storage URL (root://, davs:// or https://)"))?;
@@ -62,23 +61,6 @@ fn element<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-/// "Thu, 25 Jun 2026 23:05:06 GMT" as "2026-06-25T23:05:06Z".
-fn rfc3339(http_date: &str) -> Option<String> {
-    let parts: Vec<&str> = http_date.split_whitespace().collect();
-    let [_, day, month, year, time, ..] = parts.as_slice() else {
-        return None;
-    };
-    let month = MONTHS.iter().position(|m| m == month)? + 1;
-    Some(format!(
-        "{year}-{month:02}-{:02}T{time}Z",
-        day.parse::<u32>().ok()?
-    ))
-}
-
 /// The files (not folders) of a PROPFIND answer, sorted by name.
 fn entries(xml: &str) -> Vec<Entry> {
     let mut entries = Vec::new();
@@ -101,7 +83,6 @@ fn entries(xml: &str) -> Vec<Entry> {
         entries.push(Entry {
             name: name.to_string(),
             bytes,
-            modified: element(block, "getlastmodified").and_then(rfc3339),
         });
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -558,7 +539,7 @@ impl Storage {
     fn list_now(&self, folder: &str) -> Result<Vec<Entry>, String> {
         let (origin, path) = door(folder)?;
         let path = format!("{}/", path.trim_end_matches('/'));
-        let body = r#"<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getcontentlength/><D:getlastmodified/></D:prop></D:propfind>"#;
+        let body = r#"<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getcontentlength/></D:prop></D:propfind>"#;
         let at = format!("{origin}{path}");
         let (proxied, door) = (self.proxy.is_some(), host_port(&origin));
         let reply = patiently(
@@ -610,8 +591,8 @@ impl Storage {
     }
 
     /// A storage file's size and adler32 as its storage reports them, without reading it.
-    pub fn digest(&self, url: &str) -> Result<(Option<u64>, Option<String>), String> {
-        digest(
+    pub fn digest(&self, url: &str) -> Result<Digest, Failed> {
+        digest_seen(
             &self.agent,
             url,
             self.waits,
@@ -649,22 +630,12 @@ pub fn why(error: &ureq::Error) -> String {
     }
 }
 
-/// A storage file's size and adler32 as its storage reports them, asked with one HEAD (asked
-/// again after each of `waits` while it fails at a busy storage).
-pub fn digest(
-    agent: &ureq::Agent,
-    url: &str,
-    waits: &[u64],
-    proxied: bool,
-    watch: &Watch,
-) -> Result<Digest, String> {
-    digest_seen(agent, url, waits, proxied, watch).map_err(|failed| failed.why)
-}
-
 /// A file's size and adler32, as its storage reports them.
 pub type Digest = (Option<u64>, Option<String>);
 
-/// As `digest`, a failure also saying what it means for the file.
+/// A storage file's size and adler32 as its storage reports them, asked with one HEAD (asked
+/// again after each of `waits` while it fails at a busy storage); a failure also says what it
+/// means for the file.
 pub fn digest_seen(
     agent: &ureq::Agent,
     url: &str,
@@ -727,12 +698,17 @@ fn digested(
         ));
     }
     let bytes = reply.header("Content-Length").and_then(|s| s.parse().ok());
-    let adler = reply.header("Digest").and_then(|d| {
-        d.split(',')
-            .find_map(|p| p.trim().strip_prefix("adler32="))
-            .map(|s| s.to_ascii_lowercase())
-    });
-    Ok((bytes, adler))
+    Ok((bytes, reply.header("Digest").and_then(adler32_of)))
+}
+
+/// The adler32 a `Digest` header gives, as 8 lowercase hex digits whatever case or length the
+/// storage wrote it in (`adler32=3DA0195` is `03da0195`).
+fn adler32_of(digest: &str) -> Option<String> {
+    digest
+        .split(',')
+        .find_map(|p| p.trim().strip_prefix("adler32="))
+        .and_then(|s| u32::from_str_radix(s.trim(), 16).ok())
+        .map(|sum| format!("{sum:08x}"))
 }
 
 /// A storage file read in byte ranges over HTTPS, for hep-root: the door's URL first, then the
@@ -1106,7 +1082,8 @@ mod tests {
         let names: Vec<&str> = found.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["a%2Bb%20c.root", "collection_2024.root"]);
         assert_eq!(found[0].bytes, 7);
-        assert_eq!(found[0].modified.as_deref(), Some("2026-06-25T23:05:06Z"));
+        assert_eq!(adler32_of("md5=x, adler32=3DA0195").as_deref(), Some("03da0195"));
+        assert_eq!(adler32_of("adler32=not-hex"), None);
     }
 
     #[test]

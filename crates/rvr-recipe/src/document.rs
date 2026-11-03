@@ -131,6 +131,31 @@ pub fn reads(expression: &Expression, found: &mut BTreeSet<String>) {
     gather(expression, found, false, true);
 }
 
+/// Add what a `branch(…)` not given text may name: the sample fields its argument reads to
+/// `fields`, and the text and names it holds to `texts`.
+pub fn branch_names(expression: &Expression, fields: &mut BTreeSet<String>, texts: &mut BTreeSet<String>) {
+    use Expression::*;
+    match expression {
+        Call(function, arguments) if function == "branch" && !matches!(arguments.as_slice(), [Constant(crate::Constant::Text(_))]) => {
+            for argument in arguments {
+                fields_of(argument, fields);
+                gather(argument, texts, true, false);
+            }
+        }
+        Call(_, arguments) => arguments.iter().for_each(|a| branch_names(a, fields, texts)),
+        In(left, list) => {
+            branch_names(left, fields, texts);
+            list.iter().for_each(|member| branch_names(member, fields, texts));
+        }
+        Negate(inner) | Not(inner) => branch_names(inner, fields, texts),
+        Binary(_, left, right) | Pick(left, right) => {
+            branch_names(left, fields, texts);
+            branch_names(right, fields, texts);
+        }
+        Constant(_) | Sample(_) | Name(_) => {}
+    }
+}
+
 /// Add the bare names an expression holds; with `text` the text it holds too, and with
 /// `branches` the text each `branch` names.
 fn gather(expression: &Expression, found: &mut BTreeSet<String>, text: bool, branches: bool) {

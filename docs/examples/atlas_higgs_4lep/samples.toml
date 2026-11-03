@@ -2,31 +2,38 @@
 # D, 10 fb⁻¹) and the main simulated samples, skimmed to four leptons, so small that the whole study
 # presses in a minute. No grid proxy needed. The tree is "mini", and momenta are in MeV.
 
+format = "rvr-samples"
+version = 1
+
 [places]
 atlas = "root://eospublic.cern.ch//eos/opendata/atlas/OutreachDatasets/2020-01-22/4lep"
 
 [defaults]
 tree = "mini"
+
+[defaults.metadata]
 kind = "background"
 lumi = 10                     # fb⁻¹: data periods A to D
+
+[eras]
 
 [[sample]]
 name = "data"
 label = "Data, periods A to D"
 files = "{atlas}/Data/data_?.4lep.root"         # a pattern: periods A, B, C and D
-kind = "data"
+metadata = { kind = "data" }
 
 [[sample]]
 name = "ggH"
 label = "gg → H → ZZ* → 4ℓ"
 files = "{atlas}/MC/mc_345060.ggH125_ZZ4lep.4lep.root"
-kind = "signal"
+metadata = { kind = "signal" }
 
 [[sample]]
 name = "VBFH"
 label = "VBF H → ZZ* → 4ℓ"
 files = "{atlas}/MC/mc_344235.VBFH125_ZZ4lep.4lep.root"
-kind = "signal"
+metadata = { kind = "signal" }
 
 [[sample]]
 name = "ZZ"

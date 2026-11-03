@@ -8,6 +8,7 @@ mod numeric;
 pub mod parallel;
 pub mod rvr;
 pub mod sign;
+pub mod study;
 mod table;
 pub mod write;
 

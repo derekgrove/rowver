@@ -1,6 +1,9 @@
 # The two H → ττ signals of CMS Open Data (no grid proxy needed), 20,000 events of each chosen at
 # random (seed 7), for a recipe that uses every part of the recipe language.
 
+format = "rvr-samples"
+version = 1
+
 [places]
 opendata = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool"
 
@@ -9,16 +12,20 @@ tree = "Events"
 events = 20_000
 choose = "random"
 seed = 7
+
+[defaults.metadata]
 trigger = "HLT_IsoMu17_eta2p1_LooseIsoPFTau20"   # the branch the trigger cut reads
+
+[eras]
 
 [[sample]]
 name = "ggH"
 label = "gg → H → ττ"
 files = "{opendata}/GluGluToHToTauTau.root"
-production = "ggh"
+metadata = { production = "ggh" }
 
 [[sample]]
 name = "VBF"
 label = "VBF H → ττ"
 files = "{opendata}/VBF_HToTauTau.root"
-production = "vbf"
+metadata = { production = "vbf" }

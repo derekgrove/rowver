@@ -1,5 +1,8 @@
 # samples.toml: what this study reads. `rvr samples resolve samples.toml` finds every file and
-# writes samples.lock beside this file; commit both. See the README of rvr for every key.
+# writes samples.lock beside this file; commit both. Every key: https://gitlab.cern.ch/dgrove/rowver/-/blob/main/docs/SPEC.md
+
+format = "rvr-samples"
+version = 1
 
 [places]
 # Short names for long locations, used as {name} inside files = "…".
@@ -13,23 +16,24 @@ opendata = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODO
 tree = "Events"
 # events = 50_000     # read at most this many entries of every sample (rvr press --events overrides it)
 
+[eras]
 # [eras.UL18]         # a sample that lists eras = ["UL18", …] becomes one sample per era;
 # era = 3             # an era's values become metadata, and {era} is the era's name
 
-# Each [[sample]] needs a name (letters, digits, _ and -) and its files = "…".
-# label is what plots show. Any other key (kind, xsec, …) is metadata the .rvr carries.
+# Each [[sample]] needs a name (letters, digits, _ and -) and its files = "…". label is what plots
+# show, and metadata = { … } what the .rvr carries of it, which a recipe reads as sample.KEY.
 
 [[sample]]
 name = "GluGluToHToTauTau"
 label = "ggH to tau tau (CMS Open Data 2012)"
 files = "{opendata}/GluGluToHToTauTau.root"
-kind = "signal"
+metadata = { kind = "signal" }
 
 [[sample]]
 name = "VBF_HToTauTau"
 label = "VBF H to tau tau (CMS Open Data 2012)"
 files = "{opendata}/VBF_HToTauTau.root"
-kind = "signal"
+metadata = { kind = "signal" }
 
 # Skims on EOS, one sample per era, the file named with a pattern (* and ? in the file name):
 # [[sample]]
@@ -38,7 +42,7 @@ kind = "signal"
 # files = "{lpc}/Summer20{era}_106X/ST_s-channel_4f_*_Summer20{era}_106X.root"
 # eras = ["UL17", "UL18"]
 # tree = "KUAnalysis"
-# kind = "background"
+# metadata = { kind = "background" }
 
 # A file on this computer:
 # [[sample]]

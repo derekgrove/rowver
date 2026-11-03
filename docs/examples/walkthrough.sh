@@ -281,8 +281,19 @@ if [ -z "$SKIM" ] || [ ! -f "$SKIM" ]; then
   exit 0
 fi
 mkdir -p "$DIR/three/files" && cd "$DIR/three" || exit 1
-for i in $(seq -w 1 90); do ln "$SKIM" "files/f$i.root" 2> /dev/null || ln -s "$SKIM" "files/f$i.root"; done
+# Hard links, else copies (clones where the disk makes them): a symbolic link is the file it names,
+# so 90 of them would be one file reached 90 times.
+for i in $(seq -w 1 90); do ln "$SKIM" "files/f$i.root" 2> /dev/null || cp -c "$SKIM" "files/f$i.root" 2> /dev/null || cp "$SKIM" "files/f$i.root"; done
 cat > samples.toml <<'EOF'
+format = "rvr-samples"
+version = 1
+
+[places]
+
+[defaults]
+
+[eras]
+
 [[sample]]
 name = "early"
 label = "first files"

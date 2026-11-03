@@ -11,8 +11,9 @@ use crate::holes::{fault_of, Failed, Fault, Seen};
 use crate::samples::remote::{
     digest_seen, read_again, HttpsFile, Storage, Watch, READING, STOPPED,
 };
-use crate::samples::resolve::{self, adler32_file, File, Lock, Locked};
-use crate::samples::spec::Events;
+use crate::samples::resolve::{self, adler32_file};
+use rowver::choice::Events;
+use rowver::study::lock::{File, Lock, Sample as Locked};
 use crate::samples::{some, Choice};
 use hep_root::{ByteSource, RootFile, Tree};
 use rowver::write::{self, Labels};
@@ -137,9 +138,8 @@ fn run(args: &[&str]) -> Result<usize, String> {
     let workers =
         workers.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
     let mut texts = inputs(&dir)?;
-    let lock: Lock = toml::from_str(&texts.lock)
-        .map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
-    choice.check(&lock.sample)?;
+    let lock = Lock::read(&texts.lock).map_err(|p| format!("samples.lock does not check out: {p}. Run rvr samples resolve samples.toml again."))?;
+    choice.check(&lock.samples)?;
     // A fill takes the recipe the file was pressed from, as it was: it is not offered tables.
     if fill.is_none() && crate::tables::offer(&dir, &texts.recipe, "press", "continue pressing")? {
         texts = inputs(&dir)?;
@@ -197,15 +197,21 @@ pub struct Texts {
 /// Read a study's three files and refuse a lock that no longer matches its samples.toml.
 pub fn inputs(dir: &Path) -> Result<Texts, String> {
     let (texts, lock) = texts(dir)?;
-    if !resolved(&texts, &lock) {
+    agreed(&texts, &lock)?;
+    Ok(texts)
+}
+
+/// Refuse a lock not resolved from this samples.toml, or whose samples are not the ones it makes.
+pub fn agreed(texts: &Texts, lock: &Lock) -> Result<(), String> {
+    if !resolved(texts, lock) {
         return Err(format!("samples.toml has changed since samples.lock was written ({}). Run rvr samples resolve samples.toml, review the new lock, then press.", lock.resolved));
     }
-    Ok(texts)
+    rowver::study::lock::agree(&texts.samples, lock).map_err(|p| format!("samples.lock does not agree with samples.toml: {p}. Run rvr samples resolve samples.toml and review the new lock."))
 }
 
 /// Whether the lock was resolved from this samples.toml.
 pub fn resolved(texts: &Texts, lock: &Lock) -> bool {
-    crate::samples::sha256(texts.samples.as_bytes()) == lock.samples_toml_sha256
+    rowver::write::text_checksum(&texts.samples) == lock.samples_toml_sha256
 }
 
 /// One of a study's files, as text; one missing says what to do.
@@ -230,7 +236,7 @@ fn study_file(dir: &Path, file: &str) -> Result<String, String> {
 /// A study's lock, its text and as read.
 pub fn lock(dir: &Path) -> Result<(String, Lock), String> {
     let text = study_file(dir, "samples.lock")?;
-    let lock = toml::from_str(&text).map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
+    let lock = Lock::read(&text).map_err(|p| format!("samples.lock does not check out: {p}. Run rvr samples resolve samples.toml again."))?;
     Ok((text, lock))
 }
 
@@ -252,9 +258,9 @@ pub fn plan(
     events: &dyn Fn(&Locked) -> Result<Events, String>,
 ) -> Result<Vec<Events>, String> {
     let mut asked = Vec::new();
-    for sample in &mut lock.sample {
+    for sample in &mut lock.samples {
         let want = events(sample)?;
-        resolve::planned(sample, want)?;
+        *sample = sample.planned(want);
         asked.push(want);
     }
     Ok(asked)
@@ -326,6 +332,8 @@ struct Shared<'a> {
     reach: Reach<'a>,
     /// Every name the recipe mentions, to choose the branches fetched ahead.
     mentions: &'a BTreeSet<String>,
+    /// By sample, the branches of its list its files must have as they are there.
+    checked: &'a [HashMap<&'a str, &'a rowver::study::lock::Branch>],
     /// Where each input's kept values go as they are gathered, by output and input.
     spool: &'a write::Spool,
     /// Where each input finished is noted, so that a press stopped part way is picked up; not
@@ -364,21 +372,7 @@ impl<'a, S: ByteSource> Branches<'a, S> {
 
 /// A hep-root number kind as a `.rvr` kind.
 fn kind_of(kind: hep_root::columns::Kind) -> Kind {
-    use hep_root::columns::Kind as R;
-    let name = match kind {
-        R::Bool => "b1",
-        R::I8 => "i1",
-        R::U8 => "u1",
-        R::I16 => "i2",
-        R::U16 => "u2",
-        R::I32 => "i4",
-        R::U32 => "u4",
-        R::I64 => "i8",
-        R::U64 => "u8",
-        R::F32 => "f4",
-        R::F64 => "f8",
-    };
-    Kind::named(name).expect("every hep-root kind has a .rvr name")
+    Kind::named(resolve::kind_name(kind)).expect("every hep-root kind has a .rvr name")
 }
 
 impl<S: ByteSource> Columns for Branches<'_, S> {
@@ -866,7 +860,7 @@ pub(crate) fn open(reach: &Reach, file: &File) -> Result<RootFile<Held>, Failed>
     let again = Some((READING, reach.watch.clone()));
     if !at.contains("://") {
         // A relative path is the lock's own: relative to the study folder.
-        let path = reach.dir.join(at);
+        let path = resolve::local(at, reach.dir);
         // A file whose folder is not there either may be on a disk not mounted: not the file's fault.
         let folder = path.parent().is_none_or(Path::exists);
         let meta = std::fs::metadata(&path).map_err(|e| match e.kind() {
@@ -917,29 +911,23 @@ pub(crate) fn open(reach: &Reach, file: &File) -> Result<RootFile<Held>, Failed>
 
 /// Where the sample `named` is in the lock (the first sample when none is named).
 pub(crate) fn sample_at(lock: &Lock, named: Option<&str>) -> Result<usize, String> {
-    if lock.sample.is_empty() {
+    if lock.samples.is_empty() {
         return Err("samples.lock has no samples: add one to samples.toml and resolve again".into());
     }
     let Some(name) = named else { return Ok(0) };
-    lock.sample.iter().position(|s| s.name == name).ok_or_else(|| {
-        let names: Vec<&str> = lock.sample.iter().map(|s| s.name.as_str()).collect();
+    lock.samples.iter().position(|s| s.name == name).ok_or_else(|| {
+        let names: Vec<&str> = lock.samples.iter().map(|s| s.name.as_str()).collect();
         format!("samples.lock has no sample named {name}; it has {}", names.join(", "))
     })
 }
 
-/// The first of a sample's files (with entries, when `entries` is asked for), opened, with its
-/// entry in the lock.
-pub(crate) fn first_readable<'a>(
-    lock: &'a Lock,
-    sample: usize,
-    dir: &Path,
-    entries: bool,
-) -> Result<(RootFile<Held>, &'a File), String> {
-    let s = &lock.sample[sample];
+/// The first of a sample's files with entries, opened, with its entry in the lock.
+pub(crate) fn first_readable<'a>(lock: &'a Lock, sample: usize, dir: &Path) -> Result<(RootFile<Held>, &'a File), String> {
+    let s = &lock.samples[sample];
     let file = s
-        .file
+        .files
         .iter()
-        .find(|f| !entries || f.entries != Some(0))
+        .find(|f| f.entries != 0)
         .ok_or_else(|| format!("{} has no file with events", s.name))?;
     let watch = Arc::new(Watch::default());
     let (storage, offline) = connect(&[(sample, file)], &watch);
@@ -976,8 +964,8 @@ fn opened(
         }
     })?;
     let uuid = root.header().uuid_string();
-    if file.uuid.as_ref().is_some_and(|locked| *locked != uuid) {
-        return Err(Failed::new(Fault::Changed, format!("{at} is not the file samples.lock recorded: its ROOT UUID was {}, it is now {uuid}. Run rvr samples resolve samples.toml and review the new lock.", file.uuid.as_deref().unwrap_or("?"))));
+    if file.uuid != uuid {
+        return Err(Failed::new(Fault::Changed, format!("{at} is not the file samples.lock recorded: its ROOT UUID was {}, it is now {uuid}. Run rvr samples resolve samples.toml and review the new lock.", file.uuid)));
     }
     Ok(root)
 }
@@ -991,19 +979,11 @@ pub(crate) fn hint(error: &str, branches: &[String], recipe: &Recipe) -> String 
         let mut names: Vec<&str> = branches.iter().map(String::as_str).chain(defined).collect();
         names.sort();
         names.dedup();
-        let near = resolve::nearest(name.trim(), names.into_iter());
-        let near = match near.is_empty() {
-            true => String::new(),
-            false => format!(" Did you mean: {}?", near.join(", ")),
-        };
+        let near = rowver::study::meant(name.trim(), names.into_iter());
         return format!(".{near} rvr branches lists every branch the file has.");
     }
     if let Some((_, name)) = error.rsplit_once("There is no function named ") {
-        let near = resolve::nearest(name.trim(), rvr_recipe::FUNCTIONS.iter().copied());
-        let near = match near.is_empty() {
-            true => String::new(),
-            false => format!(" Did you mean: {}?", near.join(", ")),
-        };
+        let near = rowver::study::meant(name.trim(), rvr_recipe::FUNCTIONS.iter().copied());
         return format!(".{near} Every function, with an example, is in the recipe reference: {RECIPES}");
     }
     match error.contains("decompression failed") {
@@ -1024,7 +1004,7 @@ pub(crate) fn chosen_in(input: &Input, first: u64, last: u64) -> u64 {
 
 /// The entries the choice reads of an input's file, by the lock: below `stop`, or all.
 fn limit(input: &Input) -> u64 {
-    input.file.stop.or(input.file.entries).unwrap_or(0)
+    input.file.stop.unwrap_or(input.file.entries)
 }
 
 /// How many entries an input reads: of what its choice reads, or for a fill of the holes asked.
@@ -1035,10 +1015,10 @@ pub(crate) fn chosen_of(input: &Input) -> u64 {
     }
 }
 
-/// An input's record as the lock gives it: its tree, UUID (`null` when the lock has none) and
-/// entries, and what the choice reads of it.
+/// An input's record as the lock gives it: its tree, UUID and entries, and what the choice reads
+/// of it.
 fn planned(input: &Input) -> Value {
-    let mut record = json!({"tree": input.tree, "uuid": input.file.uuid, "entries": input.file.entries.unwrap_or(0)});
+    let mut record = json!({"tree": input.tree, "uuid": input.file.uuid, "entries": input.file.entries});
     if let Some(stop) = input.file.stop {
         record["stop"] = stop.into();
     }
@@ -1102,7 +1082,7 @@ fn take(
         cutflow: vec![0; recipe.keep.len()],
     };
     // A file a random choice takes nothing from is recorded from the lock, not opened.
-    if input.chosen.as_ref().is_some_and(Vec::is_empty) && input.file.uuid.is_some() && input.file.entries.is_some() {
+    if input.chosen.as_ref().is_some_and(Vec::is_empty) {
         if input.kept.as_ref().is_some_and(|kept| !kept.is_empty()) {
             return Err(located("none of the events the earlier file kept were chosen (a bug in rvr: press with --full, and please report it)".into()).into());
         }
@@ -1145,8 +1125,19 @@ fn take(
         }
     };
     let total = tree.entries.max(0) as u64;
-    if input.file.entries.is_some_and(|locked| locked != total) {
-        return unread(Failed::new(Fault::Changed, located(format!("its tree {} has {total} entries, not the {} samples.lock recorded. Run rvr samples resolve samples.toml and review the new lock.", input.tree, input.file.entries.unwrap()))));
+    if input.file.entries != total {
+        return unread(Failed::new(Fault::Changed, located(format!("its tree {} has {total} entries, not the {} samples.lock recorded. Run rvr samples resolve samples.toml and review the new lock.", input.tree, input.file.entries))));
+    }
+    // Every branch the recipe reads has here the kind and shape it has in the sample's first file;
+    // the others may differ (a run's trigger menu adds HLT_ branches).
+    let want = &shared.checked[input.sample];
+    let have = match want.is_empty() {
+        true => Vec::new(),
+        false => resolve::branches_named(&tree, |name| want.contains_key(name)),
+    };
+    let differ = resolve::differ(want.values().copied(), have.iter());
+    if !differ.is_empty() {
+        return unread(Failed::new(Fault::Changed, located(format!("of the branches the recipe reads, its tree is not as its sample's first file is ({differ}). Name the files that differ in a sample of their own, run rvr samples resolve samples.toml, then rvr press."))));
     }
     let entries = input.file.stop.map_or(total, |stop| stop.min(total));
     let mut sample = sample.clone();
@@ -1330,7 +1321,7 @@ fn take(
                     // A local file that cannot be opened now at all (a mount gone) is not the file's
                     // fault; one that can, but not read there, is damaged there.
                     if !remote && matches!(fault, Fault::Damaged | Fault::Save) {
-                        failed.fault = match std::fs::File::open(shared.reach.dir.join(at)) {
+                        failed.fault = match std::fs::File::open(resolve::local(at, shared.reach.dir)) {
                             Ok(_) => Fault::Damaged,
                             Err(_) => Fault::Save,
                         };
@@ -1470,7 +1461,7 @@ fn take_all(
     picked: BTreeMap<usize, Taken>,
 ) -> Result<Vec<Taken>, Failed> {
     let fields: Vec<BTreeMap<String, Constant>> =
-        lock.sample.iter().map(|s| fields(&s.metadata)).collect();
+        lock.samples.iter().map(|s| fields(&s.metadata)).collect();
     let next = AtomicUsize::new(0);
     let watch = &shared.reach.watch;
     let todo: Vec<usize> = (0..work.len()).filter(|at| !picked.contains_key(at)).collect();
@@ -1692,17 +1683,13 @@ pub fn press(
     on: On,
 ) -> Result<usize, String> {
     let started = std::time::Instant::now();
-    let mut lock: Lock = toml::from_str(&texts.lock)
-        .map_err(|e| format!("samples.lock is not a lock rvr wrote: {e}"))?;
+    let mut lock = Lock::read(&texts.lock).map_err(|p| format!("samples.lock does not check out: {p}. Run rvr samples resolve samples.toml again."))?;
+    agreed(texts, &lock)?;
     let source = &texts.recipe;
     let recipe = read_recipe(source)?;
     let asked = plan(&mut lock, events)?;
-    let given = lock.sample.iter().find_map(|s| ADDED.iter().find(|key| s.metadata.contains_key(**key)).map(|key| (s, key)));
-    if let Some((sample, key)) = given {
-        return Err(format!("{} has a key {key} in samples.toml, a name rvr press gives every sample ({}): give it another name, and resolve again.", sample.name, ADDED.join(", ")));
-    }
     // A derived column has a name no sample column has, before anything is read.
-    let metadata = |name: &str| ADDED.contains(&name) || lock.sample.iter().any(|s| s.metadata.contains_key(name));
+    let metadata = |name: &str| ADDED.contains(&name) || lock.samples.iter().any(|s| s.metadata.contains_key(name));
     if let Some(total) = recipe.totals.iter().find(|total| metadata(&total.name)) {
         return Err(format!("[totals] {} has the name of a key of samples.toml, or of one rvr press gives every sample ({}): give the total another", total.name, ADDED.join(", ")));
     }
@@ -1710,12 +1697,12 @@ pub fn press(
         return Err(format!("[derived] {name} has the name of a key of samples.toml, or of one rvr press gives every sample ({}): give the derived column another", ADDED.join(", ")));
     }
     for total in &recipe.totals {
-        if let Some(sample) = lock.sample.iter().find(|sample| total.tree.as_deref() == Some(sample.tree.as_str())) {
+        if let Some(sample) = lock.samples.iter().find(|sample| total.tree.as_deref() == Some(sample.tree.as_str())) {
             return Err(format!("[totals] {} names the tree {}, the one {} reads its events from: a total over the events read is written without tree, as {} = \"…\"", total.name, sample.tree, sample.name, total.name));
         }
     }
     if let Some(total) = recipe.totals.iter().find(|total| total.tree.is_some()) {
-        if let Some((sample, _)) = lock.sample.iter().zip(&asked).find(|(_, want)| !matches!(want, Events::All)) {
+        if let Some((sample, _)) = lock.samples.iter().zip(&asked).find(|(_, want)| !matches!(want, Events::All)) {
             return Err(format!("[totals] {} sums the tree {}, whose entries count every event of a file, and {} reads only some of its events: read its files whole (events = \"all\"), or total a branch of the events read", total.name, total.tree.as_deref().unwrap_or_default(), sample.name));
         }
     }
@@ -1777,11 +1764,11 @@ pub fn press(
     });
     let reader = uncut.as_ref().unwrap_or(&recipe);
     let mut work: Vec<Input> = lock
-        .sample
+        .samples
         .iter()
         .enumerate()
         .flat_map(|(sample, s)| {
-            let entries: Vec<u64> = s.file.iter().map(|f| f.entries.unwrap_or(0)).collect();
+            let entries: Vec<u64> = s.files.iter().map(|f| f.entries).collect();
             let chosen: Vec<Option<Vec<u64>>> = match asked[sample] {
                 Events::Random { n, seed } => rowver::choice::per_file(&entries, n, seed)
                     .into_iter()
@@ -1789,7 +1776,7 @@ pub fn press(
                     .collect(),
                 _ => vec![None; entries.len()],
             };
-            s.file
+            s.files
                 .iter()
                 .zip(chosen)
                 .filter(|(f, _)| f.stop != Some(0))
@@ -1816,7 +1803,7 @@ pub fn press(
     for input in &mut work {
         if let Some(earlier) = &mut earlier {
             let key = (
-                lock.sample[input.sample].name.clone(),
+                lock.samples[input.sample].name.clone(),
                 input.file.at.clone(),
             );
             let record = &earlier.file().header()["made"]["files"][&key.0]["files"][&key.1];
@@ -1865,7 +1852,7 @@ pub fn press(
         .collect();
     let (storage, offline) = connect(&files, &watch);
     let (spool, journal) = crate::journal::stage(target, &staged, &identity, picked)?;
-    let read: u64 = lock.sample.iter().map(|s| s.events_read).sum();
+    let read: u64 = lock.samples.iter().map(|s| s.events_read).sum();
     // The samples a press of other samples than the file's reads: "sample c", "samples c, d".
     let named = |added: &[String]| format!("{} {}", if added.len() == 1 { "sample" } else { "samples" }, added.join(", "));
     match (&earlier, adding) {
@@ -1876,8 +1863,8 @@ pub fn press(
         (_, Some(added)) => println!(
             "{} holds the rows of {} of the {} as samples.lock has them.\nReading only the new {}, {}, {} entries, {} at a time:",
             target.display(),
-            lock.sample.len() - added.len(),
-            some(lock.sample.len(), "sample", "samples"),
+            lock.samples.len() - added.len(),
+            some(lock.samples.len(), "sample", "samples"),
             named(added),
             some(reads.len(), "file", "files"),
             count(reads.iter().map(chosen_of).sum::<u64>()),
@@ -1916,7 +1903,7 @@ pub fn press(
         }
         (None, None) => println!(
             "Pressing {}, {}, {} entries, {} at a time:",
-            some(lock.sample.len(), "sample", "samples"),
+            some(lock.samples.len(), "sample", "samples"),
             some(work.len(), "file", "files"),
             count(read),
             workers.min(work.len()).max(1)
@@ -1933,11 +1920,26 @@ pub fn press(
         .collect();
     let defined = crate::reuse::reached(reader, &roots);
     let mut mentions = BTreeSet::new();
+    let (mut by_name, mut fields, mut by_text) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
     for expression in roots.iter().copied().chain(defined.iter().map(|d| &reader.defines[d])) {
         rvr_recipe::names(expression, &mut mentions);
+        rvr_recipe::reads(expression, &mut by_name);
+        rvr_recipe::branch_names(expression, &mut fields, &mut by_text);
+    }
+    // The branches each sample's files must have as its first file has them: those the recipe
+    // reads by name (a defined name is not one), by text, or through a field of the sample.
+    by_name.retain(|name| !reader.defines.contains_key(name));
+    by_name.extend(by_text);
+    let mut checked = Vec::new();
+    for s in &lock.samples {
+        let list = lock.branches_of(s).ok_or("samples.lock names a branch list it does not hold (a bug in rvr: please report it)")?;
+        let named = |b: &&rowver::study::lock::Branch| {
+            by_name.contains(&b.name) || fields.iter().any(|f| s.metadata.get(f).and_then(Value::as_str) == Some(b.name.as_str()))
+        };
+        checked.push(list.list.iter().filter(named).map(|b| (b.name.as_str(), b)).collect::<HashMap<_, _>>());
     }
     // The bars: each sample's entries chosen of what this press reads, and what it picked up.
-    let (mut chosen, mut already, mut holed) = (vec![0; lock.sample.len()], vec![0; lock.sample.len()], 0);
+    let (mut chosen, mut already, mut holed) = (vec![0; lock.samples.len()], vec![0; lock.samples.len()], 0);
     for (at, input) in reads.iter().enumerate() {
         chosen[input.sample] += chosen_of(input);
         if let Some(taken) = resumed.get(&at) {
@@ -1945,7 +1947,7 @@ pub fn press(
             holed += taken.record["holes"].as_array().filter(|_| input.kept.is_none()).map_or(0, Vec::len);
         }
     }
-    let names = lock.sample.iter().map(|s| s.name.clone());
+    let names = lock.samples.iter().map(|s| s.name.clone());
     let bars = names.zip(chosen).zip(already).map(|((name, chosen), done)| (name, chosen, done)).collect();
     let display = crate::progress::Display::start(bars, resumed.values().map(|t| t.rows as u64).sum(), holed);
     let shared = Shared {
@@ -1960,6 +1962,7 @@ pub fn press(
             read: display.counts.bytes.clone(),
         },
         mentions: &mentions,
+        checked: &checked,
         spool: &spool,
         journal: &journal,
         carries,
@@ -2020,7 +2023,7 @@ pub fn press(
     let (mut samples, mut made_files) = (Vec::new(), Map::new());
     let mut kinds: Vec<Option<(Kind, bool)>> = vec![None; reading.len()];
     let mut missing = Vec::new();
-    for (index, sample) in lock.sample.iter().enumerate() {
+    for (index, sample) in lock.samples.iter().enumerate() {
         let inputs: Vec<&Input> = work.iter().filter(|i| i.sample == index).collect();
         let (rows, records, lacks) = joined(
             sample, &inputs, &mut taken, &reading, &mut kinds, &mut tally,
@@ -2050,7 +2053,7 @@ pub fn press(
     }
     // What each sample misses is said only in a file with holes, and then on every sample.
     if !tally.holes.is_empty() {
-        for (sample, lacks) in lock.sample.iter().zip(&missing) {
+        for (sample, lacks) in lock.samples.iter().zip(&missing) {
             made_files[&sample.name]["metadata"]["events_missing"] = (*lacks).into();
         }
     }
@@ -2136,7 +2139,7 @@ pub fn press(
     made.insert("lock".into(), text(&texts.lock));
     made.insert("files".into(), Value::Object(made_files));
     let mut made = Value::Object(made);
-    let names: Vec<&str> = lock.sample.iter().map(|s| s.name.as_str()).collect();
+    let names: Vec<&str> = lock.samples.iter().map(|s| s.name.as_str()).collect();
     let written: Vec<&str> = outputs.iter().map(|(n, _)| n.as_str()).collect();
     data["sample_cols"] = write::sample_cols(&names, &made["files"], &written)
         .map_err(failed)?
@@ -2181,7 +2184,7 @@ pub fn press(
     // Building on a file of other samples, what was read is the new samples'.
     let read_now = |name: &String| adding.is_none_or(|added| added.contains(name));
     if !built_on && adding.is_none_or(|added| !added.is_empty()) {
-        let lacks: u64 = lock.sample.iter().zip(&missing).filter(|(s, _)| read_now(&s.name)).map(|(_, m)| m).sum();
+        let lacks: u64 = lock.samples.iter().zip(&missing).filter(|(s, _)| read_now(&s.name)).map(|(_, m)| m).sum();
         let read = match lacks {
             _ if filling.is_some() && adding.is_none() => format!("{} entries in the holes", count(tally.read)),
             0 => format!("{} entries", count(tally.read)),
@@ -2352,9 +2355,8 @@ mod tests {
             at: "f.root".into(),
             bytes: 10,
             adler32: adler32.map(str::to_owned),
-            modified: None,
-            uuid: None,
-            entries: None,
+            uuid: String::new(),
+            entries: 0,
             stop: None,
             take: None,
         };

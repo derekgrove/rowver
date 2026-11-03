@@ -10,11 +10,11 @@
 //! read whole, and every other sample's rows are the file's own.
 
 use crate::press::{chosen_in, ranges, Input, Output, Taken};
-use crate::samples::resolve::Lock;
+use rowver::study::lock::Lock;
 use rowver::write;
 use rowver::NumericBuffer;
 use rvr_recipe::Kind;
-use crate::samples::spec::Events;
+use rowver::choice::Events;
 use rowver::rvr::{Reader, HOLE_KINDS};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -88,7 +88,7 @@ pub fn fits(
     if wanted.is_empty() {
         return Err(format!("{shown} has no holes of kind {}: its holes are {}", kinds.join(", "), holes.iter().map(|h| h.kind.as_str()).collect::<std::collections::BTreeSet<_>>().into_iter().collect::<Vec<_>>().join(", ")));
     }
-    let old: Lock = toml::from_str(text("lock")).map_err(|e| format!("{shown}: its samples.lock cannot be read ({e})"))?;
+    let old = Lock::read(text("lock")).map_err(|p| format!("{shown} cannot be filled, as the samples.lock it carries does not check out ({p}): rvr press --full presses it again"))?;
     // Only a file whose holes are read may have been resolved again; one the old file holds rows
     // of must be the same ROOT file.
     let read: Vec<(&str, &str)> = wanted.iter().map(|h| (h.sample.as_str(), h.file.as_str())).collect();
@@ -105,14 +105,18 @@ pub fn fits(
         let chosen = record["take"].as_u64().or(record["stop"].as_u64()).or(record["entries"].as_u64());
         chosen.is_some_and(|n| missing.get(&(sample, at)) == Some(&n))
     };
-    if old.sample.len() != lock.sample.len() {
+    if old.samples.len() != lock.samples.len() {
         return not("samples.lock has other samples now");
     }
-    for (was, now) in old.sample.iter().zip(&lock.sample) {
-        if was.name != now.name || was.tree != now.tree || was.file.len() != now.file.len() {
+    for (was, now) in old.samples.iter().zip(&lock.samples) {
+        if was.name != now.name || was.tree != now.tree || was.files.len() != now.files.len() {
             return not(&format!("samples.lock has other files of {} now", now.name));
         }
-        for (a, b) in was.file.iter().zip(&now.file) {
+        // The rows kept were checked against the sample's branch list as it was.
+        if was.branches != now.branches {
+            return not(&format!("{}'s branch list has changed in samples.lock", now.name));
+        }
+        for (a, b) in was.files.iter().zip(&now.files) {
             let at = (now.name.as_str(), b.at.as_str());
             if a.at != b.at {
                 return not(&format!("{} is now {} in samples.lock", a.at, b.at));
@@ -127,12 +131,12 @@ pub fn fits(
                 return not(&format!("{} has changed in samples.lock, and no hole of it is read", b.at));
             }
             // Another ROOT file in its place is the same file only if the old file read none of it.
-            if a.uuid.is_some() && a.uuid != b.uuid && (!unread(&now.name, &b.at) || kept.contains(&at)) {
+            if a.uuid != b.uuid && (!unread(&now.name, &b.at) || kept.contains(&at)) {
                 return not(&format!("{} is another ROOT file now (its UUID), of which the file holds rows or holes", b.at));
             }
         }
     }
-    for (sample, want) in lock.sample.iter().zip(asked) {
+    for (sample, want) in lock.samples.iter().zip(asked) {
         if made["files"][&sample.name]["events"] != want.record() {
             return Err(format!("{shown} chose other events of {} than this press would: fill it with the --events, --random and --seed it was pressed with", sample.name));
         }
@@ -142,9 +146,9 @@ pub fn fits(
 }
 
 /// A file of the lock as another lock gives the same file: but for what a press plans of it
-/// (stop, take) and when it was written.
-pub(crate) fn unplanned(file: &crate::samples::resolve::File) -> crate::samples::resolve::File {
-    crate::samples::resolve::File { stop: None, take: None, modified: None, ..file.clone() }
+/// (stop, take).
+pub(crate) fn unplanned(file: &rowver::study::lock::File) -> rowver::study::lock::File {
+    rowver::study::lock::File { stop: None, take: None, ..file.clone() }
 }
 
 /// What filling the file at `path` reads, or why it cannot (see `fits`).
@@ -208,7 +212,7 @@ pub(crate) struct Laid<'p> {
 pub(crate) fn same_kinds(filling: &Fill, lock: &Lock, reads: &[Input], read: &[Taken]) -> bool {
     let kinds = |record: &Value| -> Vec<Value> { record["holes"].as_array().into_iter().flatten().map(|h| h["kind"].clone()).collect() };
     reads.iter().zip(read).all(|(input, taken)| {
-        let plan = filling.files.get(&(lock.sample[input.sample].name.clone(), input.file.at.clone()));
+        let plan = filling.files.get(&(lock.samples[input.sample].name.clone(), input.file.at.clone()));
         let asked: Vec<(u64, u64)> = input.ranges.iter().flatten().map(|(first, last, _)| (*first, *last)).collect();
         let was: Vec<Value> = plan.map_or(Vec::new(), |plan| {
             let holes = plan.record["holes"].as_array().into_iter().flatten();
@@ -228,7 +232,7 @@ pub(crate) fn laid<'a, 'p>(
 ) -> Result<(Vec<Input<'a>>, Vec<Laid<'p>>), String> {
     let (mut reads, mut all, mut order) = (Vec::new(), Vec::new(), 0);
     for input in work {
-        let key = (lock.sample[input.sample].name.clone(), input.file.at.clone());
+        let key = (lock.samples[input.sample].name.clone(), input.file.at.clone());
         let plan = plans.get(&key).ok_or_else(|| {
             format!("{} is not a file the press built on read (a bug in rvr: press with --full, and please report it)", input.file.at)
         })?;
@@ -315,7 +319,7 @@ pub(crate) fn merged(
 ) -> Result<Vec<Taken>, String> {
     let mut out = Vec::new();
     for (input, laid) in work.iter().zip(laid) {
-        let plan = &filling.files[&(lock.sample[input.sample].name.clone(), input.file.at.clone())];
+        let plan = &filling.files[&(lock.samples[input.sample].name.clone(), input.file.at.clone())];
         let taken = laid.read.map(|at| &read[at]);
         // A file the old file did not read (a sample added) is recorded as it was read now.
         let mut record = match (&plan.record, taken) {
@@ -377,13 +381,25 @@ pub(crate) fn merged(
 mod tests {
     use super::*;
     use crate::press::Input;
-    use crate::samples::resolve::File;
+    use rowver::study::lock::File;
 
     #[test]
     fn a_fill_keeps_the_rows_around_each_hole_it_reads() {
-        let file: File = toml::from_str("at = \"f.root\"\nbytes = 10\nentries = 10").unwrap();
-        let other: File = toml::from_str("at = \"g.root\"\nbytes = 10\nentries = 10").unwrap();
-        let lock: Lock = toml::from_str("format = \"rvr-lock\"\nversion = 1\nresolved = \"\"\nsamples_toml_sha256 = \"\"\n[[sample]]\nname = \"s\"\nlabel = \"s\"\nfrom = \"s\"\nasked = []\ntree = \"t\"\nevents = \"all\"\nevents_total = 20\nevents_read = 20\nmetadata = {}\nfile = []\n").unwrap();
+        let pin = |at: &str| File { at: at.into(), bytes: 10, adler32: None, uuid: String::new(), entries: 10, stop: None, take: None };
+        let (file, other) = (pin("f.root"), pin("g.root"));
+        let sample = rowver::study::lock::Sample {
+            name: "s".into(),
+            label: "s".into(),
+            asked: Vec::new(),
+            tree: "t".into(),
+            branches: String::new(),
+            events: Events::All,
+            events_total: 20,
+            events_read: 20,
+            metadata: Default::default(),
+            files: Vec::new(),
+        };
+        let lock = Lock { resolved: String::new(), samples_toml_sha256: String::new(), samples: vec![sample], branches: Vec::new() };
         let input = |file| Input { sample: 0, tree: "t", file, chosen: None, kept: None, before: None, ranges: None, order: 0 };
         let plan = |rows: std::ops::Range<usize>, read: Vec<(u64, u64)>| crate::fill::Plan { rows, read, kept: Vec::new(), record: Value::Null, unread: false };
         let plans = HashMap::from([

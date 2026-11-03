@@ -135,8 +135,8 @@ The recipe's `title` is the folder's name.
 
 ### `rvr samples expand samples.toml [--json]`
 
-Lists the samples `samples.toml` describes, with each one's name, label, tree and what it reads,
-after eras, mass points and placeholders are filled in. It asks no catalog or storage, so it is the
+Lists the samples `samples.toml` describes, with each one's name, label, tree, event choice and
+what it reads, after eras, mass points and placeholders are filled in. It asks no storage, so it is the
 quick check while editing. `--json` prints them as JSON for other tools.
 
 ### `rvr samples resolve samples.toml`
@@ -146,11 +146,14 @@ of source it asks:
 
 | source | written as | asked of |
 |---|---|---|
-| a central CMS dataset | `dataset = "/Primary/Processed/TIER"` | DBS (files, bytes, adler32, events), Rucio (which sites hold them on disk), and the three sites that answered its first file fastest |
-| storage: LPC EOS, CERN EOS, any grid site | `files = "root://host//path/file.root"` (or `davs://`, `https://`) | the storage's WebDAV door: one listing per folder, one checksum request per file, and three small reads of each file for its UUID and entries |
-| this computer | `files = "~/data/…/file.root"` (or a path relative to `samples.toml`) | the file itself |
+| storage: LPC EOS, CERN EOS, any grid site | `files = "root://host//path/file.root"` (or `davs://`, `https://`) | the storage's WebDAV door: one listing per folder, one checksum request per file, and a few small reads of each file for its UUID and entries |
+| this computer | `files = "~/data/…/file.root"` (or a path relative to `samples.toml`) | the file itself, read whole for its adler32 |
 
-No event is read. The 307 files of a 353-sample study resolve in about 8 s. If any sample fails,
+Of each sample's first file it also reads its tree's whole record, for the sample's branch list
+(every branch's name, kind and shape, written once in the lock as a `[[branches]]` list): for a
+skim that can be megabytes. A press checks each file against it, for the branches the recipe reads.
+
+No event is read. If any sample fails,
 no lock is written and each failure is a line marked `FAIL` saying why, usually with the fix
 ("Did you mean …?", the trees the file does have). Under the totals it lists `.root` files in the
 folders read that no sample reads: not an error, a check that none was forgotten.
@@ -532,7 +535,8 @@ rvr press --fill would read 5 entries of 1 file.
 
 Lists every branch of the first file of the study's first sample (or of `--sample NAME`), in
 alphabetical order whatever the case, one per line with its type and its shape: `flat` (one value
-per event), `jagged` (a list per event), or `3 per event` for a fixed array. These are the names a
+per event), `jagged` (a list per event), `3 per event` for a fixed array, or `jagged, 3 per element`
+for a list of fixed arrays (`xy[n][3]/F`). These are the names a
 recipe uses, in full: `Jet_pt`, `lep_pt` in an ATLAS ntuple, `H1_PX` in an LHCb one, and for a
 member of a split object such as `recoMuons_muons__RECO.obj.m_state.p4Polar_.fCoordinates.fPt`,
 `branch('…')` with its name. Branches `rvr` cannot read (whole objects, strings, nested vectors)
@@ -742,13 +746,17 @@ when less than six hours are left.
 ## samples.toml
 
 ```toml
+format = "rvr-samples"
+version = 1
+
 [places]                      # short names for long locations, used as {name}
 lpc = "root://cmseos.fnal.gov//store/user/username/ntuples"
 
 [defaults]                    # every sample has these unless it says otherwise
 tree = "KUAnalysis"
 
-[eras.UL17]                   # values become metadata; {era} is the era's name
+[eras]                        # values become metadata; {era} is the era's name
+[eras.UL17]
 era = 2
 [eras.UL18]
 era = 3
@@ -758,7 +766,7 @@ name = "ST_s-channel"         # makes ST_s-channel_UL17 and ST_s-channel_UL18
 label = "ST s-channel"        # shown as "ST s-channel (UL17)"
 files = "{lpc}/Summer20{era}_106X/ST_s-channel_4f_leptonDecays_TuneCP5_13TeV-amcatnlo-pythia8_Summer20{era}_106X.root"
 eras = ["UL17", "UL18"]
-kind = "background"
+metadata = { kind = "background" }
 
 [[sample]]
 name = "Signal"               # one file per era holds a tree per mass point
@@ -768,26 +776,24 @@ trees = { "300/250" = "SMS_30000_25000", "300/292.5" = "SMS_30000_29250" }
 events = 20_000               # makes Signal_300_292p5_UL18, shown as "Signal 300/292.5 (UL18)"
 choose = "random"
 seed = 7
-kind = "signal"
-
-[[sample]]
-name = "WZTo3LNu_UL18"
-dataset = "/WZTo3LNu_TuneCP5_13TeV-amcatnloFXFX-pythia8/RunIISummer20UL18NanoAODv9-106X_upgrade2018_realistic_v16_L1v1-v2/NANOAODSIM"
-tree = "Events"
-events = 1_000_000
+metadata = { kind = "signal" }
 ```
+
+Every samples.toml starts with `format` and `version` and has `[places]`, `[defaults]` and `[eras]`,
+each even when empty; a key that is not one of these is refused, with the key it is nearest to.
+Off a terminal a file that leaves out the header or a table is refused; at one, `rvr samples
+resolve` offers to write them in. Every rule is in [docs/SPEC.md](../../docs/SPEC.md) §3.
 
 | key | meaning |
 |---|---|
 | `name` | required: what every tool calls the sample. Letters, digits, `_` and `-`; unique. |
 | `label` | what plots show; any text; the name when left out. |
-| `files` | paths or URLs, one or a list; `*` and `?` may appear in the file name |
-| `dataset` | a CMS dataset, found through DBS and Rucio |
+| `files` | required: paths or URLs, one or a list; `*` and `?` may appear in the file name |
 | `tree` / `trees` | the tree to read, or a table of label → tree making one sample per tree |
 | `eras` | the eras this entry exists in, one sample each: `_ERA` added to the name, ` (ERA)` to the label |
 | `events` | how many entries to read before any selection: a number, or `"all"` (the default) |
-| `choose`, `seed` | `"first"` (the default) or `"random"`, reproducible from `seed` |
-| anything else | metadata: it travels in the `.rvr`, and one value per sample becomes a sample column |
+| `choose`, `seed` | `"first"` (the default) or `"random"`, reproducible from `seed` (1 when left out) |
+| `metadata` | a table: it travels in the `.rvr`, and one value per sample becomes a sample column |
 
 A mass point's label becomes part of the name as CMS dataset names write numbers: `.` becomes
 `p`, anything else a name cannot hold becomes `_` (`300/292.5` → `300_292p5`).
@@ -807,12 +813,12 @@ where it differs:
 ```toml
 [defaults]
 tree = "Events"
-isData = false
+metadata = { isData = false }
 
 [[sample]]
 name = "data"
-dataset = "/SingleMuon/Run2018D-UL2018_MiniAODv2_NanoAODv9-v1/NANOAOD"
-isData = true                 # every other sample keeps the default, false
+files = "{eos}/SingleMuon_Run2018D/*.root"
+metadata = { isData = true }  # every other sample keeps the default, false
 ```
 
 It is then a sample column, and `if(sample.isData, …)` works for every sample:
@@ -823,7 +829,7 @@ isData         b1 by sample[2]  data: true, mc: false
 
 Set on the data samples alone, the flag stays in the file's metadata but is not a sample column,
 and `if(sample.isData, …)` stops the press at a sample without it (`sample.isData is used as the
-condition of if, but this sample has no isData: …`); `if(sample.isData == true, …)` works, taking a sample without it as false. A text field (`kind = "data"` on the data samples,
+condition of if, but this sample has no isData: …`); `if(sample.isData == true, …)` works, taking a sample without it as false. A text field (`metadata = { kind = "data" }` on the data samples,
 read as `sample.kind == 'data'`) needs no default.
 
 ## recipe.toml

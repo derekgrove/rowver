@@ -1,12 +1,19 @@
 # The dimuon mass spectrum of CMS Open Data: 61.5 million events of the 2012 DoubleMuParked data,
 # which anyone can read, with no grid proxy. A first press: rvr press --events 1000000.
 
+format = "rvr-samples"
+version = 1
+
 [places]
 opendata = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool"
+
+[defaults]
+
+[eras]
 
 [[sample]]
 name = "DoubleMuParked"
 label = "Data, Run 2012 B and C (DoubleMuParked)"
 files = "{opendata}/Run2012BC_DoubleMuParked_Muons.root"
 tree = "Events"
-kind = "data"
+metadata = { kind = "data" }

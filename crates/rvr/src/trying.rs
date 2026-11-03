@@ -47,13 +47,14 @@ fn run(args: &[&str]) -> Result<(), String> {
     let expression = parse(text).map_err(|e| format!("the expression: {}", e.0))?;
     let dir = Path::new(dir);
     let (mut texts, mut lock) = press::texts(dir)?;
+    press::agreed(&texts, &lock)?;
     let index = press::sample_at(&lock, words.value("--sample"))?;
     if crate::tables::offer(dir, &texts.recipe, "try", "go on with the try")? {
         (texts, lock) = press::texts(dir)?;
     }
     let recipe = press::study_recipe(&texts.recipe)?;
-    let sample = &lock.sample[index];
-    let (root, file) = press::first_readable(&lock, index, dir, true)?;
+    let sample = &lock.samples[index];
+    let (root, file) = press::first_readable(&lock, index, dir)?;
     let at = &file.at;
     let tree = root.tree_at(&sample.tree).map_err(|e| format!("{at}: its tree {:?}: {e}", sample.tree))?;
     let names: Vec<String> = tree.walk().into_iter().map(|(_, b)| b.name.clone()).collect();

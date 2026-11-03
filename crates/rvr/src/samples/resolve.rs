@@ -1,94 +1,15 @@
-//! `samples.lock`: what each sample of samples.toml resolved to, file by file, with the identity
-//! of every file (bytes, adler32 where its storage gives one, ROOT UUID and entries, all known
-//! without reading the events). Written by `resolve`, reviewed like code, never edited.
+//! `rvr samples resolve`, one sample at a time: every file it asks for, found and pinned (its size,
+//! its adler32 when its storage gives one, its ROOT UUID and its tree's entries), and the sample's
+//! branch list, from its first file; no event read. The lock itself is rowver's
+//! (`rowver::study::lock`).
 
-use super::plan::plan;
 use super::remote::{HttpsFile, Storage};
-use super::spec::{Events, Plan, Source};
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use hep_root::columns::{inventory, Kind, Shape};
+use rowver::study::lock::{self, Branch, Branches, File};
+use rowver::study::meant;
+use rowver::study::samples::Sample;
 use std::path::{Path, PathBuf};
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Lock {
-    pub format: String,
-    pub version: u32,
-    /// When it was resolved, UTC.
-    pub resolved: String,
-    /// The SHA-256 of the samples.toml it was resolved from.
-    pub samples_toml_sha256: String,
-    pub sample: Vec<Locked>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Locked {
-    /// What every tool calls it.
-    pub name: String,
-    /// What plots and the viewer show.
-    pub label: String,
-    /// The name of the [[sample]] entry it came from, before eras and trees were added.
-    pub from: String,
-    /// What the block asked for, its placeholders filled: paths and patterns.
-    pub asked: Vec<String>,
-    pub tree: String,
-    /// What samples.toml asked for: a number of events, or "all".
-    pub events: Value,
-    /// "random" when the events are chosen at random (with `seed`); absent for the first ones.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub choose: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub seed: Option<u64>,
-    /// Entries in all its files, and how many of them a press reads.
-    pub events_total: u64,
-    pub events_read: u64,
-    pub metadata: Map<String, Value>,
-    pub file: Vec<File>,
-}
-
-/// A lock's value as TOML writes it, each number a TOML number: rowver keeps serde_json's numbers
-/// exact (for .rvr headers), which TOML would write as tables. `name` is its key, to say which
-/// value TOML cannot hold.
-pub fn toml_value(value: &Value, name: &str) -> Result<toml::Value, String> {
-    let cannot = || format!("samples.lock cannot hold {name}: TOML has no such value (nan, inf, or a number past its range). Give it a finite number in samples.toml.");
-    Ok(match value {
-        Value::Number(number) => match (number.as_i64(), number.as_f64()) {
-            (Some(whole), _) => toml::Value::Integer(whole),
-            (None, Some(float)) if number.is_f64() && float.is_finite() => toml::Value::Float(float),
-            _ => return Err(cannot()),
-        },
-        Value::String(text) => toml::Value::String(text.clone()),
-        Value::Bool(truth) => toml::Value::Boolean(*truth),
-        Value::Array(items) => toml::Value::Array(items.iter().map(|item| toml_value(item, name)).collect::<Result<_, _>>()?),
-        Value::Object(fields) => {
-            let fields = fields.iter().map(|(key, value)| Ok((key.clone(), toml_value(value, key)?)));
-            toml::Value::Table(fields.collect::<Result<_, String>>()?)
-        }
-        Value::Null => return Err(cannot()),
-    })
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct File {
-    /// Where it is: a local path (relative to samples.toml's folder, under ~/, or absolute), or a URL.
-    pub at: String,
-    pub bytes: u64,
-    /// adler32 of the whole file, as 8 hex digits: from the storage, or computed here.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub adler32: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub modified: Option<String>,
-    /// Read from the file's header (through its storage's door for a remote file): the ROOT UUID
-    /// and the tree's entries.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub uuid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub entries: Option<u64>,
-    /// What a press reads: entries 0..stop (when not all), or `take` entries chosen at random.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stop: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub take: Option<u64>,
-}
+use std::sync::{Arc, OnceLock};
 
 /// Whether `name` matches `pattern`, where `*` is any run of characters and `?` one character.
 pub fn matches(pattern: &str, name: &str) -> bool {
@@ -164,11 +85,13 @@ fn adler32(sum: u32, data: &[u8]) -> u32 {
     ((b << 16) | a) as u32
 }
 
-fn local(text: &str, base: &Path) -> PathBuf {
+/// Where a local path of samples.toml or the lock is: under the home folder (`~/`), absolute, or
+/// relative to `base`, the folder holding samples.toml.
+pub fn local(text: &str, base: &Path) -> PathBuf {
+    let home = |rest: &str| std::env::var("HOME").map(|h| PathBuf::from(h).join(rest)).unwrap_or_else(|_| PathBuf::from(text));
     let expanded = match text.strip_prefix("~/") {
-        Some(rest) => std::env::var("HOME")
-            .map(|h| PathBuf::from(h).join(rest))
-            .unwrap_or_else(|_| PathBuf::from(text)),
+        Some(rest) => home(rest),
+        None if text == "~" => home(""),
         None => PathBuf::from(text),
     };
     if expanded.is_absolute() {
@@ -178,19 +101,11 @@ fn local(text: &str, base: &Path) -> PathBuf {
     }
 }
 
-fn utc(time: std::time::SystemTime) -> String {
-    let seconds = time
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    voms_proxy::utc(seconds)
-}
-
-/// How a file differs from what the lock recorded of it, in words, if it does. A size or an
-/// adler32 is compared only when both the lock and the storage give one; an adler32 as a number.
+/// How a file differs from what the lock recorded of it, in words, if it does. A size is compared
+/// when the storage gives one, an adler32 when both the lock and the storage give one, as a number.
 pub fn differs(file: &File, bytes: Option<u64>, adler32: Option<&str>) -> Option<String> {
     let number = |hex: Option<&str>| hex.and_then(|h| u32::from_str_radix(h.trim(), 16).ok());
-    let size = bytes.is_some_and(|b| b != file.bytes && file.bytes > 0);
+    let size = bytes.is_some_and(|b| b != file.bytes);
     let sum =
         matches!((number(file.adler32.as_deref()), number(adler32)), (Some(a), Some(b)) if a != b);
     let shown = |b: Option<u64>| b.map_or("? bytes".to_string(), |b| format!("{b} bytes"));
@@ -206,18 +121,99 @@ pub fn differs(file: &File, bytes: Option<u64>, adler32: Option<&str>) -> Option
     })
 }
 
-/// The UUID of a ROOT file and the entries of one of its trees, from its header and the tree's
-/// record alone; the trees it has when the one asked for is not there.
+/// A hep-root number kind as a `.rvr` kind's name.
+pub fn kind_name(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Bool => "b1",
+        Kind::I8 => "i1",
+        Kind::U8 => "u1",
+        Kind::I16 => "i2",
+        Kind::U16 => "u2",
+        Kind::I32 => "i4",
+        Kind::U32 => "u4",
+        Kind::I64 => "i8",
+        Kind::U64 => "u8",
+        Kind::F32 => "f4",
+        Kind::F64 => "f8",
+    }
+}
+
+/// A tree's branch list, as the lock writes it.
+pub fn branch_list(tree: &hep_root::Tree) -> Branches {
+    Branches::new(branches_named(tree, |_| true))
+}
+
+/// The branches of a tree whose name `wanted` takes, in the tree's order: each one's name, the
+/// kind rvr reads it as (or `none`, with why), and its shape. A name the tree gives twice is
+/// listed once, the first time.
+pub fn branches_named(tree: &hep_root::Tree, wanted: impl Fn(&str) -> bool) -> Vec<Branch> {
+    let mut seen = std::collections::BTreeSet::new();
+    // hep-root's inventory gives every branch of the tree, depth first as `Tree::walk`: one entry each.
+    inventory(tree)
+        .into_iter()
+        .zip(tree.walk())
+        .filter(|(info, _)| wanted(&info.path) && seen.insert(info.path.clone()))
+        .map(|(info, (_, branch))| {
+            let kind = match &info.shape {
+                Shape::Unreadable { reason } => Err(reason.clone()),
+                Shape::Vector(kind) => Ok(*kind),
+                _ => Kind::of(branch).map_err(|e| e.to_string()),
+            };
+            let shape = match info.shape {
+                Shape::Scalar => lock::Shape::Flat,
+                Shape::Fixed(n) => lock::Shape::Fixed(n as u64),
+                Shape::JaggedFixed { len, .. } => lock::Shape::JaggedFixed(len as u64),
+                _ => lock::Shape::Jagged,
+            };
+            match kind {
+                Ok(kind) => Branch { name: info.path, kind: kind_name(kind).into(), shape, why: None },
+                Err(why) => Branch { name: info.path, kind: "none".into(), shape: lock::Shape::Flat, why: Some(why) },
+            }
+        })
+        .collect()
+}
+
+/// How `have` falls short of `want`, in words, by name, kind and shape (not why a branch is
+/// unreadable, which words can change): the first few of `want` it lacks, or has as another kind
+/// or shape; empty when it has them all as they are.
+pub fn differ<'a>(want: impl Iterator<Item = &'a Branch>, have: impl Iterator<Item = &'a Branch>) -> String {
+    let index = |list: &mut dyn Iterator<Item = &'a Branch>| list.map(|b| (b.name.as_str(), (b.kind.as_str(), b.shape))).collect::<std::collections::BTreeMap<_, _>>();
+    let (want, have) = (index(&mut { want }), index(&mut { have }));
+    let mut said = Vec::new();
+    for (name, b) in &want {
+        match have.get(name) {
+            None => said.push(format!("{name} missing")),
+            Some(h) if h != b => said.push(format!("{name} {} {} here, {} {} in the sample", h.0, h.1, b.0, b.1)),
+            Some(_) => {}
+        }
+    }
+    let more = said.len().saturating_sub(5);
+    said.truncate(5);
+    if more > 0 {
+        said.push(format!("and {more} more"));
+    }
+    said.join(", ")
+}
+
+/// The UUID of a ROOT file and the entries of one of its trees, and with `listed` the tree's
+/// branch list, from its header and the tree's record alone (the start of the record, which holds
+/// the entries, when no list is asked: the whole record of a skim can be megabytes); the trees it
+/// has when the one asked for is not there.
 fn root_identity<S: hep_root::ByteSource>(
     source: S,
     shown: &str,
     tree: &str,
-) -> Result<(String, u64), String> {
+    listed: bool,
+) -> Result<(String, u64, Option<Branches>), String> {
     let file = hep_root::RootFile::open(source)
         .map_err(|e| format!("{shown} is not a ROOT file this reader can open: {e}"))?;
     let uuid = file.header().uuid_string();
-    match file.tree_entries(tree) {
-        Ok(entries) => Ok((uuid, entries.max(0) as u64)),
+    let found = match listed {
+        true => file.tree_at(tree).map(|t| (t.entries, Some(branch_list(&t)))),
+        false => file.tree_entries(tree).map(|entries| (entries, None)),
+    };
+    match found {
+        Ok((entries, list)) => Ok((uuid, entries.max(0) as u64, list)),
         Err(hep_root::Error::KeyNotFound(_)) => {
             let trees: Vec<String> = file
                 .trees_listing()
@@ -242,6 +238,28 @@ pub struct Context {
     pub storage: Option<Storage>,
     /// Why storage is unavailable, said once to the user if a sample needs it.
     pub offline: String,
+    /// Each local folder's file names (or why it cannot be read), listed once a run.
+    folders: std::sync::Mutex<std::collections::HashMap<PathBuf, Listing>>,
+}
+
+/// One folder's listing, made by the first thread to ask for it while the others wait.
+type Listing = Arc<OnceLock<Result<Arc<[String]>, String>>>;
+
+/// The folder and name of a path or URL of `files` (`.` for a bare name, `/` for one at the root).
+pub fn split(asked: &str) -> (&str, &str) {
+    match asked.rsplit_once('/') {
+        Some(("", name)) => ("/", name),
+        Some(split) => split,
+        None => (".", asked),
+    }
+}
+
+/// A file's path or URL from its folder and name, as `split` parts them.
+pub fn join(folder: &str, name: &str) -> String {
+    match folder {
+        "/" => format!("/{name}"),
+        _ => format!("{folder}/{name}"),
+    }
 }
 
 impl Context {
@@ -260,6 +278,41 @@ impl Context {
             base,
             storage: storage.ok(),
             offline,
+            folders: Default::default(),
+        }
+    }
+
+    /// The regular files of a local folder, and links to them, sorted by name; listed once a run.
+    pub fn listed(&self, dir: &Path) -> Result<Arc<[String]>, String> {
+        let slot = self.folders.lock().unwrap_or_else(|e| e.into_inner()).entry(dir.to_path_buf()).or_default().clone();
+        slot.get_or_init(|| {
+            let mut names = Vec::new();
+            // An entry that cannot be read is left out, as one that is not a file is.
+            for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+                // A link is followed to see whether it is a file; anything else is told by the folder.
+                let Ok(kind) = entry.file_type() else { continue };
+                if kind.is_file() || (kind.is_symlink() && std::fs::metadata(entry.path()).is_ok_and(|m| m.is_file())) {
+                    names.push(entry.file_name().to_string_lossy().into_owned());
+                }
+            }
+            names.sort();
+            Ok(names.into())
+        })
+        .clone()
+    }
+
+    /// Which file a path or URL of the lock is, however it is written: a local file as its path
+    /// with links followed, a storage file as the door and path it is read at.
+    pub fn which(&self, at: &str) -> PathBuf {
+        match at.contains("://") {
+            true => match super::remote::door(at) {
+                Ok((door, path)) => PathBuf::from(format!("{door}{}", rowver::study::plain(Path::new(&path)).display())),
+                Err(_) => PathBuf::from(at),
+            },
+            false => {
+                let path = local(at, &self.base);
+                path.canonicalize().unwrap_or_else(|_| rowver::study::plain(&path))
+            }
         }
     }
 
@@ -268,218 +321,106 @@ impl Context {
     }
 }
 
-/// The files of one path, URL or pattern.
-fn files_of(ctx: &Context, asked: &str, tree: &str) -> Result<Vec<File>, String> {
-    let remote = asked.contains("://");
-    let (folder, name) = asked.rsplit_once('/').unwrap_or((".", asked));
+/// The files one path, URL or pattern of `files` matches, each pinned; the first with its branch
+/// list when `listed`.
+fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool) -> Result<Vec<(File, Option<Branches>)>, String> {
+    let (folder, name) = split(asked);
+    let join = |n: &str| join(folder, n);
     if pattern(folder) {
         return Err(format!("{asked}: a pattern may only be in the file name, not in a folder. Write one pattern per folder."));
     }
-    if remote {
+    let wanted = |found: &str| if pattern(name) { matches(name, found) } else { found == name };
+    let pinned = |at: String, bytes: u64, adler32: Option<String>, identity: (String, u64, Option<Branches>)| {
+        let (uuid, entries, list) = identity;
+        (File { at, bytes, adler32, uuid, entries, stop: None, take: None }, list)
+    };
+    if asked.contains("://") {
         let storage = ctx.storage()?;
-        let listed = storage.list(folder)?;
-        let found: Vec<_> = listed
-            .iter()
-            .filter(|e| {
-                if pattern(name) {
-                    matches(name, &e.name)
-                } else {
-                    e.name == name
-                }
-            })
-            .collect();
+        let entries = storage.list(folder)?;
+        let found: Vec<_> = entries.iter().filter(|e| wanted(&e.name)).collect();
         if found.is_empty() {
-            let near = nearest(name, listed.iter().map(|e| e.name.as_str()));
-            return Err(format!(
-                "{asked} matched no file ({} files in that folder).{}",
-                listed.len(),
-                if near.is_empty() {
-                    String::new()
-                } else {
-                    format!(" Did you mean: {}?", near.join(", "))
-                }
-            ));
+            let near = meant(name, entries.iter().map(|e| e.name.as_str()));
+            return Err(format!("{asked} matched no file ({} files in that folder).{near}", entries.len()));
         }
         found
             .iter()
-            .map(|e| {
-                let at = format!("{folder}/{}", e.name);
-                let (_, adler32) = storage.digest(&at)?;
-                let (uuid, entries) =
-                    root_identity(HttpsFile::new(storage, &at, e.bytes)?, &at, tree)?;
-                Ok(File {
-                    at,
-                    bytes: e.bytes,
-                    adler32,
-                    modified: e.modified.clone(),
-                    uuid: Some(uuid),
-                    entries: Some(entries),
-                    stop: None,
-                    take: None,
-                })
+            .enumerate()
+            .map(|(i, e)| {
+                let at = join(&e.name);
+                let (said, adler32) = storage.digest(&at).map_err(|failed| failed.why)?;
+                // The listing's size, else the HEAD's: a lock pins every file's size.
+                let bytes = match e.bytes {
+                    0 => said.filter(|b| *b > 0).ok_or_else(|| format!("{at}: its storage gives no size for it, so the lock cannot pin it"))?,
+                    size => size,
+                };
+                let identity = root_identity(HttpsFile::new(storage, &at, bytes)?, &at, tree, listed && i == 0)?;
+                Ok(pinned(at, bytes, adler32, identity))
             })
             .collect()
     } else {
         let dir = local(folder, &ctx.base);
-        let mut names: Vec<String> = std::fs::read_dir(&dir)
-            .map_err(|e| format!("{asked}: the folder {} cannot be read: {e}", dir.display()))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        let found: Vec<&String> = names
-            .iter()
-            .filter(|n| {
-                if pattern(name) {
-                    matches(name, n)
-                } else {
-                    *n == name
-                }
-            })
-            .collect();
+        let names = ctx.listed(&dir).map_err(|e| format!("{asked}: the folder {folder} cannot be read: {e}"))?;
+        let found: Vec<&String> = names.iter().filter(|n| wanted(n)).collect();
         if found.is_empty() {
-            let near = nearest(name, names.iter().map(String::as_str));
-            return Err(format!(
-                "{asked} matched no file in {}.{}",
-                dir.display(),
-                if near.is_empty() {
-                    String::new()
-                } else {
-                    format!(" Did you mean: {}?", near.join(", "))
-                }
-            ));
+            let near = meant(name, names.iter().map(String::as_str));
+            let shown = if folder == "." { "the study folder" } else { folder };
+            return Err(format!("{asked} matched no file in {shown}.{near}"));
         }
         found
             .into_iter()
-            .map(|n| {
+            .enumerate()
+            .map(|(i, n)| {
                 let path = dir.join(n);
-                let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
-                let (uuid, entries) = root_identity(
-                    hep_root::LocalFile::open(&path).map_err(|e| e.to_string())?,
-                    &path.display().to_string(),
-                    tree,
-                )?;
-                Ok(File {
-                    at: path.display().to_string(),
-                    bytes: meta.len(),
-                    adler32: Some(adler32_file(&path).map_err(|e| e.to_string())?),
-                    modified: meta.modified().ok().map(utc),
-                    uuid: Some(uuid),
-                    entries: Some(entries),
-                    stop: None,
-                    take: None,
-                })
+                let meta = std::fs::metadata(&path).map_err(|e| format!("{n}: {e}"))?;
+                // The folder as samples.toml writes it, so the lock reads from any folder.
+                let at = join(n);
+                let opened = hep_root::LocalFile::open(&path).map_err(|e| format!("{at}: {e}"))?;
+                let identity = root_identity(opened, &at, tree, listed && i == 0)?;
+                let adler32 = adler32_file(&path).map_err(|e| format!("{at}: {e}"))?;
+                Ok(pinned(at, meta.len(), Some(adler32), identity))
             })
             .collect()
     }
 }
 
-/// How many single-character edits turn `a` into `b`.
-fn distance(a: &str, b: &str) -> usize {
-    let b: Vec<char> = b.chars().collect();
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, x) in a.chars().enumerate() {
-        let mut diagonal = row[0];
-        row[0] = i + 1;
-        for (j, y) in b.iter().enumerate() {
-            let above = row[j + 1];
-            row[j + 1] = (diagonal + usize::from(x != *y))
-                .min(row[j] + 1)
-                .min(above + 1);
-            diagonal = above;
-        }
-    }
-    row[b.len()]
-}
-
-/// The few `names` nearest to what was asked, when they are near enough to be what was meant:
-/// within a tenth of its length in edits (at least three).
-pub fn nearest<'a>(asked: &str, names: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
-    let limit = (asked.chars().count() / 10).max(3);
-    let mut ranked: Vec<(usize, &str)> = names
-        .map(|n| (distance(asked, n), n))
-        .filter(|(d, _)| *d <= limit)
-        .collect();
-    ranked.sort();
-    ranked.into_iter().take(3).map(|(_, n)| n).collect()
-}
-
-/// One sample resolved: every file it names, and its metadata with {file} filled.
-pub fn resolve(ctx: &Context, plan: &Plan) -> Result<Locked, String> {
-    let Source::Files(list) = &plan.source;
-    let mut files = Vec::new();
-    for text in list {
-        files.extend(files_of(ctx, text, &plan.tree)?);
-    }
-    let asked = list.clone();
-    let mut metadata = plan.metadata.clone();
-    for (key, value) in metadata.iter_mut() {
-        if let Value::String(s) = value {
-            if s.contains("{file}") {
-                let [one] = files.as_slice() else {
-                    return Err(format!("{}: {key} uses {{file}}, which names a sample's one file, but it has {} files", plan.name, files.len()));
-                };
-                *s = s.replace("{file}", one.at.rsplit('/').next().unwrap_or(&one.at));
+/// One sample resolved: every file it asks for, pinned, with what its own event choice reads of
+/// each, its metadata's `{file}` filled; and its branch list, its first file's.
+pub fn resolve(ctx: &Context, sample: &Sample) -> Result<(lock::Sample, Branches), String> {
+    let mut files: Vec<File> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut list = None;
+    for text in &sample.files {
+        for (file, found) in files_of(ctx, text, &sample.tree, list.is_none())? {
+            if !seen.insert(ctx.which(&file.at)) {
+                return Err(format!("{} is reached twice, by two of files or by a pattern and a name: name each file once", file.at));
             }
+            list = list.or(found);
+            files.push(file);
         }
     }
-    let mut locked = Locked {
-        name: plan.name.clone(),
-        label: plan.label.clone(),
-        from: plan.from.clone(),
-        asked,
-        tree: plan.tree.clone(),
-        events: Value::Null,
-        choose: None,
-        seed: None,
+    let list = list.ok_or("it has no files")?;
+    if files.iter().try_fold(0u64, |sum, f| sum.checked_add(f.entries)).is_none_or(|t| t > lock::MOST_ENTRIES) {
+        return Err("its files hold more than 2^40 entries in all, more than a .rvr file may: split them among samples of fewer files".into());
+    }
+    if list.list.iter().any(|b| b.name.is_empty()) {
+        return Err(format!("its tree {} has a branch with no name, which samples.lock cannot record: write the files again with every branch named", sample.tree));
+    }
+    let ats: Vec<&str> = files.iter().map(|f| f.at.as_str()).collect();
+    let metadata = rowver::study::samples::file_filled(&sample.metadata, &ats)
+        .ok_or_else(|| format!("its metadata uses {{file}}, which names a sample's one file, but it has {} files: give each file a sample of its own, or leave {{file}} out", files.len()))?;
+    let locked = lock::Sample {
+        name: sample.name.clone(),
+        label: sample.label.clone(),
+        asked: sample.files.clone(),
+        tree: sample.tree.clone(),
+        branches: list.sha256.clone(),
+        events: sample.events,
         events_total: 0,
         events_read: 0,
         metadata,
-        file: files,
+        files,
     };
-    planned(&mut locked, plan.events)?;
-    Ok(locked)
-}
-
-/// Write into a locked sample what a press reads of each file for these `events`.
-pub fn planned(sample: &mut Locked, events: Events) -> Result<(), String> {
-    let entries: Vec<u64> = sample
-        .file
-        .iter()
-        .map(|f| {
-            f.entries.ok_or_else(|| {
-                format!(
-                    "{}: {} has no known entries, so what to read cannot be planned",
-                    sample.name, f.at
-                )
-            })
-        })
-        .collect::<Result<_, _>>()?;
-    let reads = plan(&entries, events);
-    (sample.events, sample.choose, sample.seed) = match events {
-        Events::All => ("all".into(), None, None),
-        Events::First(n) => (n.into(), None, None),
-        Events::Random { n, seed } => (n.into(), Some("random".into()), Some(seed)),
-    };
-    for (file, read) in sample.file.iter_mut().zip(&reads) {
-        (file.stop, file.take) = (read.stop, read.take);
-    }
-    sample.events_total = entries.iter().sum();
-    sample.events_read = reads.iter().map(|r| r.read).sum();
-    Ok(())
-}
-
-/// A locked sample's `events` as samples.toml asked for them.
-pub fn asked(sample: &Locked) -> Events {
-    match (sample.events.as_u64(), sample.choose.as_deref()) {
-        (Some(n), Some("random")) => Events::Random {
-            n,
-            seed: sample.seed.unwrap_or(1),
-        },
-        (Some(n), _) => Events::First(n),
-        _ => Events::All,
-    }
+    Ok((locked.planned(sample.events), list))
 }
 
 #[cfg(test)]
@@ -501,20 +442,32 @@ mod tests {
     }
 
     #[test]
-    fn near_names_are_suggested_and_far_ones_not() {
-        let names = [
-            "ST_s-channel_4f_leptonDecays_TuneCP5_13TeV-amcatnlo-pythia8_Summer20UL18_106X.root",
-            "TTJets.root",
-        ];
-        assert_eq!(
-            nearest(
-                "ST_s-chanel_4f_leptonDecays_TuneCP5_13TeV-amcatnlo-pythia8_Summer20UL18_106X.root",
-                names.into_iter()
-            ),
-            [names[0]]
-        );
-        assert!(nearest("WJets.root", names.into_iter()).len() <= 1);
-        assert!(nearest("completely_different_name.root", names.into_iter()).is_empty());
+    fn a_path_is_split_and_joined_back_as_written() {
+        for asked in ["root://eospublic.cern.ch//x.root", "root://h//eos/a/x.root", "/x.root", "./x.root", "~/d/x.root", "d//x.root"] {
+            let (folder, name) = split(asked);
+            assert_eq!(join(folder, name), asked);
+        }
+        assert_eq!(join(split("x.root").0, "x.root"), "./x.root");
+    }
+
+    #[test]
+    fn two_branch_lists_differ_by_name_kind_and_shape() {
+        let branch = |name: &str, kind: &str, shape| Branch { name: name.into(), kind: kind.into(), shape, why: None };
+        let want = Branches::new(vec![branch("nJet", "i4", lock::Shape::Flat), branch("Jet_pt", "f4", lock::Shape::Jagged)]);
+        let have = Branches::new(vec![branch("nJet", "u4", lock::Shape::Flat), branch("Muon_pt", "f4", lock::Shape::Jagged)]);
+        assert_eq!(differ(want.list.iter(), have.list.iter()), "Jet_pt missing, nJet u4 flat here, i4 flat in the sample");
+        assert_eq!(differ(want.list.iter(), want.list.iter()), "");
+        let unread = |why: &str| Branch { name: "obj".into(), kind: "none".into(), shape: lock::Shape::Flat, why: Some(why.into()) };
+        assert_eq!(differ([unread("old words")].iter(), [unread("new words")].iter()), "", "why is not compared");
+    }
+
+    #[test]
+    fn a_local_path_is_under_home_absolute_or_the_study_s() {
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(local("~", Path::new("s")), PathBuf::from(&home));
+        assert_eq!(local("~/d/x.root", Path::new("s")), PathBuf::from(&home).join("d/x.root"));
+        assert_eq!((local("/d/x.root", Path::new("s")), local("d/x.root", Path::new("s"))), (PathBuf::from("/d/x.root"), PathBuf::from("s/d/x.root")));
+        assert_eq!((split("/x.root"), split("x.root"), split("~/x.root")), (("/", "x.root"), (".", "x.root"), ("~", "x.root")));
     }
 
     #[test]
@@ -547,15 +500,5 @@ mod tests {
             assert_eq!(adler32(adler32(1, head), tail), plain(1, &data));
             assert_eq!(adler32(0xfff0_fff0, &data), plain(0xfff0_fff0, &data));
         }
-    }
-
-    #[test]
-    fn a_number_is_written_as_toml_holds_it_or_refused_by_name() {
-        assert_eq!(toml_value(&serde_json::json!(3), "era").unwrap(), toml::Value::Integer(3));
-        assert_eq!(toml_value(&serde_json::json!(2.5), "xsec").unwrap(), toml::Value::Float(2.5));
-        assert_eq!(toml_value(&serde_json::json!(3.0), "scale").unwrap(), toml::Value::Float(3.0));
-        // A whole number past TOML's range is refused, not written as a float that reads back otherwise.
-        assert!(toml_value(&serde_json::json!(u64::MAX), "seed").unwrap_err().starts_with("samples.lock cannot hold seed:"));
-        assert!(toml_value(&serde_json::json!({"a": null}), "metadata").unwrap_err().starts_with("samples.lock cannot hold a:"));
     }
 }

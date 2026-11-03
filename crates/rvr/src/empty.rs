@@ -4,7 +4,7 @@
 use crate::press;
 use crate::samples::some;
 use crate::reproduce::{base, study_texts};
-use crate::samples::resolve::{Lock, Locked};
+use rowver::study::lock::{Lock, Sample as Locked};
 use crate::Words;
 use rowver::choice::Events;
 use rowver::rvr::Reader;
@@ -90,9 +90,11 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result
     }
     if !anyway {
         let text = reader.header()["made"]["lock"]["text"].as_str().unwrap_or_default();
-        let lock: Lock = toml::from_str(text).map_err(|e| format!("{shown}: the samples.lock it carries does not read: {e}"))?;
-        let changed = crate::samples::differing(&lock, &base(file, study)?)
-            .map_err(|e| format!("{shown} was not emptied: its inputs could not all be checked ({e}). With --anyway it is emptied all the same."))?;
+        let lock = Lock::read(text).map_err(|p| format!("{shown} was not emptied: the samples.lock it carries does not check out ({p}). Press its study again with rvr press --full, then empty that file."))?;
+        let (changed, unasked) = crate::samples::differing(&lock, &base(file, study)?);
+        if let Some(why) = unasked.first() {
+            return Err(format!("{shown} was not emptied: its inputs could not all be checked ({why}). With --anyway it is emptied all the same."));
+        }
         if !changed.is_empty() {
             let lines: String = changed.iter().map(|line| format!("\n  {line}")).collect();
             return Err(format!("{shown} was not emptied: rvr refill reads its inputs again, and {} as its lock recorded:{lines}\nWith --anyway it is emptied all the same, and cannot be refilled until they are back.", some(changed.len(), "is not", "are not")));

@@ -88,10 +88,10 @@ fn run(args: &[&str]) -> Result<bool, String> {
         made["built"].as_str().unwrap_or("?"),
         made["by"].as_str().unwrap_or("?")
     );
-    choice.check(&lock.sample)?;
+    choice.check(&lock.samples)?;
     let asked = press::plan(&mut lock, &|s| choice.of(s))?;
     let chosen = lock
-        .sample
+        .samples
         .iter()
         .zip(&asked)
         // A sample the file does not hold is a change of samples.toml, not of the events chosen.
@@ -131,7 +131,7 @@ fn run(args: &[&str]) -> Result<bool, String> {
     let said = match reuse::earlier(&target, &texts, &new, &lock, &asked) {
         Some(Ok(reuse::Base::Samples(rows))) => {
             let added = rows.added.unwrap_or_default();
-            let files: usize = lock.sample.iter().filter(|s| added.contains(&s.name)).map(|s| s.file.iter().filter(|f| f.stop != Some(0)).count()).sum();
+            let files: usize = lock.samples.iter().filter(|s| added.contains(&s.name)).map(|s| s.files.iter().filter(|f| f.stop != Some(0)).count()).sum();
             match added.is_empty() {
                 true => "rvr press would read nothing: the rows of every sample are copied from it into a file that holds the study as it is now.".into(),
                 false => format!(

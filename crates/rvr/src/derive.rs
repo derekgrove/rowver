@@ -128,7 +128,7 @@ fn line_of(lines: &[&str], table: (usize, usize), name: &str) -> Option<usize> {
 /// Where the `[derived]` table of a recipe's lines is: its heading's index, and the index of the
 /// line after it ends.
 fn table(lines: &[&str]) -> Option<(usize, usize)> {
-    let heading = lines.iter().position(|line| crate::tables::header(line.trim()) == Some("derived"))?;
+    let heading = lines.iter().position(|line| crate::tables::header(line.trim(), &crate::tables::TABLES) == Some("derived"))?;
     let end = (heading + 1..lines.len())
         .find(|&at| lines[at].trim_start().starts_with('['))
         .unwrap_or(lines.len());

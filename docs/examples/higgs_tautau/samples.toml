@@ -2,30 +2,35 @@
 # backgrounds, all readable with no grid proxy. rvr new writes the two signals alone; this is the
 # whole study. A first press: rvr press --events 50000.
 
+format = "rvr-samples"
+version = 1
+
 [places]
 opendata = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool"
 
 [defaults]
 tree = "Events"
-kind = "background"
+metadata = { kind = "background" }
+
+[eras]
 
 [[sample]]
 name = "data"
 label = "Data, Run 2012 B and C (TauPlusX)"
 files = "{opendata}/Run2012?_TauPlusX.root"     # a pattern: the files of both runs
-kind = "data"
+metadata = { kind = "data" }
 
 [[sample]]
 name = "ggH"
 label = "gg → H → ττ"
 files = "{opendata}/GluGluToHToTauTau.root"
-kind = "signal"
+metadata = { kind = "signal" }
 
 [[sample]]
 name = "VBF"
 label = "VBF H → ττ"
 files = "{opendata}/VBF_HToTauTau.root"
-kind = "signal"
+metadata = { kind = "signal" }
 
 [[sample]]
 name = "DY"

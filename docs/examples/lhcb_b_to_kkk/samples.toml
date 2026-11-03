@@ -3,8 +3,13 @@
 # written as eras: one sample each, B2HHH_MagnetDown and B2HHH_MagnetUp.
 # A first press: rvr press --events 500000.
 
+format = "rvr-samples"
+version = 1
+
 [places]
 lhcb = "root://eospublic.cern.ch//eos/opendata/lhcb/AntimatterMatters2017/data"
+
+[defaults]
 
 [eras.MagnetDown]
 polarity = "down"

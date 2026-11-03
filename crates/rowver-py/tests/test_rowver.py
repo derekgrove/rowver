@@ -18,12 +18,18 @@ FIXTURES = pathlib.Path(__file__).resolve().parents[2] / "rvr" / "tests" / "fixt
 SAMPLES = """format = "rvr-samples"
 version = 1
 
+[places]
+
+[defaults]
+
+[eras]
+
 [[sample]]
 name = "flat"
 label = "Flat ntuple"
 files = "uproot_flat.root"
 tree = "analysis"
-xsec = 1.5
+metadata = { xsec = 1.5 }
 """
 
 RECIPE = """format = "rvr-recipe"

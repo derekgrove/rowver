@@ -522,6 +522,7 @@ name = "signal"
 label = "Signal"
 asked = ["./signal.root"]
 tree = "analysis"
+branches = "5d1a…"
 events = "all"
 events_total = 5
 events_read = 5
@@ -533,7 +534,6 @@ bytes = 5281
 adler32 = "0a1b2c3d"
 uuid = "31e851e4-b994-11f1-ba5c-1a45bb13c76a"
 entries = 5
-branches = "5d1a…"
 
 [[branches]]
 sha256 = "5d1a…"
@@ -547,14 +547,16 @@ list = [
 written, `YYYY-MM-DDTHH:MM:SSZ`), `samples_toml_sha256` (the SHA-256 of the `samples.toml` text it
 was resolved from), `sample` (one or more) and `branches` (one or more).
 
-**Each `[[sample]]`** has exactly `name`, `label`, `asked`, `tree`, `events`, `events_total`,
-`events_read`, `metadata` and `file`, and `choose` (`"random"`) and `seed` exactly when the sample's
+**Each `[[sample]]`** has exactly `name`, `label`, `asked`, `tree`, `branches`, `events`,
+`events_total`, `events_read`, `metadata` and `file`, and `choose` (`"random"`) and `seed` exactly when the sample's
 choice is random. The samples are in the order, and have the name, label, tree, event choice and
 metadata, that `samples.toml` makes (SPEC.md §3.7), with `{file}` filled in. `asked` is the sample's
 `files` entries, their placeholders filled, in order. `events_total` is the sum of its files'
-`entries`, and `events_read` the entries its own choice reads.
+`entries`, and `events_read` the entries its own choice reads. `branches` is the SHA-256 of the branch
+list of its first file's tree (the `sha256` of one `[[branches]]`): a press makes a `changed` hole of a
+file of the sample whose tree lacks a branch the recipe reads, or reads one as another kind or shape.
 
-**Each `[[sample.file]]`** has exactly `at`, `bytes`, `uuid`, `entries` and `branches`; `adler32`
+**Each `[[sample.file]]`** has exactly `at`, `bytes`, `uuid` and `entries`; `adler32`
 when its storage gave one (a file on this computer always has one); `stop` for a first-N choice
 exactly when it reads fewer than `entries` of the file (0 for a file it never reaches); `take` for a
 random choice, always (how many chosen entries lie in it). The files are in the order SPEC.md §3.8
@@ -567,9 +569,8 @@ gives, and no two have the same `at`.
 | `adler32` | its adler32, 8 lowercase hexadecimal digits |
 | `uuid` | the UUID inside the ROOT file, as §6 writes it |
 | `entries` | the tree's entries |
-| `branches` | the SHA-256 of the tree's branch list: the `sha256` of one `[[branches]]` |
 
-**Each `[[branches]]`** is one branch list, written once however many files have it: exactly
+**Each `[[branches]]`** is one branch list, written once however many samples have it: exactly
 `sha256` and `list`. `list` holds one inline table per branch of the tree, in byte order of name,
 each exactly `name` (as a recipe writes it), `kind` and `shape`, and `why` exactly when `kind` is
 `"none"`:
@@ -577,11 +578,11 @@ each exactly `name` (as a recipe writes it), `kind` and `shape`, and `why` exact
 | field | holds |
 |---|---|
 | `kind` | the kind rvr reads the branch as (§4; for a list, its members' kind), or `"none"` when rvr cannot read it |
-| `shape` | `"flat"` (one value per event), `"jagged"` (a list per event), or a whole number N from 1 (N values per event) |
+| `shape` | `"flat"` (one value per event), `"jagged"` (a list per event), a whole number N from 1 (N values per event), or `"jagged N"`, N from 2 written with no leading zero (a list per event of elements of N values each, as `xy[n][3]/F`) |
 | `why` | for a branch rvr cannot read, why, in words |
 
 `sha256` is the SHA-256 of the canonical JSON (§8) of `list`, as an array of objects. No two lists
-have the same `sha256`, and every list is some file's.
+have the same `sha256`, and every list is some sample's.
 
 ## 7. Arrays
 

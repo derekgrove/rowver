@@ -1,7 +1,7 @@
 //! `rvr reproduce`: write a file's study back out of it, press it again, and compare the two.
 
 use crate::press::{self, Texts};
-use crate::samples::resolve::{Lock, Locked};
+use rowver::study::lock::{Lock, Sample as Locked};
 use rowver::choice::Events;
 use std::path::{Path, PathBuf};
 
@@ -56,13 +56,12 @@ fn run(
     let (texts, name) = study_texts(reader.header(), file)?;
     let name = name.as_str();
     let base = base(file, study.as_deref())?;
-    let lock: Lock = toml::from_str(&texts.lock)
-        .map_err(|e| format!("{shown}: its samples.lock does not read: {e}"))?;
-    let local = lock.sample.iter().flat_map(|s| &s.file);
+    let lock = Lock::read(&texts.lock).map_err(|p| format!("{shown}: its samples.lock does not check out: {p}"))?;
+    let local = lock.samples.iter().flat_map(|s| &s.files);
     let local = local
         .filter(|f| !f.at.contains("://"))
         .map(|f| &f.at);
-    if let Some(missing) = local.into_iter().find(|at| !base.join(at).exists()) {
+    if let Some(missing) = local.into_iter().find(|at| !crate::samples::resolve::local(at, &base).exists()) {
         return Err(format!("{missing}, which the lock names, is not in {}. The lock's relative paths are from the study folder: name it with --study FOLDER.", base.display()));
     }
     let dir = dir.unwrap_or_else(|| file.with_extension("reproduced"));

@@ -138,14 +138,25 @@ $ cd higgs_tautau
 ```
 
 `samples.toml` names each sample, its files and tree, and any metadata to carry along (here
-`kind`):
+`kind`), after a header and three tables that every samples.toml has:
 
 ```toml
+format = "rvr-samples"
+version = 1
+
+[places]
+opendata = "root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool"
+
+[defaults]
+tree = "Events"
+
+[eras]
+
 [[sample]]
 name = "GluGluToHToTauTau"
 label = "ggH to tau tau (CMS Open Data 2012)"
 files = "{opendata}/GluGluToHToTauTau.root"
-kind = "signal"
+metadata = { kind = "signal" }
 ```
 
 `recipe.toml` says which events to keep and what to store of them:
