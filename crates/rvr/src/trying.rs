@@ -7,7 +7,7 @@ use crate::open::{entries as located, first_readable, hint, sample_at, Branches}
 use crate::options::Options;
 use crate::plan::Choose;
 use rowver::rvr::derived::fields;
-use rvr_recipe::{per_event, Array, Columns, Constant, Kind, Scope, Store, Values};
+use rvr_recipe::{per_event, Array, Columns, Constant, Scope, Store, Values};
 use std::path::Path;
 
 pub(crate) const USAGE: &str = "usage:
@@ -120,14 +120,16 @@ fn described(array: &Array) -> String {
     }
 }
 
-/// One event's value as text: a number, true or false, or a list of them.
+/// One event's value as text, as rowver reads values: a number, true or false, or a list of them.
 fn value(array: &Array, event: usize) -> String {
-    let one = |values: &Values, at: usize| match &values.store {
-        Store::Whole(held) if values.kind == Kind::B1 => (held[at] != 0).to_string(),
-        Store::Whole(held) if values.kind == Kind::U8 => (held[at] as u64).to_string(),
-        Store::Whole(held) => held[at].to_string(),
-        Store::Float(held) if values.kind == Kind::F4 => (held[at] as f32).to_string(),
-        Store::Float(held) => held[at].to_string(),
+    let one = |values: &Values, at: usize| {
+        let single = match &values.store {
+            Store::Whole(held) => Values::whole(values.kind, vec![held[at]]),
+            Store::Float(held) => Values::float(values.kind, vec![held[at]]),
+        };
+        let mut out = String::new();
+        let _ = rowver::rvr::push_shown(values.kind.name(), &single.to_bytes(), &mut out);
+        out
     };
     match array {
         Array::Event(values) => one(values, event),

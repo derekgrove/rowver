@@ -148,7 +148,7 @@ impl ByteSource for Held {
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> hep_root::Result<()> {
         let [read] = &mut self.read_ranges(&[(offset, buf.len())])?[..] else {
-            unreachable!("one range asked, one answered")
+            return Err(hep_root::Error::Io(std::io::Error::other("one range was asked for, and another number came back (a bug in rvr: please report it)")));
         };
         buf.copy_from_slice(read);
         Ok(())

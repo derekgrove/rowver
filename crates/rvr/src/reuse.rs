@@ -17,7 +17,6 @@ use rowver::rvr::Reader;
 use rvr_recipe::{uses, Cut, Expression, Recipe};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::Path;
 
 /// What an earlier press gives a new one.
 pub struct Earlier {
@@ -150,26 +149,29 @@ pub fn same_build(made: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// What the file at `path` gives this press: nothing when there is none, or why it cannot.
+/// What the file at the target, as opened (`None` when there is none), gives this press, or why it cannot.
 pub fn earlier(
-    path: &Path,
+    file: Option<rowver::Result<Reader>>,
     texts: &crate::texts::Texts,
     recipe: &Recipe,
     lock: &Lock,
     asked: &[Events],
 ) -> Option<Result<Base, String>> {
-    path.exists()
-        .then(|| read(path, texts, recipe, lock, asked))
+    file.map(|file| read(file, texts, recipe, lock, asked))
 }
 
+/// What a file at the target gives this press, or why it cannot.
 fn read(
-    path: &Path,
+    file: rowver::Result<Reader>,
     texts: &crate::texts::Texts,
     recipe: &Recipe,
     lock: &Lock,
     asked: &[Events],
 ) -> Result<Base, String> {
-    let file = Reader::open(path).map_err(|e| format!("it could not be read ({e})"))?;
+    let file = file.map_err(|e| match e {
+        rowver::Error::Io(e) => rowver::plain_it(&e),
+        e => format!("it could not be read ({e})"),
+    })?;
     if file.empty() {
         return Err("it is empty (rvr refill gives its columns back, checked against its checksums)".into());
     }

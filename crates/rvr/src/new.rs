@@ -29,10 +29,10 @@ pub fn main(dir: &str) -> Result<(), String> {
     if !there.is_empty() {
         return Err(format!("{dir} already has {}; rvr new writes nothing over a file. Use another folder, or move those away.", there.join(" and ")));
     }
-    std::fs::create_dir_all(folder).map_err(|e| format!("{dir} could not be made: {e}"))?;
+    std::fs::create_dir_all(folder).map_err(|e| rowver::plain_io(folder, &e))?;
     for (name, text) in &files {
         std::fs::write(folder.join(name), text)
-            .map_err(|e| format!("{dir}/{name} could not be written: {e}"))?;
+            .map_err(|e| rowver::plain_io(format!("{dir}/{name}"), &e))?;
     }
     println!(
         "Made {dir}/ with

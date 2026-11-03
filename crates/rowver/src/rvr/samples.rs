@@ -1,4 +1,3 @@
-use super::cancellation::Cancellation;
 use super::{checksum, digest, exactly, hex, list, nonempty, MEND};
 use crate::numeric::{width, NumericArray};
 use crate::{invalid, Result};
@@ -7,16 +6,6 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
 pub(crate) use rvr_recipe::RESERVED;
-
-/// Hash bytes in pieces so that a long sample can still be cancelled.
-fn chunked(bytes: &[u8], cancellation: Cancellation<'_>) -> Result<String> {
-    let mut hash = Sha256::new();
-    for chunk in bytes.chunks(65536) {
-        cancellation.check()?;
-        hash.update(chunk);
-    }
-    Ok(hex(&hash.finalize()))
-}
 
 /// The half-open row range of every sample, in `data.samples` order (their sum checked on opening).
 pub(super) fn spans(data: &Value) -> Result<Vec<(usize, usize)>> {
@@ -35,12 +24,10 @@ fn compare(
     record: &Value,
     spans: &[(usize, usize)],
     place: &str,
-    cancellation: Cancellation<'_>,
     part: impl Fn(usize, usize) -> Result<String>,
 ) -> Result<()> {
     let recorded = list(record, place, "by_sample")?;
     for (index, (sum, (start, end))) in recorded.iter().zip(spans).enumerate() {
-        cancellation.check()?;
         if sum.as_str() != Some(part(*start, *end)?.as_str()) {
             return Err(invalid(format!("{place}.by_sample[{index}] is not the SHA-256 of that sample's part of the array (docs/FORMAT.md §8): {MEND}")));
         }
@@ -54,12 +41,9 @@ pub(super) fn per_row(
     array: &NumericArray,
     spans: &[(usize, usize)],
     place: &str,
-    cancellation: Cancellation<'_>,
 ) -> Result<()> {
     let w = width(&array.kind)?;
-    compare(record, spans, place, cancellation, |start, end| {
-        chunked(&array.bytes[start * w..end * w], cancellation)
-    })
+    compare(record, spans, place, |start, end| Ok(digest(&array.bytes[start * w..end * w])))
 }
 
 /// Check the per-sample checksums of a jagged column's rebased offsets and of its content.
@@ -69,20 +53,16 @@ pub(super) fn jagged(
     content: &NumericArray,
     spans: &[(usize, usize)],
     place: &str,
-    cancellation: Cancellation<'_>,
 ) -> Result<()> {
-    compare(&record["offsets"], spans, &format!("{place}.offsets"), cancellation, |start, end| {
+    compare(&record["offsets"], spans, &format!("{place}.offsets"), |start, end| {
         let mut hash = Sha256::new();
-        for (index, offset) in offsets[start..=end].iter().enumerate() {
-            cancellation.at(index)?;
+        for offset in &offsets[start..=end] {
             hash.update(((offset - offsets[start]) as i64).to_le_bytes());
         }
         Ok(hex(&hash.finalize()))
     })?;
     let w = width(&content.kind)?;
-    compare(&record["content"], spans, &format!("{place}.content"), cancellation, |start, end| {
-        chunked(&content.bytes[offsets[start] * w..offsets[end] * w], cancellation)
-    })
+    compare(&record["content"], spans, &format!("{place}.content"), |start, end| Ok(digest(&content.bytes[offsets[start] * w..offsets[end] * w])))
 }
 
 /// Whether a JSON number is written as a whole number.

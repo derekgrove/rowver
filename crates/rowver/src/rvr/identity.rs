@@ -2,14 +2,12 @@
 //! on opening; in full validation, the event choice made again with the holes and counts against
 //! it, then each row's sample and entry.
 
-use super::cancellation::Cancellation;
 use super::samples::whole as written_whole;
 use super::{count, exactly, list, nonempty, object, text, whole_count, MEND};
 use crate::choice::{per_file, Events};
 use crate::numeric::NumericArray;
 use crate::study::lock::{uuid, MOST_ENTRIES};
-use crate::table::Source;
-use crate::{invalid, EventIdentity, Result};
+use crate::{invalid, Result};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -297,11 +295,10 @@ fn sums(records: &Map<String, Value>, metadata: &Map<String, Value>, paths: &[&s
 /// The event choice made again for every sample, each hole holding a chosen entry, totals only on
 /// a file the press read an entry of, and `events_read` and `events_missing` exact: what each
 /// file's rows may hold.
-pub(super) fn choices<'a>(header: &'a Value, cancellation: Cancellation<'_>) -> Result<Reads<'a>> {
+pub(super) fn choices(header: &Value) -> Result<Reads<'_>> {
     let (data, made) = (&header["data"], &header["made"]);
     let mut out = Reads::new();
     for sample in data["samples"].as_array().into_iter().flatten() {
-        cancellation.check()?;
         let name = sample["name"].as_str().unwrap_or_default();
         let place = format!("made.files[{name:?}]");
         let files = ordered(data, made, name);
@@ -313,7 +310,7 @@ pub(super) fn choices<'a>(header: &'a Value, cancellation: Cancellation<'_>) -> 
             let mut lost = 0;
             for (index, &(first, last)) in holes.iter().enumerate() {
                 match read.within(first, last) {
-                    0 => return Err(invalid(format!("{at}.holes[{index}] holds entries {first} to {last}, none of which the event choice chose, and a hole holds at least one (docs/FORMAT.md §6.2): {MEND}"))),
+                    0 => return Err(invalid(format!("{at}.holes[{index}] holds {}, none of which the event choice chose, and a hole holds at least one (docs/FORMAT.md §6.2): {MEND}", super::span(first, last)))),
                     n => lost += n,
                 }
             }
@@ -356,20 +353,18 @@ pub(super) fn chosen_in_holes(header: &Value) -> Result<Vec<u64>> {
     Ok(out)
 }
 
+
 /// Check each row against the samples and files: the sample index running through the samples in
-/// order, and each file's entries strictly increasing, each chosen and in no hole; and recover
-/// each file's identity.
-pub(super) fn rows(header: &Value, sample: &NumericArray, entry: &NumericArray, reads: &Reads, cancellation: Cancellation<'_>) -> Result<Vec<Source>> {
-    let (data, made) = (&header["data"], &header["made"]);
+/// order, and each file's entries strictly increasing, each chosen and in no hole.
+pub(super) fn rows(header: &Value, sample: &NumericArray, entry: &NumericArray, reads: &Reads) -> Result<()> {
+    let data = &header["data"];
     for (at, (start, end)) in super::samples::spans(data)?.into_iter().enumerate() {
         for row in start..end {
-            cancellation.at(row)?;
             if sample.signed(row)? != at as i64 {
                 return Err(invalid(format!("data.sample: row {row} holds {}, and the rows of data.samples[{at}] hold {at} (docs/FORMAT.md §3): {MEND}", sample.signed(row)?)));
             }
         }
     }
-    let mut files = Vec::new();
     let mut start = 0_usize;
     for (at, record) in data["files"].as_array().into_iter().flatten().enumerate() {
         let (name, path) = (record["sample"].as_str().unwrap_or_default(), record["path"].as_str().unwrap_or_default());
@@ -377,7 +372,6 @@ pub(super) fn rows(header: &Value, sample: &NumericArray, entry: &NumericArray, 
         let (read, holes) = &reads[&(name, path)];
         let mut previous: Option<i64> = None;
         for row in start..end {
-            cancellation.at(row)?;
             let held = entry.signed(row)?;
             if previous.is_some_and(|previous| held <= previous) {
                 return Err(invalid(format!("data.entry: row {row} holds entry {held} of data.files[{at}] after entry {}, and within a file rows are in strictly increasing order of their entries (docs/FORMAT.md §3): {MEND}", previous.unwrap_or_default())));
@@ -391,19 +385,7 @@ pub(super) fn rows(header: &Value, sample: &NumericArray, entry: &NumericArray, 
                 return Err(invalid(format!("data.entry: row {row} holds entry {held} of data.files[{at}] ({path}), which the event choice did not choose or a hole holds (docs/FORMAT.md §3, §6.1, §6.2): {MEND}")));
             }
         }
-        let source = &made["files"][name]["files"][path];
-        files.push(Source {
-            identity: EventIdentity {
-                sample: name.into(),
-                file: path.into(),
-                entry: 0,
-                uuid: source["uuid"].as_str().unwrap_or_default().into(),
-                tree: source["tree"].as_str().unwrap_or_default().into(),
-            },
-            start,
-            end,
-        });
         start = end;
     }
-    Ok(files)
+    Ok(())
 }

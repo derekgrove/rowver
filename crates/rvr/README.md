@@ -355,15 +355,17 @@ Pressing 3 samples, 90 files, 636,390 entries, 2 at a time:
 
 A press that cannot read part of what it chose still writes the file, without those events, and
 records each **hole** in it: the entries of the file it could not read, a kind, and why. The kinds
-are `tape` (every copy of a dataset's file is on tape only), `unreachable` (its storage kept
-failing after every wait), `damaged` (a basket does not decompress), `gone` (the file is not
+are `unreachable` (its storage kept failing after every wait), `damaged` (a basket does not decompress), `gone` (the file is not
 there any more), `changed` (it is not the file the lock names) and `refused` (its storage refuses
 it with a valid proxy). A damaged basket makes a hole of the 50,000 entries read with it, and the
 rest of the file is read; any other kind makes a hole of the rest of the file. What is not the
 file's fault makes no hole and stops the press: a mistake in the recipe, a grid proxy missing or
 refused, a certificate rvr does not trust, a local file that cannot be read for want of rights or
 a mount gone. A press whose every chosen entry lies in a hole still writes the file, with no rows
-of those files and their holes. The press exits 3 when the file has holes:
+of those files and their holes. The press exits 3 when the file has holes. rvr writes a run of
+entries as `entries 0 to 4`, both ends among them (`entry 7` for one), in press, status and
+validate alike; the file, and the Python package's `holes`, record that run as `[0, 5]`, the
+entries from the first to before the last:
 
 ```text
 $ rvr press
@@ -551,7 +553,7 @@ Says whether the study's `.rvr` file (the one `rvr press` with the same options 
 holds the study as it is now, from the study's three texts and the file alone (no input is read): what changed in
 `recipe.toml` (columns new, changed or dropped; the cuts), whether `samples.toml` was edited or
 the lock resolved again since, and what `rvr press` would read; then how much of what it chose
-each sample holds, and its holes by kind, each kind with what to do about it (`--holes` lists every
+each sample holds, with how many of its files the file's choice took entries from, and its holes by kind, each kind with what to do about it (`--holes` lists every
 hole: sample, file, entries, kind and why). A press that stopped part way is shown, with how many
 files it finished, and so is one under way. It builds the Plan `rvr press` would, without running
 the core: a study `rvr press` would refuse is listed, a problem a line. Exit status 0 exactly when
@@ -688,12 +690,13 @@ its arrays'. One line per file: `valid`, how many entries the press read of how 
 (`read 5 of 10 entries, 1 hole (damaged)`), and who signed it, or the first problem found. Every
 derived column is worked out, and checked against the checksums and facts the file records of it
 (`1 derived`), and the recipe the file carries lists the same derived columns.
-`--complete` also fails (exit 1, on its line) a valid file that has holes.
+`--complete` also fails (exit 1, on its line) a valid file that has holes, or is empty. A file
+that is not there, a folder, or a file changed while it is read is said so in plain words.
 
 Every reader (rvr, the Python package) refuses a file whose header fails these checks, or whose
 signature no longer holds; `rvr dump` still shows it.
 
-### `rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns]`
+### `rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns] [--all]`
 
 Prints the inside of a file: the header in full, the texts of recipe.toml, samples.toml and
 samples.lock, and every column with its kind, length and first values; a derived column worked
@@ -704,7 +707,25 @@ mean_jet_pt    f8[8]  derived = "ht / nJet"  [33.901041666666664, 38.51171875, 3
 ```
 
 Each flag prints only that part: `--files` the files read and each sample's event choice and
-metadata, `--recipe`, `--samples` and `--lock` one text each, `--columns` the columns.
+metadata, `--recipe`, `--samples` and `--lock` one text each, `--columns` the columns. `--all`
+prints every value of every column instead of the first: a line naming them, then one line a row,
+its values apart by tabs: its sample, entry, then each column, the stored ones then the derived
+ones worked out (a list as `[40, 50]`); then the sample columns, as without it. Each row is written
+as it is made, but every column is held decoded while the rows are written (each array is one
+compressed frame, read whole), so it needs memory for the file's columns as they decompress. It
+goes alone or with `--columns`; with another part it is wrong use.
+
+```text
+$ rvr dump flat.rvr --columns --all
+sample	entry	weight	nJet	Jet_pt	per_jet
+flat	0	1	3	[65.3125, 19.96875, 16.421875]	0.3333333333333333
+flat	1	0.5	4	[51.75, 49.3125, 31.90625, 21.078125]	0.125
+flat	2	2.25	3	[37.03125, 34.03125, 33.40625]	0.75
+flat	3	1	0	[]	inf
+flat	4	0.75	1	[120.5]	0.75
+events_read    i8 by sample[1]  flat: 5
+events_total   i8 by sample[1]  flat: 5
+```
 
 ### `rvr header FILE`
 
@@ -714,9 +735,12 @@ why is said on standard error, with exit status 1.
 
 ### `rvr diff A B`
 
-Says where two files differ from their headers alone, without decompressing anything: rows,
-samples and columns only one has, columns whose kind changed, and each column of each sample
-whose contents changed (every column carries one checksum per sample). It says when a header fails
+Says where two files differ from their headers alone, without decompressing anything: the rows,
+in all and of each sample; samples, columns, derived columns and sample columns only one has;
+each sample's label; kinds, and derived columns' expressions, that changed; and the entries, each
+column and each derived column of each sample whose contents changed (every one carries one
+checksum per sample), and each sample column's value that changed. A label is tied to the lock the
+file carries by `rvr validate`, not by a checksum: `rvr diff` names it all the same. It says when a header fails
 its checks (and compares it all the same), and when one file is empty and the other is not: either
 is a difference. Exit status 0 when the headers show no difference, 1 when they do, 2 when one
 cannot be read.
@@ -732,7 +756,9 @@ sample column xsec: differs in sample B: 2.5 in before.rvr, 3.5 in after.rvr
 Writes the recipe.toml, samples.toml and samples.lock that FILE holds into DIR (FILE's name with
 `.reproduced` when not given), presses them again with the same event choice, and runs
 `rvr diff` on the two files: exit status 0 when they hold the same data. A relative path in the
-lock is read from FILE's folder, where `rvr press` writes it, or FOLDER.
+lock is read from FILE's folder, where `rvr press` writes it, or FOLDER. A DIR that holds a
+`.rvr` file, or a recipe.toml, samples.toml or samples.lock other than FILE's, is refused, naming
+them, rather than pressed over.
 
 ### `rvr empty FILE... [--study FOLDER] [--anyway] [--force | -f]`, `rvr refill FILE [--study FOLDER] [--workers N]`
 
@@ -774,19 +800,31 @@ Refilled tiny.rvr: every column is back, byte for byte as it was, and its signat
 `rvr press` does not build on an empty file: it presses every column. `rvr status` says a file is
 empty, with exit status 1.
 
-### `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME`
+`rvr derive`, `rvr empty` and `rvr refill` keep every tool key a file has (a top-level key of
+another tool's, docs/FORMAT.md §11) as it was, and so does a press that replaces the file at its
+target (a fill, a build on its columns or samples, a full press): the new file carries them. A
+file at the target that does not open has none to keep, and a press adds none of its own.
 
-`rvr key new` makes your ed25519 key in `~/.config/rvr/key` (keep it private); from then on every
-file you press is signed with it, so a reader can tell who pressed it and that its header has not
-changed since. `rvr key show` prints your public key for others, and `rvr key trust KEY NAME` adds
-someone's key to `~/.config/rvr/trusted`, so `rvr validate` names them. `RVR_CONFIG` names another
+### `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME...`
+
+`rvr key new` makes your ed25519 key in `~/.config/rvr/key` (keep it private): 64 lowercase
+hexadecimal characters and a newline, readable by you alone, written into a file beside it and then
+put in its place, never over a key that is there. From then on every file you press is signed with
+it, so a reader can tell who pressed it and that its header has not changed since. Its NAME is
+one word, put in the `rvr key trust` line it prints. `rvr key show` prints your public key for
+others, and `rvr key trust KEY NAME...` adds someone's key to `~/.config/rvr/trusted`, the words
+of NAME joined by spaces, so `rvr validate` names them. `trusted` holds a line `KEY NAME` per key;
+lines that begin with `#`, and blank lines, are passed over. A key trusted already is left under
+its name: trusting it again by that name says so, and by another is refused, saying which line to
+take out. A KEY is 64 lowercase hexadecimal characters, as `rvr key show` prints it. `RVR_CONFIG` names another
 folder for both files (else `XDG_CONFIG_HOME/rvr`); one set but empty counts as not set.
 
 ### `rvr proxy`, `rvr proxy init [--hours H]`
 
-`rvr proxy` shows the grid proxy rvr would use: its file, whose it is, its VO and how long its
-attributes last, the time left, and what to do when it is missing or ending. The exit status is 0
-when it can be used.
+`rvr proxy` shows the grid proxy rvr would use (`X509_USER_PROXY`, else `/tmp/x509up_u<your
+uid>`): its file, whose it is, its VO and how long its attributes last, the time left, and what to
+do when it is missing or ending; an `X509_USER_PROXY` that names no file is said to be missing,
+with what to run. The exit status is 0 when it can be used.
 
 `rvr proxy init` makes one with no other grid tool installed. It reads your certificate from
 `~/.globus`: `usercert.pem` and `userkey.pem`, or a `.p12` file as your certificate authority

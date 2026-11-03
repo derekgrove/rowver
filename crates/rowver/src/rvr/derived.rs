@@ -62,7 +62,7 @@ pub fn fields(metadata: &Map<String, Value>) -> BTreeMap<String, Constant> {
 }
 
 /// One derived column's values over the `rows` rows of `columns`, of the kind and shape `seen` holds.
-pub fn evaluate(place: &str, expression: &Expression, columns: &dyn Columns, metadata: &BTreeMap<String, Constant>, rows: usize, seen: &mut Option<(Kind, bool)>, row: &dyn Fn(usize) -> String) -> Result<Array> {
+pub(crate) fn evaluate(place: &str, expression: &Expression, columns: &dyn Columns, metadata: &BTreeMap<String, Constant>, rows: usize, seen: &mut Option<(Kind, bool)>, row: &dyn Fn(usize) -> String) -> Result<Array> {
     let defines = BTreeMap::new();
     let mut work = |run: &dyn Columns, from: usize, to: usize| {
         Scope::new(run, metadata, &defines).evaluate(expression).and_then(|value| per_event(value, to - from))
@@ -363,19 +363,19 @@ pub fn records(file: &Reader, derived: &[(String, String)], before: &[Value]) ->
 
 /// Derived columns of a file, worked out and each checked against the file's record of it.
 pub fn columns(file: &Reader, names: &[String]) -> Result<Vec<Held>> {
-    columns_while(file, names, &|| Ok(()))
+    columns_with(file, names, &[])
 }
 
-/// `columns`, asking `go` before each one whether to carry on.
-fn columns_while(file: &Reader, names: &[String], go: &dyn Fn() -> Result<()>) -> Result<Vec<Held>> {
+/// `columns`, worked out from the stored columns `held` as they are, reading only the others.
+pub fn columns_with(file: &Reader, names: &[String], held: &[(String, Rc<Held>)]) -> Result<Vec<Held>> {
     let header = file.header();
     let derived = listed(header);
     let store = Store::new(file, &derived);
+    store.held.borrow_mut().extend(held.iter().cloned());
     let rows = sample_rows(header);
     let records = header["derived"]["columns"].as_array();
     let mut wholes = Vec::new();
     for (at, name) in names.iter().enumerate() {
-        go()?;
         store.keep_for(&names[at..]);
         let record = records
             .into_iter()
@@ -429,17 +429,12 @@ pub(super) fn checked_empty(file: &Reader) -> Result<usize> {
 
 /// Check a file's derived columns against the recipe it carries and its records; how many.
 pub fn checked(file: &Reader) -> Result<usize> {
-    checked_while(file, &|| Ok(()))
-}
-
-/// `checked`, asking `go` before each derived column whether to carry on.
-pub(super) fn checked_while(file: &Reader, go: &dyn Fn() -> Result<()>) -> Result<usize> {
     let derived = listed(file.header());
     if agreed(file.header())? == 0 {
         return Ok(0);
     }
     let names: Vec<String> = derived.iter().map(|(name, _)| name.clone()).collect();
-    columns_while(file, &names, go)?;
+    columns(file, &names)?;
     Ok(derived.len())
 }
 

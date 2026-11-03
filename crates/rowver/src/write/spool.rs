@@ -185,7 +185,7 @@ impl Spool {
     /// Read back what `put` added.
     fn get(&self, span: &Span) -> Result<Vec<u8>> {
         let mut packed = vec![0; span.size];
-        read_at(&self.file, &mut packed, span.at)?;
+        read_at(&self.file, &mut packed, span.at).map_err(|e| crate::about(&self.path, e.into()))?;
         match span.packed {
             true => codec::unpack(packed, 1, span.bytes, "a spooled piece"),
             false => Ok(packed),

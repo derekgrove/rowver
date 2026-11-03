@@ -53,9 +53,10 @@ const USAGE: &str = "usage:
   rvr derive FILE 'NAME = EXPRESSION'... | --drop NAME... | --rename OLD NEW
                                            add, drop or rename derived columns of a pressed file
   rvr validate FILE... [--complete]        check files, their derived columns worked out too;
-                                           --complete fails a file with holes
-  rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns]
+                                           --complete fails a file with holes, or an empty one
+  rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns] [--all]
                                            the header in full, the study's texts, every column
+                                           (--all: every value, one row a line)
   rvr header FILE                          the JSON header only, as the file holds it
   rvr diff A B                             which column of which sample differs, from the headers
   rvr reproduce FILE [DIR] [--study FOLDER] [--workers N]
@@ -70,7 +71,7 @@ const USAGE: &str = "usage:
 /// The usage of the commands that keep none of their own.
 const NEW: &str = "usage:\n  rvr new DIR    start a study in DIR: samples.toml, recipe.toml and .gitignore";
 const VALIDATE: &str = "usage:\n  rvr validate FILE... [--complete]    check files in full; --complete fails a file with holes, or an empty one";
-const DUMP: &str = "usage:\n  rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns]\n      the header in full, the study's texts and every column, or only the parts named, in the order given";
+const DUMP: &str = "usage:\n  rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns] [--all]\n      the header in full, the study's texts and every column, or only the parts named, in the order\n      given; --all prints every value of every column, one row a line (with --columns, or alone)";
 const HEADER: &str = "usage:\n  rvr header FILE    the header's bytes, as the file holds them";
 const DIFF: &str = "usage:\n  rvr diff A B    where two files differ, from their headers alone";
 
@@ -87,7 +88,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "status", flags: &[("--out", Value), ("--events", Value), ("--random", No), ("--seed", Value), ("--holes", No)], words: (0, 1, "at most one study folder"), dashes: false, usage: status::USAGE },
     Command { name: "derive", flags: &[("--drop", No), ("--rename", No)], words: (2, usize::MAX, "a file and what to change of it"), dashes: false, usage: derive::USAGE },
     Command { name: "validate", flags: &[("--complete", No)], words: (1, usize::MAX, "the files to check"), dashes: false, usage: VALIDATE },
-    Command { name: "dump", flags: &[("--files", No), ("--recipe", No), ("--samples", No), ("--lock", No), ("--columns", No)], words: (1, 1, "one file"), dashes: false, usage: DUMP },
+    Command { name: "dump", flags: &[("--files", No), ("--recipe", No), ("--samples", No), ("--lock", No), ("--columns", No), ("--all", No)], words: (1, 1, "one file"), dashes: false, usage: DUMP },
     Command { name: "header", flags: &[], words: (1, 1, "one file"), dashes: false, usage: HEADER },
     Command { name: "diff", flags: &[], words: (2, 2, "two files, A and B"), dashes: false, usage: DIFF },
     Command { name: "reproduce", flags: &[("--study", Value), ("--workers", Value)], words: (1, 2, "a file and at most one folder"), dashes: false, usage: reproduce::USAGE },
@@ -127,7 +128,7 @@ pub(crate) fn out(command: &str, bytes: &[u8]) -> Result<(), String> {
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(bytes).and_then(|()| stdout.flush()).map_err(|e| match e.kind() {
         std::io::ErrorKind::BrokenPipe => std::process::exit(CLOSED),
-        _ => format!("rvr {command}: standard output could not be written ({e}): free space where it goes, or send it elsewhere"),
+        _ => format!("rvr {command}: standard output could not be written ({}): free space where it goes, or send it elsewhere", rowver::described(&e)),
     })
 }
 
@@ -139,8 +140,18 @@ pub(crate) fn wrong(command: &str, why: &str) -> u8 {
 }
 
 /// Run the command these words (the arguments after `rvr`) name; its exit status.
-pub fn run(args: &[String]) -> u8 {
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+pub fn run(args: &[std::ffi::OsString]) -> u8 {
+    let mut words = Vec::new();
+    for arg in args {
+        match arg.to_str() {
+            Some(word) => words.push(word),
+            None => {
+                eprintln!("rvr: the argument {:?} is not UTF-8 text, and rvr reads only UTF-8: give it in UTF-8 (rename a file whose name is not)", arg.to_string_lossy());
+                return 2;
+            }
+        }
+    }
+    let args = words;
     let mut tops: Vec<&str> = COMMANDS.iter().map(|c| c.name.split(' ').next().unwrap_or(c.name)).collect();
     tops.dedup();
     // The command is the first word that is not a flag (flags before it, with their values, are
@@ -233,8 +244,11 @@ fn command_run(name: &str, options: &Options) -> u8 {
         "derive" => derive::main(options),
         "validate" => validate(&words, options.has("--complete")),
         "dump" => {
-            let flags: Vec<&str> = options.flags.iter().map(|(flag, _)| *flag).collect();
-            report("dump", dump::main(words[0], &flags))
+            let flags: Vec<&str> = options.flags.iter().map(|(flag, _)| *flag).filter(|flag| *flag != "--all").collect();
+            if let Some(part) = flags.iter().find(|flag| **flag != "--columns").filter(|_| options.has("--all")) {
+                return wrong("dump", &format!("--all prints every value of the columns, and {part} prints no column: give --all alone or with --columns"));
+            }
+            report("dump", dump::main(words[0], &flags, options.has("--all")))
         }
         "header" => header(words[0]),
         "diff" => diff::main(words[0], words[1]),
@@ -260,7 +274,7 @@ pub(crate) fn at_terminal() -> bool {
 pub(crate) fn yes(question: &str) -> Result<bool, String> {
     eprint!("{question}");
     let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).map_err(|e| format!("the answer could not be read ({e})"))?;
+    std::io::stdin().read_line(&mut answer).map_err(|e| format!("the answer could not be read ({})", rowver::described(&e)))?;
     Ok(["y", "yes"].iter().any(|yes| answer.trim().eq_ignore_ascii_case(yes)))
 }
 
@@ -280,7 +294,7 @@ fn report(command: &str, result: Result<(), String>) -> u8 {
 fn header(file: &str) -> u8 {
     let text = match rowver::rvr::header_text(file) {
         Ok(text) => text,
-        Err(e) => return report("header", Err(format!("{file}: {e}"))),
+        Err(e) => return report("header", Err(rowver::plain(file, &e))),
     };
     if let Err(why) = out("header", &text) {
         eprintln!("{why}");
@@ -288,7 +302,8 @@ fn header(file: &str) -> u8 {
     }
     match rowver::rvr::Reader::inspect(file).map(|(_, checked)| checked) {
         Ok(Ok(())) => 0,
-        Ok(Err(why)) | Err(why) => report("header", Err(format!("{file}: its header is printed as the file holds it, but it fails its checks: {why}"))),
+        Ok(Err(why)) => report("header", Err(format!("{file}: its header is printed as the file holds it, but it fails its checks: {why}"))),
+        Err(e) => report("header", Err(rowver::plain(file, &e))),
     }
 }
 
@@ -298,7 +313,10 @@ fn header(file: &str) -> u8 {
 fn validate(words: &[&str], complete: bool) -> u8 {
     let mut ok = true;
     for file in words {
-        let checked = rowver::rvr::validate_file(file).map_err(|e| e.to_string());
+        let checked = rowver::rvr::validate_file(file).map_err(|e| match e {
+            rowver::Error::Io(e) => rowver::plain_it(&e),
+            e => e.to_string(),
+        });
         let compared = checked.map(|summary| {
             let derived = match (summary.derived, summary.empty) {
                 (0, _) => String::new(),

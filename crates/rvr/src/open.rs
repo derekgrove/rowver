@@ -143,11 +143,11 @@ pub(crate) fn open(reach: &Reach, file: &File) -> Result<RootFile<Held>, Failed>
             std::io::ErrorKind::NotFound => Failed::new(Fault::Gone, format!(
                 "{at} no longer exists: put it back and run rvr press --fill (if it moved, run rvr samples resolve samples.toml again, then rvr press)."
             )),
-            _ => Failed::new(Fault::Save, format!("{at} could not be read: {e}")),
+            _ => Failed::new(Fault::Save, rowver::plain_io(at, &e)),
         })?;
         // A file that cannot be read for want of rights, or on a mount that went, is not the
         // file's fault.
-        let unreadable = |e: std::io::Error| Failed::new(Fault::Save, format!("{at} could not be read: {e}"));
+        let unreadable = |e: std::io::Error| Failed::new(Fault::Save, rowver::plain_io(at, &e));
         // Read whole for its adler32 only when the lock has one to compare with, and a press asks.
         let adler32 = match file.adler32 {
             Some(_) if reach.whole => {
@@ -247,7 +247,7 @@ pub(crate) fn opened(
 pub(crate) fn entries(error: &rvr_recipe::Error, first: u64, part: &std::ops::Range<usize>) -> String {
     match error.1 {
         Some(row) => format!("entry {}", count(first + row as u64)),
-        None if part.end > part.start => format!("entries {} to {}", count(first + part.start as u64), count(first + part.end as u64 - 1)),
+        None if part.end > part.start => rowver::rvr::span(first + part.start as u64, first + part.end as u64),
         None => "no entries".into(),
     }
 }

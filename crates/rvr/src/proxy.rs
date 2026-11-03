@@ -104,7 +104,7 @@ fn init(hours: u32) -> Result<bool, String> {
     let passphrase = match source.encrypted()? {
         true => {
             voms_proxy::user::passphrase(&format!("Passphrase for {}: ", source.key().display()))
-                .map_err(|e| format!("the passphrase could not be read: {e}"))?
+                .map_err(|e| format!("the passphrase could not be read ({}): run rvr proxy init at a terminal", rowver::described(&e)))?
         }
         false => String::new(),
     };
@@ -125,12 +125,13 @@ fn init(hours: u32) -> Result<bool, String> {
     let now = voms_proxy::now();
     let made = make::proxy(&user, Some(&attributes), now, seconds)?;
     let places = Places::here();
+    // X509_USER_PROXY set but empty counts as not set, as it does where the proxy is looked for.
     let path = places
         .proxy_variable
+        .filter(|path| !path.trim().is_empty())
         .or(places.usual_proxy)
         .ok_or("this platform has no usual place for a grid proxy; set X509_USER_PROXY")?;
-    make::write(path.as_ref(), &made.text)
-        .map_err(|e| format!("{path} could not be written: {e}"))?;
+    make::write(path.trim().as_ref(), &made.text).map_err(|e| rowver::plain_io(path.trim(), &e))?;
     if made.not_after < now + seconds {
         println!(
             "Your certificate ends at {}, so the proxy ends then too. Renew your certificate with your certificate authority.",

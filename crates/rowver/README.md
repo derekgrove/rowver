@@ -27,11 +27,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `rowver::rvr`: open, read and validate files (`Reader`, `validate_file`). `Reader::column`
   reads a derived column too: worked out from the file's columns with the recipe language
   ([`rvr-recipe`](https://crates.io/crates/rvr-recipe)), and checked against its record
-  (`rowver::rvr::derived`).
-- `rowver::write`: build the arrays and write a file, whole in memory or a piece at a time
-  through a spool on disk (`stream`); measure a derived column's record (`derived`), and write a
-  file again with another header (`rewrite`).
-- `rowver::sign`: sign a header with ed25519 and check a signature.
+  (`rowver::rvr::derived`). `width` and `push_shown` give a kind's width and its values as text,
+  and `span` a run of entries in words.
+- `rowver::write`: pack the arrays a piece at a time, through a spool on disk, and write a file
+  (`stream`, `write_laid`); measure a derived column's record (`derived`), write a file again
+  with another header (`rewrite`), and empty and refill one.
+- `rowver::sign`: sign a header with ed25519; a reader checks the signature when it opens a file.
+- `rowver::plain`: what went wrong with a file, in plain words (`FILE is not there`, `FILE changed
+  while it was read …`). A `Reader` reads through the handle it opened, so a file renamed over it
+  meanwhile is read as it was.
 - `rowver::choice`: the random event choice a file can record.
 
 Arrays are byte-shuffled and compressed with Zstandard in pure Rust; reading a column is one read

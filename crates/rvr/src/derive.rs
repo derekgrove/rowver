@@ -53,12 +53,12 @@ pub(crate) fn sealed(header: &mut Value, signer: Option<&[u8; 32]>) -> Result<()
         rowver::sign::sign(header, secret).map_err(|e| format!("the file could not be signed with your key: {e}"))?;
     }
     let text = serde_json::to_vec(header).map_err(|e| e.to_string())?;
-    rowver::rvr::checked_header(&text).map(drop).map_err(|e| format!("the file would not be valid: {e}"))
+    rowver::rvr::checked_header(&text).map(drop).map_err(|e| format!("it would not be valid: {e}"))
 }
 
 /// Write `from` again at `to` with `header`, sealed.
 pub(crate) fn rewritten(from: &Path, to: &Path, header: &mut Value, signer: Option<&[u8; 32]>) -> Result<(), String> {
-    sealed(header, signer)?;
+    sealed(header, signer).map_err(|why| format!("{} could not be written: {why}", to.display()))?;
     rowver::write::rewrite(from, to, header).map_err(|e| e.to_string())
 }
 
@@ -205,10 +205,10 @@ fn edited(text: &str, change: &Change, expected: &[(String, String)]) -> Result<
 }
 
 fn run(path: &Path, change: Asked) -> Result<(), String> {
-    let file = Reader::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let file = Reader::open(path).map_err(|e| rowver::plain(path, &e))?;
     // A file is changed, and signed again, only when its derived columns are what it records.
     let secret = crate::key::secret()?;
-    rowver::rvr::derived::checked(&file).map_err(|e| format!("{}: {e}", path.display()))?;
+    rowver::rvr::derived::checked(&file).map_err(|e| rowver::plain(path, &e))?;
     let mut header = file.header().clone();
     let text = header["made"]["recipe"]["text"].as_str().unwrap_or_default().to_owned();
     let recipe = Recipe::read(&text).map_err(|e| format!("{}: the recipe it carries cannot be read by this rvr ({}). {}", path.display(), e.line(), rowver::rvr::derived::remedy(&header)))?;
@@ -249,7 +249,7 @@ fn run(path: &Path, change: Asked) -> Result<(), String> {
             let change = |lines: &mut Vec<String>, table: (usize, usize)| {
                 let view: Vec<&str> = lines.iter().map(String::as_str).collect();
                 let line = line_of(&view, table, old).ok_or_else(|| format!("rvr could not find {old} in the [derived] table of the recipe the file carries"))?;
-                let (_, rest) = lines[line].split_once('=').unwrap();
+                let (_, rest) = lines[line].split_once('=').ok_or_else(|| format!("rvr could not find {old} in the [derived] table of the recipe the file carries"))?;
                 lines[line] = format!("{new} ={rest}");
                 Ok(())
             };
@@ -309,11 +309,11 @@ fn run(path: &Path, change: Asked) -> Result<(), String> {
     // The file is replaced only by one every reader opens, and only once it is on disk.
     let staged = crate::empty::beside(path, ".derive");
     let written = rewritten(path, &staged, &mut header, secret.as_ref())
-        .and_then(|()| std::fs::File::open(&staged).and_then(|f| f.sync_all()).map_err(|e| e.to_string()))
-        .and_then(|()| std::fs::rename(&staged, path).map_err(|e| e.to_string()));
+        .and_then(|()| std::fs::File::open(&staged).and_then(|f| f.sync_all()).map_err(|e| rowver::plain_io(&staged, &e)))
+        .and_then(|()| std::fs::rename(&staged, path).map_err(|e| rowver::plain_io(path, &e)));
     if let Err(e) = written {
         let _ = std::fs::remove_file(&staged);
-        return Err(format!("{} could not be written: {e}", path.display()));
+        return Err(e);
     }
     println!(
         "{said} {}: it has {}; {signed}",

@@ -17,7 +17,7 @@ pub struct Problems {
 
 impl Problems {
     /// One problem.
-    pub fn one(said: impl Into<String>) -> Self {
+    pub(crate) fn one(said: impl Into<String>) -> Self {
         Problems { said: vec![said.into()], missing: Vec::new() }
     }
 
@@ -70,7 +70,7 @@ pub fn plain(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// Whether `text` is `YYYY-MM-DDTHH:MM:SSZ`, a real date and time.
-pub fn utc(text: &str) -> bool {
+pub(crate) fn utc(text: &str) -> bool {
     let b = text.as_bytes();
     let digits = |r: std::ops::Range<usize>| text[r].bytes().all(|c| c.is_ascii_digit());
     if b.len() != 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' || b[19] != b'Z' {
@@ -129,7 +129,7 @@ pub fn matches(pattern: &str, name: &str) -> bool {
 }
 
 /// Whether `text` is `count` lowercase hexadecimal digits.
-pub fn hex(text: &str, count: usize) -> bool {
+pub(crate) fn hex(text: &str, count: usize) -> bool {
     text.len() == count && text.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 

@@ -7,63 +7,46 @@ pub(crate) struct NumericArray {
     pub bytes: Vec<u8>,
 }
 
-/// Return the exact byte width of a supported flat dtype.
-pub(crate) fn width(kind: &str) -> Result<usize> {
+/// Bytes per value of a kind: 8 for `f8`, 1 for `b1`; refused for a word that is no kind.
+pub fn width(kind: &str) -> Result<usize> {
     match kind {
         "f8" | "i8" | "u8" => Ok(8),
         "f4" | "i4" | "u4" => Ok(4),
         "i2" | "u2" => Ok(2),
         "i1" | "u1" | "b1" => Ok(1),
-        _ => Err(invalid(format!("Unsupported numeric kind {kind}"))),
+        _ => Err(invalid(format!("{kind:?} is not a kind of the format (f8, f4, i8, i4, i2, i1, u8, u4, u2, u1, b1): press its study again"))),
     }
 }
 
+/// Each value of a kind's little-endian `bytes` written to `out` as exact text, `, ` between them.
+pub fn push_shown(kind: &str, bytes: &[u8], out: &mut String) -> Result<()> {
+    use std::fmt::Write;
+    let w = width(kind)?;
+    for (at, b) in bytes.chunks_exact(w).enumerate() {
+        if at > 0 {
+            out.push_str(", ");
+        }
+        let mut v = [0; 8];
+        v[..w].copy_from_slice(b);
+        let four = [v[0], v[1], v[2], v[3]];
+        let _ = match kind {
+            "f8" => write!(out, "{}", f64::from_le_bytes(v)),
+            "f4" => write!(out, "{}", f32::from_le_bytes(four)),
+            "i8" => write!(out, "{}", i64::from_le_bytes(v)),
+            "i4" => write!(out, "{}", i32::from_le_bytes(four)),
+            "i2" => write!(out, "{}", i16::from_le_bytes([v[0], v[1]])),
+            "i1" => write!(out, "{}", v[0] as i8),
+            "u8" => write!(out, "{}", u64::from_le_bytes(v)),
+            "u4" => write!(out, "{}", u32::from_le_bytes(four)),
+            "u2" => write!(out, "{}", u16::from_le_bytes([v[0], v[1]])),
+            "u1" => write!(out, "{}", v[0]),
+            _ => write!(out, "{}", v[0] != 0),
+        };
+    }
+    Ok(())
+}
+
 impl NumericArray {
-    /// Decode every integer kind exactly for metadata validation.
-    pub fn integer(&self, index: usize) -> Result<i128> {
-        if index >= self.count {
-            return Err(invalid("Integer index is out of bounds"));
-        }
-        let w = width(&self.kind)?;
-        let b = &self.bytes[index * w..(index + 1) * w];
-        Ok(match self.kind.as_str() {
-            "i8" => i64::from_le_bytes(b.try_into().unwrap()) as i128,
-            "i4" => i32::from_le_bytes(b.try_into().unwrap()) as i128,
-            "i2" => i16::from_le_bytes(b.try_into().unwrap()) as i128,
-            "i1" => (b[0] as i8) as i128,
-            "u8" => u64::from_le_bytes(b.try_into().unwrap()) as i128,
-            "u4" => u32::from_le_bytes(b.try_into().unwrap()) as i128,
-            "u2" => u16::from_le_bytes(b.try_into().unwrap()) as i128,
-            "u1" | "b1" => b[0] as i128,
-            _ => return Err(invalid("Floating arrays have no exact integer values")),
-        })
-    }
-
-    /// Read a numerical value without changing the stored dtype.
-    pub fn value(&self, index: usize) -> Result<f64> {
-        if index >= self.count {
-            return Err(invalid(format!(
-                "Value index {index} exceeds {} values",
-                self.count
-            )));
-        }
-        let w = width(&self.kind)?;
-        let b = &self.bytes[index * w..(index + 1) * w];
-        Ok(match self.kind.as_str() {
-            "f8" => f64::from_le_bytes(b.try_into().unwrap()),
-            "f4" => f32::from_le_bytes(b.try_into().unwrap()) as f64,
-            "i8" => i64::from_le_bytes(b.try_into().unwrap()) as f64,
-            "i4" => i32::from_le_bytes(b.try_into().unwrap()) as f64,
-            "i2" => i16::from_le_bytes(b.try_into().unwrap()) as f64,
-            "i1" => (b[0] as i8) as f64,
-            "u8" => u64::from_le_bytes(b.try_into().unwrap()) as f64,
-            "u4" => u32::from_le_bytes(b.try_into().unwrap()) as f64,
-            "u2" => u16::from_le_bytes(b.try_into().unwrap()) as f64,
-            "u1" | "b1" => b[0] as f64,
-            _ => unreachable!(),
-        })
-    }
-
     /// Read signed integer identity and offset arrays exactly.
     pub fn signed(&self, index: usize) -> Result<i64> {
         if index >= self.count {
@@ -81,9 +64,9 @@ impl NumericArray {
     }
 }
 
-impl From<crate::NumericBuffer> for NumericArray {
+impl From<crate::write::NumericBuffer> for NumericArray {
     /// Take a caller's buffer without copying its bytes.
-    fn from(buffer: crate::NumericBuffer) -> Self {
+    fn from(buffer: crate::write::NumericBuffer) -> Self {
         Self {
             kind: buffer.kind,
             count: buffer.count,

@@ -254,6 +254,15 @@ fn a_random_choice_is_recorded_checked_and_reproduced() {
     assert!(said.contains("name it with --study FOLDER"), "{said}");
     let (code, said) = rvr(&moved, &["reproduce", "moved.rvr", "--study", ".."]);
     assert_eq!(code, 0, "{said}");
+    // A folder that holds a .rvr file, or texts of its own, is not pressed over.
+    let (code, said) = rvr(&moved, &["reproduce", "moved.rvr", "--study", ".."]);
+    assert!(code == 1 && said.contains(&format!("moved.reproduced already holds {name}.rvr, which rvr reproduce would press over")), "{said}");
+    let mine = moved.join("mine");
+    std::fs::create_dir(&mine).unwrap();
+    std::fs::write(mine.join("samples.toml"), "mine").unwrap();
+    let (code, said) = rvr(&moved, &["reproduce", "moved.rvr", "mine", "--study", ".."]);
+    assert!(code == 1 && said.contains("mine already holds a samples.toml of its own"), "{said}");
+    assert_eq!(std::fs::read_to_string(mine.join("samples.toml")).unwrap(), "mine");
 }
 
 #[test]
@@ -500,6 +509,15 @@ per_jet = "ht / nJet"
     let dir = study("derived", FLAT, recipe);
     let header = pressed(&dir, &[]);
     let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    // Every value, the derived column worked out from the stored ones dump holds.
+    let (code, all) = rvr(&dir, &["dump", &file, "--all", "--columns"]);
+    let mut lines = all.lines();
+    assert!(code == 0 && lines.next() == Some("sample\tentry\tnJet\tJet_pt\tht\tper_jet"), "{all}");
+    for line in lines.take(4) {
+        let cells: Vec<&str> = line.split('\t').collect();
+        let (n, ht, per): (f64, f32, f64) = (cells[2].parse().unwrap(), cells[4].parse().unwrap(), cells[5].parse().unwrap());
+        assert_eq!(per, f64::from(ht) / n, "{line}");
+    }
     let record = &header["derived"]["columns"][0];
     assert_eq!((record["name"].as_str(), record["expression"].as_str()), (Some("per_jet"), Some("ht / nJet")));
     assert!(record.get("at").is_none() && record["lim"].is_array(), "{record}");
@@ -995,6 +1013,9 @@ fn a_damaged_basket_is_a_hole_named_with_its_file_tree_and_entries() {
     assert!(said.contains(" 50%   2 files, 1 hole"), "{said}");
     assert!(said.contains("  damaged      1 file, 5 entries   flat"), "{said}");
     assert!(said.contains("rvr press --fill would read 5 entries of 1 file."), "{said}");
+    // Every hole, its entries as press and the file's why say them, both ends among them.
+    let (_, said) = rvr(&dir, &["status", "--holes"]);
+    assert!(said.contains("  flat  ./flat_b.root  entries 0 to 4 (5 chosen)  damaged: ./flat_b.root, tree analysis, entries 0 to 4: "), "{said}");
     // Pressed again as it is, it is filled, not pressed: press says so.
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 3, "{said}");
@@ -1267,7 +1288,7 @@ fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("where it stopped: 1 of 2 files done") && said.contains("  2/2 "), "{said}");
-    assert!(said.contains("could not be written: "), "{said}");
+    assert!(said.contains("is a folder, not a file"), "{said}");
     assert!(said.contains("Mend it, then press again, which carries on from the 2 of 2 files done"), "{said}");
     std::fs::remove_dir_all(dir.join(&name)).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
@@ -1719,4 +1740,72 @@ fn derive_says_every_problem_of_the_recipe_a_file_carries_in_one_sentence() {
     assert_eq!(code, 1, "{said}");
     let line = said.lines().find(|line| line.contains("cannot be read by this rvr")).unwrap_or_else(|| panic!("{said}"));
     assert!(line.contains("([keep] a: There is no function named cnt") && line.contains("; [keep] b: count takes 1 value, not 2)"), "{said}");
+}
+
+/// The file `name` in `dir` written again with a tool key added.
+fn with_tool_key(dir: &Path, name: &str, tool: &Value) {
+    let path = dir.join(name);
+    let mut header: Value = serde_json::from_str(&rvr(dir, &["header", name]).1).unwrap();
+    header["my.tool-2"] = tool.clone();
+    rowver::write::rewrite(&path, dir.join("with.rvr"), &header).unwrap();
+    std::fs::rename(dir.join("with.rvr"), &path).unwrap();
+}
+
+#[test]
+fn every_writer_keeps_the_tool_keys_of_the_file_it_replaces() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[totals]\n\n[derived]\n";
+    let dir = twice("tool-keys", recipe);
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert_eq!(code, 0, "{said}");
+    std::fs::rename(dir.join("flat_b.root"), dir.join("away.root")).unwrap();
+    assert_eq!(rvr(&dir, &["press"]).0, 3);
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let tool = serde_json::json!({"note": "kept", "seen": [1, 2.5, "μ"]});
+    with_tool_key(&dir, &name, &tool);
+    let held = || serde_json::from_str::<Value>(&rvr(&dir, &["header", &name]).1).unwrap()["my.tool-2"].clone();
+    assert_eq!(rvr(&dir, &["validate", &name]).0, 0);
+    // A fill, a build on its columns, a full press, and derive, empty and refill: each keeps it.
+    std::fs::rename(dir.join("away.root"), dir.join("flat_b.root")).unwrap();
+    let more = recipe.replace("\n\n[totals]", "\ndouble = \"weight * 2\"\n\n[totals]");
+    let steps: [(&[&str], Option<&str>, &str); 6] = [
+        (&["press", "--fill"], None, "Filling"),
+        (&["press"], Some(more.as_str()), "Reading only double"),
+        (&["press", "--full"], None, "Pressing 1 sample"),
+        (&["derive", &name, "twice = weight * 2"], None, "Added twice"),
+        (&["empty", &name, "-f"], None, "Emptied"),
+        (&["refill", &name], None, "Refilled"),
+    ];
+    for (args, recipe, what) in steps {
+        if let Some(recipe) = recipe {
+            std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
+        }
+        let (code, said) = rvr(&dir, args);
+        assert!(code == 0 && said.contains(what), "{args:?}: {said}");
+        assert_eq!(held(), tool, "{args:?}");
+    }
+    // A file at the target that does not open has none to keep.
+    let bytes = std::fs::read(dir.join(&name)).unwrap();
+    std::fs::write(dir.join(&name), &bytes[..bytes.len() - 1]).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(held(), Value::Null);
+}
+
+#[test]
+fn status_counts_the_files_the_file_read_of_each_sample() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
+    let dir = twice("status-files", recipe);
+    pressed(&dir, &["--events", "3"]);
+    let (code, said) = rvr(&dir, &["status", "--events", "3"]);
+    assert!(code == 0 && said.contains("100%   1 file\n"), "{said}");
+    // What the file holds, whatever a press with other options would read.
+    let (_, said) = rvr(&dir, &["status"]);
+    assert!(said.contains("100%   1 file\n"), "{said}");
+    std::fs::remove_file(dir.join(format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap()))).unwrap();
+    // One entry chosen at random: the file it is not in gave nothing, and is not counted.
+    let header = pressed(&dir, &["--events", "1", "--random"]);
+    let takes: Vec<&Value> = ["./flat_a.root", "./flat_b.root"].iter().map(|f| &header["made"]["files"]["flat"]["files"][*f]["take"]).collect();
+    assert!(takes.contains(&&Value::from(0)), "{takes:?}");
+    let (_, said) = rvr(&dir, &["status", "--events", "1", "--random"]);
+    assert!(said.contains("100%   1 file\n"), "{said}");
 }

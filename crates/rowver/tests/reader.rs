@@ -4,35 +4,10 @@
 
 mod common;
 
-use common::{golden, rebuilt, sealed, split, written};
-use rowver::rvr::{from_bytes, validate_file, Reader};
-use rowver::write::to_bytes;
+use common::{golden, rebuilt, sealed, split, to_bytes, written};
+use rowver::rvr::{validate_file, Reader};
+use rowver::write::Values;
 use serde_json::{json, Value};
-
-/// Little-endian values of a kind, each as an f64.
-fn as_f64(kind: &str, bytes: &[u8]) -> Vec<f64> {
-    let w = match kind {
-        "f8" | "i8" | "u8" => 8,
-        "f4" | "i4" | "u4" => 4,
-        "i2" | "u2" => 2,
-        _ => 1,
-    };
-    bytes
-        .chunks_exact(w)
-        .map(|b| match kind {
-            "f8" => f64::from_le_bytes(b.try_into().unwrap()),
-            "f4" => f32::from_le_bytes(b.try_into().unwrap()) as f64,
-            "i8" => i64::from_le_bytes(b.try_into().unwrap()) as f64,
-            "i4" => i32::from_le_bytes(b.try_into().unwrap()) as f64,
-            "i2" => i16::from_le_bytes(b.try_into().unwrap()) as f64,
-            "i1" => b[0] as i8 as f64,
-            "u8" => u64::from_le_bytes(b.try_into().unwrap()) as f64,
-            "u4" => u32::from_le_bytes(b.try_into().unwrap()) as f64,
-            "u2" => u16::from_le_bytes(b.try_into().unwrap()) as f64,
-            _ => b[0] as f64,
-        })
-        .collect()
-}
 
 fn names(header: &Value) -> Vec<String> {
     header["data"]["cols"]
@@ -50,48 +25,27 @@ fn the_format_version_is_the_crate_major_version() {
 
 #[test]
 fn reader_gives_the_columns_the_fixture_holds() {
-    let bytes = golden();
-    let table = from_bytes(&bytes).unwrap();
-    let path = written(&bytes, "fixture");
+    let path = written(&golden(), "fixture");
     let reader = Reader::open(&path).unwrap();
-    for name in names(table.header()) {
+    for (name, values) in common::columns(0, 5, 10.) {
         let held = reader.column(&name).unwrap().unwrap();
-        let column = table.column(&name).unwrap();
-        let values = as_f64(&held.kind, &held.bytes);
-        match &held.offsets {
-            None => {
-                let want: Vec<f64> = (0..table.len())
-                    .map(|row| column.value(row).unwrap())
-                    .collect();
-                assert_eq!(values, want, "{name}");
-            }
-            Some(offsets) => {
-                for row in 0..table.len() {
-                    assert_eq!(
-                        offsets[row + 1] - offsets[row],
-                        column.object_count(row).unwrap(),
-                        "{name}"
-                    );
-                }
-                let want: Vec<f64> = (0..values.len())
-                    .map(|i| column.content_value(i).unwrap())
-                    .collect();
-                assert_eq!(
-                    values.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-                    want.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-                    "{name}"
-                );
+        match values {
+            Values::Flat(flat) => assert_eq!((&held.kind, &held.bytes, &held.offsets), (&flat.kind, &flat.bytes, &None), "{name}"),
+            Values::Jagged { counts, content } => {
+                let offsets: Vec<usize> = std::iter::once(0).chain(counts.iter().scan(0, |at, n| { *at += n; Some(*at) })).collect();
+                assert_eq!((&held.kind, &held.bytes, held.offsets.as_ref()), (&content.kind, &content.bytes, Some(&offsets)), "{name}");
             }
         }
     }
-    assert_eq!(reader.entry().unwrap().len(), table.len());
+    assert_eq!(reader.entry().unwrap(), [0, 2, 4, 1, 17]);
+    assert_eq!(reader.sample().unwrap(), [0, 0, 0, 1, 1]);
 }
 
 #[test]
 fn a_header_declaring_more_rows_than_its_arrays_hold_is_refused_not_allocated() {
     let (mut header, arrays) = split(&golden());
     header["data"]["rows"] = (1_u64 << 40).into();
-    let bytes = rowver::write::to_bytes(&header, &[arrays]).unwrap();
+    let bytes = to_bytes(&header, &[arrays]);
     let path = written(&bytes, "rows");
     // Opening may refuse the header; reading a column must refuse it rather than ask for 8 TB.
     if let Ok(reader) = Reader::open(&path) {
@@ -105,7 +59,7 @@ fn a_header_declaring_more_rows_than_its_arrays_hold_is_refused_not_allocated() 
 /// Whether a header, written with the fixture's arrays, opens and validates; the first error.
 fn opens(header: &Value) -> Result<(), String> {
     let (_, arrays) = rebuilt(10.);
-    let path = written(&to_bytes(header, &arrays).unwrap(), "changed");
+    let path = written(&to_bytes(header, &arrays), "changed");
     let opened = Reader::open(&path)
         .map(drop)
         .and_then(|()| validate_file(&path).map(drop));
@@ -139,7 +93,7 @@ fn a_made_without_its_study_is_refused_but_can_be_inspected() {
         .shift_remove("samples");
     let gone = sealed(gone);
     assert!(opens(&gone).unwrap_err().contains("samples"));
-    let path = written(&to_bytes(&gone, &[arrays.concat()]).unwrap(), "inspect");
+    let path = written(&to_bytes(&gone, &[arrays.concat()]), "inspect");
     let (reader, checked) = Reader::inspect(&path).unwrap();
     assert!(checked.is_err() && reader.column("MET").unwrap().is_some());
 }
@@ -272,4 +226,19 @@ fn a_samples_totals_are_its_files_totals_summed() {
     assert!(more.contains(".totals holds [\"sumw\"], and a file the press read holds each total"), "{more}");
     let less = totaled(2.5.into(), 2.5.into(), "sumw = \"MET\"\nn = \"1\"").unwrap_err();
     assert!(less.contains(".totals holds [\"sumw\"]"), "{less}");
+}
+
+#[test]
+fn a_failed_read_is_said_in_plain_words() {
+    let path = written(&golden(), "plain");
+    let reader = Reader::open(&path).unwrap();
+    // Cut short after it was opened: its last array, `double`'s, ends past the file's end.
+    std::fs::write(&path, &golden()[..golden().len() - 10]).unwrap();
+    let said = rowver::plain(&path, &reader.column("double").unwrap_err());
+    assert_eq!(said, format!("{} changed while it was read (emptied, or written again): open it again", path.0.display()));
+    let gone = path.0.with_extension("gone");
+    assert_eq!(rowver::plain(&gone, &Reader::open(&gone).unwrap_err()), format!("{} is not there", gone.display()));
+    let folder = std::env::temp_dir();
+    let said = rowver::plain(&folder, &validate_file(&folder).unwrap_err());
+    assert!(said.ends_with("is a folder, not a file: name a file in it"), "{said}");
 }

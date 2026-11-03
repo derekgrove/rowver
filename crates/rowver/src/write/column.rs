@@ -12,7 +12,7 @@ use ruzstd::encoding::{compress, CompressionLevel};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 
 /// Where `stream` takes a column from.
@@ -141,6 +141,7 @@ pub(super) fn read_at(file: &std::fs::File, buffer: &mut [u8], at: u64) -> std::
     return std::os::unix::fs::FileExt::read_exact_at(file, buffer, at);
     #[cfg(not(unix))]
     {
+        use std::io::{Seek, SeekFrom};
         let _held = CURSOR.lock().unwrap_or_else(|e| e.into_inner());
         let mut file = file;
         file.seek(SeekFrom::Start(at))?;
@@ -154,6 +155,7 @@ pub(super) fn write_at(file: &std::fs::File, bytes: &[u8], at: u64) -> std::io::
     return std::os::unix::fs::FileExt::write_all_at(file, bytes, at);
     #[cfg(not(unix))]
     {
+        use std::io::{Seek, SeekFrom};
         let _held = CURSOR.lock().unwrap_or_else(|e| e.into_inner());
         let mut file = file;
         file.seek(SeekFrom::Start(at))?;
@@ -678,11 +680,10 @@ pub(super) fn column(
     source: Source,
     edges: &[usize],
     out: &mut dyn Write,
-    scratch: Option<&Path>,
+    scratch: &Path,
 ) -> Result<Packed> {
     let held = match source {
         Source::Copied(reader, from) => {
-            let scratch = scratch.ok_or_else(|| invalid("A copied column needs a scratch file"))?;
             let copy = Copy {
                 name,
                 reader,
@@ -836,19 +837,17 @@ fn decoded(
             copy.reader.path().display()
         ))
     };
-    let (path, at, size) = copy.reader.span(held, copy.name)?;
+    let (file, size) = copy.reader.span(held, copy.name)?;
+    let mut start = file.clone();
     let expected = values.checked_mul(width(kind)?).ok_or_else(damaged)?;
     if expected > crate::codec::most(size as usize) {
         return Err(damaged());
     }
-    let mut file = std::fs::File::open(path)?;
-    file.seek(SeekFrom::Start(at))?;
     let mut head = vec![0; (size as usize).min(18)];
-    file.read_exact(&mut head)?;
+    start.read_exact(&mut head)?;
     crate::codec::frame(&head, expected, copy.name).map_err(|_| damaged())?;
-    file.seek(SeekFrom::Start(at))?;
     let mut tee = Tee {
-        from: file.take(size),
+        from: file,
         out,
         copied: 0,
         failed: None,

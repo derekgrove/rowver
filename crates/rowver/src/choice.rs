@@ -15,7 +15,12 @@ pub enum Events {
     /// The first n entries, in the files' order.
     First(u64),
     /// n entries chosen at random, the same n for the same seed.
-    Random { n: u64, seed: u64 },
+    Random {
+        /// How many.
+        n: u64,
+        /// The seed they are chosen by.
+        seed: u64,
+    },
 }
 
 impl Events {
@@ -73,16 +78,16 @@ fn whole(value: &Value) -> Option<u64> {
 }
 
 /// SplitMix64 (Steele, Lea and Flood 2014): the generator a random choice is drawn from.
-pub struct SplitMix64(u64);
+pub(crate) struct SplitMix64(u64);
 
 impl SplitMix64 {
     /// The generator at the state `seed`.
-    pub fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         SplitMix64(seed)
     }
 
     /// The next draw.
-    pub fn next_u64(&mut self) -> u64 {
+    pub(crate) fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -91,7 +96,7 @@ impl SplitMix64 {
     }
 
     /// A number in [0, 1) from the top 53 bits.
-    pub fn uniform(&mut self) -> f64 {
+    pub(crate) fn uniform(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
     }
 }
@@ -99,7 +104,7 @@ impl SplitMix64 {
 /// The entries a random choice of n out of `total` picks, ascending, counted over the files
 /// one after another: Knuth's selection sampling (Algorithm S), entry i chosen when
 /// (total - i) * u < still needed, with u drawn from SplitMix64(seed) for every entry in turn.
-pub fn chosen(total: u64, n: u64, seed: u64, mut each: impl FnMut(u64)) {
+pub(crate) fn chosen(total: u64, n: u64, seed: u64, mut each: impl FnMut(u64)) {
     let mut rng = SplitMix64::new(seed);
     let mut needed = n.min(total);
     let mut i = 0;
@@ -113,7 +118,7 @@ pub fn chosen(total: u64, n: u64, seed: u64, mut each: impl FnMut(u64)) {
 }
 
 /// How many entries of each file a random choice picks, given each file's entries in order.
-pub fn counts(entries: &[u64], n: u64, seed: u64) -> Vec<u64> {
+pub(crate) fn counts(entries: &[u64], n: u64, seed: u64) -> Vec<u64> {
     let mut taken = vec![0; entries.len()];
     each_file(entries, n, seed, |file, _| taken[file] += 1);
     taken

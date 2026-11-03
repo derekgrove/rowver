@@ -1,7 +1,7 @@
 //! The rvr command on files written here: validate, header, dump, and diff naming what changed.
 
 use rowver::study::lock::{Branch, Branches, File, Lock, Sample, Shape};
-use rowver::write::{array, made_checksum, pack, sample_cols, text_checksum, write, Piece, Values};
+use rowver::write::{array, made_checksum, sample_cols, stream, text_checksum, write_laid, Rows, Sample as Rowed, Source, Values};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,30 +9,17 @@ use std::process::Command;
 /// A small pressed file: samples A (3 rows) and B (2 rows), a flat and a jagged column, and an
 /// `xsec` sample column. `met_b` is MET's first value in sample B; `xsec_b` is B's cross-section.
 fn pressed(path: &Path, met_b: f32, xsec_b: f64) {
-    let piece = |name: &str, met: Vec<f32>, counts: Vec<usize>, pt: Vec<f32>| Piece {
-        name: name.into(),
-        label: format!("Sample {name}"),
-        columns: vec![
-            ("MET".into(), Values::Flat(array(&met))),
-            (
-                "Jet_pt".into(),
-                Values::Jagged {
-                    counts,
-                    content: array(&pt),
-                },
-            ),
-        ],
-        entry: (0..met.len() as i64).collect(),
-    };
-    let pieces = vec![
-        piece("A", vec![10., 20., 30.], vec![1, 0, 2], vec![40., 50., 60.]),
-        piece("B", vec![met_b, 50.], vec![2, 1], vec![70., 80., 90.]),
-    ];
+    let sample = |name: &str, rows| Rowed { name: name.into(), label: format!("Sample {name}"), rows };
     let files = vec![
         json!({"sample": "A", "path": "./a.root", "rows": 3}),
         json!({"sample": "B", "path": "./b.root", "rows": 2}),
     ];
-    let (mut data, arrays) = pack(pieces, files).unwrap();
+    let rows = Rows { samples: vec![sample("A", 3), sample("B", 2)], files, entry: Source::Values(Values::Flat(array(&[0_i64, 1, 2, 0, 1]))) };
+    let columns = vec![
+        ("MET".to_owned(), Source::Values(Values::Flat(array(&[10_f32, 20., 30., met_b, 50.])))),
+        ("Jet_pt".to_owned(), Source::Values(Values::Jagged { counts: vec![1, 0, 2, 2, 1], content: array(&[40_f32, 50., 60., 70., 80., 90.]) })),
+    ];
+    let (mut data, laid) = stream(rows, columns, 1, path).unwrap();
     let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"Events\"\n\n[eras]\n\n\
         [[sample]]\nname = \"A\"\nlabel = \"Sample A\"\nfiles = \"./a.root\"\nmetadata = {{ xsec = 1.5 }}\n\n\
         [[sample]]\nname = \"B\"\nlabel = \"Sample B\"\nfiles = \"./b.root\"\nmetadata = {{ xsec = {xsec_b:?} }}\n");
@@ -69,12 +56,17 @@ fn pressed(path: &Path, met_b: f32, xsec_b: f64) {
     data["sample_cols"] = sample_cols(&["A", "B"], &made["files"], &["MET", "Jet_pt"])
         .unwrap()
         .into();
-    write(
-        path,
-        &json!({"rowver": 15, "data": data, "made": made}),
-        &arrays,
-    )
-    .unwrap();
+    write_laid(path, &json!({"rowver": 15, "data": data, "made": made}), laid).unwrap();
+}
+
+/// The bytes of a file of this header and arrays, whatever the header holds.
+fn framed(header: &Value, arrays: &[u8]) -> Vec<u8> {
+    let text = serde_json::to_string(header).unwrap();
+    let mut bytes = b"\x89RVR\r\n\x1a\n".to_vec();
+    bytes.extend((text.len() as u32).to_le_bytes());
+    bytes.extend(text.as_bytes());
+    bytes.extend(arrays);
+    bytes
 }
 
 /// A fresh scratch folder in the temporary directory, removed when dropped.
@@ -160,7 +152,7 @@ fn validate_header_and_dump_read_a_pressed_file() {
     header["derived"] = 5.into();
     header["made"]["recipe"] = "not a record".into();
     let damaged = dir.0.join("damaged.rvr");
-    write(&damaged, &header, &[bytes[start..].to_vec()]).unwrap();
+    std::fs::write(&damaged, framed(&header, &bytes[start..])).unwrap();
     let (code, said) = rvr(&["dump", damaged.to_str().unwrap()]);
     assert_eq!(code, 0, "{said}");
     assert!(
@@ -219,4 +211,139 @@ fn samples_alone_says_its_commands() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("rvr samples resolve samples.toml"));
+}
+
+/// Run rvr with these variables set and those removed: its exit status, standard output and standard error.
+fn run(args: &[&std::ffi::OsStr], set: &[(&str, &Path)], removed: &[&str]) -> (i32, String, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
+    command.args(args).env("RVR_CONFIG", std::env::temp_dir().join("rvr-cli-no-config"));
+    for (name, value) in set {
+        command.env(name, value);
+    }
+    for name in removed {
+        command.env_remove(name);
+    }
+    let out = command.output().unwrap();
+    (out.status.code().unwrap(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+/// `run` of text arguments, with nothing else set.
+fn said(args: &[&str]) -> (i32, String, String) {
+    let args: Vec<&std::ffi::OsStr> = args.iter().map(std::ffi::OsStr::new).collect();
+    run(&args, &[], &[])
+}
+
+#[test]
+fn dump_all_prints_every_value_one_row_a_line() {
+    let dir = Scratch::new("dump-all");
+    let path = dir.0.join("one.rvr");
+    pressed(&path, 40., 2.5);
+    let file = path.to_str().unwrap();
+    let (code, out, _) = said(&["dump", file, "--columns", "--all"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("sample\tentry\tMET\tJet_pt\nA\t0\t10\t[40]\nA\t1\t20\t[]\nA\t2\t30\t[50, 60]\nB\t0\t40\t[70, 80]\nB\t1\t50\t[90]\nxsec "), "{out}");
+    let (code, out, _) = said(&["dump", file, "--all"]);
+    assert!(code == 0 && out.contains("##### end samples.lock #####") && out.contains("B\t1\t50\t[90]\n"), "{out}");
+    let (code, out, err) = said(&["dump", file, "--files", "--all"]);
+    assert!(code == 2 && out.is_empty() && err.contains("--files prints no column: give --all alone or with --columns"), "{err}");
+}
+
+#[test]
+fn diff_compares_labels_and_reading_failures_are_said_plainly() {
+    let dir = Scratch::new("labels");
+    let (a, b) = (dir.0.join("a.rvr"), dir.0.join("b.rvr"));
+    pressed(&a, 40., 2.5);
+    let bytes = std::fs::read(&a).unwrap();
+    let start = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let mut header: Value = serde_json::from_slice(&bytes[12..start]).unwrap();
+    header["data"]["samples"][1]["label"] = "Sample B, again".into();
+    std::fs::write(&b, framed(&header, &bytes[start..])).unwrap();
+    let (a, b) = (a.to_str().unwrap(), b.to_str().unwrap());
+    let (code, out, _) = said(&["diff", a, b]);
+    assert_eq!((code, out), (1, format!("sample B: its label is \"Sample B\" in {a}, \"Sample B, again\" in {b}\n")));
+    // Full validation ties a label to the lock the file carries.
+    let (code, out, _) = said(&["validate", b]);
+    assert!(code == 1 && out.contains("with their names and labels"), "{out}");
+    let missing = dir.0.join("missing.rvr");
+    let missing = missing.to_str().unwrap();
+    let (code, out, _) = said(&["validate", missing]);
+    assert_eq!((code, out), (1, format!("{missing}: INVALID: it is not there\n")));
+    let folder = dir.0.to_str().unwrap();
+    let (code, _, err) = said(&["dump", folder]);
+    assert!(code == 1 && err.contains(&format!("{folder} is a folder, not a file")), "{err}");
+    let (code, out, _) = said(&["diff", a, missing]);
+    assert_eq!((code, out), (2, format!("cannot compare: {missing} is not there\n")));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_argument_that_is_not_utf8_is_wrong_use() {
+    use std::os::unix::ffi::OsStrExt;
+    let (code, _, err) = run(&[std::ffi::OsStr::new("validate"), std::ffi::OsStr::from_bytes(b"caf\xe9.rvr")], &[], &[]);
+    assert!(code == 2 && err.contains("the argument \"caf\u{fffd}.rvr\" is not UTF-8 text"), "{err}");
+}
+
+#[test]
+fn keys_are_made_once_and_trusted_once_under_one_name() {
+    let dir = Scratch::new("keys");
+    let config = dir.0.join("config");
+    let key = |args: &[&str]| {
+        let args: Vec<&std::ffi::OsStr> = ["key"].iter().chain(args).map(std::ffi::OsStr::new).collect();
+        run(&args, &[("RVR_CONFIG", &config)], &[])
+    };
+    let (code, out, _) = key(&["new", "Tester"]);
+    assert!(code == 0 && out.contains("rvr key trust ") && out.ends_with(" Tester\n"), "{out}");
+    let text = std::fs::read_to_string(config.join("key")).unwrap();
+    assert!(text.len() == 65 && text.ends_with('\n'));
+    #[cfg(unix)]
+    assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(config.join("key")).unwrap().permissions()) & 0o777, 0o600);
+    let (code, _, err) = key(&["new"]);
+    assert!(code == 1 && err.contains("You already have a key"), "{err}");
+    assert_eq!(std::fs::read_to_string(config.join("key")).unwrap(), text);
+    let left: Vec<_> = std::fs::read_dir(&config).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(left, ["key"]);
+    assert_eq!(key(&["new", "two", "words"]).0, 2);
+    let other = "ab".repeat(32);
+    let (code, out, _) = key(&["trust", &other, "Someone", "Else"]);
+    assert!(code == 0 && out.contains("now say they are Someone Else's"), "{out}");
+    let (code, out, _) = key(&["trust", &other, "Someone", "Else"]);
+    assert!(code == 0 && out.contains("trusted already, as Someone Else's: nothing to change"), "{out}");
+    let (code, _, err) = key(&["trust", &other, "Another"]);
+    assert!(code == 1 && err.contains("trusted already, as Someone Else's, and is left so: to trust it as Another's"), "{err}");
+    assert_eq!(std::fs::read_to_string(config.join("trusted")).unwrap(), format!("{other} Someone Else\n"));
+    let (code, _, err) = key(&["trust", &"AB".repeat(32), "Upper"]);
+    assert!(code == 1 && err.contains("one is 64 lowercase hexadecimal characters"), "{err}");
+}
+
+#[test]
+fn proxy_says_what_is_wrong_with_a_proxy_and_a_key_without_the_network() {
+    let dir = Scratch::new("proxy");
+    let proxy = |args: &[&str], set: &[(&str, &Path)]| {
+        let args: Vec<&std::ffi::OsStr> = ["proxy"].iter().chain(args).map(std::ffi::OsStr::new).collect();
+        run(&args, set, &["X509_USER_CERT", "X509_USER_KEY"])
+    };
+    let missing = dir.0.join("x509up_missing");
+    let (code, out, _) = proxy(&[], &[("X509_USER_PROXY", &missing)]);
+    assert!(code == 1 && out.contains(&format!("The grid proxy at {} does not exist. Run rvr proxy init to make one.", missing.display())), "{out}");
+    let made_up = dir.0.join("x509up_made_up");
+    std::fs::write(&made_up, "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n").unwrap();
+    #[cfg(unix)]
+    std::fs::set_permissions(&made_up, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+    let (code, out, _) = proxy(&[], &[("X509_USER_PROXY", &made_up)]);
+    assert!(code == 1 && out.starts_with(&format!("proxy     {}\n", made_up.display())) && out.contains("rvr proxy init"), "{out}");
+    for wrong in [&["init", "--hours", "0"][..], &["init", "--hours", "721"], &["init", "--vo", "cms"], &["extra"]] {
+        assert_eq!(proxy(wrong, &[]).0, 2, "{wrong:?}");
+    }
+    let globus = dir.0.join(".globus");
+    std::fs::create_dir_all(&globus).unwrap();
+    for name in ["usercert.pem", "userkey.pem"] {
+        std::fs::write(globus.join(name), "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n").unwrap();
+    }
+    #[cfg(unix)]
+    {
+        std::fs::set_permissions(globus.join("userkey.pem"), std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+        let (code, _, err) = proxy(&["init"], &[("HOME", &dir.0), ("X509_USER_PROXY", &missing)]);
+        assert!(code == 1 && err.contains(&format!("chmod 600 {}", globus.join("userkey.pem").display())), "{err}");
+        assert!(!missing.exists());
+    }
 }

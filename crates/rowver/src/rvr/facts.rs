@@ -1,7 +1,6 @@
 //! A flat column's facts (docs/FORMAT.md §4), compared as numbers: their forms and `nice` made
 //! again from `lim` on opening, and every fact made again from the values in full validation.
 
-use super::cancellation::Cancellation;
 use super::samples::whole as written_whole;
 use super::{field, MEND};
 use crate::decimal::{nice, Decimal};
@@ -120,10 +119,9 @@ pub(super) fn forms(record: &Value, kind: &str, place: &str) -> Result<()> {
 }
 
 /// Check a flat column's facts against its values: each made again, and equal as a number.
-pub(super) fn values(record: &Value, array: &NumericArray, place: &str, cancellation: Cancellation<'_>) -> Result<()> {
+pub(super) fn values(record: &Value, array: &NumericArray, place: &str) -> Result<()> {
     let mut facts = Facts::new(&array.kind);
     for chunk in array.bytes.chunks(width(&array.kind)? << 16) {
-        cancellation.check()?;
         facts.add(chunk)?;
     }
     agree(record, &facts.finish(), &array.kind, place)

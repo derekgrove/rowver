@@ -9,7 +9,9 @@ use super::{checksum, count, digest, header_end, text, MEND};
 use crate::numeric::width;
 use crate::{invalid, Result};
 use serde_json::Value;
-use std::io::{Read, Seek, SeekFrom};
+use std::fs::File;
+use std::sync::Arc;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// An open `.rvr` file whose header has been read and whose arrays are read on request.
@@ -17,8 +19,79 @@ use std::path::{Path, PathBuf};
 pub struct Reader {
     path: PathBuf,
     header: Value,
-    /// The files that hold the arrays, in order: each with where its bytes begin, and how many.
-    parts: Vec<(PathBuf, u64, u64)>,
+    /// The files that hold the arrays, in order, each read through the handle opened.
+    parts: Vec<Part>,
+}
+
+/// One file of a Reader's arrays: where they begin, how many bytes they take, and how it is read.
+#[derive(Debug)]
+struct Part {
+    from: Reading,
+    start: u64,
+    length: u64,
+}
+
+/// How a Part is read.
+#[derive(Debug)]
+enum Reading {
+    /// Through the handle opened, whatever is renamed over the file since; and its length and
+    /// time of change then, to tell it changed in place since.
+    Held(Arc<File>, (u64, Option<std::time::SystemTime>)),
+    /// Opened while one of its arrays is read: a file a press laid, of its own.
+    Laid(PathBuf),
+}
+
+impl Part {
+    /// The arrays of `file` from `start`, `length` bytes of them, read through its handle.
+    fn new(file: File, start: u64, length: u64) -> Result<Self> {
+        let seen = stamp(&file)?;
+        Ok(Self { from: Reading::Held(Arc::new(file), seen), start, length })
+    }
+
+    /// Whether the file was changed in place since it was opened (emptied, cut short, written over).
+    fn changed(&self) -> bool {
+        match &self.from {
+            Reading::Held(file, seen) => stamp(file).ok().as_ref() != Some(seen),
+            Reading::Laid(_) => false,
+        }
+    }
+}
+
+/// A file's length and time of change, as its handle sees them.
+fn stamp(file: &File) -> Result<(u64, Option<std::time::SystemTime>)> {
+    let held = file.metadata()?;
+    Ok((held.len(), held.modified().ok()))
+}
+
+/// What a read of the file at `path`, changed in place since it was opened, fails with.
+fn changed(path: &Path) -> crate::Error {
+    crate::tagged(path, std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "the file changed while it was read")).into()
+}
+
+/// One array's compressed bytes, read from where they lie in an open file; a failure names the file.
+#[derive(Clone)]
+pub(crate) struct Span {
+    file: Arc<File>,
+    path: PathBuf,
+    at: u64,
+    end: u64,
+}
+
+impl Read for Span {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let room = buffer.len().min(usize::try_from(self.end.saturating_sub(self.at)).unwrap_or(usize::MAX));
+        #[cfg(unix)]
+        let read = std::os::unix::fs::FileExt::read_at(&*self.file, &mut buffer[..room], self.at);
+        #[cfg(windows)]
+        let read = std::os::windows::fs::FileExt::seek_read(&*self.file, &mut buffer[..room], self.at);
+        let read = read.map_err(|e| crate::tagged(&self.path, e))?;
+        // Bytes its record lays out that are no longer there: the file was cut short since.
+        if read == 0 && room > 0 {
+            return Err(crate::tagged(&self.path, std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "the file changed while it was read")));
+        }
+        self.at += read as u64;
+        Ok(read)
+    }
 }
 
 /// One column as the file holds it: little-endian values, and for a list column each row's bounds.
@@ -26,6 +99,7 @@ pub struct Reader {
 pub struct Held {
     /// The kind of the values: `f4`, `i8`, `b1`.
     pub kind: String,
+    /// The values, little-endian.
     pub bytes: Vec<u8>,
     /// For a list column, row `r` holds values `offsets[r]..offsets[r + 1]`.
     pub offsets: Option<Vec<usize>>,
@@ -42,15 +116,15 @@ impl Reader {
     /// what checking the header found.
     pub fn inspect(path: impl AsRef<Path>) -> Result<(Self, Result<()>)> {
         let path = path.as_ref().to_path_buf();
-        let mut file = std::fs::File::open(&path)?;
-        let size = file.metadata()?.len();
+        let (mut file, size) = super::opened(&path)?;
         let mut prefix = [0; 12];
         file.read_exact(&mut prefix)
             .map_err(|_| invalid(super::NOT_RVR))?;
-        let start = header_end(&prefix, usize::try_from(size).unwrap_or(usize::MAX))?;
+        let start = header_end(&prefix, size)?;
         let mut text = vec![0; start - 12];
         file.read_exact(&mut text)?;
-        let length = (size - start as u64) as usize;
+        let length = size - start;
+        let size = size as u64;
         // Parsed once: strictly, or, when that fails, as it is, to look inside all the same.
         let (header, checked) = match crate::json::strict(&text) {
             Ok(header) => {
@@ -59,29 +133,30 @@ impl Reader {
             }
             Err(e) => (serde_json::from_slice(&text)?, Err(e)),
         };
-        let parts = vec![(path.clone(), start as u64, size - start as u64)];
+        let parts = vec![Part::new(file, start as u64, size - start as u64)?];
         Ok((Self { path, header, parts }, checked))
     }
 
-    /// The file at `path` whose `header`, already checked, is followed by `length` bytes of arrays from `start`.
-    pub(super) fn of(path: &Path, header: Value, start: u64, length: u64) -> Self {
-        Self { path: path.to_path_buf(), header, parts: vec![(path.to_path_buf(), start, length)] }
+    /// The file opened at `path` whose `header`, already checked, is followed by `length` bytes of arrays from `start`.
+    pub(super) fn of(path: &Path, file: File, header: Value, start: u64, length: u64) -> Result<Self> {
+        Ok(Self { path: path.to_path_buf(), header, parts: vec![Part::new(file, start, length)?] })
     }
 
     /// Read the arrays laid in `files` under `header`, checked as `open` checks it, before they are written.
     pub(crate) fn laid(dir: &Path, files: &[PathBuf], header: Value) -> Result<Self> {
         let (_, end) = super::checked(&serde_json::to_vec(&header)?)?;
         let mut parts = Vec::new();
-        for file in files {
-            parts.push((file.clone(), 0, std::fs::metadata(file)?.len()));
+        for path in files {
+            let length = std::fs::metadata(path).map_err(|e| crate::about(path, e.into()))?.len();
+            parts.push(Part { from: Reading::Laid(path.clone()), start: 0, length });
         }
-        super::arrays::fill(end, parts.iter().map(|(_, _, n)| *n as usize).sum())?;
+        super::arrays::fill(end, parts.iter().map(|part| part.length as usize).sum())?;
         Ok(Self { path: dir.to_path_buf(), header, parts })
     }
 
     /// Whether the file is empty: its header alone, its arrays let go by `write::empty`.
     pub fn empty(&self) -> bool {
-        self.parts.iter().all(|(_, _, length)| *length == 0)
+        self.parts.iter().all(|part| part.length == 0)
     }
 
     /// Where the file is.
@@ -110,24 +185,23 @@ impl Reader {
         columns.iter().find(|column| column["name"] == name)
     }
 
-    /// The record of a sample column, when the file holds one of that name.
-    pub fn sample_record(&self, name: &str) -> Option<&Value> {
-        let columns = self.data()["sample_cols"].as_array()?;
-        columns.iter().find(|column| column["name"] == name)
-    }
-
-    /// Where one array's compressed bytes lie: the file that holds them, their offset, their size.
-    pub(crate) fn span(&self, record: &Value, label: &str) -> Result<(&Path, u64, u64)> {
+    /// Where one array's compressed bytes lie: the part that holds them, and they from there.
+    fn part(&self, record: &Value, label: &str) -> Result<(&Part, Span)> {
         if self.empty() {
             return Err(invalid(super::EMPTY));
         }
         let (mut at, size) = (count(record, label, "at")? as u64, count(record, label, "size")? as u64);
-        for (path, start, length) in &self.parts {
-            if at.checked_add(size).is_some_and(|end| end <= *length) {
-                return Ok((path, start + at, size));
+        for part in &self.parts {
+            if at.checked_add(size).is_some_and(|end| end <= part.length) {
+                let at = part.start + at;
+                let (file, path) = match &part.from {
+                    Reading::Held(file, _) => (file.clone(), self.path.clone()),
+                    Reading::Laid(path) => (Arc::new(File::open(path).map_err(|e| crate::about(path, e.into()))?), path.clone()),
+                };
+                return Ok((part, Span { file, path, at, end: at + size }));
             }
             // An array lies whole in one part: one past this part's end is in a later one.
-            match at.checked_sub(*length) {
+            match at.checked_sub(part.length) {
                 Some(rest) => at = rest,
                 None => break,
             }
@@ -135,22 +209,30 @@ impl Reader {
         Err(invalid(format!("{label}: its array lies past the end of the file: the file is damaged; copy it again")))
     }
 
-    /// Decompress one array and refuse it unless its bytes have the checksum its record states.
+    /// One array's compressed bytes, as they lie in the file opened, and how many.
+    pub(crate) fn span(&self, record: &Value, label: &str) -> Result<(Span, u64)> {
+        let (_, span) = self.part(record, label)?;
+        let size = span.end - span.at;
+        Ok((span, size))
+    }
+
+    /// Decompress one array and refuse it unless its bytes have the checksum its record states; a
+    /// file changed in place since it was opened is said to be.
     fn array(&self, record: &Value, kind: &str, values: usize, label: &str) -> Result<Vec<u8>> {
         let w = width(kind)?;
         let expected = values
             .checked_mul(w)
             .ok_or_else(|| invalid(format!("{label}: byte count overflows")))?;
-        let (path, at, size) = self.span(record, label)?;
-        let mut file = std::fs::File::open(path)?;
-        file.seek(SeekFrom::Start(at))?;
-        let mut packed = vec![0; size as usize];
-        file.read_exact(&mut packed)?;
-        let bytes = crate::codec::unpack(packed, w, expected, label)?;
-        if digest(&bytes) != checksum(record, label)? {
-            return Err(invalid(format!("{label}: its array's bytes are not the sha256 its record states (docs/FORMAT.md §8): the file is damaged; copy it again, or press its study again")));
-        }
-        Ok(bytes)
+        let (part, mut span) = self.part(record, label)?;
+        let mut packed = vec![0; (span.end - span.at) as usize];
+        let read = span.read_exact(&mut packed).map_err(crate::Error::from).and_then(|()| {
+            let bytes = crate::codec::unpack(packed, w, expected, label)?;
+            match digest(&bytes) == checksum(record, label)? {
+                true => Ok(bytes),
+                false => Err(invalid(format!("{label}: its array's bytes are not the sha256 its record states (docs/FORMAT.md §8): the file is damaged; copy it again, or press its study again"))),
+            }
+        });
+        read.map_err(|e| if part.changed() { changed(&self.path) } else { e })
     }
 
     /// Each row's index into `data.samples`.

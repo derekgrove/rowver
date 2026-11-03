@@ -8,7 +8,7 @@ use crate::samples::some;
 use crate::take::Taken;
 use rowver::study::lock::Sample;
 use rowver::write;
-use rowver::NumericBuffer;
+use rowver::write::NumericBuffer;
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
@@ -123,18 +123,27 @@ fn columns<'a>(plan: &'a Plan, spool: &'a write::Spool) -> Result<Vec<(String, w
     Ok(columns)
 }
 
+/// What failed writing the file at `path`, or the file the failure names, without what to do:
+/// a press says that (`Done::stuck`).
+fn what(path: &Path, error: rowver::Error) -> String {
+    match error {
+        e @ (rowver::Error::Io(_) | rowver::Error::File(..)) => rowver::plain_what(path, &e),
+        e => e.to_string(),
+    }
+}
+
 /// Write the file the Plan presses, from what every file gave: the number of holes it has.
 pub(crate) fn write(plan: &Plan, mut done: Done) -> Result<usize, String> {
     let (target, stuck) = (&plan.target, done.stuck);
     let staged_file = plan.staging.join("pressed.rvr");
     let Joined { samples, files: made_files, tally, missing } = samples(plan, &mut done)?;
-    let entry = match done.spool.take(plan.reading.len()).map_err(|e| stuck(e.to_string()))? {
+    let entry = match done.spool.take(plan.reading.len()).map_err(|e| stuck(what(&staged_file, e)))? {
         Some(spooled) => write::Source::Spooled(spooled),
         None => write::Source::Values(write::Values::Flat(write::array::<i64>(&[]))),
     };
     let rows = write::Rows { samples, files: tally.files.clone(), entry };
-    let columns = columns(plan, done.spool).map_err(|e| stuck(e.to_string()))?;
-    let (mut data, laid) = write::stream(rows, columns, plan.workers, &staged_file).map_err(|e| stuck(format!("{} could not be written: {e}", target.display())))?;
+    let columns = columns(plan, done.spool).map_err(|e| stuck(what(&staged_file, e)))?;
+    let (mut data, laid) = write::stream(rows, columns, plan.workers, &staged_file).map_err(|e| stuck(what(&staged_file, e)))?;
     let failed = |e: rowver::Error| e.to_string();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     let text = |text: &str| json!({"sha256": write::text_checksum(text), "text": text});
@@ -173,18 +182,22 @@ pub(crate) fn write(plan: &Plan, mut done: Done) -> Result<usize, String> {
             underived = Some(why);
         }
     }
+    if let Some(root) = header.as_object_mut() {
+        root.extend(plan.tools.clone());
+    }
     // A press of more than a few seconds is on disk before what would carry it on goes.
     let durable = |path: &Path| match done.worth {
         true => std::fs::File::open(path).and_then(|f| f.sync_all()),
         false => Ok(()),
     };
     let put = crate::derive::sealed(&mut header, signer.as_ref())
-        .and_then(|()| write::write_laid(&staged_file, &header, laid).map_err(|e| e.to_string()))
-        .and_then(|()| durable(&staged_file).map_err(|e| e.to_string()))
-        .and_then(|()| std::fs::rename(&staged_file, target).map_err(|e| e.to_string()));
+        .map_err(|why| format!("{} could not be written: {why}", target.display()))
+        .and_then(|()| write::write_laid(&staged_file, &header, laid).map_err(|e| what(&staged_file, e)))
+        .and_then(|()| durable(&staged_file).map_err(|e| what(&staged_file, e.into())))
+        .and_then(|()| std::fs::rename(&staged_file, target).map_err(|e| what(target, e.into())));
     if let Err(e) = put {
         let _ = std::fs::remove_file(&staged_file);
-        return Err(stuck(format!("{} could not be written: {e}", target.display())));
+        return Err(stuck(e));
     }
     if done.worth {
         let _ = std::fs::File::open(crate::journal::parent(target)).and_then(|f| f.sync_all());

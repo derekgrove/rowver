@@ -823,8 +823,9 @@ is dropped or renamed only with it, or after it.
 
 Any other top-level key belongs to a tool: one object per tool, named for it (one or more ASCII
 letters, digits, `_`, `-` and `.`), holding whatever JSON the tool likes, within
-§1's rules. `rvr press` never writes one. Any program that saves a `.rvr` file writes back
-every tool key it found. Tool keys are outside every checksum and the signature, so a tool can
+§1's rules. `rvr press` never adds one. Any program that saves a `.rvr` file writes back
+every tool key it found: `rvr press` those of the file it replaces at its target, when that file
+opens. Tool keys are outside every checksum and the signature, so a tool can
 change its own key without breaking either.
 
 ## 12. What a reader checks

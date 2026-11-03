@@ -2,8 +2,7 @@
 //! would read to bring it up to date, from the study's texts and the file (no input is read).
 
 use crate::options::Options;
-use crate::plan::{Asked, Base, Choose, On, Place};
-use crate::press::count;
+use crate::plan::{Asked, At, Base, Choose, On, Place};
 use crate::reuse;
 use crate::samples::{some, Choice};
 use rvr_recipe::Recipe;
@@ -58,19 +57,21 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
             done.when
         );
     }
-    let header = match rowver::rvr::read_header(&target) {
-        Ok(header) => header,
-        Err(rowver::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+    // The file there, opened once for what is said of it here and for the Plan.
+    let at = At::open(&target);
+    let header = match &at {
+        At::Opened(file, _) => file.header().clone(),
+        At::Missing => {
             println!("{} is not there: rvr press makes it.", target.display());
             return Ok(false);
         }
-        Err(e) => return Err(format!("{} could not be read: {e}", target.display())),
+        At::Unopened(e) => return Err(rowver::plain(&target, e)),
     };
     let made = &header["made"];
     let held = |key: &str| made[key]["text"].as_str().unwrap_or_default();
     println!("{}: pressed {} by {}", target.display(), made["built"].as_str().unwrap_or("?"), made["by"].as_str().unwrap_or("?"));
     // The Plan rvr press would make, with these options, of the file there.
-    let place = Place { base: dir, study, target: target.clone() };
+    let place = Place { base: dir, study, target: target.clone(), at };
     let asked = Asked { choose: Choose::Options(choice.clone()), on: On::Earlier, workers: 1, sign: true };
     let plan = crate::plan::build(place, texts.clone(), asked);
     let events = match &plan {
@@ -129,9 +130,8 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
     Ok(matches!(plan.from, Base::Current(0)))
 }
 
-/// How much of what it chose the file holds, from its header alone: one bar per sample, then its
-/// holes by kind with what to do about each kind, or (with `every`) one line per hole, and what
-/// `--fill` would read (or why it cannot fill it). Whether status exits 0 is the Plan's to say.
+/// How much of what it chose the file holds, from its header: one bar per sample with the files its
+/// choice read, then its holes by kind, or (with `every`) one a line, and what `--fill` would read.
 fn completeness(header: &Value, every: bool, fillable: Result<(), String>) {
     let made = &header["made"];
     let holes = rowver::rvr::holes(header);
@@ -143,7 +143,8 @@ fn completeness(header: &Value, every: bool, fillable: Result<(), String>) {
         let read = sample["metadata"]["events_read"].as_u64().unwrap_or(0);
         let missing = sample["metadata"]["events_missing"].as_u64().unwrap_or(0);
         let (bar, percent) = crate::progress::cells(read, read + missing, 24);
-        let files = sample["files"].as_object().map_or(0, |f| f.len());
+        // A file the choice took no entry of (`stop` or `take` 0) is not counted, as rvr samples plan counts.
+        let files = sample["files"].as_object().into_iter().flatten().filter(|(_, f)| f["stop"] != 0 && f["take"] != 0).count();
         let holed = holes.iter().filter(|h| h.sample == *name).count();
         let holed = match holed {
             0 => String::new(),
@@ -164,8 +165,7 @@ fn completeness(header: &Value, every: bool, fillable: Result<(), String>) {
     if every {
         println!("\nHoles:");
         for (hole, n) in holes.iter().zip(&chosen) {
-            let name = hole.file.rsplit('/').next().unwrap_or(&hole.file);
-            println!("  {}  {name}  entries {} to {} ({n} chosen)  {}: {}", hole.sample, count(hole.first), count(hole.last.saturating_sub(1)), hole.kind, hole.why);
+            println!("  {}  {}  {} ({n} chosen)  {}: {}", hole.sample, hole.file, rowver::rvr::span(hole.first, hole.last), hole.kind, hole.why);
         }
     } else {
         println!("\nHoles, by why:");

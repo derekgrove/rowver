@@ -60,11 +60,11 @@ fn compare(a: &str, b: &str, headers: [&Value; 2]) -> Vec<String> {
         ));
     }
     let samples = [named(&first["samples"]), named(&second["samples"])];
-    let index = |i: usize, name: &str| samples[i].iter().position(|(n, _)| *n == name).unwrap();
-    let shared: Vec<&str> = samples[0]
+    let index = |i: usize, name: &str| samples[i].iter().position(|(n, _)| *n == name).unwrap_or(usize::MAX);
+    // Each sample both hold, with its record in each.
+    let shared: Vec<(&str, &Value, &Value)> = samples[0]
         .iter()
-        .map(|(n, _)| *n)
-        .filter(|n| find(&samples[1], n).is_some())
+        .filter_map(|(n, one)| Some((*n, *one, find(&samples[1], n)?)))
         .collect();
     let columns = [named(&first["cols"]), named(&second["cols"])];
     let derived = [named(&headers[0]["derived"]["columns"]), named(&headers[1]["derived"]["columns"])];
@@ -77,18 +77,15 @@ fn compare(a: &str, b: &str, headers: [&Value; 2]) -> Vec<String> {
             }
         }
     }
-    for name in &shared {
-        let rows = [
-            &find(&samples[0], name).unwrap()["rows"],
-            &find(&samples[1], name).unwrap()["rows"],
-        ];
-        if rows[0] != rows[1] {
-            said.push(format!(
-                "sample {name}: {} rows in {a}, {} in {b}",
-                rows[0], rows[1]
-            ));
+    for (name, one, other) in &shared {
+        if one["rows"] != other["rows"] {
+            said.push(format!("sample {name}: {} rows in {a}, {} in {b}", one["rows"], other["rows"]));
+        }
+        if one["label"] != other["label"] {
+            said.push(format!("sample {name}: its label is {} in {a}, {} in {b}", one["label"], other["label"]));
         }
     }
+    let shared: Vec<&str> = shared.into_iter().map(|(name, _, _)| name).collect();
     let differs = |one: &Value, other: &Value, sample: &str| {
         one["by_sample"][index(0, sample)] != other["by_sample"][index(1, sample)]
     };
@@ -170,7 +167,7 @@ fn compare(a: &str, b: &str, headers: [&Value; 2]) -> Vec<String> {
 /// show some (a header that fails its checks, or one file empty and the other not, is one), and 2
 /// when the files cannot be compared.
 pub fn main(a: &str, b: &str) -> u8 {
-    let read = |path: &str| rowver::rvr::Reader::inspect(path).map_err(|e| format!("{path}: {e}"));
+    let read = |path: &str| rowver::rvr::Reader::inspect(path).map_err(|e| rowver::plain(path, &e));
     let (first, second) = match (read(a), read(b)) {
         (Ok(first), Ok(second)) => (first, second),
         (Err(e), _) | (_, Err(e)) => {
@@ -191,7 +188,7 @@ pub fn main(a: &str, b: &str) -> u8 {
     }
     said.extend(compare(a, b, [first.0.header(), second.0.header()]));
     if said.is_empty() {
-        println!("The headers show no difference in rows, samples, columns, derived columns, by_sample or sample columns.");
+        println!("The headers show no difference in rows, samples, labels, columns, derived columns, by_sample or sample columns.");
         return 0;
     }
     println!("{}", said.join("\n"));

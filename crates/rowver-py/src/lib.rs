@@ -45,24 +45,22 @@ struct File {
 }
 
 impl File {
-    /// Say which file a problem is in.
-    fn located(&self, error: impl std::fmt::Display) -> PyErr {
-        failed(format!("{}: {error}", self.reader.path().display()))
+    /// A problem reading this file, in plain words.
+    fn located(&self, error: &rowver::Error) -> PyErr {
+        failed(rowver::plain(self.reader.path(), error))
     }
 }
 
 #[pymethods]
 impl File {
+    /// Open the file at `path`, checking its header.
     #[new]
     fn new(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
-        if !path.exists() {
-            let missing = format!("{}: no such file", path.display());
-            return Err(pyo3::exceptions::PyFileNotFoundError::new_err(missing));
+        match py.detach(|| Reader::open(&path)) {
+            Ok(reader) => Ok(File { reader }),
+            Err(rowver::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(pyo3::exceptions::PyFileNotFoundError::new_err(rowver::plain_io(&path, &e))),
+            Err(e) => Err(failed(rowver::plain(&path, &e))),
         }
-        let reader = py
-            .detach(|| Reader::open(&path))
-            .map_err(|e| failed(format!("{}: {e}", path.display())))?;
-        Ok(File { reader })
     }
 
     /// The JSON header, as the file holds it.
@@ -77,16 +75,11 @@ impl File {
         self.reader.empty()
     }
 
-    #[getter]
-    fn rows(&self) -> PyResult<usize> {
-        self.reader.rows().map_err(|e| self.located(e))
-    }
-
     /// Each row's index into the file's samples.
     fn sample<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<i32>>> {
         let values = py
             .detach(|| self.reader.sample())
-            .map_err(|e| self.located(e))?;
+            .map_err(|e| self.located(&e))?;
         Ok(values.into_pyarray(py))
     }
 
@@ -94,7 +87,7 @@ impl File {
     fn entry<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<i64>>> {
         let values = py
             .detach(|| self.reader.entry())
-            .map_err(|e| self.located(e))?;
+            .map_err(|e| self.located(&e))?;
         Ok(values.into_pyarray(py))
     }
 
@@ -108,16 +101,17 @@ impl File {
         let listed = rowver::rvr::derived::listed(self.reader.header());
         let derived: Vec<String> = listed.into_iter().map(|(name, _)| name).filter(|name| names.contains(name)).collect();
         let read = py.detach(|| {
+            let plain = |e: rowver::Error| rowver::plain(self.reader.path(), &e);
             let stored = rowver::parallel::map(&names, rowver::parallel::cores(), |name| match derived.contains(name) {
                 true => Ok(None),
-                false => self.reader.column(name).map_err(|e| e.to_string()),
+                false => self.reader.column(name).map_err(plain),
             })?;
-            let worked = rowver::rvr::derived::columns(&self.reader, &derived).map_err(|e| e.to_string())?;
+            let worked = rowver::rvr::derived::columns(&self.reader, &derived).map_err(plain)?;
             let mut worked: std::collections::HashMap<&String, _> = derived.iter().zip(worked).collect();
             Ok::<_, String>(names.iter().zip(stored).map(|(name, held)| worked.remove(name).or(held)).collect::<Vec<_>>())
         });
         Ok(read
-            .map_err(|e| self.located(e))?
+            .map_err(failed)?
             .into_iter()
             .map(|held| held.map(|h| handed(py, h)))
             .collect())
@@ -129,13 +123,30 @@ impl File {
 #[pyfunction]
 fn validate(py: Python<'_>, path: PathBuf) -> PyResult<(usize, usize)> {
     let checked = py.detach(|| rowver::rvr::validate_file(&path));
-    let summary = checked.map_err(|e| failed(format!("{}: {e}", path.display())))?;
+    let summary = checked.map_err(|e| failed(rowver::plain(&path, &e)))?;
     Ok((summary.rows, summary.columns))
+}
+
+/// One argument to `rvr`: text, or the bytes the system gave (`os.fsencode`).
+#[derive(FromPyObject)]
+enum Arg {
+    Bytes(Vec<u8>),
+    Text(String),
 }
 
 /// Run `rvr` with these arguments, as the command does; its exit status.
 #[pyfunction(name = "rvr")]
-fn run_rvr(py: Python<'_>, args: Vec<String>) -> u8 {
+fn run_rvr(py: Python<'_>, args: Vec<Arg>) -> u8 {
+    let args: Vec<std::ffi::OsString> = args
+        .into_iter()
+        .map(|arg| match arg {
+            Arg::Text(text) => text.into(),
+            #[cfg(unix)]
+            Arg::Bytes(bytes) => std::os::unix::ffi::OsStringExt::from_vec(bytes),
+            #[cfg(not(unix))]
+            Arg::Bytes(bytes) => String::from_utf8_lossy(&bytes).into_owned().into(),
+        })
+        .collect();
     py.detach(|| {
         let code = ::rvr::run(&args);
         // A Rust binary flushes its standard output on exit; inside Python nothing would.

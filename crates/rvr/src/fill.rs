@@ -13,13 +13,13 @@ use crate::plan::Input;
 use crate::take::{missed, ranges, Taken};
 use rowver::study::lock::Lock;
 use rowver::write;
-use rowver::NumericBuffer;
+use rowver::write::NumericBuffer;
 use rowver::choice::Events;
 use rowver::rvr::{Reader, HOLE_KINDS};
 use serde_json::Value;
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::path::Path;
 
 /// What a fill reads of one file, and what it keeps.
 pub struct Plan {
@@ -56,7 +56,8 @@ pub fn kinds(given: Option<&str>) -> Vec<String> {
     }
 }
 
-/// Whether `--fill` would fill a file with this header (the files it read none of), or why not.
+/// Whether `--fill` would fill a file with this header, or why not; the files it read none of,
+/// when it had to work them out.
 pub fn fits(
     header: &Value,
     shown: &str,
@@ -64,7 +65,9 @@ pub fn fits(
     lock: &Lock,
     asked: &[Events],
     kinds: &[String],
-) -> Result<HashSet<(String, String)>, String> {
+) -> Result<Option<HashSet<(String, String)>>, String> {
+    // The files it read none of, worked out only when a file of the lock is another ROOT file now.
+    let unread = OnceCell::new();
     let made = &header["made"];
     let text = |key: &str| made[key]["text"].as_str().unwrap_or_default();
     let holes = rowver::rvr::holes(header);
@@ -88,17 +91,6 @@ pub fn fits(
     let read: Vec<(&str, &str)> = wanted.iter().map(|h| (h.sample.as_str(), h.file.as_str())).collect();
     // A file with a hole this fill does not read keeps that hole as the old file found it.
     let kept: Vec<(&str, &str)> = holes.iter().filter(|h| !kinds.contains(&h.kind)).map(|h| (h.sample.as_str(), h.file.as_str())).collect();
-    // The entries chosen in each file's holes, to tell a file the old file read none of.
-    let chosen = rowver::rvr::chosen_in_holes(header).map_err(|e| format!("{shown}: {e}"))?;
-    let mut missing: HashMap<(&str, &str), u64> = HashMap::new();
-    for (hole, n) in holes.iter().zip(&chosen) {
-        *missing.entry((hole.sample.as_str(), hole.file.as_str())).or_default() += n;
-    }
-    let unread = |sample: &str, at: &str| {
-        let record = &made["files"][sample]["files"][at];
-        let chosen = record["take"].as_u64().or(record["stop"].as_u64()).or(record["entries"].as_u64());
-        chosen.is_some_and(|n| missing.get(&(sample, at)) == Some(&n))
-    };
     if old.samples.len() != lock.samples.len() {
         return not("samples.lock has other samples now");
     }
@@ -125,7 +117,7 @@ pub fn fits(
                 return not(&format!("{} has changed in samples.lock, and no hole of it is read", b.at));
             }
             // Another ROOT file in its place is the same file only if the old file read none of it.
-            if a.uuid != b.uuid && (!unread(&now.name, &b.at) || kept.contains(&at)) {
+            if a.uuid != b.uuid && (!unread_once(&unread, header, shown)?.contains(&(now.name.clone(), b.at.clone())) || kept.contains(&at)) {
                 return not(&format!("{} is another ROOT file now (its UUID), of which the file holds rows or holes", b.at));
             }
         }
@@ -135,8 +127,34 @@ pub fn fits(
             return Err(format!("{shown} chose other events of {} than this press would: fill it with the --events, --random and --seed it was pressed with", sample.name));
         }
     }
-    let read = holes.iter().map(|h| (h.sample.clone(), h.file.clone()));
-    Ok(read.filter(|(sample, at)| unread(sample, at)).collect())
+    Ok(unread.into_inner())
+}
+
+/// `unread` of a header, worked out the first time it is asked for.
+fn unread_once<'a>(cell: &'a OnceCell<HashSet<(String, String)>>, header: &Value, shown: &str) -> Result<&'a HashSet<(String, String)>, String> {
+    if let Some(set) = cell.get() {
+        return Ok(set);
+    }
+    let set = unread(header, shown)?;
+    Ok(cell.get_or_init(|| set))
+}
+
+/// By sample and path, the files with holes that a file read none of: every entry it chose of
+/// them lies in a hole.
+fn unread(header: &Value, shown: &str) -> Result<HashSet<(String, String)>, String> {
+    let holes = rowver::rvr::holes(header);
+    let chosen = rowver::rvr::chosen_in_holes(header).map_err(|e| format!("{shown}: {e}"))?;
+    let mut missing: HashMap<(&str, &str), u64> = HashMap::new();
+    for (hole, n) in holes.iter().zip(&chosen) {
+        *missing.entry((hole.sample.as_str(), hole.file.as_str())).or_default() += n;
+    }
+    let files = &header["made"]["files"];
+    let none = |(sample, at): &(&str, &str)| {
+        let record = &files[*sample]["files"][*at];
+        let chosen = record["take"].as_u64().or(record["stop"].as_u64()).or(record["entries"].as_u64());
+        chosen.is_some_and(|n| missing.get(&(*sample, *at)) == Some(&n))
+    };
+    Ok(missing.keys().filter(|file| none(file)).map(|(sample, at)| ((*sample).to_owned(), (*at).to_owned())).collect())
 }
 
 /// A file of the lock as another lock gives the same file: but for what a press plans of it
@@ -145,20 +163,19 @@ pub(crate) fn unplanned(file: &rowver::study::lock::File) -> rowver::study::lock
     rowver::study::lock::File { stop: None, take: None, ..file.clone() }
 }
 
-/// What filling the file at `path` reads, or why it cannot (see `fits`).
+/// What filling `file` reads, or why it cannot (see `fits`).
 pub fn plan(
-    path: &Path,
+    file: Reader,
     texts: &crate::texts::Texts,
     lock: &Lock,
     asked: &[Events],
     kinds: &[String],
 ) -> Result<Fill, String> {
-    let shown = path.display();
-    if !path.exists() {
-        return Err(format!("{shown} is not there: rvr press makes it, and --fill fills its holes"));
-    }
-    let file = Reader::open(path).map_err(|e| format!("{shown} could not be read ({e})"))?;
-    let unread = fits(file.header(), &shown.to_string(), texts, lock, asked, kinds)?;
+    let shown = file.path().display().to_string();
+    let unread = match fits(file.header(), &shown, texts, lock, asked, kinds)? {
+        Some(unread) => unread,
+        None => unread(file.header(), &shown)?,
+    };
     rows(file, kinds, &unread)
 }
 
@@ -168,7 +185,7 @@ pub(crate) fn rows(file: Reader, kinds: &[String], unread: &HashSet<(String, Str
     let shown = file.path().display().to_string();
     let header = file.header();
     let made = &header["made"];
-    let entries = file.entry().map_err(|e| format!("{shown} could not be read ({e})"))?;
+    let entries = file.entry().map_err(|e| rowver::plain(file.path(), &e))?;
     if entries.len() < header["data"]["rows"].as_u64().unwrap_or(0) as usize {
         return Err(format!("{shown}: its files hold more rows than it has"));
     }
@@ -260,7 +277,7 @@ pub(crate) fn laid(work: &[Input], lock: &Lock, plans: &HashMap<(String, String)
 pub(crate) fn spool_old(spool: &write::Spool, fill: &Fill, columns: &[&str], laid: &[Laid], workers: usize) -> Result<(), String> {
     let file = &fill.file;
     let shown = file.path().display();
-    let failed = |e: rowver::Error| format!("{shown} could not be read ({e})");
+    let failed = |e: rowver::Error| rowver::plain(file.path(), &e);
     let old: Vec<&(usize, Range<usize>)> = laid.iter().flat_map(|l| &l.old).filter(|(_, rows)| !rows.is_empty()).collect();
     rowver::parallel::map(&old, workers, |(order, rows)| {
         spool.add(columns.len(), (*order, 0), write::Values::Flat(write::array(&fill.entries[rows.clone()]))).map_err(failed)

@@ -461,8 +461,8 @@ fn plan_all(path: &Path, choice: &Choice) -> Result<(), String> {
         let cut = sample
             .files
             .iter()
-            .find(|f| matches!(f.stop, Some(n) if n > 0))
-            .map(|f| format!("; stops at entry {} of {}", count(f.stop.unwrap()), f.at.rsplit('/').next().unwrap_or(&f.at)))
+            .find_map(|f| Some((f.stop.filter(|n| *n > 0)?, f)))
+            .map(|(stop, f)| format!("; stops at entry {} of {}", count(stop), f.at.rsplit('/').next().unwrap_or(&f.at)))
             .unwrap_or_default();
         println!("  {:40} {:>34}   {files}{cut}", sample.name, reading(sample));
     }

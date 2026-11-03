@@ -1,7 +1,7 @@
 //! `rvr reproduce`: write a file's study back out of it, press it again, and compare the two.
 
 use crate::options::Options;
-use crate::plan::{Asked, Choose, On, Place};
+use crate::plan::{Asked, At, Choose, On, Place};
 use crate::texts::Texts;
 use rowver::study::lock::Lock;
 use std::path::{Path, PathBuf};
@@ -37,7 +37,7 @@ pub(crate) fn base(file: &Path, study: Option<&Path>) -> Result<PathBuf, String>
         Some(folder) => Ok(folder.to_path_buf()),
         None => Ok(file
             .canonicalize()
-            .map_err(|e| format!("{}: {e}", file.display()))?
+            .map_err(|e| rowver::plain_io(file, &e))?
             .parent()
             .unwrap_or(Path::new("."))
             .to_path_buf()),
@@ -52,7 +52,7 @@ fn run(
     workers: usize,
 ) -> Result<u8, String> {
     let shown = file.display();
-    let reader = rowver::rvr::Reader::open(file).map_err(|e| format!("{shown}: {e}"))?;
+    let reader = rowver::rvr::Reader::open(file).map_err(|e| rowver::plain(file, &e))?;
     let made = &reader.header()["made"];
     let (texts, name) = study_texts(reader.header(), file)?;
     let name = name.as_str();
@@ -66,29 +66,21 @@ fn run(
         return Err(format!("{missing}, which the lock names, is not in {}. The lock's relative paths are from the study folder: name it with --study FOLDER.", base.display()));
     }
     let dir = dir.unwrap_or_else(|| file.with_extension("reproduced"));
-    for name in ["recipe.toml", "samples.toml", "samples.lock"] {
-        if dir.join(name).exists() {
-            return Err(format!(
-                "{} already holds {name}; name another folder, or remove it.",
-                dir.display()
-            ));
-        }
+    let written = [("recipe.toml", &texts.recipe), ("samples.toml", &texts.samples), ("samples.lock", &texts.lock)];
+    let there = in_the_way(&dir, &written);
+    if !there.is_empty() {
+        return Err(format!("{} already holds {}, which rvr reproduce would press over: name another folder, or move them away.", dir.display(), there.join(", ")));
     }
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    for (name, text) in [
-        ("recipe.toml", &texts.recipe),
-        ("samples.toml", &texts.samples),
-        ("samples.lock", &texts.lock),
-    ] {
-        std::fs::write(dir.join(name), text)
-            .map_err(|e| format!("{}: {e}", dir.join(name).display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| rowver::plain_io(&dir, &e))?;
+    for (name, text) in written {
+        std::fs::write(dir.join(name), text).map_err(|e| rowver::plain_io(dir.join(name), &e))?;
     }
     println!(
         "Wrote {}/ with the recipe.toml, samples.toml and samples.lock {shown} holds.",
         dir.display()
     );
     let target = dir.join(format!("{name}.rvr"));
-    let place = Place { base, study: name.to_owned(), target: target.clone() };
+    let place = Place { base, study: name.to_owned(), target: target.clone(), at: At::Missing };
     let asked = Asked { choose: Choose::Recorded(made["files"].clone()), on: On::Once, workers, sign: true };
     let again = |why: String| format!("{why}\nTo press it again, remove {} and run rvr reproduce again.", dir.display());
     let plan = crate::plan::build(place, texts, asked).map_err(again)?;
@@ -98,6 +90,19 @@ fn run(
         &file.to_string_lossy(),
         &target.to_string_lossy(),
     ))
+}
+
+/// What in `dir` a reproduce would press over: any `.rvr` file, and any of the texts it writes
+/// that holds other than what it would write there.
+fn in_the_way(dir: &Path, written: &[(&str, &String)]) -> Vec<String> {
+    let mut there: Vec<String> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).filter(|name| name.ends_with(".rvr")).collect();
+    there.sort();
+    for (name, text) in written {
+        if dir.join(name).exists() && std::fs::read_to_string(dir.join(name)).ok().as_ref() != Some(*text) {
+            there.push(format!("a {name} of its own"));
+        }
+    }
+    there
 }
 
 /// `rvr reproduce` with its options: the exit status.

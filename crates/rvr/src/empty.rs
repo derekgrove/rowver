@@ -2,7 +2,7 @@
 //! its study (its header, byte for byte), and press them again from that shell.
 
 use crate::options::Options;
-use crate::plan::{Asked, Choose, On, Place};
+use crate::plan::{Asked, At, Choose, On, Place};
 use crate::reproduce::{base, study_texts};
 use crate::samples::some;
 use rowver::study::lock::Lock;
@@ -56,7 +56,7 @@ fn said(result: Result<(), String>, command: &str) -> u8 {
 /// first unless `force`.
 fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result<(), String> {
     let shown = file.display();
-    let reader = Reader::open(file).map_err(|e| format!("{shown}: {e}"))?;
+    let reader = Reader::open(file).map_err(|e| rowver::plain(file, &e))?;
     if reader.empty() {
         println!("{shown} is empty already.");
         return Ok(());
@@ -83,7 +83,7 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result
         }
     }
     if !force {
-        let rows = reader.rows().map_err(|e| format!("{shown}: {e}"))?;
+        let rows = reader.rows().map_err(|e| rowver::plain(file, &e))?;
         let columns = reader.header()["data"]["cols"].as_array().map_or(0, Vec::len);
         let size = std::fs::metadata(file).map_or(0, |m| m.len());
         let question = format!("Empty {shown} ({}, {}, {})? Its columns go and its header stays; rvr refill presses them again from the study it carries, reading its inputs again. [y/N] ", some(rows, "row", "rows"), some(columns, "column", "columns"), amount(size));
@@ -100,7 +100,7 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result
     }
     let signed = reader.header().get("signature").is_some();
     drop(reader);
-    let freed = rowver::write::empty(file).map_err(|e| format!("{shown}: {e}"))?;
+    let freed = rowver::write::empty(file).map_err(|e| rowver::plain(file, &e))?;
     drop(held);
     let kept = std::fs::metadata(file).map_or(0, |m| m.len());
     let signature = match signed {
@@ -134,7 +134,7 @@ fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), Strin
     let shown = file.display();
     // No press of the file writes it while it is refilled.
     let _held = crate::journal::Staged::lock(file)?;
-    let shell = Reader::open(file).map_err(|e| format!("{shown}: {e}"))?;
+    let shell = Reader::open(file).map_err(|e| rowver::plain(file, &e))?;
     if !shell.empty() {
         return Err(format!("{shown} holds its columns: there is nothing to refill."));
     }
@@ -145,7 +145,7 @@ fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), Strin
         return Err(format!("{} is in the way: remove it, and refill again.", there.display()));
     }
     println!("Pressing the study {shown} carries again, into {}:", staged.display());
-    let place = Place { base, study: name, target: staged.clone() };
+    let place = Place { base, study: name, target: staged.clone(), at: At::Missing };
     // The copy pressed beside it is not signed: only its arrays are kept.
     let asked = Asked { choose: Choose::Recorded(shell.header()["made"]["files"].clone()), on: On::Once, workers, sign: false };
     let pressed = crate::plan::build(place, texts, asked).and_then(crate::core::press);
@@ -159,9 +159,9 @@ fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), Strin
 fn settle(file: &Path, shell: &Reader, staged: &Path, out: &Path, holes: usize) -> Result<(), String> {
     let shown = file.display();
     if holes > 0 {
-        return Err(format!("pressed again, it has {} its press did not have: an input could not be read, as the holes listed above say.", some(holes, "hole", "holes")));
+        return Err(format!("pressed again, it has {} its press did not have: an input could not be read, as the holes listed above say. Their fixes are a press's: for a refill, put each input back as its lock recorded it, then run rvr refill {shown} again.", some(holes, "hole", "holes")));
     }
-    let pressed = Reader::open(staged).map_err(|e| e.to_string())?;
+    let pressed = Reader::open(staged).map_err(|e| rowver::plain(staged, &e))?;
     let (was, now) = (&shell.header()["data"], &pressed.header()["data"]);
     let said = if was == now {
         rowver::write::refilled(file, staged, out).map_err(|e| e.to_string())?;
@@ -188,10 +188,11 @@ fn settle(file: &Path, shell: &Reader, staged: &Path, out: &Path, holes: usize) 
     match rowver::rvr::validate_file(out) {
         Ok(summary) if !summary.empty => {}
         Ok(_) => return Err("the refilled file holds no arrays".into()),
-        Err(e) => return Err(format!("the refilled file does not check out: {e}")),
+        Err(e @ (rowver::Error::Io(_) | rowver::Error::File(..))) => return Err(rowver::plain(out, &e)),
+        Err(e) => return Err(format!("{}, the file refilled, does not check out: {e}", out.display())),
     }
-    std::fs::File::open(out).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
-    std::fs::rename(out, file).map_err(|e| format!("{shown} could not be written: {e}"))?;
+    std::fs::File::open(out).and_then(|f| f.sync_all()).map_err(|e| rowver::plain_io(out, &e))?;
+    std::fs::rename(out, file).map_err(|e| rowver::plain_io(file, &e))?;
     println!("Refilled {shown}: {said}.");
     Ok(())
 }

@@ -31,6 +31,38 @@ pub struct Place {
     pub study: String,
     /// The file the press writes.
     pub target: PathBuf,
+    /// The file at the target, opened once for all the Plan takes from it.
+    pub at: At,
+}
+
+/// The file at a press's target, as it was found.
+pub enum At {
+    /// No file is there, or none is looked for (a press of a file of its own).
+    Missing,
+    /// One is there that cannot be opened: why.
+    Unopened(rowver::Error),
+    /// One is there: it, and what checking its header found.
+    Opened(rowver::rvr::Reader, rowver::Result<()>),
+}
+
+impl At {
+    /// The file at `target` as it is now.
+    pub fn open(target: &std::path::Path) -> At {
+        match rowver::rvr::Reader::inspect(target) {
+            Ok((file, checked)) => At::Opened(file, checked),
+            Err(rowver::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => At::Missing,
+            Err(e) => At::Unopened(e),
+        }
+    }
+
+    /// The file when it opens with its header checked, why not when it is there and does not.
+    pub fn file(self) -> Option<rowver::Result<rowver::rvr::Reader>> {
+        match self {
+            At::Missing => None,
+            At::Unopened(e) | At::Opened(_, Err(e)) => Some(Err(e)),
+            At::Opened(file, Ok(())) => Some(Ok(file)),
+        }
+    }
 }
 
 /// Where each sample's choice of events comes from.
@@ -164,6 +196,8 @@ pub struct Plan {
     pub sign: bool,
     /// What the journal's first line says this press is.
     pub identity: Value,
+    /// The tool keys of the file it replaces at the target, which the new file carries.
+    pub tools: serde_json::Map<String, Value>,
 }
 
 impl Plan {
@@ -304,19 +338,23 @@ fn same_kinds(file: &rowver::rvr::Reader, recipe: &Recipe, kinds: &[(Kind, bool)
     Ok(())
 }
 
-/// What the earlier file gives, and why it gives nothing when it is there.
-fn base(place: &Place, texts: &Texts, checked: &Checked, on: &On) -> Result<(Base, Option<String>), String> {
+/// What the earlier file, `at` the target, gives, and why it gives nothing when it is there.
+fn base(place: &Place, at: At, texts: &Texts, checked: &Checked, on: &On) -> Result<(Base, Option<String>), String> {
     let Checked { recipe, lock, asked, kinds, .. } = checked;
     let all: Vec<&str> = recipe.columns.iter().map(|(n, _)| n.as_str()).collect();
     match on {
         On::Full | On::Once => Ok((Base::Nothing, None)),
         On::Holes(holes) => {
-            let fill = crate::fill::plan(&place.target, texts, lock, asked, holes)?;
+            let file = match at.file() {
+                None => return Err(format!("{} is not there: rvr press makes it, and --fill fills its holes", place.target.display())),
+                Some(file) => file.map_err(|e| rowver::plain(&place.target, &e))?,
+            };
+            let fill = crate::fill::plan(file, texts, lock, asked, holes)?;
             same_kinds(&fill.file, recipe, kinds, &all).map_err(|why| format!("{} cannot be filled, as {why}: rvr press presses it again", place.target.display()))?;
             Ok((Base::Holes(fill), None))
         }
         On::Earlier => {
-            let base = crate::reuse::earlier(&place.target, texts, recipe, lock, asked);
+            let base = crate::reuse::earlier(at.file(), texts, recipe, lock, asked);
             // Its columns copied, or every column packed again from it, are of this press's kinds.
             let kinds_held = match &base {
                 Some(Ok(Base::Samples(fill))) => same_kinds(&fill.file, recipe, kinds, &all),
@@ -336,11 +374,18 @@ fn base(place: &Place, texts: &Texts, checked: &Checked, on: &On) -> Result<(Bas
 }
 
 /// The Plan of a press, or every reason it cannot be made, one a line.
-pub fn build(place: Place, texts: Texts, asked: Asked) -> Result<Plan, String> {
+pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, String> {
     let toolchain = crate::press::toolchain();
     rowver::rvr::toolchain(&toolchain).map_err(|e| format!("this rvr cannot record what built it, as every file it writes does ({e}): build it again from a git checkout of its repository, or install a released rvr"))?;
     let checked = checked(&texts, &asked.choose)?;
-    let (mut from, mut why) = base(&place, &texts, &checked, &asked.on)?;
+    // A press that replaces the file at its target keeps its tool keys (docs/FORMAT.md §11); a
+    // file that does not open has none to keep.
+    let at = std::mem::replace(&mut place.at, At::Missing);
+    let tools = match &at {
+        At::Opened(file, Ok(())) => rowver::rvr::tool_keys(file.header()),
+        _ => serde_json::Map::new(),
+    };
+    let (mut from, mut why) = base(&place, at, &texts, &checked, &asked.on)?;
     let Checked { recipe, lock, asked: events, kinds, derived } = checked;
     let mut work = inputs(&lock, &events);
     if let Base::Columns(earlier) = &mut from {
@@ -421,6 +466,7 @@ pub fn build(place: Place, texts: Texts, asked: Asked) -> Result<Plan, String> {
         carries,
         sign: asked.sign,
         identity,
+        tools,
     })
 }
 

@@ -5,10 +5,9 @@
 
 mod common;
 
-use common::{rebuilt, sealed, written};
+use common::{rebuilt, sealed, to_bytes, written};
 use rowver::rvr::{validate_file, Reader};
 use rowver::study::lock::{Branches, Lock};
-use rowver::write::to_bytes;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -90,7 +89,11 @@ fn relaid(header: &mut Value, arrays: &[Vec<u8>]) {
         held["size"] = array.len().into();
         at += array.len();
     }
-    header["data"]["sha256"] = rowver::write::data_checksum(&header["data"]).unwrap().into();
+    let mut sums = String::new();
+    for index in 0..arrays.len() {
+        sums += record(header, index)["sha256"].as_str().unwrap();
+    }
+    header["data"]["sha256"] = sha(sums.as_bytes()).into();
 }
 
 /// A text of the study put in `made`, with its checksum.
@@ -105,7 +108,7 @@ fn derived() -> (Value, Vec<Vec<u8>>) {
     let recipe = common::recipe() + "twice = \"MET * 2\"\nmuons = \"Muon_pt * 2\"\n";
     set_text(&mut header, "recipe", &recipe);
     let header = sealed(header);
-    let path = written(&to_bytes(&header, &arrays).unwrap(), "derived");
+    let path = written(&to_bytes(&header, &arrays), "derived");
     let reader = Reader::open(&path).unwrap();
     let wanted = [("twice".to_owned(), "MET * 2".to_owned()), ("muons".to_owned(), "Muon_pt * 2".to_owned())];
     let records = rowver::rvr::derived::records(&reader, &wanted, &[]).unwrap();
@@ -143,13 +146,13 @@ fn bytes(change: Change) -> Vec<u8> {
             return out;
         }
         Bytes(f) => {
-            let mut out = to_bytes(&header, &arrays).unwrap();
+            let mut out = to_bytes(&header, &arrays);
             f(&mut out);
             return out;
         }
         Empty(f) => {
             f(&mut header);
-            return to_bytes(&sealed(header), &[]).unwrap();
+            return to_bytes(&sealed(header), &[]);
         }
         Lock(f) => {
             lock(&mut header, common::lock_with(f));
@@ -181,10 +184,10 @@ fn bytes(change: Change) -> Vec<u8> {
             let (mut with, arrays) = derived();
             f(&mut with);
             let arrays = if matches!(change, EmptyDerived(_)) { Vec::new() } else { arrays };
-            return to_bytes(&sealed(with), &arrays).unwrap();
+            return to_bytes(&sealed(with), &arrays);
         }
     }
-    to_bytes(&header, &arrays).unwrap()
+    to_bytes(&header, &arrays)
 }
 
 /// Whether the file of these bytes opens, and whether it validates in full: each refusal said.
@@ -254,9 +257,9 @@ const ZEROS: &str = "00000000000000000000000000000000000000000000000000000000000
 fn the_fixture_itself_is_valid() {
     assert_eq!(checked(&common::golden()), (Ok(()), Ok(())));
     let (header, arrays) = derived();
-    assert_eq!(checked(&to_bytes(&header, &arrays).unwrap()), (Ok(()), Ok(())));
-    assert_eq!(checked(&to_bytes(&header, &[]).unwrap()), (Ok(()), Ok(())));
-    assert_eq!(checked(&to_bytes(&rebuilt(10.).0, &[]).unwrap()), (Ok(()), Ok(())));
+    assert_eq!(checked(&to_bytes(&header, &arrays)), (Ok(()), Ok(())));
+    assert_eq!(checked(&to_bytes(&header, &[])), (Ok(()), Ok(())));
+    assert_eq!(checked(&to_bytes(&rebuilt(10.).0, &[])), (Ok(()), Ok(())));
 }
 
 #[test]
@@ -297,12 +300,12 @@ fn a_reader_refuses_on_opening_each_rule_it_checks_there() {
         ("§1", "rowver is the whole number 15", Raw(|h| h["rowver"] = json!(15.0)), "rowver must be the whole number 15"),
         ("§1", "the arrays fill the file: no byte after", Bytes(|b| b.extend([0, 0, 0])), "the arrays' records end at byte"),
         ("§1", "the arrays fill the file: none missing", Bytes(|b| b.truncate(b.len() - 1)), "the arrays' records end at byte"),
-        ("§1", "no byte-order mark", Text(|t| t.insert(0, '\u{feff}')), "Invalid JSON header"),
+        ("§1", "no byte-order mark", Text(|t| t.insert(0, '\u{feff}')), "the header is not JSON"),
         ("§1", "one JSON object", Text(|t| *t = format!("[{t}]")), "the header must be one JSON object"),
         ("§1", "no key twice", Text(|t| *t = t.replacen("{\"rows\":", "{\"rows\":5,\"rows\":", 1)), "data.rows is written twice"),
         ("§1 §11", "no key twice in a tool key", Text(|t| *t = t.replace("\"preserved\":\"μ\"", "\"preserved\":\"μ\",\"preserved\":1")), "fixture_tool.preserved is written twice"),
         ("§1 §11", "nesting at most 64", Raw(|h| h["fixture_tool"]["deep"] = nested(63)), "nested 65 arrays and objects deep"),
-        ("§1", "no lone surrogate", Text(|t| *t = t.replace("\"preserved\":\"μ\"", "\"preserved\":\"\\ud800\"")), "Invalid JSON header"),
+        ("§1", "no lone surrogate", Text(|t| *t = t.replace("\"preserved\":\"μ\"", "\"preserved\":\"\\ud800\"")), "the header is not JSON"),
         ("§1", "a count has no fraction", Raw(|h| h["data"]["rows"] = json!(5.0)), "data.rows must be a whole number from 0 to 2^63 − 1"),
         ("§1", "a count to 2^63 − 1", Header(|h| h["made"]["files"]["A"]["files"]["./fixture-a.root"]["entries"] = json!(9223372036854775808_u64)), "made.files[\"A\"].files[\"./fixture-a.root\"].entries must be a whole number"),
         ("§1", "a hole's entries are counts", Header(|h| h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["holes"] = json!([{"entries": [1.5, 3], "kind": "damaged", "why": "x"}])), "holes[0].entries must be [first, last]"),
@@ -526,7 +529,7 @@ fn full_validation_refuses_each_rule_it_alone_checks() {
             h["made"]["files"]["B"]["files"]["./fixture-b.root"]["holes"] = json!([hole(0, 1)]);
             h["made"]["files"]["A"]["metadata"]["events_missing"] = 0.into();
             h["made"]["files"]["B"]["metadata"]["events_missing"] = 0.into();
-        }), "made.files[\"B\"].files[\"./fixture-b.root\"].holes[0] holds entries 0 to 1, none of which the event choice chose"),
+        }), "made.files[\"B\"].files[\"./fixture-b.root\"].holes[0] holds entry 0, none of which the event choice chose"),
         ("§6.2", "no row's entry in a hole", Header(|h| {
             h["made"]["files"]["A"]["files"]["./fixture-a.root"]["holes"] = json!([hole(0, 1)]);
             h["made"]["files"]["A"]["metadata"]["events_read"] = 24.into();
@@ -613,19 +616,19 @@ fn a_file_of_no_entries_is_listed_and_read_and_one_never_reached_is_not() {
     header["made"]["files"]["A"]["metadata"]["sumw"] = json!(3.0);
     header["made"]["files"]["B"]["metadata"]["sumw"] = json!(1.0);
     let read = sealed(header.clone());
-    assert_eq!(checked(&to_bytes(&read, &arrays).unwrap()), (Ok(()), Ok(())));
+    assert_eq!(checked(&to_bytes(&read, &arrays)), (Ok(()), Ok(())));
     // A file of no entries that the press opened holds the totals.
     let mut without = header.clone();
     drop(without["made"]["files"]["A"]["files"]["./fixture-empty.root"].as_object_mut().unwrap().shift_remove("totals"));
     without["made"]["files"]["A"]["metadata"]["sumw"] = json!(2.0);
-    let said = checked(&to_bytes(&sealed(without), &arrays).unwrap()).1.unwrap_err();
+    let said = checked(&to_bytes(&sealed(without), &arrays)).1.unwrap_err();
     assert!(said.contains("./fixture-empty.root\"].totals holds [], and a file the press read holds each total"), "{said}");
     // Left out of the file, it is refused: only a file with entries the first N never reached is.
     let mut left = header;
     left["data"]["files"].as_array_mut().unwrap().remove(1);
     drop(left["made"]["files"]["A"]["files"].as_object_mut().unwrap().shift_remove("./fixture-empty.root"));
     left["made"]["files"]["A"]["metadata"]["sumw"] = json!(2.0);
-    let said = checked(&to_bytes(&sealed(left), &arrays).unwrap()).1.unwrap_err();
+    let said = checked(&to_bytes(&sealed(left), &arrays)).1.unwrap_err();
     assert!(said.contains("data.files lists of sample A [\"./fixture-a.root\", \"./fixture-a2.root\"]"), "{said}");
 }
 
@@ -633,28 +636,28 @@ fn a_file_of_no_entries_is_listed_and_read_and_one_never_reached_is_not() {
 fn a_file_that_validates_whole_validates_emptied() {
     // B keeps none of its rows, and has no xsec, which a derived column reads.
     let (mut header, _) = rebuilt(10.);
-    let piece = |name: &str, from, to, entry: Vec<i64>| rowver::write::Piece { name: name.into(), label: header["data"]["samples"][usize::from(name == "B")]["label"].as_str().unwrap().into(), columns: common::columns(from, to, 10.), entry };
+    let piece = |name: &str, from, to, entry: Vec<i64>| common::Piece { name: name.into(), label: header["data"]["samples"][usize::from(name == "B")]["label"].as_str().unwrap().into(), columns: common::columns(from, to, 10.), entry };
     let pieces = vec![piece("A", 0, 3, vec![0, 2, 4]), piece("B", 3, 3, Vec::new())];
     let mut files = header["data"]["files"].as_array().unwrap().clone();
     files[3]["rows"] = 0.into();
-    let (mut data, arrays) = rowver::write::pack(pieces, files).unwrap();
+    let (mut data, arrays) = common::pack(pieces, files).unwrap();
     data["sample_cols"] = header["data"]["sample_cols"].clone();
     header["data"] = data;
     set_text(&mut header, "recipe", &(common::recipe() + "w = \"MET * sample.xsec\"\n"));
     let header = sealed(header);
-    let path = written(&to_bytes(&header, &arrays).unwrap(), "plain");
+    let path = written(&to_bytes(&header, &arrays), "plain");
     let wanted = [("w".to_owned(), "MET * sample.xsec".to_owned())];
     let records = rowver::rvr::derived::records(&Reader::open(&path).unwrap(), &wanted, &[]).unwrap();
     let mut header = header;
     header["derived"] = json!({ "columns": records });
-    assert_eq!(checked(&to_bytes(&header, &arrays).unwrap()), (Ok(()), Ok(())));
-    assert_eq!(checked(&to_bytes(&header, &[]).unwrap()), (Ok(()), Ok(())));
+    assert_eq!(checked(&to_bytes(&header, &arrays)), (Ok(()), Ok(())));
+    assert_eq!(checked(&to_bytes(&header, &[])), (Ok(()), Ok(())));
 }
 
 #[test]
-fn a_table_load_of_an_empty_file_says_it_is_empty() {
-    let path = written(&to_bytes(&rebuilt(10.).0, &[]).unwrap(), "empty");
-    for refused in [rowver::rvr::load(&path).map(drop), rowver::rvr::from_bytes(&std::fs::read(&path).unwrap()).map(drop)] {
+fn reading_a_column_of_an_empty_file_says_it_is_empty() {
+    let path = written(&to_bytes(&rebuilt(10.).0, &[]), "empty");
+    for refused in [Reader::open(&path).unwrap().column("MET").map(drop), Reader::open(&path).unwrap().entry().map(drop)] {
         let said = refused.unwrap_err().to_string();
         assert!(said.contains("the file is empty") && said.contains("rvr refill"), "{said}");
     }
@@ -666,18 +669,18 @@ fn reading_a_column_checks_its_frame_length_and_sha256() {
     let raw: Vec<u8> = [20_f32, 0., 40., 30., 10.].iter().flat_map(|v| v.to_le_bytes()).collect();
     arrays[3] = [arrays[3].clone(), arrays[3].clone()].concat();
     relaid(&mut header, &arrays);
-    let path = written(&to_bytes(&header, &arrays).unwrap(), "column");
+    let path = written(&to_bytes(&header, &arrays), "column");
     let reader = Reader::open(&path).unwrap();
     assert!(reader.column("MET").unwrap_err().to_string().contains("exactly one frame"));
     assert!(reader.column("nlep").is_ok());
     let (mut header, mut arrays) = rebuilt(10.);
     put(&mut header, &mut arrays, 3, &raw[..16], 4);
     relaid(&mut header, &arrays);
-    let path = written(&to_bytes(&header, &arrays).unwrap(), "column");
+    let path = written(&to_bytes(&header, &arrays), "column");
     assert!(Reader::open(&path).unwrap().column("MET").unwrap_err().to_string().contains("decodes to 16 bytes"));
     let (mut header, arrays) = rebuilt(10.);
     header["data"]["cols"][1]["sha256"] = ZEROS.into();
     relaid(&mut header, &arrays);
-    let path = written(&to_bytes(&header, &arrays).unwrap(), "column");
+    let path = written(&to_bytes(&header, &arrays), "column");
     assert!(Reader::open(&path).unwrap().column("MET").unwrap_err().to_string().contains("not the sha256 its record states"));
 }

@@ -1,11 +1,93 @@
 //! A small file every test of this crate reads: the columns, samples and study it holds, built
-//! with the writer, and the bytes of it committed as `fixtures/rowver-v15.hex`.
+//! with the writer, and the bytes of it committed as `fixtures/rowver-v15.hex`; and the pieces a
+//! test builds a file of.
 #![allow(dead_code)]
 
 use rowver::study::lock::{Branch, Branches, File, Lock, Sample, Shape};
 use rowver::study::samples::Events;
-use rowver::write::{array, made_checksum, pack, sample_cols, text_checksum, Piece, Values};
+use rowver::write::{array, made_checksum, sample_cols, stream, text_checksum, write_laid, Rows, Source, Values};
 use serde_json::{json, Value};
+
+/// One sample's rows before they are joined with the other samples'.
+pub struct Piece {
+    pub name: String,
+    pub label: String,
+    pub columns: Vec<(String, Values)>,
+    pub entry: Vec<i64>,
+}
+
+/// The bytes of one `.rvr` file: the magic, the header's length and text, then the arrays.
+pub fn to_bytes(header: &Value, arrays: &[Vec<u8>]) -> Vec<u8> {
+    let text = serde_json::to_string(header).unwrap();
+    let mut bytes = b"\x89RVR\r\n\x1a\n".to_vec();
+    bytes.extend((text.len() as u32).to_le_bytes());
+    bytes.extend(text.as_bytes());
+    bytes.extend(arrays.concat());
+    bytes
+}
+
+/// The data section of these pieces joined, in their order, as the writer streams it, and each
+/// array's compressed bytes, in file order.
+pub fn pack(pieces: Vec<Piece>, files: Vec<Value>) -> rowver::Result<(Value, Vec<Vec<u8>>)> {
+    let refused = |why: String| rowver::Error::Invalid(why);
+    let samples = pieces.iter().map(|p| rowver::write::Sample { name: p.name.clone(), label: p.label.clone(), rows: p.entry.len() }).collect();
+    let entry: Vec<i64> = pieces.iter().flat_map(|p| p.entry.clone()).collect();
+    let mut columns: Vec<(String, Values)> = Vec::new();
+    for (index, piece) in pieces.into_iter().enumerate() {
+        if index > 0 && piece.columns.len() != columns.len() {
+            return Err(refused(format!("sample {} does not hold every column", piece.name)));
+        }
+        for (at, (name, values)) in piece.columns.into_iter().enumerate() {
+            let rows = match &values {
+                Values::Flat(flat) => flat.count,
+                Values::Jagged { counts, .. } => counts.len(),
+            };
+            if rows != piece.entry.len() {
+                return Err(refused(format!("{name}: needs one value per row of sample {}", piece.name)));
+            }
+            if index == 0 {
+                columns.push((name, values));
+                continue;
+            }
+            match (&mut columns[at], values) {
+                ((held, _), _) if *held != name => return Err(refused(format!("sample {} holds {name} where the first holds {held}", piece.name))),
+                ((_, Values::Flat(all)), Values::Flat(more)) if all.kind == more.kind => {
+                    all.count += more.count;
+                    all.bytes.extend(more.bytes);
+                }
+                ((_, Values::Jagged { counts, content }), Values::Jagged { counts: more, content: values }) if content.kind == values.kind => {
+                    counts.extend(more);
+                    content.count += values.count;
+                    content.bytes.extend(values.bytes);
+                }
+                _ => return Err(refused(format!("{name}: samples differ in its kind"))),
+            }
+        }
+    }
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("rowver-test-{}-{n}-packed.rvr", std::process::id()));
+    let rows = Rows { samples, files, entry: Source::Values(Values::Flat(array(&entry))) };
+    let columns = columns.into_iter().map(|(name, values)| (name, Source::Values(values))).collect();
+    let (data, laid) = stream(rows, columns, 2, &path)?;
+    write_laid(&path, &json!({}), laid)?;
+    let bytes = std::fs::read(&path)?;
+    std::fs::remove_file(&path)?;
+    let (_, mut rest) = split(&bytes);
+    let mut sizes = vec![&data["sample"]["size"], &data["entry"]["size"]];
+    for column in data["cols"].as_array().unwrap() {
+        match column["kind"] == "jagged" {
+            true => sizes.extend([&column["offsets"]["size"], &column["content"]["size"]]),
+            false => sizes.push(&column["size"]),
+        }
+    }
+    let mut arrays = Vec::new();
+    for size in sizes {
+        let more = rest.split_off(size.as_u64().unwrap() as usize);
+        arrays.push(std::mem::replace(&mut rest, more));
+    }
+    Ok((data, arrays))
+}
 
 /// The committed fixture's bytes; `ROWVER_BLESS=1` writes them again from `rebuilt(10.)`.
 pub fn golden() -> Vec<u8> {
@@ -15,7 +97,7 @@ pub fn golden() -> Vec<u8> {
     );
     if std::env::var_os("ROWVER_BLESS").is_some() {
         let (header, arrays) = rebuilt(10.);
-        let bytes = rowver::write::to_bytes(&header, &arrays).unwrap();
+        let bytes = to_bytes(&header, &arrays);
         let hex: Vec<String> = bytes
             .chunks(32)
             .map(|line| line.iter().map(|b| format!("{b:02x}")).collect())

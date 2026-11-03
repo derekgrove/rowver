@@ -7,6 +7,7 @@ import pathlib
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -69,7 +70,8 @@ class Pressed(unittest.TestCase):
     def setUpClass(cls):
         cls.dir = pathlib.Path(tempfile.mkdtemp(prefix="rowver-py-")) / "flat"
         cls.dir.mkdir()
-        os.environ["RVR_CONFIG"] = str(cls.dir.parent / "config")
+        cls.config = mock.patch.dict(os.environ, {"RVR_CONFIG": str(cls.dir.parent / "config")})
+        cls.config.start()
         shutil.copy(FIXTURES / "uproot_flat.root", cls.dir)
         (cls.dir / "samples.toml").write_text(SAMPLES)
         (cls.dir / "recipe.toml").write_text(RECIPE)
@@ -80,6 +82,7 @@ class Pressed(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        cls.config.stop()
         shutil.rmtree(cls.dir.parent)
 
     def test_the_file_says_what_it_holds(self):
@@ -145,7 +148,10 @@ class Pressed(unittest.TestCase):
     def test_list_columns_are_awkward_arrays(self):
         pt = self.file["Jet_pt"]
         self.assertEqual(pt.tolist()[0], [65.3125, 19.96875, 16.421875])
-        self.assertEqual(self.file.arrays().fields, self.file.columns + self.file.derived)
+        arrays = self.file.arrays()
+        self.assertEqual(arrays.fields, ["sample", "entry", *self.file.columns, *self.file.derived])
+        self.assertEqual((arrays["sample"].tolist(), arrays["entry"].tolist()), (["flat"] * 4, [0, 1, 2, 4]))
+        self.assertEqual(self.file.arrays(["ht", "sample"]).fields, ["sample", "entry", "ht"])
 
     @unittest.skipUnless(has("pyarrow") and has("pandas"), "needs pyarrow and pandas")
     def test_arrow_pandas_and_parquet_hold_the_same(self):
@@ -173,9 +179,44 @@ class Pressed(unittest.TestCase):
             self.file["MET"]
         with self.assertRaisesRegex(rowver.Error, "samples.toml: .*not an .rvr file"):
             rowver.open(self.dir / "samples.toml")
-        with self.assertRaises(FileNotFoundError):
+        with self.assertRaisesRegex(FileNotFoundError, "missing.rvr is not there"):
             rowver.open(self.dir / "missing.rvr")
+        with self.assertRaisesRegex(rowver.Error, "is a folder, not a file"):
+            rowver.open(self.dir)
         self.assertEqual(rowver.Error.__module__, "rowver")
+
+    def test_the_names_it_offers_are_the_ones_it_documents(self):
+        public = {n for n in dir(rowver) if not n.startswith("_")}
+        self.assertEqual(public, {"Error", "File", "open", "validate"})
+        documented = {"path", "header", "rows", "samples", "labels", "columns", "derived", "sample_columns", "recipe",
+                      "study", "signed_by", "holes", "complete", "empty", "read", "forget", "arrays", "to_arrow",
+                      "to_pandas", "to_parquet"}
+        self.assertEqual({n for n in dir(self.file) if not n.startswith("_")}, documented)
+        self.assertIn("sample", self.file)
+
+    def test_a_file_replaced_by_rename_after_it_was_opened_is_read_as_it_was(self):
+        copy, other = self.dir / "renamed.rvr", self.dir / "other.rvr"
+        shutil.copy(self.path, copy)
+        try:
+            f = rowver.open(copy)
+            other.write_bytes(b"\x00" * 64 + self.path.read_bytes())
+            os.replace(other, copy)
+            np.testing.assert_array_equal(f["weight"], [1.0, 0.5, 2.25, 0.75])
+            self.assertEqual(len(f["ht_per_jet"]), 4)
+        finally:
+            copy.unlink()
+
+    def test_a_file_emptied_after_it_was_opened_says_so(self):
+        copy = self.dir / "cut.rvr"
+        shutil.copy(self.path, copy)
+        try:
+            f = rowver.open(copy)
+            whole = copy.read_bytes()
+            copy.write_bytes(whole[:12 + int.from_bytes(whole[8:12], "little")])
+            with self.assertRaisesRegex(rowver.Error, "cut.rvr changed while it was read \\(emptied, or written again\\): open it again"):
+                f["weight"]
+        finally:
+            copy.unlink()
 
     def test_a_complete_file_has_no_holes(self):
         self.assertEqual((self.file.complete, self.file.holes), (True, []))
@@ -204,7 +245,7 @@ class Holed(unittest.TestCase):
         dir = pathlib.Path(tempfile.mkdtemp(prefix="rowver-py-")) / "holed"
         dir.mkdir()
         try:
-            os.environ["RVR_CONFIG"] = str(dir.parent / "config")
+            self.enterContext(mock.patch.dict(os.environ, {"RVR_CONFIG": str(dir.parent / "config")}))
             for name in ("flat_a.root", "flat_b.root"):
                 shutil.copy(FIXTURES / "uproot_flat.root", dir / name)
             (dir / "samples.toml").write_text(SAMPLES.replace("uproot_flat.root", "flat_*.root"))
@@ -221,6 +262,28 @@ class Holed(unittest.TestCase):
         finally:
             shutil.rmtree(dir.parent)
 
+
+class Command(unittest.TestCase):
+    """The rvr command the package installs."""
+
+    def test_an_argument_that_is_not_utf8_is_wrong_use(self):
+        import sys
+
+        from rowver import _cli
+
+        # rvr writes to the process's standard error itself: caught at its file descriptor.
+        with tempfile.TemporaryFile() as said, mock.patch.object(sys, "argv", ["rvr", "validate", "caf\udce9.rvr"]):
+            kept = os.dup(2)
+            os.dup2(said.fileno(), 2)
+            try:
+                with self.assertRaises(SystemExit) as stopped:
+                    _cli.main()
+            finally:
+                os.dup2(kept, 2)
+                os.close(kept)
+            said.seek(0)
+            self.assertEqual(stopped.exception.code, 2)
+            self.assertIn(b"is not UTF-8 text", said.read())
 
 if __name__ == "__main__":
     unittest.main()

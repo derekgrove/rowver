@@ -8,7 +8,7 @@ use serde_json::{json, Map, Value};
 
 /// The SHA-256 a signature signs: of the canonical JSON of `rowver`, `data`, `made` and
 /// `derived`, the parts every checksum covers.
-pub fn signed_digest(header: &Value) -> Result<String> {
+pub(crate) fn signed_digest(header: &Value) -> Result<String> {
     let mut body = Map::new();
     for key in ["rowver", "data", "made", "derived"] {
         if let Some(value) = header.get(key) {
@@ -41,7 +41,7 @@ pub fn sign(header: &mut Value, secret: &[u8; 32]) -> Result<()> {
 
 /// The key that signed a header, or `None` when it is not signed. A signature that does not
 /// hold, because the header changed after it was signed, is refused.
-pub fn verify(header: &Value) -> Result<Option<String>> {
+pub(crate) fn verify(header: &Value) -> Result<Option<String>> {
     let Some(signature) = header.get("signature") else {
         return Ok(None);
     };

@@ -435,14 +435,14 @@ fn value_ok(value: &toml::Value, place: &str, p: &mut Problems) {
 }
 
 /// Whether text can be a sample's or era's name: ASCII letters, digits, `_` and `-`, at least one.
-pub fn is_name(text: &str) -> bool {
+pub(crate) fn is_name(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
 }
 
 /// Text made into a name, as CMS dataset names write numbers: `.` becomes `p`, every other run of
 /// characters a name cannot hold becomes one `_`, and `_` is trimmed from both ends. "300/292.5"
 /// is "300_292p5"; "ST s-channel (13.6 TeV)" is "ST_s-channel_13p6_TeV".
-pub fn as_name(text: &str) -> String {
+pub(crate) fn as_name(text: &str) -> String {
     let mut out = String::new();
     for c in text.chars() {
         if c.is_ascii_alphanumeric() || c == '-' {

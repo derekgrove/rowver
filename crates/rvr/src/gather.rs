@@ -4,7 +4,7 @@
 
 use crate::holes::{Failed, Fault};
 use rowver::write;
-use rowver::NumericBuffer;
+use rowver::write::NumericBuffer;
 use rvr_recipe::{Array, Columns, Constant, Kind, Recipe, Scope, Values};
 use std::cell::RefCell;
 use std::collections::BTreeMap;

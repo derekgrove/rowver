@@ -70,18 +70,8 @@ impl Staged {
     pub fn lock(target: &Path) -> Result<Staged, String> {
         let folder = folder(target);
         let failed = |e: std::io::Error| {
-            format!("{} could not be staged in {}: {e}. Make its folder writable, or remove {} if it is there.", target.display(), folder.display(), folder.display())
+            format!("{} could not be staged in {}: {}. Make its folder writable, or remove {} if it is there.", target.display(), folder.display(), rowver::described(&e), folder.display())
         };
-        // What an older rvr left of a press it staged beside the target, as files.
-        let older = target.with_extension("rvr.partial");
-        for old in ["", ".spool", ".arrays"] {
-            let mut name = older.as_os_str().to_owned();
-            name.push(old);
-            let name = PathBuf::from(name);
-            if !old.is_empty() || name.is_file() {
-                remove(&name).map_err(failed)?;
-            }
-        }
         // A lock held for a moment is rvr status asking, or a press ending (its folder going, so
         // the journal locked may no longer be the one there): asked again.
         for _ in 0..5 {
@@ -392,7 +382,10 @@ impl Journal {
         }
         let start = (&*file).stream_position();
         let written = || -> std::io::Result<()> {
-            spool.sync().map_err(std::io::Error::other)?;
+            spool.sync().map_err(|e| match e {
+                rowver::Error::Io(e) => e,
+                e => std::io::Error::other(e.to_string()),
+            })?;
             let mut out = std::io::BufWriter::new(&*file);
             for line in &lines {
                 writeln!(out, "{line}")?;
@@ -405,7 +398,7 @@ impl Journal {
         match written() {
             Ok(()) => Ok(finished),
             Err(e) => {
-                let why = format!("{} could not be written ({e}): free disk space there, or make the folder writable", self.path.display());
+                let why = rowver::plain_io(&self.path, &e);
                 // Left as the last checkpoint left it, its lines wait for the next.
                 if let Ok(start) = start {
                     let _ = file.set_len(start).and_then(|()| file.seek(SeekFrom::Start(start)).map(drop));

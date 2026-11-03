@@ -15,7 +15,7 @@ pub fn study(
     let given = given.unwrap_or_else(|| PathBuf::from("."));
     let dir = given
         .canonicalize()
-        .map_err(|e| format!("{}: {e}", given.display()))?;
+        .map_err(|e| rowver::plain_io(&given, &e))?;
     let name = dir
         .file_name()
         .and_then(|n| n.to_str())
@@ -61,7 +61,7 @@ fn study_file(dir: &Path, file: &str) -> Result<String, String> {
             "{} has no recipe.toml: write one (the recipe reference, {RECIPES}, says how; rvr new makes a study with one).",
             dir.display()
         ),
-        _ => format!("{}: {e}", dir.join(file).display()),
+        _ => rowver::plain_io(dir.join(file), &e),
     })
 }
 

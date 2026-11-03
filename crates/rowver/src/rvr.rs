@@ -1,16 +1,15 @@
+//! Read and check `.rvr` files: a header on opening, the whole file in full validation.
+
 use crate::numeric::NumericArray;
-use crate::table::Source;
 use crate::write::data_checksum;
-use crate::{invalid, Column, Result, Table, VERSION};
+use crate::{invalid, Result, VERSION};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::Path;
-use std::sync::Arc;
 
 mod arrays;
-mod cancellation;
 mod columns;
 pub mod derived;
 mod facts;
@@ -21,7 +20,7 @@ mod snapshot;
 mod texts;
 
 use arrays::Arrays;
-use cancellation::{CancelReader, Cancellation};
+pub use crate::numeric::{push_shown, width};
 pub use reader::{Held, Reader};
 pub use snapshot::{study_name, toolchain};
 pub use texts::{derived_kinds, kinds};
@@ -40,11 +39,17 @@ const MEND: &str = "press its study again with rvr press, which writes it as doc
 /// Entries `[first, last)` of one file's tree that a press chose but could not read.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Hole {
+    /// The sample the file is of.
     pub sample: String,
+    /// The file, as `data.files` names it.
     pub file: String,
+    /// The first entry of the hole.
     pub first: u64,
+    /// The entry after its last.
     pub last: u64,
+    /// One of `HOLE_KINDS`.
     pub kind: String,
+    /// What failed, for a person.
     pub why: String,
 }
 
@@ -78,47 +83,28 @@ pub fn holes(header: &Value) -> Vec<Hole> {
         .collect()
 }
 
+/// What full validation found of a valid file.
 #[derive(Debug, Clone, Serialize)]
-pub struct CheckpointSummary {
+pub struct Validated {
+    /// How many rows it has.
     pub rows: usize,
+    /// How many stored columns it has.
     pub columns: usize,
     /// How many derived columns it has, each worked out and checked (over no rows when empty).
     pub derived: usize,
     /// Whether the file is empty: its header alone, every fact of which is checked.
     pub empty: bool,
+    /// Its header.
     pub header: Value,
 }
 
-/// Validate a file in full (docs/FORMAT.md §12), one column at a time, holding no event table.
-pub fn validate_file(path: impl AsRef<Path>) -> Result<CheckpointSummary> {
-    validate_file_cancellable(path, || false)
-}
-
-/// Validate a checkpoint while allowing its owning build job to cancel the scan.
-pub fn validate_file_cancellable(
-    path: impl AsRef<Path>,
-    cancelled: impl Fn() -> bool,
-) -> Result<CheckpointSummary> {
-    let cancellation = Cancellation(&cancelled);
-    let result = validate_stream(path.as_ref(), cancellation);
-    cancellation.check()?;
-    result
-}
-
-/// Every check of full validation: the header's, the study's texts against it, the event choice
-/// made again, then each array as it streams past, and the derived columns worked out.
-fn validate_stream(path: &Path, cancellation: Cancellation<'_>) -> Result<CheckpointSummary> {
-    cancellation.check()?;
-    let file = std::fs::File::open(path)?;
-    let size = usize::try_from(file.metadata()?.len())
-        .map_err(|_| invalid("the file is longer than this computer can address"))?;
+/// Validate a file in full (docs/FORMAT.md §12), one column at a time, its derived columns worked out.
+pub fn validate_file(path: impl AsRef<Path>) -> Result<Validated> {
+    let path = path.as_ref();
+    let (mut file, size) = opened(path)?;
     if size < 12 {
         return Err(invalid(NOT_RVR));
     }
-    let mut file = CancelReader {
-        reader: file,
-        cancellation,
-    };
     let mut prefix = [0; 12];
     file.read_exact(&mut prefix)?;
     let start = header_end(&prefix, size)?;
@@ -127,27 +113,42 @@ fn validate_stream(path: &Path, cancellation: Cancellation<'_>) -> Result<Checkp
     let (header, end) = checked(&text)?;
     let empty = size == start;
     arrays::fill(end, size - start)?;
-    let reads = identity::choices(&header, cancellation)?;
+    let reads = identity::choices(&header)?;
     texts::validate(&header, &reads)?;
+    // The file is read for its derived columns through the handle it was checked through.
+    let handle = file.try_clone()?;
     if !empty {
-        read_body(&header, Arrays::new(file, size - start, cancellation), &reads, drop)?;
+        read_body(&header, Arrays::new(file, size - start), &reads)?;
     }
-    cancellation.check()?;
-    // The file is read for its derived columns as it was checked, not opened and checked again.
-    let file = || Reader::of(path, header.clone(), start as u64, (size - start) as u64);
     let derived = match listed_derived(&header) {
         0 => 0,
-        _ if empty => derived::checked_empty(&file())?,
-        _ => derived::checked_while(&file(), &|| cancellation.check())?,
+        _ => {
+            let file = Reader::of(path, handle, header.clone(), start as u64, (size - start) as u64)?;
+            match empty {
+                true => derived::checked_empty(&file)?,
+                false => derived::checked(&file)?,
+            }
+        }
     };
     let data = &header["data"];
-    Ok(CheckpointSummary {
+    Ok(Validated {
         rows: count(data, "data", "rows")?,
         columns: list(data, "data", "cols")?.len(),
         derived,
         empty,
         header,
     })
+}
+
+/// The file at `path` opened to read, and its length; a folder is refused as `IsADirectory`.
+pub(crate) fn opened(path: &Path) -> Result<(std::fs::File, usize)> {
+    let file = std::fs::File::open(path)?;
+    let held = file.metadata()?;
+    if held.is_dir() {
+        return Err(std::io::Error::from(std::io::ErrorKind::IsADirectory).into());
+    }
+    let size = usize::try_from(held.len()).map_err(|_| invalid("the file is longer than this computer can address"))?;
+    Ok((file, size))
 }
 
 /// How many derived columns a checked header records.
@@ -157,26 +158,12 @@ fn listed_derived(header: &Value) -> usize {
 
 /// A file's header as the file holds it: the JSON text between its length and its arrays, unchecked.
 pub fn header_text(path: impl AsRef<Path>) -> Result<Vec<u8>> {
-    let mut file = std::fs::File::open(path)?;
-    let size = usize::try_from(file.metadata()?.len())
-        .map_err(|_| invalid("the file is longer than this computer can address"))?;
+    let (mut file, size) = opened(path.as_ref())?;
     let mut prefix = [0; 12];
     file.read_exact(&mut prefix).map_err(|_| invalid(NOT_RVR))?;
     let mut text = vec![0; header_end(&prefix, size)? - 12];
     file.read_exact(&mut text)?;
     Ok(text)
-}
-
-/// Identify a checkpoint by the SHA-256 of its header, which names every array's checksum.
-pub fn header_digest(path: impl AsRef<Path>) -> Result<String> {
-    Ok(digest(&header_text(path)?))
-}
-
-/// Read only a file's header, as it is, without checking it or any array.
-pub fn read_header(path: impl AsRef<Path>) -> Result<Value> {
-    let header: Value = serde_json::from_slice(&header_text(path)?)?;
-    version(&header)?;
-    Ok(header)
 }
 
 /// What a reader of an empty file's columns is told.
@@ -198,6 +185,33 @@ fn version(header: &Value) -> Result<()> {
 
 /// The top level's own keys; any other is a tool's.
 const TOP: [&str; 5] = ["rowver", "data", "made", "derived", "signature"];
+
+/// A whole number with its thousands apart by commas: `50,000`.
+pub fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Entries `[first, last)` in words, as every tool here writes a run: `entries 50,000 to 99,999`, or `entry 7`.
+pub fn span(first: u64, last: u64) -> String {
+    match last.saturating_sub(first) {
+        1 => format!("entry {}", grouped(first)),
+        _ => format!("entries {} to {}", grouped(first), grouped(last.saturating_sub(1))),
+    }
+}
+
+/// The tool keys of a header (docs/FORMAT.md §11): every top-level key that is not the format's.
+pub fn tool_keys(header: &Value) -> Map<String, Value> {
+    let root = header.as_object().into_iter().flatten();
+    root.filter(|(key, _)| !TOP.contains(&key.as_str())).map(|(key, value)| (key.clone(), value.clone())).collect()
+}
 
 /// Whether `name` is a tool key's name: one or more ASCII letters, digits, `_`, `-` and `.`.
 fn tool_name(name: &str) -> bool {
@@ -249,31 +263,6 @@ fn checks(header: &Value) -> Result<u64> {
     Ok(end)
 }
 
-/// Read a file's stored columns and check them, as `from_bytes` does.
-pub fn load(path: impl AsRef<Path>) -> Result<Arc<Table>> {
-    from_bytes(&std::fs::read(path)?)
-}
-
-/// Decode a file's stored columns and check them; `validate_file` checks the rest.
-pub fn from_bytes(bytes: &[u8]) -> Result<Arc<Table>> {
-    let start = header_end(bytes, bytes.len())?;
-    let (header, end) = checked(&bytes[12..start])?;
-    if start == bytes.len() {
-        return Err(invalid(EMPTY));
-    }
-    arrays::fill(end, bytes.len() - start)?;
-    let cancellation = Cancellation(&|| false);
-    let reads = identity::choices(&header, cancellation)?;
-    let mut columns = Vec::new();
-    let (sources, entry) = read_body(&header, Arrays::new(&bytes[start..], bytes.len() - start, cancellation), &reads, |column| columns.push(column))?;
-    Ok(Arc::new(Table {
-        header,
-        columns,
-        sources,
-        entries: entry,
-    }))
-}
-
 /// Validate the shared magic and JSON framing before allocating header storage.
 pub(crate) fn header_end(prefix: &[u8], size: usize) -> Result<usize> {
     if prefix.len() < 12 || &prefix[..8] != MAGIC {
@@ -286,62 +275,41 @@ pub(crate) fn header_end(prefix: &[u8], size: usize) -> Result<usize> {
         .ok_or_else(|| invalid("the header's length (bytes 8 to 11) is more than the file holds: the file was cut short; copy it again"))
 }
 
-/// Check every array of a checked header as it streams past, keeping the columns only for a table.
-fn read_body(
-    header: &Value,
-    mut decoder: Arrays<'_, impl Read>,
-    reads: &identity::Reads,
-    mut keep: impl FnMut(Column),
-) -> Result<(Vec<Source>, NumericArray)> {
-    let cancellation = decoder.cancellation;
-    cancellation.check()?;
+/// Check every array of a checked header as it streams past, one at a time.
+fn read_body(header: &Value, mut decoder: Arrays<impl Read>, reads: &identity::Reads) -> Result<()> {
     let data = &header["data"];
     let rows = count(data, "data", "rows")?;
     let sample = decoder.read(&data["sample"], "i4", rows, "data.sample")?;
     let entry = decoder.read(&data["entry"], "i8", rows, "data.entry")?;
-    let sources = identity::rows(header, &sample, &entry, reads, cancellation)?;
+    identity::rows(header, &sample, &entry, reads)?;
     drop(sample);
     let spans = samples::spans(data)?;
-    samples::per_row(&data["entry"], &entry, &spans, "data.entry", cancellation)?;
+    samples::per_row(&data["entry"], &entry, &spans, "data.entry")?;
+    drop(entry);
     for record in list(data, "data", "cols")? {
-        cancellation.check()?;
         let name = text(record, "data.cols", "name")?;
         let place = format!("data.cols[{name:?}]");
         let kind = text(record, &place, "kind")?;
-        let (array, offsets) = if kind == "jagged" {
+        if kind == "jagged" {
             let offsets = decoder.read(&record["offsets"], "i8", rows + 1, &format!("{place}.offsets"))?;
             let content = &record["content"];
             let count = count(content, &place, "count")?;
             let array = decoder.read(content, text(content, &place, "kind")?, count, &format!("{place}.content"))?;
-            let offsets = jagged_offsets(&offsets, count, &place, cancellation)?;
-            samples::jagged(record, &offsets, &array, &spans, &place, cancellation)?;
-            (array, Some(offsets))
+            let offsets = jagged_offsets(&offsets, count, &place)?;
+            samples::jagged(record, &offsets, &array, &spans, &place)?;
         } else {
             let array = decoder.read(record, kind, rows, &place)?;
-            facts::values(record, &array, &place, cancellation)?;
-            samples::per_row(record, &array, &spans, &place, cancellation)?;
-            (array, None)
-        };
-        keep(Column {
-            name: name.to_owned(),
-            data: array,
-            offsets,
-        });
+            facts::values(record, &array, &place)?;
+            samples::per_row(record, &array, &spans, &place)?;
+        }
     }
-    decoder.finish(data)?;
-    Ok((sources, entry))
+    decoder.finish(data)
 }
 
 /// Require offsets that start at 0, never decrease, and end at the content's count.
-fn jagged_offsets(
-    array: &NumericArray,
-    count: usize,
-    place: &str,
-    cancellation: Cancellation<'_>,
-) -> Result<Vec<usize>> {
+fn jagged_offsets(array: &NumericArray, count: usize, place: &str) -> Result<Vec<usize>> {
     let mut offsets = Vec::with_capacity(array.count);
     for index in 0..array.count {
-        cancellation.at(index)?;
         let offset = usize::try_from(array.signed(index)?).ok().filter(|offset| *offset <= count && offsets.last().is_none_or(|before| before <= offset));
         offsets.push(offset.ok_or_else(|| {
             invalid(format!("{place}.offsets decrease, or pass the content's count, at row {index} (docs/FORMAT.md §4): {MEND}"))

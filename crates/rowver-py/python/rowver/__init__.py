@@ -8,9 +8,9 @@ Arrow tables, pandas data frames or Parquet. `rvr`, the command that makes them,
     f.to_pandas()            # every column, with each row's sample and entry
 """
 
-import json
+import json as _json
 
-import numpy as np
+import numpy as _np
 
 from ._rowver import Error
 from ._rowver import File as _File
@@ -18,21 +18,21 @@ from ._rowver import validate as _validate
 
 __all__ = ["Error", "File", "open", "validate"]
 
-#: The NumPy type of each .rvr kind; a file holds its values little-endian.
-KINDS = {
-    "b1": np.dtype("?"), "i1": np.dtype("i1"), "i2": np.dtype("<i2"), "i4": np.dtype("<i4"),
-    "i8": np.dtype("<i8"), "u1": np.dtype("u1"), "u2": np.dtype("<u2"), "u4": np.dtype("<u4"),
-    "u8": np.dtype("<u8"), "f4": np.dtype("<f4"), "f8": np.dtype("<f8"),
+# The NumPy type of each .rvr kind; a file holds its values little-endian.
+_KINDS = {
+    "b1": _np.dtype("?"), "i1": _np.dtype("i1"), "i2": _np.dtype("<i2"), "i4": _np.dtype("<i4"),
+    "i8": _np.dtype("<i8"), "u1": _np.dtype("u1"), "u2": _np.dtype("<u2"), "u4": _np.dtype("<u4"),
+    "u8": _np.dtype("<u8"), "f4": _np.dtype("<f4"), "f8": _np.dtype("<f8"),
 }
 
-#: The columns every file has besides its own: each row's sample index, and entry number.
-ROW = ("sample", "entry")
+# The columns every file has besides its own: each row's sample index, and entry number.
+_ROW = ("sample", "entry")
 
 
 def _typed(raw, kind):
     """The bytes Rust handed over, seen as values of their kind without a copy (copied only if
     they are not aligned for it, as an empty buffer is not), and kept from being changed."""
-    values = raw.view(KINDS[kind])
+    values = raw.view(_KINDS[kind])
     if not values.flags.aligned:
         values = values.copy()
     values.flags.writeable = False
@@ -61,7 +61,7 @@ class File:
     def __init__(self, path):
         self.path = str(path)
         self._file = _File(self.path)
-        self.header = json.loads(self._file.header_text)
+        self.header = _json.loads(self._file.header_text)
         self._held = {}
 
     @property
@@ -114,17 +114,13 @@ class File:
         return self.header.get("signature", {}).get("key")
 
     @property
-    def files(self):
-        """Every input file read: its sample, path, and the rows it gave."""
-        return self.header["data"]["files"]
-
-    @property
     def holes(self):
-        """What the press chose but could not read: {sample, file, entries, kind, why} per hole."""
+        """What the press chose but could not read, per hole: {sample, file, entries, kind, why},
+        `entries` as the file records them, (first, last) with `last` not among them."""
         made = self.header["made"]["files"]
         return [{"sample": f["sample"], "file": f["path"], "entries": tuple(h["entries"]),
                  "kind": h["kind"], "why": h["why"]}
-                for f in self.files for h in made[f["sample"]]["files"][f["path"]].get("holes", [])]
+                for f in self.header["data"]["files"] for h in made[f["sample"]]["files"][f["path"]].get("holes", [])]
 
     @property
     def complete(self):
@@ -141,7 +137,7 @@ class File:
         return self.rows
 
     def __contains__(self, name):
-        return name in self.columns or name in self.derived or name in ROW
+        return name in self.columns or name in self.derived or name in _ROW
 
     def __repr__(self):
         derived = f", {len(self.derived)} derived" if self.derived else ""
@@ -166,12 +162,12 @@ class File:
         unknown = [n for n in names if n not in self]
         if unknown:
             raise KeyError(f"{', '.join(map(str, unknown))}: not a column of {self.path}; it has {', '.join(self.columns + self.derived)}")
-        wanted = [n for n in dict.fromkeys(names) if n not in self._held and n not in ROW]
+        wanted = [n for n in dict.fromkeys(names) if n not in self._held and n not in _ROW]
         for name, (kind, raw, offsets) in zip(wanted, self._file.columns(wanted)):
             if offsets is not None:
                 offsets.flags.writeable = False
             self._held[name] = (_typed(raw, kind), offsets)
-        for name in ROW:
+        for name in _ROW:
             if name in names and name not in self._held:
                 values = getattr(self._file, name)()
                 values.flags.writeable = False
@@ -186,11 +182,13 @@ class File:
 
     def arrays(self, columns=None):
         """The columns (every one, stored and derived, when not given) as one Awkward record
-        array, a record per row."""
+        array, a record per row, with `sample` (its name, a categorical) and `entry` first."""
         ak = _needs("awkward", "arrays()")
-        names = _names(columns, self.columns + self.derived)
-        self.read(names)  # at once: derived columns that share what they use work it out once
-        return ak.zip({n: self[n] for n in names}, depth_limit=1)
+        names = [n for n in _names(columns, self.columns + self.derived) if n not in _ROW]
+        read = self.read([*_ROW, *names])  # at once: derived columns that share what they use work it out once
+        codes = ak.index.Index64(read["sample"][0].astype(_np.int64))
+        sample = ak.contents.IndexedArray(codes, ak.to_layout(self.samples), parameters={"__array__": "categorical"})
+        return ak.zip({"sample": ak.Array(sample), "entry": read["entry"][0], **{n: self[n] for n in names}}, depth_limit=1)
 
     def _arrow(self, name, values, offsets):
         """One column as Arrow: its values, or for a list column a list (64-bit offsets)."""
@@ -202,8 +200,8 @@ class File:
         """The columns (all when not given) as a pyarrow Table, with `sample` (each row's sample
         name) and `entry` first; a list column is an Arrow large list."""
         pa = _needs("pyarrow", "to_arrow()")
-        names = [n for n in _names(columns, self.columns + self.derived) if n not in ROW]
-        read = self.read([*ROW, *names])
+        names = [n for n in _names(columns, self.columns + self.derived) if n not in _ROW]
+        read = self.read([*_ROW, *names])
         table = {
             "sample": pa.DictionaryArray.from_arrays(read["sample"][0], pa.array(self.samples)),
             "entry": read["entry"][0],
@@ -216,8 +214,8 @@ class File:
         and `entry` first. A flat column keeps its NumPy type; a list column needs pyarrow and is
         held as Arrow lists."""
         pd = _needs("pandas", "to_pandas()")
-        names = [n for n in _names(columns, self.columns + self.derived) if n not in ROW]
-        read = self.read([*ROW, *names])
+        names = [n for n in _names(columns, self.columns + self.derived) if n not in _ROW]
+        read = self.read([*_ROW, *names])
         frame = {
             "sample": pd.Categorical.from_codes(read["sample"][0], self.samples),
             "entry": read["entry"][0],

@@ -64,11 +64,11 @@ pub fn ask_and_write(path: &Path, source: &str, text: &str, question: &str, by_h
 /// `then` again, or when it cannot be written, saying to do `by_hand` first.
 pub fn rewrite(path: &Path, source: &str, text: &str, then: &str, by_hand: &str) -> Result<(), String> {
     let name = path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
-    let path = path.canonicalize().map_err(|e| format!("{name}: {e}"))?;
+    let path = path.canonicalize().map_err(|e| rowver::plain_io(&name, &e))?;
     if std::fs::read_to_string(&path).ok().as_deref() != Some(source) {
         return Err(format!("{name} changed while rvr asked, so it is as you saved it: {then} again."));
     }
-    put(&path, text).map_err(|e| format!("{name} could not be written ({e}), so it is as it was: {by_hand}, then {then} again."))
+    put(&path, text).map_err(|e| format!("{name} could not be written ({}), so it is as it was: {by_hand}, then {then} again.", rowver::described(&e)))
 }
 
 /// Write `text` as the file at `path` (the one a link names), whole or not at all: beside it, with

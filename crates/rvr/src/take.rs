@@ -153,6 +153,7 @@ fn hole((first, last, failed): &(u64, u64, Failed)) -> Value {
     json!({"entries": [first, last], "kind": failed.fault.kind(), "why": failed.why})
 }
 
+
 /// A hole's entries, as `[first, last)`.
 pub(crate) fn range(hole: &Value) -> (u64, u64) {
     let entry = |at: usize| hole["entries"][at].as_u64().unwrap_or(0);

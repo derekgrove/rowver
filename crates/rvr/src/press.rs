@@ -91,7 +91,7 @@ fn run(pressing: Pressing) -> Result<usize, String> {
         }
         stopped.keep.set(false);
     }
-    let place = Place { base: dir, study, target: target.clone() };
+    let place = Place { base: dir, study, at: crate::plan::At::open(&target), target: target.clone() };
     let asked = Asked { choose: Choose::Options(pressing.choice), on: pressing.on, workers: pressing.workers, sign: true };
     let plan = crate::plan::build(place, texts, asked)?;
     if let Some(why) = &plan.why {
@@ -112,15 +112,7 @@ fn run(pressing: Pressing) -> Result<usize, String> {
 
 /// A whole number with thousands separated, as rvr prints them.
 pub(crate) fn count(n: u64) -> String {
-    let digits = n.to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
+    rowver::rvr::grouped(n)
 }
 
 /// What built this rvr, as `made.toolchain` records it.

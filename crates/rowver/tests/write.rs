@@ -2,8 +2,8 @@
 
 mod common;
 
-use common::{golden, rebuilt};
-use rowver::write::{array, build, pack, to_bytes, Piece, Sample, Values};
+use common::{golden, pack, rebuilt, to_bytes, Piece};
+use rowver::write::{array, Sample, Values};
 use serde_json::Value;
 
 /// Drop where each compressed array lies, which depends on the compressor's version.
@@ -22,62 +22,47 @@ fn without_spans(value: &mut Value) {
 #[test]
 fn the_writer_makes_the_committed_fixture() {
     let (header, arrays) = rebuilt(10.);
-    let table = rowver::rvr::from_bytes(&to_bytes(&header, &arrays).unwrap()).unwrap();
-    let committed = rowver::rvr::from_bytes(&golden()).unwrap();
-    let (mut ours, mut theirs) = (table.header().clone(), committed.header().clone());
+    let (ours, theirs) = (common::written(&to_bytes(&header, &arrays), "ours"), common::written(&golden(), "theirs"));
+    let (ours, theirs) = (rowver::rvr::validate_file(&ours).unwrap().header, rowver::rvr::validate_file(&theirs).unwrap().header);
+    for section in ["data", "made"] {
+        assert_eq!(ours[section]["sha256"], theirs[section]["sha256"]);
+    }
+    let (mut ours, mut theirs) = (ours, theirs);
     without_spans(&mut ours);
     without_spans(&mut theirs);
     assert_eq!(
         serde_json::to_string(&ours).unwrap(),
         serde_json::to_string(&theirs).unwrap()
     );
-    for section in ["data", "made"] {
-        assert_eq!(
-            table.header()[section]["sha256"],
-            committed.header()[section]["sha256"]
-        );
-    }
+}
+
+/// One sample, A, of two rows holding these columns.
+fn one(columns: Vec<(String, Values)>) -> rowver::Result<(Value, Vec<Vec<u8>>)> {
+    pack(vec![Piece { name: "A".into(), label: "A".into(), columns, entry: vec![0, 1] }], Vec::new())
 }
 
 #[test]
-fn build_refuses_what_the_format_refuses() {
-    let skim = |columns| rowver::write::Skim {
-        samples: vec![Sample {
-            name: "A".into(),
-            label: "A".into(),
-            rows: 2,
-        }],
-        files: Vec::new(),
-        sample: vec![0, 0],
-        entry: vec![0, 1],
-        columns,
-    };
+fn the_writer_refuses_what_the_format_refuses() {
     let flat = |values| vec![("x".to_owned(), Values::Flat(values))];
     // A float may be any IEEE value, NaN and infinities included.
-    let nan = build(skim(flat(array(&[1.0_f32, f32::NAN])))).unwrap().0;
+    let nan = one(flat(array(&[1.0_f32, f32::NAN]))).unwrap().0;
     assert_eq!(nan["cols"][0]["lim"], serde_json::json!([1.0, 1.0]));
-    assert!(build(skim(flat(array(&[1_i32])))).is_err());
     let jagged = Values::Jagged {
         counts: vec![1, 1],
         content: array(&[1.0_f64, f64::INFINITY]),
     };
-    assert!(build(skim(vec![("x".into(), jagged)])).is_ok());
+    assert!(one(vec![("x".into(), jagged)]).is_ok());
     let short = Values::Jagged {
         counts: vec![1, 2],
         content: array(&[1.0_f64, 2.0]),
     };
-    assert!(build(skim(vec![("x".into(), short)])).is_err());
-    let mut wrong = skim(flat(array(&[1_i8, 2])));
-    wrong.sample = vec![0, 1];
-    assert!(build(wrong).is_err());
+    assert!(one(vec![("x".into(), short)]).is_err());
     let piece = |name: &str, values: &[i8], rows: i64| Piece {
         name: name.into(),
         label: name.into(),
         columns: flat(array(values)),
         entry: (0..rows).collect(),
     };
-    let uneven = vec![piece("A", &[1, 2, 3], 2), piece("B", &[4], 2)];
-    assert!(pack(uneven, Vec::new()).is_err());
     let even = vec![piece("A", &[1, 2], 2), piece("B", &[3, 4], 2)];
     assert!(pack(even, Vec::new()).is_ok());
     // Within a file, rows are in strictly increasing order of their entries.
@@ -90,35 +75,26 @@ fn build_refuses_what_the_format_refuses() {
         ("x".to_owned(), Values::Flat(array(&[1_i8, 2]))),
         ("x".to_owned(), Values::Flat(array(&[1_i8, 2]))),
     ];
-    assert!(build(skim(twice)).is_err());
+    assert!(one(twice).is_err());
+    let same = vec![Sample { name: "A".into(), label: "A".into(), rows: 0 }; 2];
+    let rows = rowver::write::Rows { samples: same, files: Vec::new(), entry: rowver::write::Source::Values(Values::Flat(array::<i64>(&[]))) };
+    let beside = std::env::temp_dir().join(format!("rowver-test-{}-twice.rvr", std::process::id()));
+    assert!(rowver::write::stream(rows, Vec::new(), 1, &beside).is_err());
 }
 
 #[test]
 fn a_jagged_column_may_hold_values_that_are_not_finite() {
     for muon in [f32::NAN, f32::INFINITY] {
         let (header, arrays) = rebuilt(muon);
-        let table = rowver::rvr::from_bytes(&to_bytes(&header, &arrays).unwrap()).unwrap();
-        let value = table.column("Muon_pt").unwrap().content_value(0).unwrap();
-        assert!(!value.is_finite());
+        let path = common::written(&to_bytes(&header, &arrays), "muon");
+        let held = rowver::rvr::Reader::open(&path).unwrap().column("Muon_pt").unwrap().unwrap();
+        assert!(!f32::from_le_bytes(held.bytes[..4].try_into().unwrap()).is_finite());
     }
 }
 
 #[test]
 fn nice_is_lim_rounded_outward_to_two_digits_in_exact_decimal() {
-    let nice = |values| {
-        let skim = rowver::write::Skim {
-            samples: vec![Sample {
-                name: "A".into(),
-                label: "A".into(),
-                rows: 2,
-            }],
-            files: Vec::new(),
-            sample: vec![0, 0],
-            entry: vec![0, 1],
-            columns: vec![("x".into(), Values::Flat(values))],
-        };
-        build(skim).unwrap().0["cols"][0]["nice"].to_string()
-    };
+    let nice = |values| one(vec![("x".into(), Values::Flat(values))]).unwrap().0["cols"][0]["nice"].to_string();
     assert_eq!(nice(array(&[1.2_f64, 5.0])), "[1.2,5.0]");
     let inexact = serde_json::from_str::<Vec<f64>>("[0.1,0.30000000000000004]").unwrap();
     assert_eq!(nice(array(&inexact)), "[0.1,0.31]");
@@ -164,7 +140,8 @@ fn a_derived_column_is_a_record_with_no_array_that_the_header_check_takes() {
     let checked = |record: Value| {
         let mut with = header.clone();
         with["derived"] = serde_json::json!({ "columns": [record] });
-        rowver::rvr::from_bytes(&to_bytes(&with, &arrays).unwrap()).map(drop)
+        let path = common::written(&to_bytes(&with, &arrays), "derived-record");
+        rowver::rvr::Reader::open(&path).map(drop)
     };
     checked(record.clone()).unwrap();
     let refused = |change: &dyn Fn(&mut Value)| {
@@ -189,7 +166,7 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
     header["made"]["recipe"]["text"] = text.into();
     header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(text).into();
     header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
-    let written = |header: &Value, name: &str| common::written(&to_bytes(header, &arrays).unwrap(), name);
+    let written = |header: &Value, name: &str| common::written(&to_bytes(header, &arrays), name);
     let plain = written(&header, "derived-plain");
     let derived = [("twice".to_owned(), "MET * 2".to_owned())];
     let opened = rowver::rvr::Reader::inspect(&plain).unwrap().0;
@@ -311,7 +288,7 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
         assert_eq!(early, rowver::rvr::derived::records(&reader, &derived, &[]).unwrap(), "{name}");
         assert_eq!(
             std::fs::read(file(name)).unwrap(),
-            to_bytes(&header, &arrays).unwrap(),
+            to_bytes(&header, &arrays),
             "{name}"
         );
     };
@@ -381,7 +358,7 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
     // is not under the data checksum.
     let mut lying = header.clone();
     lying["data"]["cols"][1]["by_sample"][0] = "0".repeat(64).into();
-    std::fs::write(file("lying.rvr"), to_bytes(&lying, &arrays).unwrap()).unwrap();
+    std::fs::write(file("lying.rvr"), to_bytes(&lying, &arrays)).unwrap();
     let lying = rowver::rvr::Reader::open(file("lying.rvr")).unwrap();
     let rows = Rows {
         samples: samples.clone(),
@@ -404,4 +381,36 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
     left.sort();
     assert_eq!(left, ["copied.rvr", "spooled.rvr"]);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_failed_refill_or_rewrite_names_the_file_it_is_about() {
+    let (header, arrays) = rebuilt(10.);
+    let shell = common::written(&to_bytes(&header, &[]), "shell");
+    let gone = shell.0.with_extension("gone");
+    let to = shell.0.with_extension("to");
+    let said = rowver::write::refilled(&shell, &gone, &to).unwrap_err().to_string();
+    assert_eq!(said, format!("{} is not there", gone.display()));
+    let full = common::written(&to_bytes(&header, &arrays), "full");
+    let said = rowver::write::refilled(&full, &shell, &to).unwrap_err().to_string();
+    assert!(said.starts_with(&format!("{}: the file to refill holds its arrays", full.0.display())), "{said}");
+    let said = rowver::write::rewrite(&gone, &to, &header).unwrap_err().to_string();
+    assert_eq!(said, format!("{} is not there", gone.display()));
+    let _ = std::fs::remove_file(&to);
+}
+
+#[test]
+fn a_column_copied_from_a_file_cut_short_since_names_that_file() {
+    use rowver::write::{array, stream, Rows, Source};
+    let path = common::written(&golden(), "copied-from");
+    let reader = rowver::rvr::Reader::open(&path).unwrap();
+    std::fs::write(&path, &golden()[..golden().len() / 2]).unwrap();
+    let samples = vec![Sample { name: "A".into(), label: "Sample A, π⁰".into(), rows: 3 }, Sample { name: "B".into(), label: "B".into(), rows: 2 }];
+    let files = reader.header()["data"]["files"].as_array().unwrap().clone();
+    let rows = Rows { samples, files, entry: Source::Values(Values::Flat(array(&[0_i64, 2, 4, 1, 17]))) };
+    let beside = std::env::temp_dir().join(format!("rowver-test-{}-copied.rvr", std::process::id()));
+    let refused = stream(rows, vec![("double".into(), Source::Copied(&reader, "double".into()))], 1, &beside).unwrap_err();
+    let said = rowver::plain(&beside, &refused);
+    assert_eq!(said, format!("{} changed while it was read (emptied, or written again): open it again", path.0.display()));
+    assert_eq!(rowver::plain_what(&beside, &refused), format!("{} changed while it was read (emptied, or written again)", path.0.display()));
 }

@@ -408,7 +408,8 @@ whatever follows it: the refusal says the kinds and the nearest (`did you mean -
 **5.1.3** A flag the command does not take (said with the nearest flag it does take), a flag given
 twice (but `--drop`, §8), a flag without its value, a value not of its flag's form (§5.1.4), or a
 word too many or too few is wrong use: the command does nothing, prints `rvr COMMAND: what is wrong`
-and its usage on standard error, and exits 2.
+and its usage on standard error, and exits 2. An argument that is not UTF-8 text is wrong use too:
+rvr runs nothing, says `rvr: the argument … is not UTF-8 text` and how to fix it, and exits 2.
 
 **5.1.4** A count given as a flag's value (`--events N`, `--workers N`, `--hours H`, `rvr try
 --events N`) is a whole number from 1, written in digits, with `_` allowed between two digits
@@ -607,7 +608,10 @@ is.
 ### 7.3 Holes
 
 **7.3.1** A file the core cannot read is not fatal: the file is written without those entries, and
-records a *hole*: the entries it could not read, a kind, and why (FORMAT.md §6.2).
+records a *hole*: the entries it could not read, a kind, and why (FORMAT.md §6.2). rvr writes a run
+of entries as `entries A to B`, both A and B among them (`entry A` for one), wherever it says one:
+press, status and validate alike; the file, and the Python package's `holes`, record that run as
+`[A, B + 1]`.
 
 | kind | the core found |
 |---|---|
@@ -798,15 +802,20 @@ valid file that has holes or is empty. It exits 1 when any file fails.
 **9.2 `rvr dump FILE`** prints the inside of a file: the header in full, the three texts, and every
 column with its kind, length and first values, a derived column worked out with its expression.
 `--files`, `--recipe`, `--samples`, `--lock` and `--columns` print only those parts, in the order
-given; `--all` prints every value of every column, one row a line. A file whose header fails its
+given; `--all` prints every value of every column: a line naming them, then one line a row, the
+values apart by tabs (its sample's name, its entry, then each stored column and each derived column
+worked out, a list as `[a, b]`), then the sample columns. `--all` goes alone or with `--columns`;
+with another part it is wrong use. A file whose header fails its
 checks is still shown, after a line saying why.
 
 **9.3 `rvr header FILE`** prints the header's bytes exactly as the file holds them. When the header
 fails its checks it says why on standard error, and exits 1.
 
-**9.4 `rvr diff A B`** says where two files differ, from their headers alone: rows; samples, columns,
-derived columns and sample columns only one has; kinds and expressions that changed; and each column
-of each sample whose contents changed (every array has one checksum per sample). It says when a
+**9.4 `rvr diff A B`** says where two files differ, from their headers alone: the rows, in all and of
+each sample; samples, columns, derived columns and sample columns only one has; each sample's label;
+kinds and expressions that changed; the entries, and each column and derived column, of each sample
+whose contents changed (every array has one checksum per sample); and each sample column's value
+that changed. It says when a
 header fails its checks, and when one file is empty. Exit 0 when the headers show no difference, 1
 when they do, 2 when one cannot be read.
 
@@ -819,7 +828,8 @@ have nothing to do: the file current (§8.1) and without holes.
 **9.6 `rvr reproduce FILE [DIR]`** writes the three texts FILE carries into DIR (`FILE`'s name with
 `.reproduced` when not given), presses them with the same event choices into
 `DIR/<the file's study>.rvr`, and runs `rvr diff` on the two, exiting with its status. Relative paths
-in the lock are read from FILE's folder, or `--study FOLDER`.
+in the lock are read from FILE's folder, or `--study FOLDER`. A DIR that holds a `.rvr` file, or a
+`recipe.toml`, `samples.toml` or `samples.lock` other than FILE's, is refused, naming them.
 
 ## 10. Keys and proxies
 
@@ -832,17 +842,21 @@ with it from then on. It prints your public key, and the `rvr key trust` line ot
 `rvr key show` prints your public key.
 
 **10.3 `rvr key trust KEY NAME…`** adds `KEY NAME` (the words of NAME joined by spaces) as a line of
-`trusted` in that folder; `#` lines and blank lines are passed over. `rvr validate` names a signer
-from it: `signed by you`, `signed by NAME (trusted)`, or `signed by key K…, which you do not trust yet`.
+`trusted` in that folder; `#` lines and blank lines are passed over. KEY is 64 lowercase
+hexadecimal characters, as `rvr key show` prints it. A key trusted already stays under its name:
+trusting it by that name says so (exit 0), and by another is refused (exit 1), saying which line to
+take out. `rvr validate` names a signer from it: `signed by you`, `signed by NAME (trusted)`, or `signed by key K…, which you do not trust yet`.
 
 **10.4 `rvr proxy`** shows the grid proxy rvr uses (`$X509_USER_PROXY`, else
 `/tmp/x509up_u<your uid>`): its file, whose it is, its VO and how long its attributes last, the time
 left, and what to do when it is missing or ending. Exit 0 when it can be used.
 
 **10.5 `rvr proxy init [--hours H]`** makes a proxy for the VO cms with no other grid tool: from
-`$X509_USER_CERT` and `$X509_USER_KEY`, else `~/.globus/usercert.pem` and `userkey.pem`, else
-`~/.globus/usercred.p12`, else the only `.p12` there. It refuses a key file any other account can
-read, giving the `chmod` that fixes it; asks the passphrase without showing it; asks CMS's VOMS server
+`$X509_USER_CERT` and `$X509_USER_KEY` (a `$X509_USER_CERT` ending `.p12` is read as one PKCS #12
+file holding both; with only one of the two set, the other is the one in `~/.globus`), else
+`~/.globus/usercert.pem` and `userkey.pem`, else `~/.globus/usercred.p12`, else the only `.p12`
+there. It refuses a key file with any permission for its group or other accounts, giving the
+`chmod 600` that fixes it; asks the passphrase without showing it; asks CMS's VOMS server
 for your attributes; and writes a proxy valid for H hours (1 to 720, 192 when not given, never past
 the certificate's end), readable by you alone, through a file beside it put in its place.
 
@@ -863,7 +877,7 @@ whose header fails raises `rowver.Error`, a missing path `FileNotFoundError`.
 **11.3** A `File` has `rows`, `samples`, `labels`, `columns`, `derived`, `sample_columns` (name to one
 value per sample), `recipe`, `study` (the three texts by file name), `signed_by` (the public key, or
 `None`), `holes` (`[{sample, file, entries: (first, last), kind, why}]`, `last` not included),
-`complete` and `empty`.
+`complete` and `empty`; and `path`, `header` (the JSON header), `len(f)` (its rows) and `name in f`.
 
 **11.4** `f[name]` reads a column: a flat one as a read-only NumPy array (not copied), a list one as
 an Awkward array, `sample` as `int32`, `entry` as `int64`, a derived one worked out and checked

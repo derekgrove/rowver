@@ -1,4 +1,3 @@
-use super::cancellation::Cancellation;
 use super::{checksum, count, exactly, hex, MEND};
 use crate::numeric::{width, NumericArray};
 use crate::{invalid, Result};
@@ -52,30 +51,23 @@ pub(super) fn fill(end: u64, length: usize) -> Result<()> {
     Ok(())
 }
 
-pub(super) struct Arrays<'a, R> {
+/// The arrays of an open file, read in file order, each checked as it is read.
+pub(super) struct Arrays<R> {
     reader: R,
     length: usize,
     at: usize,
     hashes: Sha256,
-    pub(super) cancellation: Cancellation<'a>,
 }
 
-impl<'a, R: Read> Arrays<'a, R> {
-    /// Decode either a byte slice or an open file through the same array checks.
-    pub(super) fn new(reader: R, length: usize, cancellation: Cancellation<'a>) -> Self {
-        Self {
-            reader,
-            length,
-            at: 0,
-            hashes: Sha256::new(),
-            cancellation,
-        }
+impl<R: Read> Arrays<R> {
+    /// The `length` bytes of arrays `reader` holds from where it is.
+    pub(super) fn new(reader: R, length: usize) -> Self {
+        Self { reader, length, at: 0, hashes: Sha256::new() }
     }
 
     /// Read one array of `values` values of `kind`, laid out as `layout` checked: its frame, its
     /// length and its `sha256`.
     pub(super) fn read(&mut self, record: &Value, kind: &str, values: usize, place: &str) -> Result<NumericArray> {
-        self.cancellation.check()?;
         let w = width(kind)?;
         let expected = values
             .checked_mul(w)
@@ -87,15 +79,8 @@ impl<'a, R: Read> Arrays<'a, R> {
         let hash = checksum(record, place)?;
         let mut packed = vec![0; size];
         self.reader.read_exact(&mut packed)?;
-        self.cancellation.check()?;
         let bytes = crate::codec::unpack(packed, w, expected, place)?;
-        self.cancellation.check()?;
-        let mut actual = Sha256::new();
-        for chunk in bytes.chunks(65536) {
-            self.cancellation.check()?;
-            actual.update(chunk);
-        }
-        if hex(&actual.finalize()) != hash {
+        if hex(&Sha256::digest(&bytes)) != hash {
             return Err(invalid(format!("{place}: its array's bytes are not the sha256 its record states (docs/FORMAT.md §8): the file is damaged; copy it again, or press its study again")));
         }
         if kind == "b1" {
@@ -110,7 +95,6 @@ impl<'a, R: Read> Arrays<'a, R> {
 
     /// Require every array read, and nothing after them.
     pub(super) fn finish(mut self, data: &Value) -> Result<()> {
-        self.cancellation.check()?;
         if self.at != self.length || self.reader.read(&mut [0])? != 0 {
             return Err(invalid("bytes follow the last array, and nothing does (docs/FORMAT.md §1): the file is damaged; copy it again"));
         }

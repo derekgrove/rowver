@@ -144,7 +144,7 @@ impl std::fmt::Display for Shape {
 
 /// What a press reads of one file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Read {
+pub(crate) struct Read {
     /// Entries read.
     pub read: u64,
     /// For the first N: entries 0..stop, when fewer than the file has.
@@ -154,7 +154,7 @@ pub struct Read {
 }
 
 /// What a press reads of each file, given each file's entries.
-pub fn reads(entries: &[u64], events: Events) -> Vec<Read> {
+pub(crate) fn reads(entries: &[u64], events: Events) -> Vec<Read> {
     let total: u64 = entries.iter().sum();
     match events {
         Events::All => entries.iter().map(|&e| Read { read: e, stop: None, take: None }).collect(),
@@ -460,14 +460,14 @@ pub fn agree(text: &str, lock: &Lock) -> Result<(), Problems> {
 }
 
 /// Whether `text` is a ROOT UUID as a file records it: 8-4-4-4-12 lowercase hex.
-pub fn uuid(text: &str) -> bool {
+pub(crate) fn uuid(text: &str) -> bool {
     let parts: Vec<&str> = text.split('-').collect();
     parts.len() == 5 && parts.iter().zip([8, 4, 4, 4, 12]).all(|(part, n)| hex(part, n))
 }
 
 /// A JSON value as TOML writes it, each number a TOML number (rowver keeps serde_json's numbers
 /// exact, which TOML would write as tables); `name` says which value TOML cannot hold.
-pub fn toml_value(value: &Value, name: &str) -> Result<toml::Value, String> {
+pub(crate) fn toml_value(value: &Value, name: &str) -> Result<toml::Value, String> {
     let cannot = || format!("samples.lock cannot hold {name}: TOML has no such value (a null, or a number past its range). Give it a text, a whole number of 64 bits or a finite float in samples.toml");
     Ok(match value {
         Value::Null => return Err(cannot()),
