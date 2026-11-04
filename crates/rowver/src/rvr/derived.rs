@@ -252,9 +252,13 @@ impl<'a> Store<'a> {
     }
 }
 
-/// For a file a newer rvr pressed than this version: what to do, said after what failed.
+/// For a file a newer rvr pressed than this version, or another program: what to do, said after what failed.
 fn newer(header: &Value) -> Option<String> {
-    let made = header["made"]["toolchain"]["rvr"].as_str()?;
+    let made = header["made"]["toolchain"]["version"].as_str()?;
+    let program = header["made"]["toolchain"]["program"].as_str()?;
+    if program != "rvr" {
+        return Some(format!("The file was made by {program} {made}, which knows a function this rvr does not: press its study again with rvr to work it out here."));
+    }
     let this = env!("CARGO_PKG_VERSION");
     later(made, this).then(|| {
         format!("The file was made by rvr {made}, newer than this one ({this}), and may use what only a newer version reads: update rvr and rowver to {made} or later (pip install -U rowver updates both; or that release's rvr download, or rowver crate).")

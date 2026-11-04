@@ -181,16 +181,19 @@ pub(crate) fn open(reach: &Reach, file: &File, read_at: &str, then: &str) -> Res
     })
 }
 
-/// Where the sample `named` is in the lock (the first sample when none is named).
-pub(crate) fn sample_at(lock: &Lock, named: Option<&str>) -> Result<usize, String> {
-    if lock.samples.is_empty() {
-        return Err("samples.lock has no samples: add one to samples.toml and resolve again".into());
+/// Where the sample `named` is among the `names` of `file` (the first sample when none is named).
+pub(crate) fn sample_at(names: &[&str], named: Option<&str>, file: &str) -> Result<usize, String> {
+    if names.is_empty() {
+        return Err(format!("{file} has no samples: add one to samples.toml and resolve again"));
     }
     let Some(name) = named else { return Ok(0) };
-    lock.samples.iter().position(|s| s.name == name).ok_or_else(|| {
-        let names: Vec<&str> = lock.samples.iter().map(|s| s.name.as_str()).collect();
-        format!("samples.lock has no sample named {name}; it has {}", names.join(", "))
-    })
+    names.iter().position(|s| *s == name).ok_or_else(|| format!("{file} has no sample named {name}; it has {}", names.join(", ")))
+}
+
+/// Where the sample `named` is in the lock (the first sample when none is named).
+pub(crate) fn sample_in(lock: &Lock, named: Option<&str>) -> Result<usize, String> {
+    let names: Vec<&str> = lock.samples.iter().map(|s| s.name.as_str()).collect();
+    sample_at(&names, named, "samples.lock")
 }
 
 /// The first of a sample's files with entries, opened, with its entry in the lock.

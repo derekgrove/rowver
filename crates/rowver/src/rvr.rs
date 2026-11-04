@@ -220,6 +220,13 @@ pub fn tool_keys(header: &Value) -> Map<String, Value> {
     root.filter(|(key, _)| !TOP.contains(&key.as_str())).map(|(key, value)| (key.clone(), value.clone())).collect()
 }
 
+/// The format's key that `key`, not one of them, is a slip of (docs/FORMAT.md §11): ignoring
+/// case, at most one edit from it, a swap of two neighbours counting as one.
+fn slip(key: &str) -> Option<&'static str> {
+    let lower = key.to_lowercase();
+    TOP.iter().find(|top| **top != key && rvr_recipe::slips(&lower, top) <= 1).copied()
+}
+
 /// Whether `name` is a tool key's name: one or more ASCII letters, digits, `_`, `-` and `.`.
 fn tool_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
@@ -243,6 +250,9 @@ fn checks(header: &Value) -> Result<u64> {
     let root = header.as_object().ok_or_else(|| invalid(format!("the header must be one JSON object: {MEND}")))?;
     version(header)?;
     for (key, value) in root {
+        if let Some(near) = slip(key) {
+            return Err(invalid(format!("the top-level key {key:?} is a slip of {near}, one of the format's own keys, not a tool key (docs/FORMAT.md §11): write it {near}, or give the tool key a name further from it")));
+        }
         if !TOP.contains(&key.as_str()) && !tool_name(key) {
             return Err(invalid(format!("the top-level key {key:?} is no field of the format and not a tool key's name (one or more ASCII letters, digits, _, - and ., docs/FORMAT.md §11): rename the tool key")));
         }

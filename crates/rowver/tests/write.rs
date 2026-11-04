@@ -197,14 +197,14 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
     drop(path);
     assert!(refused.contains("derived.columns[\"twice\"], worked out here, is not what the file records"), "{refused}");
     // A newer rvr's record that this rowver works out otherwise is not replaced: it says to update.
-    let made = header["made"]["toolchain"]["rvr"].clone();
-    header["made"]["toolchain"]["rvr"] = "15.99.0".into();
+    let made = header["made"]["toolchain"]["version"].clone();
+    header["made"]["toolchain"]["version"] = "15.99.0".into();
     header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
     let path = written(&header, "derived-changed-newer");
     let refused = rowver::rvr::validate_file(&path).unwrap_err().to_string();
     drop(path);
     assert!(refused.contains("is not what the file records") && refused.contains("newer than this one") && !refused.contains("rvr derive"), "{refused}");
-    header["made"]["toolchain"]["rvr"] = made;
+    header["made"]["toolchain"]["version"] = made;
     // A newer rvr's derived column, with a function this rowver does not know, says to update;
     // its stored columns still read.
     header["derived"]["columns"][0]["sha256"] = sha256;
@@ -222,7 +222,7 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
     again["expression"] = "twice * 2".into();
     header["derived"]["columns"] = serde_json::json!([header["derived"]["columns"][0].clone(), again]);
     for (made, newer) in [("15.99.0", true), (this, false)] {
-        header["made"]["toolchain"]["rvr"] = made.into();
+        header["made"]["toolchain"]["version"] = made.into();
         header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
         let path = written(&header, "derived-newer");
         let reader = rowver::rvr::Reader::open(&path).unwrap();
@@ -238,13 +238,22 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
             assert!(refused.contains("There is no function named later") && updates == usize::from(newer), "{refused}");
         }
     }
+    // Another program's file is named for what made it, with no advice to update rvr to its version.
+    header["made"]["toolchain"]["program"] = "rvrcpp".into();
+    header["made"]["toolchain"]["version"] = "15.1.0".into();
+    header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
+    let path = written(&header, "derived-other-program");
+    let refused = rowver::rvr::Reader::open(&path).unwrap().column("again").unwrap_err().to_string();
+    drop(path);
+    assert!(refused.contains("The file was made by rvrcpp 15.1.0, which knows a function this rvr does not") && !refused.contains("update rvr"), "{refused}");
+    header["made"]["toolchain"]["program"] = "rvr".into();
     // Syntax a newer rvr's recipe holds that this one cannot read says to update too.
     header["derived"]["columns"] = serde_json::json!([header["derived"]["columns"][0].clone()]);
     let unread = later.replace("later(MET)", "MET ?? 2");
     header["made"]["recipe"]["text"] = unread.as_str().into();
     header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(&unread).into();
     header["derived"]["columns"][0]["expression"] = "MET ?? 2".into();
-    header["made"]["toolchain"]["rvr"] = "15.99.0".into();
+    header["made"]["toolchain"]["version"] = "15.99.0".into();
     header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
     let path = written(&header, "derived-unread");
     let refused = rowver::rvr::validate_file(&path).unwrap_err().to_string();

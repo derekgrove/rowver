@@ -209,6 +209,28 @@ fn expand(path: &Path, json: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// The sample `named` (the first when none is) of samples.toml at `path`, its first file found as
+/// resolve finds it and opened, nothing else asked (no adler32, no digest): the sample, its first
+/// file and that file's branch list. Nothing is written.
+pub(crate) fn first_file(path: &Path, named: Option<&str>) -> Result<(samples::Sample, String, Branches), String> {
+    let (_, made) = read_samples(path, false)?;
+    let names: Vec<&str> = made.iter().map(|s| s.name.as_str()).collect();
+    let sample = made[crate::open::sample_at(&names, named, "samples.toml")?].clone();
+    let proxy = proxy();
+    let mut ctx = Context::new(path.parent().map(Path::to_path_buf).unwrap_or_default(), proxy.path, proxy.said, proxy.ca);
+    ctx.pins = false;
+    let first = std::sync::OnceLock::new();
+    let resolved = resolve::resolve(&ctx, &sample, &|locked, list| {
+        let _ = first.set((locked.files[0].at.clone(), list.clone()));
+        ctx.stop();
+    });
+    // A sample resolves only with a branch list, which `first` is given before resolve returns.
+    match first.into_inner() {
+        Some((at, list)) => Ok((sample, at, list)),
+        None => Err(format!("{}: {}", sample.name, resolved.err().unwrap_or_default())),
+    }
+}
+
 /// The recipe.toml beside samples.toml at `path`, as text and as its validator reads it; at a
 /// terminal, the tables it leaves out are offered first. resolve writes no lock a recipe cannot be
 /// pressed from.
@@ -372,7 +394,7 @@ fn unread(ctx: &Context, read: &BTreeMap<&str, u64>) {
     }
     if !unread.is_empty() {
         unread.sort();
-        println!("The folders read also hold {} .root files no sample reads (not an error; check none was meant):", unread.len());
+        println!("The folders read also hold {} no sample reads (not an error; check none was meant):", some(unread.len(), ".root file", ".root files"));
         for at in unread.iter().take(3) {
             println!("  {at}");
         }

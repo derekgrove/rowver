@@ -118,7 +118,7 @@ ht = "sum(Jet_pt)"
     assert_eq!(made["samples"]["text"], FLAT);
     let lock = std::fs::read_to_string(dir.join("samples.lock")).unwrap();
     assert_eq!(made["lock"]["text"], lock);
-    assert_eq!(made["toolchain"]["rvr"], env!("CARGO_PKG_VERSION"));
+    assert_eq!((&made["toolchain"]["program"], &made["toolchain"]["version"]), (&serde_json::json!("rvr"), &serde_json::json!(env!("CARGO_PKG_VERSION"))));
     assert_eq!(data["samples"][0]["label"], "Flat ntuple");
     let sample = &made["files"]["flat"];
     assert_eq!(sample["events"], serde_json::json!({"choose": "all"}));

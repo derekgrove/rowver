@@ -103,10 +103,11 @@ fn run(pressing: Pressing) -> Result<usize, String> {
 /// What built this rvr, as `made.toolchain` records it.
 pub fn toolchain() -> Value {
     json!({
-        "rvr": env!("CARGO_PKG_VERSION"),
+        "program": "rvr",
+        "version": env!("CARGO_PKG_VERSION"),
         "rowver": rowver::VERSION.to_string(),
         "commit": env!("RVR_COMMIT"),
-        "rustc": env!("RVR_RUSTC"),
+        "compiler": env!("RVR_RUSTC"),
         "target": env!("RVR_TARGET"),
     })
 }

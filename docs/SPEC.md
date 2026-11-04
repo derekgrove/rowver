@@ -889,7 +889,9 @@ take out. `rvr validate` names a signer from it: `signed by you`, `signed by NAM
 
 **10.4 `rvr proxy`** shows the grid proxy rvr uses (`$X509_USER_PROXY`, else
 `/tmp/x509up_u<your uid>`): its file, whose it is, its VO and how long its attributes last, the time
-left, and what to do when it is missing or ending. Exit 0 when it can be used.
+left, and what to do when it is missing or ending; it warns that the attributes end before the proxy
+only when they end an hour or more before it (voms-proxy-init's end a second before). Exit 0 when it
+can be used.
 
 **10.5 `rvr proxy init [--hours H]`** makes a proxy for the VO cms with no other grid tool: from
 `$X509_USER_CERT` and `$X509_USER_KEY` (a `$X509_USER_CERT` ending `.p12` is read as one PKCS #12
@@ -936,8 +938,9 @@ dictionary in `to_arrow()`) and `entry` first;
 
 ## 12. Builds and releases
 
-**12.1** A build of rvr records, in every file it writes (`made.toolchain`): its version, the format
-version, the commit it was built from, its compiler (`rustc -V`) and its target platform.
+**12.1** A build of rvr records, in every file it writes (`made.toolchain`): the program (`rvr`), its
+version, the format version, the commit it was built from, its compiler (`rustc -V`) and its target
+platform, under names any implementation of the format fills alike (FORMAT.md §6).
 
 **12.2** The commit is, first that applies:
 

@@ -1072,8 +1072,8 @@ impl Study {
         );
         made.insert(
             "toolchain".into(),
-            json!({"rvr": "15.0.0", "rowver": "15", "commit": self.commit,
-                   "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"}),
+            json!({"program": "rvr", "version": "15.0.0", "rowver": "15", "commit": self.commit,
+                   "compiler": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"}),
         );
         made.insert(
             "recipe".into(),

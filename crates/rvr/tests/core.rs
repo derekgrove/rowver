@@ -269,3 +269,21 @@ fn what_a_press_holds_does_not_grow_with_the_events_it_keeps() {
     // Building on it: 8 bytes a row more, and one of its columns (at most 8 bytes a row again).
     assert!(built_large <= built_small + 16 * (many - few) + (64 << 20), "{seen:?}");
 }
+
+// SPEC 8.5
+#[test]
+fn a_file_another_program_made_is_not_built_on_and_its_program_is_named() {
+    let dir = copies("other-program", 0, &recipe("", "branches = [\"nJet\"]\n", ""));
+    assert_eq!(rvr(&dir, &["press"]).0, 0);
+    let path = dir.join(name(&dir));
+    let mut header = header(&dir);
+    header["made"]["toolchain"]["program"] = "rvrcpp".into();
+    header["made"]["toolchain"]["version"] = "15.1.0".into();
+    header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
+    let other = dir.join("other.rvr");
+    rowver::write::rewrite(&path, &other, &header).unwrap();
+    std::fs::rename(&other, &path).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains(&format!("Pressing every column: {} cannot be built on, as it was made by rvrcpp 15.1.0, not rvr", name(&dir))), "{said}");
+}

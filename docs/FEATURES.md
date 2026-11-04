@@ -133,7 +133,7 @@ file alone.
 `made` records the study:
 
 - its name and title, and when it was built;
-- a `toolchain` naming the `rvr` version, the format version, the git commit (with a hash of the
+- a `toolchain` naming the program that wrote it (`rvr`) and its version, the format version, the git commit (with a hash of the
   uncommitted changes when the build was dirty), the compiler and the target platform;
 - the complete text of `recipe.toml`, `samples.toml` and `samples.lock`, each with its SHA-256;
 - for every sample, its event choice (§4.2) and its metadata;

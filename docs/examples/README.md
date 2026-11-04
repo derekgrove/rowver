@@ -126,9 +126,9 @@ named in full, as the file spells it.
   five tables, even the empty ones: `rvr press` refuses a recipe that leaves one out, or, at a
   terminal, offers to write it in.
 
-**How do you know the file has `Muon_pt`?** You don't have to guess. Once the samples are resolved
-(just below), `rvr branches` lists every branch of the sample's first file, from the lock, and
-`--find` narrows them down:
+**How do you know the file has `Muon_pt`?** You don't have to guess. `rvr branches` lists every
+branch of the sample's first file (from the lock once the samples are resolved, just below; before
+that, from the file itself, found through `samples.toml`), and `--find` narrows them down:
 
 ```text
 $ rvr branches --find muon

@@ -214,6 +214,9 @@ pub struct Context {
     folders: super::Once<PathBuf, Result<Arc<[String]>, String>>,
     /// Set when the run is to end: no further file is asked.
     stop: std::sync::atomic::AtomicBool,
+    /// Whether each file is pinned (its adler32, or its storage's digest); not when files are only
+    /// found and opened, as `rvr branches` before a lock does.
+    pub pins: bool,
 }
 
 
@@ -235,6 +238,7 @@ impl Context {
             offline,
             folders: Default::default(),
             stop: Default::default(),
+            pins: true,
         }
     }
 
@@ -314,7 +318,11 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool, each: &mut dyn
         for (i, e) in found.iter().enumerate() {
                 ctx.going()?;
                 let at = join(&e.name);
-                let (said, adler32) = storage.digest(&at).map_err(|failed| failed.why)?;
+                // The listing's size is enough to open a file only found; one without needs the HEAD.
+                let (said, adler32) = match ctx.pins || e.bytes == 0 {
+                    true => storage.digest(&at).map_err(|failed| failed.why)?,
+                    false => (None, None),
+                };
                 // The listing's size, else the HEAD's: a lock pins every file's size.
                 let bytes = match e.bytes {
                     0 => said.filter(|b| *b > 0).ok_or_else(|| format!("{at}: its storage gives no size for it, so the lock cannot pin it"))?,
@@ -342,8 +350,11 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool, each: &mut dyn
                 let at = join(n);
                 let opened = hep_root::LocalFile::open(&path).map_err(|e| format!("{at}: {e}"))?;
                 let identity = root_identity(opened, &at, tree, listed && i == 0)?;
-                let adler32 = adler32_file(&path).map_err(|e| format!("{at}: {e}"))?;
-                let (file, list) = pinned(at, meta.len(), Some(adler32), identity);
+                let adler32 = match ctx.pins {
+                    true => Some(adler32_file(&path).map_err(|e| format!("{at}: {e}"))?),
+                    false => None,
+                };
+                let (file, list) = pinned(at, meta.len(), adler32, identity);
                 each(file, list)?;
         }
         Ok(())

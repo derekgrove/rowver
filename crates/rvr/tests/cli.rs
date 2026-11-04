@@ -52,7 +52,7 @@ fn pressed(path: &Path, met_b: f32, xsec_b: f64) {
     }
     let mut made = json!({
         "study": "cli-test", "built": "2026-10-16T00:00:00Z", "by": "rvr test",
-        "toolchain": {"rvr": "15.0.0", "rowver": "15", "commit": "unknown", "rustc": "rustc 1.91.0", "target": "test"},
+        "toolchain": {"program": "rvr", "version": "15.0.0", "rowver": "15", "commit": "unknown", "compiler": "rustc 1.91.0", "target": "test"},
         "recipe": recipe, "samples": text(&samples), "lock": text(&lock.0), "files": files,
     });
     made["sha256"] = made_checksum(&made).unwrap().into();

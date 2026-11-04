@@ -3,7 +3,7 @@
 //! `--kept` shows only the events the recipe's cuts keep.
 
 use crate::gather::kept;
-use crate::open::{entries as located, first_readable, hint, sample_at, Branches};
+use crate::open::{entries as located, first_readable, hint, sample_in, Branches};
 use crate::options::Options;
 use crate::plan::Choose;
 use rowver::rvr::derived::fields;
@@ -43,7 +43,7 @@ fn run(options: &Options, wanted: usize) -> Result<(), String> {
     // Read as a press reads it: its validators, then the agreement check.
     let checked = crate::plan::checked(&texts, &Choose::Options(Default::default()))?;
     let (recipe, lock) = (checked.recipe, checked.lock);
-    let index = sample_at(&lock, options.value("--sample"))?;
+    let index = sample_in(&lock, options.value("--sample"))?;
     let expression = recipe.expression(text).map_err(|e| format!("the expression: {}", e.0.replace('\n', "\nthe expression: ")))?;
     let sample = &lock.samples[index];
     let (root, file) = first_readable(&lock, index, dir)?;

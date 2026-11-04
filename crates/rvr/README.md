@@ -642,7 +642,10 @@ rvr press --fill would read 5 entries of 1 file.
 ### `rvr branches [DIR] [--sample NAME] [--find TEXT]`
 
 Lists every branch of the first file of the study's first sample (or of `--sample NAME`), from the
-sample's branch list in the lock: no file is opened. One line per branch, ordered by name ignoring
+sample's branch list in the lock: no file is opened. Before the study has a lock (and before it has
+a recipe), it finds that one file through `samples.toml`, as resolve finds files, opens it and reads
+its branches from the file itself, asking no checksum and writing nothing: list the branches first, then write the recipe and resolve.
+One line per branch, ordered by name ignoring
 case: its name as a recipe writes it, its kind, and its shape (`flat`, `jagged`, `N per event`, or
 `jagged, N per element`). Branches rvr cannot read (whole objects, strings, nested vectors) follow
 under `Not readable by rvr:`, each with why. `--find TEXT` shows only the names holding TEXT,

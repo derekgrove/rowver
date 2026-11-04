@@ -17,7 +17,7 @@ pub use array::{Array, Constant, Operator, Store, Values};
 pub use document::{branch_names, fields_of, names, plain, reads, uses, Cut, Recipe, Total, ADDED, RESERVED, TABLES};
 pub use evaluate::{over_runs, per_event, Columns, Picked, Scope, FUNCTIONS};
 pub use kind::Kind;
-pub use nearest::{meant, nearest, unknown};
+pub use nearest::{meant, nearest, slips, unknown};
 
 /// Where the recipe reference, which lists every function with an example, is read.
 pub const REFERENCE: &str = "https://gitlab.cern.ch/dgrove/rowver/-/blob/main/crates/rvr-recipe/README.md";

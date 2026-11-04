@@ -37,15 +37,18 @@ pub fn study_name(name: &str) -> bool {
 /// Check what built a program, as `made.toolchain` records it (docs/FORMAT.md §6): what is wrong, if anything.
 pub fn toolchain(toolchain: &Value) -> std::result::Result<(), String> {
     let place = "made.toolchain";
-    let fields = ["rvr", "rowver", "commit", "rustc", "target"];
+    let fields = ["program", "version", "rowver", "commit", "compiler", "target"];
     let held = toolchain.as_object().ok_or_else(|| format!("{place} must be an object"))?;
     if let Some(key) = held.keys().find(|key| !fields.contains(&key.as_str())) {
         return Err(format!("{place} has a field {key:?}, which the format does not give it"));
     }
     let text = |key: &str| held.get(key).and_then(Value::as_str).ok_or_else(|| format!("{place}.{key} must be text"));
-    let rvr = text("rvr")?;
-    if !version(rvr) {
-        return Err(format!("{place}.rvr is {rvr:?}, and it is rvr's version, {}.MINOR.PATCH (docs/FORMAT.md §6)", crate::VERSION));
+    if text("program")?.is_empty() {
+        return Err(format!("{place}.program must be nonempty text: the name of the program that wrote the file, rvr for RowVer's own"));
+    }
+    let made_with = text("version")?;
+    if !version(made_with) {
+        return Err(format!("{place}.version is {made_with:?}, and it is the program's version, {}.MINOR.PATCH (docs/FORMAT.md §6)", crate::VERSION));
     }
     if text("rowver")? != crate::VERSION.to_string() {
         return Err(format!("{place}.rowver is {}, and it is \"{}\", the format version (docs/FORMAT.md §6)", toolchain["rowver"], crate::VERSION));
@@ -54,7 +57,7 @@ pub fn toolchain(toolchain: &Value) -> std::result::Result<(), String> {
     if !commit(made_by) {
         return Err(format!("{place}.commit is {made_by:?}, and it is 40 lowercase hexadecimal digits (with -dirty-HHHHHHHHHHHH or -dirty after them), or unknown (docs/FORMAT.md §6)"));
     }
-    for key in ["rustc", "target"] {
+    for key in ["compiler", "target"] {
         if text(key)?.is_empty() {
             return Err(format!("{place}.{key} must be nonempty text"));
         }

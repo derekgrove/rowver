@@ -56,6 +56,15 @@ fn each_rule_refuses_a_text_that_breaks_it_alone() {
         ("3.6.4 unclosed", sample("files = \"{x.root\""), "{"),
         ("3.7.4 label twice", format!("{HEAD}{ONE}label = \"L\"\n[[sample]]\nname = \"b\"\nfiles = \"y.root\"\ntree = \"T\"\nlabel = \"L\"\n"), "label"),
         ("3.8.5 forms", sample("files = \"file:///d/x.root\""), "root://"),
+        ("3.8.1 root:// with one slash", sample("files = \"root://h.org/store/x.root\""), "write it \"root://h.org//store/x.root\""),
+        ("3.8.1 root:// with a port and one slash", sample("files = \"root://h.org:1094/store/x.root\""), "with two slashes before the path: write it \"root://h.org:1094//store/x.root\""),
+        ("3.8.1 root:// with no path", sample("files = \"root://h.org\""), "write it \"root://h.org//path/file.root\""),
+        ("3.8.1 a folder", sample("files = [\"x.root\", \"data/\"]"), "\"data/\" names a folder: name its files, or a pattern of them, such as \"data/*.root\""),
+        ("3.8.1 a folder of storage", sample("files = \"https://h.org/store/\""), "such as \"https://h.org/store/*.root\""),
+        ("3.8.1 the top folder of grid storage", sample("files = \"root://h.org//\""), "such as \"root://h.org//*.root\""),
+        ("3.8.1 the folder itself", sample("files = \"data/..\""), "such as \"data/../*.root\""),
+        ("3.8.1 the home folder", sample("files = \"~\""), "\"~\" names a folder"),
+        ("3.8.1 the home folder at the end", sample("files = \"data/~\""), "\"data/~\" names a folder"),
     ];
     let mut wrong = Vec::new();
     for (rule, text, says) in &cases {

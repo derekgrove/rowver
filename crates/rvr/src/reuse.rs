@@ -130,12 +130,12 @@ pub fn identified() -> Result<(), String> {
 // new file names this build.
 pub fn same_build(made: &Value) -> Result<(), String> {
     identified()?;
+    let (program, version) = (made["toolchain"]["program"].as_str().unwrap_or("?"), made["toolchain"]["version"].as_str().unwrap_or("?"));
+    if program != "rvr" {
+        return Err(format!("it was made by {program} {version}, not rvr"));
+    }
     if made["toolchain"] != crate::press::toolchain() {
-        return Err(format!(
-            "it was made by another build of rvr ({} at {})",
-            made["toolchain"]["rvr"].as_str().unwrap_or("?"),
-            made["toolchain"]["commit"].as_str().unwrap_or("?")
-        ));
+        return Err(format!("it was made by another build of rvr ({version} at {})", made["toolchain"]["commit"].as_str().unwrap_or("?")));
     }
     Ok(())
 }

@@ -5,7 +5,7 @@ and writes all of it and is the reference builder; `rvr press` writes pressed fi
 [The features](FEATURES.md) describe what the tools around the format do.
 
 **The running example.** Every example below is from one real file, `tiny.rvr`, unless it says
-otherwise. It is 7,427 bytes, pressed from two copies of a five-entry test ntuple
+otherwise. It is 7,450 bytes, pressed from two copies of a five-entry test ntuple
 (`crates/rvr/tests/fixtures/uproot_flat.root`, tree `analysis`; one sample each, `signal` and
 `background`) with this recipe, and signed with a throwaway key:
 
@@ -44,16 +44,16 @@ Checksums are cut to their first 8 hex digits here; a file holds all 64.
 The first bytes of `tiny.rvr`:
 
 ```
-00000000: 8952 5652 0d0a 1a0a ab1b 0000 7b22 726f  .RVR........{"ro
+00000000: 8952 5652 0d0a 1a0a c21b 0000 7b22 726f  .RVR........{"ro
           └──────magic──────┘ └length─┘ └─header…
 ```
 
 - **The magic** is `89 52 56 52 0D 0A 1A 0A` (`\x89RVR\r\n\x1a\n`): a high byte, the letters
   `RVR`, then CR LF, Ctrl-Z and LF. A transfer that strips the eighth bit or rewrites line endings
   therefore breaks the file visibly.
-- **The header length** is `AB 1B 00 00`, that is 0x1BAB = 7,083 bytes. A reader parses that many
+- **The header length** is `C2 1B 00 00`, that is 0x1BC2 = 7,106 bytes. A reader parses that many
   bytes of JSON and has every fact about the file without touching any array.
-- **The arrays** start at byte 12 + 7,083 = 7,095 and fill the rest of the file: 332 bytes here.
+- **The arrays** start at byte 12 + 7,106 = 7,118 and fill the rest of the file: 332 bytes here.
   Each is compressed on its own (§7), so a reader decompresses only the arrays it needs. A program
   that changes only the header writes the new header and copies the arrays byte for byte.
 
@@ -339,14 +339,14 @@ metadata has any of these names (SPEC.md §3.5.10, §2.3).
 ```json
 "made": {
   "study": "tiny",
-  "built": "2026-11-03T20:10:19Z",
+  "built": "2026-11-04T17:13:06Z",
   "by": "rvr 15.0.0",
-  "toolchain": {"rvr": "15.0.0", "rowver": "15", "commit": "76ab18e2…",
-                "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
+  "toolchain": {"program": "rvr", "version": "15.0.0", "rowver": "15", "commit": "f925e1eb…",
+                "compiler": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
   "recipe":  {"sha256": "937f05be", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
               "columns": ["nJet", "Jet_pt", "ht"]},
   "samples": {"sha256": "a960276a", "text": "…the whole samples.toml…"},
-  "lock":    {"sha256": "459558ea", "text": "…the whole samples.lock…"},
+  "lock":    {"sha256": "fa383cf4", "text": "…the whole samples.lock…"},
   "files": {
     "signal": {
       "events": {"choose": "all"},
@@ -356,7 +356,7 @@ metadata has any of these names (SPEC.md §3.5.10, §2.3).
     },
     "background": { … }
   },
-  "sha256": "56c8177d"
+  "sha256": "e030dfda"
 }
 ```
 
@@ -368,7 +368,7 @@ metadata has any of these names (SPEC.md §3.5.10, §2.3).
 | `title` | the recipe's `title`; present exactly when the recipe sets one, and equal to it |
 | `built` | when the file was written, UTC to the second: `YYYY-MM-DDTHH:MM:SSZ`, a real date and time |
 | `by` | nonempty text naming the program that wrote the file |
-| `toolchain` | what built that program: exactly `rvr` (its version, `15.MINOR.PATCH`, each number in digits with no leading zero), `rowver` (`"15"`), `commit` (below), `rustc` (the compiler's `rustc -V`, nonempty) and `target` (the platform, nonempty) |
+| `toolchain` | what built that program: exactly `program` (the implementation's name, nonempty: `rvr` for RowVer's own), `version` (its version, `15.MINOR.PATCH`, each number in digits with no leading zero), `rowver` (`"15"`), `commit` (below), `compiler` (the compiler's own one-line version text, as `rustc -V` prints it, nonempty) and `target` (the platform, nonempty) |
 | `recipe`, `samples`, `lock` | the study's three files, each exactly its whole `text` and the `sha256` of that text as UTF-8; `recipe` also has `format` (`"rvr-recipe"`) and `columns` (every column the recipe stores, in the file's order, each named once) |
 | `files` | every sample of `data.samples`, by name (below) |
 | `sha256` | the checksum of `made` (§8) |
@@ -536,7 +536,7 @@ The lock of `tiny.rvr`, cut short:
 
 format = "rvr-samples-lock"
 version = 1
-resolved = "2026-11-03T20:10:19Z"
+resolved = "2026-11-04T17:13:06Z"
 samples_toml_sha256 = "a960276a…"
 
 [[sample]]
@@ -757,7 +757,7 @@ A press signs the file when the person pressing it has a key. A file without a `
 unsigned, and still valid.
 
 ```json
-"signature": {"ed25519": "52b538dd…", "key": "7355b0e5…", "sha256": "1f7b41f3…"}
+"signature": {"ed25519": "31de3bdc…", "key": "da2babb0…", "sha256": "82d4594a…"}
 ```
 
 It has exactly these three members:
@@ -810,7 +810,7 @@ exponentials, logarithms, trigonometry, roundings, `hypot` and `**` come from th
 values whoever works it out. A reader
 that works one out checks its values against the record, and refuses the column when they differ.
 A later rvr may add functions to the language; a reader that meets one it does not know, in a
-file whose `made.toolchain.rvr` is newer than its own version, says that the file needs a newer
+file whose `made.toolchain.version` is newer than its own version, says that the file needs a newer
 reader, and still reads each stored column asked for by name. A function, once released, keeps
 its results.
 
@@ -826,9 +826,9 @@ Any other top-level key belongs to a tool: one object per tool, named for it (on
 letters, digits, `_`, `-` and `.`), holding whatever JSON the tool likes, within
 §1's rules. A key that is a slip of one of the format's own (`rowver`, `data`, `made`, `derived`,
 `signature`) is refused as a misspelling, naming the key it is near: compared ignoring case, at most
-one edit (a character inserted, deleted or replaced) from `data` or `made`, or at most two from
-`rowver`, `derived` or `signature` (so `Data`, `mde` and `signatur` are refused, `dash` and `view`
-are tool keys). `rvr press` never adds one. Any program that saves a `.rvr` file writes back
+one edit from one of them, an edit being a character inserted, deleted or replaced, or two
+neighbouring characters swapped (so `Data`, `mde`, `signatur`, `rowvr` and `dervied` are refused;
+`dash`, `view`, `router` and `driver` are tool keys). `rvr press` never adds one. Any program that saves a `.rvr` file writes back
 every tool key it found: `rvr press` those of the file it replaces at its target, when that file
 opens. Tool keys are outside every checksum and the signature, so a tool can
 change its own key without breaking either.

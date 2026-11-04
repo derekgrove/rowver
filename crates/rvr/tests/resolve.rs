@@ -69,7 +69,7 @@ fn a_pattern_matches_in_byte_order_and_a_link_counts_as_its_file() {
     let at: Vec<&str> = lock.lines().filter_map(|l| l.strip_prefix("at = ")).collect();
     assert_eq!(at, ["\"d/B.root\"", "\"d/a.root\"", "\"d/link.root\"", "\"e/a1.root\""]);
     // The folders read hold a .root file no sample reads: it is named, as a check.
-    assert!(said.contains("1 .root files no sample reads") && said.contains("  e/a10.root"), "{said}");
+    assert!(said.contains("also hold 1 .root file no sample reads") && said.contains("  e/a10.root"), "{said}");
 }
 
 // SPEC 3.8.4, 3.6.3
@@ -155,4 +155,30 @@ fn a_study_without_a_recipe_is_refused_at_resolve_pointing_at_rvr_new() {
     std::fs::write(dir.join("recipe.toml"), RECIPE.replace("nJet\"]", "nJet\"]\nht = \"sum(\"")).unwrap();
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
     assert!(code == 1 && said.contains("[columns] ht") && !said.contains("  ok  "), "{said}");
+}
+
+// SPEC 5.4.1, 5.4.2
+#[test]
+fn branches_lists_a_samples_first_file_before_any_lock_or_recipe() {
+    let two = samples("[[sample]]\nname = \"flat\"\nfiles = \"uproot_*.root\"\n[[sample]]\nname = \"other\"\nfiles = \"stl_vectors.root\"\ntree = \"ntuple/Events\"\n");
+    let dir = study("branches-first", &two, RECIPE);
+    std::fs::remove_file(dir.join("recipe.toml")).unwrap();
+    std::fs::copy(dir.join("uproot_flat.root"), dir.join("uproot_more.root")).unwrap();
+    let (code, said) = rvr(&dir, &["branches"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("flat: uproot_flat.root, tree analysis, 17 branches\n") && said.contains("\n  nJet             i4  flat\n"), "{said}");
+    let (code, said) = rvr(&dir, &["branches", "--sample", "other", "--find", "label"]);
+    assert!(code == 0 && said.contains("other: stl_vectors.root, tree ntuple/Events") && said.contains("Not readable by rvr:"), "{said}");
+    // Nothing is written, and with a lock the list is the lock's, the same.
+    assert!(!dir.join("samples.lock").exists());
+    let without = rvr(&dir, &["branches"]).1;
+    std::fs::write(dir.join("recipe.toml"), "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\none = \"1\"\n\n[totals]\n\n[derived]\n").unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let with = rvr(&dir, &["branches"]).1;
+    assert_eq!(with.lines().filter(|l| l.starts_with("  ")).collect::<Vec<_>>(), without.lines().filter(|l| l.starts_with("  ")).collect::<Vec<_>>());
+    // A sample whose file cannot be found says so, as resolve would.
+    std::fs::remove_file(dir.join("samples.lock")).unwrap();
+    std::fs::write(dir.join("samples.toml"), samples("[[sample]]\nname = \"flat\"\nfiles = \"uproot_flt.root\"\n")).unwrap();
+    let (code, said) = rvr(&dir, &["branches"]);
+    assert!(code == 1 && said.contains("Did you mean: uproot_flat.root?"), "{said}");
 }

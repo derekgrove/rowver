@@ -75,7 +75,7 @@ marks what was cut, and checksums are shortened.
     "title": "higgs_tautau",
     "built": "2026-11-03T19:54:12Z",
     "by": "rvr 15.0.0",
-    "toolchain": {"rvr": "15.0.0", "rowver": "15", "commit": "76ab18e2…", "rustc": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
+    "toolchain": {"program": "rvr", "version": "15.0.0", "rowver": "15", "commit": "76ab18e2…", "compiler": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
     "recipe":  {"sha256": "fcc933cd…", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
                 "columns": ["run", "luminosityBlock", "event", "PV_npvs", "MET_pt", "MET_phi", "Muon_pt", "Muon_eta", "Tau_pt", "Tau_eta", "Jet_pt"]},
     "samples": {"sha256": "…", "text": "…the whole samples.toml…"},

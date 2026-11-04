@@ -498,3 +498,16 @@ fn a_recipe_that_does_not_fit_stops_resolve_at_each_samples_first_file() {
     let asked: Vec<String> = server.taken().iter().filter(|r| r.method != "PROPFIND").map(|r| r.path.clone()).collect();
     assert!(asked.iter().all(|p| p == "/store/own/f0.root"), "only the first file is asked: {asked:?}");
 }
+
+// SPEC 5.4.1
+#[test]
+fn branches_before_a_lock_opens_the_first_file_and_asks_no_digest() {
+    let (dir, server) = remote("branches-remote", |s| format!("{:?}", s.url("/store/f*.root")));
+    server.put("/store/flat.root", ntuple());
+    server.put("/store/flat2.root", ntuple());
+    let (code, said) = rvr(&dir, None, &["branches"]);
+    assert!(code == 0 && said.contains("flat: flat.root, tree analysis, 17 branches"), "{said}");
+    let asked = server.taken();
+    assert!(asked.iter().all(|r| r.method != "HEAD" && r.path != "/store/flat2.root"), "only the listing and the first file's bytes: {asked:?}");
+    assert!(!dir.join("samples.lock").exists());
+}

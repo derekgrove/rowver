@@ -22,7 +22,7 @@ rvr = { path = "crates/rvr", version = "15.0.0" }
 hep-columns = "0.1.4"
 hep-root = "0.2.1"
 grid-trust = "0.1.2"
-voms-proxy = "0.1.0"
+voms-proxy = "0.1.2"
 wlcg-doors = "0.1.0"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

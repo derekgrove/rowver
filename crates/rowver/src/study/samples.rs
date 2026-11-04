@@ -404,7 +404,21 @@ fn reachable(file: &str, place: &str, p: &mut Problems) {
         p.say(format!("{place}: {file} has a query: rvr names a storage file by its path: drop the query; storage access goes by your grid proxy"));
         return;
     }
-    let folder = super::split(file).0;
+    if let Some(rest) = file.strip_prefix("root://").filter(|rest| !rest.find('/').is_some_and(|at| rest[at..].starts_with("//"))) {
+        let written = match rest.split_once('/') {
+            Some((host, path)) => format!("root://{host}//{path}"),
+            None => format!("root://{rest}//path/file.root"),
+        };
+        p.say(format!("{place}: {file:?} has one slash before its path, and a grid storage file is written root://host[:port]//path, with two slashes before the path: write it {written:?}"));
+    }
+    let (folder, name) = super::split(file);
+    if ["", ".", "..", "~"].contains(&name) {
+        let pattern = match name.is_empty() {
+            true => format!("{file}*.root"),
+            false => format!("{file}/*.root"),
+        };
+        p.say(format!("{place}: {file:?} names a folder: name its files, or a pattern of them, such as {pattern:?}"));
+    }
     if folder.contains(['*', '?']) {
         p.say(format!("{place}: {file}: its folder, {folder}, holds * or ?, which rvr reads only in a file's name (a pattern), never in a folder: rename the folder, or link it under a name without them, and write that name"));
     }
