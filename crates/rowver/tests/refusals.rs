@@ -1,4 +1,4 @@
-//! One refusal per rule of docs/FORMAT.md (each row of docs/review-2026-11-02/stage3-audit.md):
+//! One refusal per rule of docs/FORMAT.md:
 //! the fixture, a valid file, changed in one way, and refused on one line that names the place.
 //! The rules a reader checks on opening are refused by `Reader::open`; the rest only by full
 //! validation, which opens the file first.
@@ -142,7 +142,7 @@ fn two_files(header: &mut Value, arrays: &mut [Vec<u8>], same: bool, swapped: bo
         (second.at, second.bytes, second.adler32, second.uuid, second.entries) =
             ("./fixture-b2.root".into(), 5005, Some("0a1b2c05".into()), "31e851e4-b994-11f1-ba5c-000000000005".into(), entries[1]);
         b.files.push(second);
-        b.events = rowver::study::samples::Events::Random { n: 4, seed };
+        b.events = rowver::choice::Events::Random { n: 4, seed };
         *b = b.planned(b.events);
         if swapped {
             let (first, second) = (b.files[0].take, b.files[1].take);
@@ -346,7 +346,7 @@ fn what_the_format_allows_is_valid() {
 fn a_reader_refuses_on_opening_each_rule_it_checks_there() {
     let rows: Vec<Row> = vec![
         // §1 The file and the header's JSON
-        ("§1", "the magic", Bytes(|b| b[0] ^= 1), "Input is not an .rvr file"),
+        ("§1", "the magic", Bytes(|b| b[0] ^= 1), "it is not an .rvr file"),
         ("§1", "the header length within the file", Bytes(|b| b[8..12].copy_from_slice(&u32::MAX.to_le_bytes())), "the header's length (bytes 8 to 11)"),
         ("§1", "rowver is 15", Raw(|h| h["rowver"] = 14.into()), "This file is rowver 14"),
         ("§1", "rowver is the whole number 15", Raw(|h| h["rowver"] = json!(15.0)), "rowver must be the whole number 15"),
@@ -475,7 +475,7 @@ fn a_reader_refuses_on_opening_each_rule_it_checks_there() {
         ("§9", "sha256 of the header", Signed(|h| {
             h["made"]["by"] = "someone else".into();
             h["made"]["sha256"] = rowver::write::made_checksum(&h["made"]).unwrap().into();
-        }), "The header changed after it was signed"),
+        }), "the header changed after it was signed"),
         ("§9", "key: 64 lowercase hex", Signed(|h| h["signature"]["key"] = h["signature"]["key"].as_str().unwrap().to_uppercase().into()), "signature.key must be 64 lowercase hexadecimal characters"),
         ("§9", "the signature holds for key", Signed(|h| h["signature"]["key"] = rowver::sign::public_key(&[4; 32]).into()), "signature.ed25519 does not hold for signature.key"),
         ("§9 R11", "checked strictly: a key of small order refused", Signed(|h| {
@@ -545,7 +545,7 @@ fn full_validation_refuses_each_rule_it_alone_checks() {
         // §6 The study, its three texts against each other and the file
         ("§6", "title present exactly when the recipe sets one", Header(|h| drop(h["made"].as_object_mut().unwrap().shift_remove("title"))), "made.title is null, and it is the recipe's title"),
         ("§6", "the recipe is one the reference accepts", Recipe(|t| t.push_str("x = ")), "made.recipe.text cannot be read as a recipe"),
-        ("§6", "the recipe has all five tables", Recipe(|t| *t = t.replace("[define]\n", "")), "made.recipe.text has no [define] table"),
+        ("§6", "the recipe has all five tables", Recipe(|t| *t = t.replace("[define]\n", "")), "A recipe has no [define] table"),
         ("§6", "its [columns] stores recipe.columns", Recipe(|t| *t = t.replace(", \"double\"", "")), "made.recipe.columns is"),
         ("§6 §10", "its [derived] lists the derived columns", Recipe(|t| t.push_str("twice = \"MET * 2\"\n")), "does not list the derived columns its header records"),
         ("§6", "samples.toml accepted", Samples(|t| *t = t.replace("version = 1", "version = 2")), "made.samples.text is not a samples.toml docs/SPEC.md §3 accepts"),

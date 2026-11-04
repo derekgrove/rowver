@@ -1,7 +1,5 @@
 //! rowver's canonical JSON, which `made.sha256` and a signature are taken of:
 //! keys sorted, no spaces, UTF-8, whole numbers as written, floats in their shortest digits.
-//! (The rule is the bytes Python's `json.dumps(sort_keys=True, separators=(",", ":"),
-//! ensure_ascii=False)` gives, which is where it came from; docs/FORMAT.md states it on its own.)
 
 use crate::{invalid, Result};
 use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
@@ -160,10 +158,26 @@ fn write(value: &Value, out: &mut String) -> Result<()> {
     Ok(())
 }
 
+/// Whether a number is written as a whole number, without a fraction or an exponent.
+pub(crate) fn whole(number: &Number) -> bool {
+    whole_text(&number.to_string())
+}
+
+/// Whether a number's text is a whole number, written without a fraction or an exponent.
+fn whole_text(text: &str) -> bool {
+    !text.contains(['.', 'e', 'E'])
+}
+
+/// A number written as a whole number from 0 to 2^64 − 1 (`-0` is 0).
+pub(crate) fn natural(value: &Value) -> Option<u64> {
+    let text = value.as_number()?.to_string();
+    u64::try_from(text.parse::<i128>().ok().filter(|_| whole_text(&text))?).ok()
+}
+
 /// Spell a number: a whole number as written, a float in its shortest digits.
 fn number(number: &serde_json::Number) -> Result<String> {
     let text = number.to_string();
-    if text.contains(['.', 'e', 'E']) {
+    if !whole_text(&text) {
         let value = number.as_f64().filter(|value| value.is_finite()).ok_or_else(|| {
             invalid(format!("the number {text} is past the largest double, and a checksum is taken of JSON whose numbers with a fraction or an exponent are doubles (docs/FORMAT.md §8): write a number a double holds"))
         })?;

@@ -24,13 +24,7 @@ pub fn main(options: &Options) -> u8 {
         Ok(wanted) => usize::try_from(wanted.unwrap_or(10)).unwrap_or(usize::MAX),
         Err(why) => return crate::wrong("try", &why),
     };
-    match run(options, wanted) {
-        Ok(()) => 0,
-        Err(error) => {
-            eprintln!("rvr try: {error}");
-            1
-        }
-    }
+    crate::report("try", run(options, wanted).map(|()| 0))
 }
 
 fn run(options: &Options, wanted: usize) -> Result<(), String> {
@@ -59,14 +53,12 @@ fn run(options: &Options, wanted: usize) -> Result<(), String> {
     let mut metadata = fields(&sample.metadata);
     metadata.insert("file".into(), Constant::Text(at.clone()));
     // A total is known once every event is read: here it stands in as 1, as in a press's trial.
-    for total in &recipe.totals {
-        let named = format!("sample.{}", total.name);
-        let reads = text.match_indices(&named).any(|(at, _)| !text[at + named.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'));
-        if reads {
-            println!("sample.{} is a total of [totals], known once every event is read: it stands in as 1 here.", total.name);
-        }
-        metadata.entry(total.name.clone()).or_insert(Constant::Float(1.0));
+    let mut read = std::collections::BTreeSet::new();
+    rvr_recipe::fields_of(&expression, &mut read);
+    for total in recipe.totals.iter().filter(|total| read.contains(&total.name)) {
+        println!("sample.{} is a total of [totals], known once every event is read: it stands in as 1 here.", total.name);
     }
+    rowver::rvr::derived::standing_in(&mut metadata, &recipe);
     let total = tree.entries.max(0) as u64;
     let shown_name = at.rsplit('/').next().unwrap_or(at);
     let (mut shown, mut first, mut kind) = (0, 0, None);

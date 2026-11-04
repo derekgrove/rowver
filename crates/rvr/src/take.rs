@@ -56,6 +56,9 @@ pub(crate) struct Shared<'a> {
     pub counts: &'a crate::progress::Counts,
     /// The samples whose derived columns were tried over a run of theirs.
     pub tried: Mutex<BTreeSet<usize>>,
+    /// For the tests of picking up (a debug build): stop as a crash would once this many files are noted.
+    #[cfg(debug_assertions)]
+    pub stop_after: Option<usize>,
 }
 
 /// What one file gave; its values are in the spool.
@@ -138,7 +141,6 @@ fn planned(input: &Input) -> Value {
 /// earlier file (whose own holes are its only ones).
 fn hole_or_end(mut failed: Failed, input: &Input) -> Result<Failed, Failed> {
     if failed.fault.kind().is_some() && input.kept.is_some() {
-        failed.why = failed.why.replace("put it back and run rvr press --fill", "put it back and press again");
         failed.why += " Building on the earlier file, a file that cannot be read stops the press (rvr press --full starts over, and makes holes of it).";
         return Err(failed);
     }
@@ -204,7 +206,8 @@ fn unread(shared: &Shared, input: &Input, to_read: &[(u64, u64, usize)], failed:
 /// (its entries, and the branches the recipe reads as its sample's list gives them).
 fn opened(shared: &Shared, input: &Input) -> Result<(RootFile<Held>, Tree, u64), Failed> {
     let at = &input.file.at;
-    let file = open(&shared.reach, &input.file, &input.read_at)?;
+    let then = if input.kept.is_some() { "press again" } else { "run rvr press --fill" };
+    let file = open(&shared.reach, &input.file, &input.read_at, then)?;
     let tree = file.tree_at(&input.tree).map_err(|e| match e {
         hep_root::Error::KeyNotFound(_) => Failed::new(Fault::Changed, format!("{at}: it has no tree {:?}, which samples.lock recorded. Run rvr samples resolve samples.toml and review the new lock.", input.tree)),
         e => Failed::new(fault_of(&e, file.source().inner().seen()), format!("{at}: its tree {:?}: {e}", input.tree)),
@@ -481,8 +484,7 @@ fn read_runs(shared: &Shared, input: &Input, file: &RootFile<Held>, tree: &Tree,
     Ok(read)
 }
 
-/// Send what a file has gathered to the spool, after checking, building on an earlier file, that
-/// its entries are the ones it kept.
+/// Send what a file has gathered to the spool, after checking, building on an earlier file, that its entries are the ones it kept.
 fn spool(shared: &Shared, input: &Input, gathered: &mut [Gathered], entry: &mut Vec<i64>, rows: &mut usize, order: write::Order) -> Result<(), Failed> {
     let at = &input.file.at;
     if let Some(kept) = &input.kept {

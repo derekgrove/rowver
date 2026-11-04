@@ -1,10 +1,10 @@
 //! A flat column's facts (docs/FORMAT.md §4), compared as numbers: their forms and `nice` made
 //! again from `lim` on opening, and every fact made again from the values in full validation.
 
-use super::samples::whole as written_whole;
 use super::{field, MEND};
 use crate::decimal::{nice, Decimal};
-use crate::numeric::{width, NumericArray};
+use crate::numeric::width;
+use crate::write::NumericBuffer;
 use crate::write::facts::Facts;
 use crate::{invalid, Result};
 use serde_json::{Map, Value};
@@ -38,7 +38,7 @@ pub(super) fn same(a: &Value, b: &Value, numbers: Numbers) -> bool {
         (Value::Number(x), Value::Number(y)) => match numbers {
             Numbers::Whole => whole(a).is_some() && whole(a) == whole(b),
             Numbers::Double => double(a).is_some() && double(a) == double(b),
-            Numbers::Written => match (written_whole(x), written_whole(y)) {
+            Numbers::Written => match (crate::json::whole(x), crate::json::whole(y)) {
                 (true, true) => same(a, b, Numbers::Whole),
                 (false, false) => same(a, b, Numbers::Double),
                 _ => false,
@@ -52,15 +52,10 @@ pub(super) fn same(a: &Value, b: &Value, numbers: Numbers) -> bool {
 
 /// How a column of `kind`'s facts are compared: as whole numbers, or as doubles.
 pub(super) fn numbers(kind: &str) -> Numbers {
-    match wholes(kind) {
+    match crate::numeric::whole_kind(kind) {
         true => Numbers::Whole,
         false => Numbers::Double,
     }
-}
-
-/// Whether a kind holds whole numbers (every kind but `f4` and `f8`).
-pub(super) fn wholes(kind: &str) -> bool {
-    !kind.starts_with('f')
 }
 
 /// Check a flat column's facts on opening: `lim` two numbers in order (whole numbers for a
@@ -68,7 +63,7 @@ pub(super) fn wholes(kind: &str) -> bool {
 /// whole numbers ascending, at most 64, between `lim`'s ends, there whenever `lim` spans 64
 /// values or fewer.
 pub(super) fn forms(record: &Value, kind: &str, place: &str) -> Result<()> {
-    let wholes = wholes(kind);
+    let wholes = crate::numeric::whole_kind(kind);
     let number = |value: &Value| match wholes {
         true => whole(value).map(Decimal::whole),
         false => double(value).map(Decimal::of),
@@ -119,7 +114,7 @@ pub(super) fn forms(record: &Value, kind: &str, place: &str) -> Result<()> {
 }
 
 /// Check a flat column's facts against its values: each made again, and equal as a number.
-pub(super) fn values(record: &Value, array: &NumericArray, place: &str) -> Result<()> {
+pub(super) fn values(record: &Value, array: &NumericBuffer, place: &str) -> Result<()> {
     let mut facts = Facts::new(&array.kind);
     for chunk in array.bytes.chunks(width(&array.kind)? << 16) {
         facts.add(chunk)?;

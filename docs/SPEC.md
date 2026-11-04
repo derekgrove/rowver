@@ -91,8 +91,8 @@ validator reads only its input: none reads an event or opens a ROOT file.
   columns;
 - what is taken from the earlier file (columns copied, rows kept, holes to fill);
 - the number of files read at once, and the toolchain the file will name;
-- whether the file is signed (with your key, when you have one), whether the press keeps a journal
-  and what its first line says the press is;
+- the key the file is signed with, when it is signed (yours, when you have one), whether the press
+  keeps a journal and what its first line says the press is;
 - every name the recipe reads, so that the branches it names are fetched ahead;
 - the study's name and the folder a relative path in the lock is read from;
 - the earlier file, as opened (§2.1), and its tool keys, which the new file carries (FORMAT.md §11).
@@ -319,8 +319,8 @@ says a recipe is read: its syntax, its depth, that every function it calls exist
 number of values it takes, the fixed values some functions take, and true-or-false values wherever
 one is needed, as far as the text tells.
 
-**4.1.6** Each table may be empty but `[columns]`, which stores at least one column. A recipe that
-leaves a table out is refused by `rvr press`, `rvr try` and `rvr status`. At a terminal,
+**4.1.6** Each table may be empty but `[columns]`, which stores at least one column. The recipe
+validator refuses a recipe that leaves a table out, or whose `[columns]` stores nothing. At a terminal,
 `rvr press` and `rvr try` first offer to write the missing tables in, empty, in their places, check
 that the recipe then reads as before with those tables added, and go on. They do not offer when
 `[columns]` is missing or stores nothing, which only the recipe's author can mend, nor for
@@ -437,7 +437,7 @@ to standard error, as `rvr COMMAND: what is wrong, and how to fix it`.
 |---|---|
 | 0 | done, or, for `status`, `diff`, `samples check` and `proxy`, the answer is yes |
 | 1 | failed, or the answer is no (a file that differs, a study not current, a file invalid) |
-| 2 | wrong use (§5.1.3), or an unknown command |
+| 2 | wrong use (§5.1.3), an unknown command, or a file `rvr diff` cannot read |
 | 3 | `rvr press` wrote, or found, a file with holes |
 | 141 | the output pipe closed before the command finished, as a C tool stopped by SIGPIPE |
 

@@ -2,14 +2,14 @@
 //! adler32, ROOT UUID and entries; each sample's branch list; what a press reads of each file; read
 //! on rails, checked, written, and checked against the `samples.toml` it was resolved from.
 
-use super::samples::{self, Events};
+use super::samples;
+use crate::choice::Events;
 use super::{hex, utc, Problems};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 
-/// The most entries a sample's files may hold in all, so that a random choice is made again in
-/// bounded time (FORMAT.md §6.1).
+/// The most entries a sample's files may hold in all, so a random choice is made again in bounded time.
 pub const MOST_ENTRIES: u64 = 1 << 40;
 
 /// Every file a study reads, pinned.
@@ -53,8 +53,7 @@ pub struct Sample {
 /// One file, pinned, with what a press reads of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct File {
-    /// Where it is: a local path (relative to samples.toml's folder, under `~/`, or absolute), or a
-    /// URL.
+    /// Where it is: a local path (relative to samples.toml's folder, under `~/`, or absolute), or a URL.
     pub at: String,
     /// Its size.
     pub bytes: u64,
@@ -79,8 +78,7 @@ pub struct Branches {
     pub list: Vec<Branch>,
 }
 
-/// One branch: its name as a recipe writes it, the kind rvr reads it as (`none` when it cannot,
-/// with why), and its shape.
+/// One branch: its name as a recipe writes it, the kind rvr reads it as (`none`, with why), and its shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Branch {
     /// Its name, as a recipe writes it.
@@ -188,8 +186,7 @@ impl Sample {
         Ok(())
     }
 
-    /// The sample as a press with `events` reads it: each file's stop or take, its events_read,
-    /// and its events_total.
+    /// The sample as a press with `events` reads it: each file's stop or take, its events_read and events_total.
     pub fn planned(&self, events: Events) -> Sample {
         let entries: Vec<u64> = self.files.iter().map(|f| f.entries).collect();
         let reads = reads(&entries, events);
@@ -293,7 +290,7 @@ impl Lock {
             for f in &s.files {
                 let local = !f.at.contains("://");
                 let at = match local {
-                    true => crate::study::plain(std::path::Path::new(&f.at)).to_string_lossy().into_owned(),
+                    true => crate::study::lexical(std::path::Path::new(&f.at)).to_string_lossy().into_owned(),
                     false => f.at.clone(),
                 };
                 if !seen.insert(at) {
@@ -441,8 +438,7 @@ fn order(s: &Sample, place: &str, p: &mut Problems) {
     }
 }
 
-/// Check that `lock` was resolved from `text`, a samples.toml: its checksum, and the samples it
-/// makes, as the lock holds them.
+/// Check that `lock` was resolved from `text`, a samples.toml: its checksum, and the samples it makes.
 pub fn agree(text: &str, lock: &Lock) -> Result<(), Problems> {
     let mut p = Problems::default();
     if crate::write::text_checksum(text) != lock.samples_toml_sha256 {
@@ -485,8 +481,8 @@ pub(crate) fn toml_value(value: &Value, name: &str) -> Result<toml::Value, Strin
         Value::Bool(b) => toml::Value::Boolean(*b),
         Value::String(s) => toml::Value::String(s.clone()),
         Value::Number(n) => match (n.as_i64(), n.as_f64()) {
-            (Some(i), _) if !n.to_string().contains(['.', 'e', 'E']) => toml::Value::Integer(i),
-            (_, Some(f)) if f.is_finite() && n.to_string().contains(['.', 'e', 'E']) => toml::Value::Float(f),
+            (Some(i), _) if crate::json::whole(n) => toml::Value::Integer(i),
+            (_, Some(f)) if f.is_finite() && !crate::json::whole(n) => toml::Value::Float(f),
             _ => return Err(cannot()),
         },
         Value::Array(list) => toml::Value::Array(list.iter().map(|v| toml_value(v, name)).collect::<Result<_, _>>()?),

@@ -8,6 +8,7 @@ mod derive;
 mod diff;
 mod dump;
 mod empty;
+mod files;
 mod fill;
 mod gather;
 mod held;
@@ -111,8 +112,7 @@ const COMMANDS: &[Command] = &[
 /// The commands whose next word names what they do, and those words.
 const SUBCOMMANDS: [(&str, &[&str]); 3] = [("samples", &["expand", "resolve", "check", "plan"]), ("key", &["new", "show", "trust"]), ("proxy", &["init"])];
 
-/// Make a closed output pipe end the process as a C tool stopped by SIGPIPE does, with 141:
-/// `rvr dump … | head` closes it early. Any other panic is reported as usual.
+/// Make a closed output pipe end the process with 141, as SIGPIPE does (`rvr dump … | head`).
 pub fn quiet_on_closed_pipe() {
     let usual = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -241,7 +241,7 @@ fn bare(args: &[&str]) -> u8 {
 fn command_run(name: &str, options: &Options) -> u8 {
     let words = options.plain();
     match name {
-        "new" => report("new", new::main(words[0])),
+        "new" => report("new", new::main(words[0]).map(|()| 0)),
         "samples expand" | "samples resolve" | "samples check" | "samples plan" => samples::main(name, options),
         "branches" => branches::main(options),
         "try" => trying::main(options),
@@ -254,7 +254,7 @@ fn command_run(name: &str, options: &Options) -> u8 {
             if let Some(part) = flags.iter().find(|flag| **flag != "--columns").filter(|_| options.has("--all")) {
                 return wrong("dump", &format!("--all prints every value of the columns, and {part} prints no column: give --all alone or with --columns"));
             }
-            report("dump", dump::main(words[0], &flags, options.has("--all")))
+            report("dump", dump::main(words[0], &flags, options.has("--all")).map(|()| 0))
         }
         "header" => header(words[0]),
         "diff" => diff::main(words[0], words[1]),
@@ -284,15 +284,12 @@ pub(crate) fn yes(question: &str) -> Result<bool, String> {
     Ok(["y", "yes"].iter().any(|yes| answer.trim().eq_ignore_ascii_case(yes)))
 }
 
-/// Print what failed, as `rvr COMMAND: …`, and give the exit status.
-fn report(command: &str, result: Result<(), String>) -> u8 {
-    match result {
-        Ok(()) => 0,
-        Err(error) => {
-            eprintln!("rvr {command}: {error}");
-            1
-        }
-    }
+/// The exit status `result` holds, or 1 with what failed printed as `rvr COMMAND: …`.
+pub(crate) fn report(command: &str, result: Result<u8, String>) -> u8 {
+    result.unwrap_or_else(|error| {
+        eprintln!("rvr {command}: {error}");
+        1
+    })
 }
 
 /// Print a file's header as its bytes lie in the file; one that fails its checks is printed all
@@ -335,8 +332,8 @@ fn validate(words: &[&str], complete: bool) -> u8 {
             };
             let read = match entries_read(&summary.header["made"]) {
                 (1, 1) => "read its 1 entry, ".to_owned(),
-                (read, total) if read == total => format!("read all {} entries, ", press::count(total)),
-                (read, total) => format!("read {} of {}, ", press::count(read), samples::some(total as usize, "entry", "entries")),
+                (read, total) if read == total => format!("read all {} entries, ", rowver::rvr::grouped(total)),
+                (read, total) => format!("read {} of {}, ", rowver::rvr::grouped(read), samples::some(total as usize, "entry", "entries")),
             };
             let holes = rowver::rvr::holes(&summary.header);
             let empty = match summary.empty {
@@ -385,11 +382,10 @@ fn holed(holes: &[rowver::rvr::Hole]) -> String {
     }
 }
 
+/// Print a file's line of `rvr validate`; whether it is valid.
 fn said(file: &str, verdict: &Result<(usize, usize, String), String>) -> bool {
     match verdict {
-        Ok((rows, columns, signed)) => {
-            println!("{file}: valid, {rows} rows, {columns} columns, {signed}")
-        }
+        Ok((rows, columns, summary)) => println!("{file}: valid, {rows} rows, {columns} columns, {summary}"),
         Err(why) => println!("{file}: INVALID: {why}"),
     }
     verdict.is_ok()
@@ -397,6 +393,19 @@ fn said(file: &str, verdict: &Result<(usize, usize, String), String>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Every command and each of its flags is in its own usage and in what rvr --help prints.
+    #[test]
+    fn every_command_and_flag_is_in_both_usages() {
+        let help = format!("{}\n\n{}", super::USAGE, super::samples::USAGE);
+        for command in super::COMMANDS {
+            let named = format!("rvr {}", command.name);
+            assert!(command.usage.contains(&named) && help.contains(&named), "{named}");
+            for (flag, _, _) in command.flags {
+                assert!(command.usage.contains(flag) && help.contains(flag), "{named} {flag}");
+            }
+        }
+    }
+
     /// A short flag is in its command's usage, and in rvr's, beside its long one.
     #[test]
     fn every_short_flag_is_in_the_usage_beside_its_long_one() {

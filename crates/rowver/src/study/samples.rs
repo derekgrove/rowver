@@ -2,7 +2,7 @@
 //! looked up: the files a sample asks for are resolved later, into `samples.lock`.
 
 use super::{unknown, Problems};
-pub use crate::choice::Events;
+use crate::choice::Events;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,8 +13,7 @@ const SAMPLE: [&str; 10] = [
     "name", "label", "files", "tree", "trees", "eras", "events", "choose", "seed", "metadata",
 ];
 
-/// Whether rvr gives every sample this metadata key (the counts a press adds, and `file`), which
-/// `samples.toml` may not.
+/// Whether rvr gives every sample this metadata key (a press's counts, and `file`), which samples.toml may not.
 pub fn given(key: &str) -> bool {
     rvr_recipe::ADDED.contains(&key) || key == "file"
 }
@@ -475,19 +474,11 @@ fn fill(text: &str, vars: &Map<String, Value>, metadata: bool, place: &str, p: &
         let close = rest.find('}');
         match (open, close) {
             (None, None) => break,
-            (None, Some(_)) => {
-                p.say(format!("{place}: a '}}' with no '{{' before it in {text:?}"));
-                return None;
-            }
-            (Some(open), Some(close)) if close < open => {
-                p.say(format!("{place}: a '}}' with no '{{' before it in {text:?}"));
-                return None;
-            }
             (Some(_), None) => {
                 p.say(format!("{place}: a '{{' is never closed in {text:?}"));
                 return None;
             }
-            (Some(open), Some(_)) => {
+            (Some(open), Some(close)) if open < close => {
                 let close = open + rest[open..].find('}').unwrap_or(0);
                 out.push_str(&rest[..open]);
                 let key = &rest[open + 1..close];
@@ -507,6 +498,10 @@ fn fill(text: &str, vars: &Map<String, Value>, metadata: bool, place: &str, p: &
                 }
                 rest = &rest[close + 1..];
             }
+            _ => {
+                p.say(format!("{place}: a '}}' with no '{{' before it in {text:?}"));
+                return None;
+            }
         }
     }
     out.push_str(rest);
@@ -523,9 +518,7 @@ fn filled(value: &toml::Value, vars: &Map<String, Value>, place: &str, p: &mut P
     }
 }
 
-/// A sample's metadata with `{file}` filled, in every text, by the name of its one file (after its
-/// last `/`), `files` its files' paths or URLs; `None` when a text has `{file}` and there is not
-/// one file.
+/// A sample's metadata with each text's `{file}` the name of its one file of `files`; `None` when there is not one.
 pub fn file_filled(metadata: &Map<String, Value>, files: &[&str]) -> Option<Map<String, Value>> {
     fn fill(value: &mut Value, name: Option<&str>) -> bool {
         match value {

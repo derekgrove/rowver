@@ -62,9 +62,7 @@ pub(crate) fn verify(header: &Value) -> Result<Option<String>> {
     let hex = |name: &str, n: usize| invalid(format!("signature.{name} must be {n} lowercase hexadecimal characters (docs/FORMAT.md §9): press its study again"));
     let sum_bytes = bytes::<32>(sum).map_err(|_| hex("sha256", 64))?;
     if signed_digest(header)? != sum {
-        return Err(invalid(
-            "The header changed after it was signed (signature.sha256 does not match it)",
-        ));
+        return Err(invalid(format!("the header changed after it was signed (signature.sha256 does not match it): {}", crate::rvr::MEND)));
     }
     let public = VerifyingKey::from_bytes(&bytes::<32>(key).map_err(|_| hex("key", 64))?)
         .map_err(|_| invalid("signature.key is not an ed25519 public key (docs/FORMAT.md §9): press its study again"))?;
@@ -83,7 +81,7 @@ pub fn bytes<const N: usize>(text: &str) -> Result<[u8; N]> {
             2 * N
         ))
     };
-    if text.len() != 2 * N || !text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+    if !crate::study::hex(text, 2 * N) {
         return Err(wrong());
     }
     let mut out = [0; N];

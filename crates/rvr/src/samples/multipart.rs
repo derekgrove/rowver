@@ -1,21 +1,12 @@
-//! Read the answer a server gives when asked for several byte ranges of a file at once.
-//!
-//! Nothing is ported. The layout is that of `multipart/byteranges` in RFC 7233, appendix A:
-//! a boundary line, a `Content-Range` header, a blank line, the bytes, and so on, closed by
-//! the boundary followed by two dashes. Fermilab's EOS answered so on 2026-10-07, for up to
-//! 1,024 ranges in one request.
-//! Documentation: <https://datatracker.ietf.org/doc/html/rfc7233#appendix-A>
-//! Limits: a server may join or reorder the ranges it was asked for, which is allowed here;
-//! one that sends far more bytes than were asked for is cut off.
+//! The answer a server gives when asked for several byte ranges at once: `multipart/byteranges`
+//! (RFC 7233, appendix A). The ranges may come joined or reordered; far more bytes than asked are refused.
 
 use std::io::{BufRead, BufReader, Read};
 
-/// One part of an answer: where its bytes lie in the file, and the file's whole size when
-/// the part states it.
+/// One part of an answer: where in the file its bytes begin, and the bytes.
 #[derive(Debug, PartialEq)]
 pub struct Part {
     pub at: u64,
-    pub whole: Option<u64>,
     pub bytes: Vec<u8>,
 }
 
@@ -47,21 +38,19 @@ fn line(reader: &mut impl BufRead) -> Result<Option<String>, String> {
     }
 }
 
-/// Read `bytes first-last/whole` as a position, a length, and the whole size when given.
-pub fn range(value: &str) -> Option<(u64, u64, Option<u64>)> {
-    let (span, whole) = value.trim().strip_prefix("bytes")?.trim().split_once('/')?;
+/// Read a `Content-Range` of `bytes first-last/whole` as the first byte and the length.
+pub fn range(value: &str) -> Option<(u64, u64)> {
+    let (span, _) = value.trim().strip_prefix("bytes")?.trim().split_once('/')?;
     let (first, last) = span.split_once('-')?;
     let (first, last) = (
         first.trim().parse::<u64>().ok()?,
         last.trim().parse::<u64>().ok()?,
     );
     let length = last.checked_sub(first)?.checked_add(1)?;
-    Some((first, length, whole.trim().parse().ok()))
+    Some((first, length))
 }
 
-/// Read every part of an answer. `asked` is how many bytes were asked for in all; an answer
-/// that holds much more than that is refused, since a server may join ranges but has no
-/// reason to send far more.
+/// Every part of an answer to a request for `asked` bytes in all, refused when it holds far more.
 pub fn parts(reader: impl Read, boundary: &str, asked: u64) -> Result<Vec<Part>, String> {
     let allowed = asked.saturating_mul(2).saturating_add(1 << 20);
     // The whole answer is bounded, not only its parts: lines between them cost bytes too.
@@ -92,7 +81,7 @@ pub fn parts(reader: impl Read, boundary: &str, asked: u64) -> Result<Vec<Part>,
                 }
             }
         }
-        let (at, length, whole) = found.ok_or("the server sent a part without its place")?;
+        let (at, length) = found.ok_or("the server sent a part without its place")?;
         held = held.saturating_add(length);
         if held > allowed || parts.len() == PARTS {
             return Err("the server sent far more than was asked for".into());
@@ -101,7 +90,7 @@ pub fn parts(reader: impl Read, boundary: &str, asked: u64) -> Result<Vec<Part>,
         let mut bytes = vec![0; length];
         let read = reader.read_exact(&mut bytes);
         read.map_err(|error| format!("the server's answer was cut short ({})", error.kind()))?;
-        parts.push(Part { at, whole, bytes });
+        parts.push(Part { at, bytes });
     }
 }
 
@@ -140,8 +129,8 @@ mod tests {
         let read = parts(&sent[..], "B", 30).unwrap();
         assert_eq!(read.len(), 3);
         assert_eq!(
-            (read[0].at, read[0].whole, &read[0].bytes[..]),
-            (10, Some(1000), &b"abc"[..])
+            (read[0].at, &read[0].bytes[..]),
+            (10, &b"abc"[..])
         );
         assert_eq!((read[1].at, &read[1].bytes[..]), (500, tricky));
         assert_eq!(read[2].bytes, [0, 255, 10, 13]);

@@ -6,8 +6,7 @@ const SAMPLES: &str = include_str!("../templates/samples.toml");
 const RECIPE: &str = include_str!("../templates/recipe.toml");
 const GITIGNORE: &str = include_str!("../templates/gitignore");
 
-/// Write `samples.toml`, `recipe.toml` and `.gitignore` into `dir`, making it if need be; nothing
-/// that is already there is overwritten.
+/// Write `samples.toml`, `recipe.toml` and `.gitignore` into `dir`, made if need be, overwriting nothing.
 pub fn main(dir: &str) -> Result<(), String> {
     let folder = Path::new(dir);
     // Named as a press names the file: after the folder's own name, `.`'s the current folder's.

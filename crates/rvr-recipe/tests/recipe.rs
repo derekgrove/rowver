@@ -5,20 +5,8 @@ use rvr_recipe::{parse, per_event, Array, Columns, Constant, Kind, Recipe, Scope
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-/// The fixture's columns, served by name.
-struct Held(BTreeMap<String, Array>);
-
-impl Columns for Held {
-    /// Hand out a copy of a held column.
-    fn column(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
-        Ok(self.0.get(name).cloned())
-    }
-
-    /// Whether a column of this name is held.
-    fn has(&self, name: &str) -> bool {
-        self.0.contains_key(name)
-    }
-}
+mod common;
+use common::{complete, Held};
 
 /// Read one recorded number, with infinities spelled as text.
 fn float(value: &Value) -> f64 {
@@ -519,6 +507,10 @@ one = "count(good_lep) >= 1"
 [columns]
 branches = ["PT_lep"]
 n_negative = "count(negative)"
+
+[totals]
+
+[derived]
 "#;
     let recipe = Recipe::read(text).unwrap();
     let lists = |values: Values| Array::object(&[2, 0, 1], values).unwrap();
@@ -568,19 +560,16 @@ n_negative = "count(negative)"
         .unwrap_err()
         .0
         .contains("branch('recoMuons_muons__RECO.obj.pt_')"));
-    let refused = |body: &str| {
-        let head = "format = \"rvr-recipe\"\nversion = 1\n";
-        Recipe::read(&format!("{head}{body}")).unwrap_err().0
-    };
+    let refused = |body: &str| Recipe::read(&complete(body)).unwrap_err().0;
     assert_eq!(
         refused("[define]\na = \"b > 1\"\nb = \"PT_lep\"\n"),
         "[define] a uses b, which is defined below it: a defined name may use only the names defined above it"
     );
     assert!(refused("[define]\na = \"a + 1\"\n").contains("[define] a uses a, itself"));
     // branch('b') reads the branch b, not the name b defined below it.
-    assert!(Recipe::read("format = \"rvr-recipe\"\nversion = 1\n[define]\na = \"branch('b') * 2\"\nb = \"PT_lep\"\n").is_ok());
+    assert!(Recipe::read(&complete("[define]\na = \"branch('b') * 2\"\nb = \"PT_lep\"\n")).is_ok());
     // A function always has brackets, so a defined name may share a function's name.
-    assert!(Recipe::read("format = \"rvr-recipe\"\nversion = 1\n[define]\nfirst = \"PT_lep\"\n").is_ok());
+    assert!(Recipe::read(&complete("[define]\nfirst = \"PT_lep\"\n")).is_ok());
     assert!(refused("[define]\n\"good-lep\" = \"PT_lep\"\n").contains("one plain name"));
     assert!(refused("[define]\nsample = \"PT_lep\"\n").contains("one plain name"));
     assert!(refused("[define.good]\nvalue = \"PT_lep\"\n")
@@ -603,8 +592,7 @@ n_negative = "count(negative)"
         .contains("Two columns are named a: give one another name"));
     // Text is not a name: a defined name may hold text that another, later, name spells.
     let quoted = "[define]\nis_mu = \"sample.channel == 'mu'\"\nmu = \"PT_lep > 20\"\n";
-    let head = "format = \"rvr-recipe\"\nversion = 1\n";
-    assert!(Recipe::read(&format!("{head}{quoted}")).is_ok());
+    assert!(Recipe::read(&complete(quoted)).is_ok());
     // A defined name is not a branch to store as it is.
     assert!(
         refused("[define]\ngood = \"PT_lep > 1\"\n[columns]\nbranches = [\"good\"]\n")
@@ -615,7 +603,7 @@ n_negative = "count(negative)"
         .contains("a branch whose name holds a dot is written branch('AnalysisJetsAuxDyn.pt')"));
     // A derived column uses what the file holds: the stored columns and the derived ones above.
     let derived = "[define]\ngood = \"PT_lep > 1\"\n[columns]\nbranches = [\"PT_lep\"]\nn = \"count(good)\"\n";
-    let read = Recipe::read(&format!("{head}{derived}[derived]\nhalf = \"n / 2\"\nquarter = \"half / 2\"\n")).unwrap();
+    let read = Recipe::read(&complete(&format!("{derived}[derived]\nhalf = \"n / 2\"\nquarter = \"half / 2\"\n"))).unwrap();
     assert_eq!(read.derived, [("half".to_owned(), "n / 2".to_owned()), ("quarter".to_owned(), "half / 2".to_owned())]);
     for (line, said) in [
         ("x = \"good\"", "x uses good, but good is a line of [define], which the file does not keep"),
@@ -628,16 +616,15 @@ n_negative = "count(negative)"
         ("x = \"branch('y') + 1\"\ny = \"n\"", "x uses y, but y is a derived column below it"),
         ("x = \"branch(sample.trigger)\"", "branch(sample.KEY) names another column for each sample"),
     ] {
-        let wrong = Recipe::read(&format!("{head}{derived}[derived]\n{line}\n")).unwrap_err().0;
+        let wrong = Recipe::read(&complete(&format!("{derived}[derived]\n{line}\n"))).unwrap_err().0;
         assert!(wrong.contains(said), "{line}: {wrong}");
     }
-    // Every table empty, or left out, is the same recipe.
-    let empty = Recipe::read("format = \"rvr-recipe\"\nversion = 1\n[define]\n[keep]\n[columns]\n")
-        .unwrap();
-    assert_eq!(
-        empty,
-        Recipe::read("format = \"rvr-recipe\"\nversion = 1\n").unwrap()
-    );
+    // A table left out is refused, each named; a [columns] that stores nothing is refused too.
+    let bare = Recipe::read("format = \"rvr-recipe\"\nversion = 1\n").unwrap_err();
+    assert_eq!(bare.lacking(), rvr_recipe::TABLES);
+    assert!(bare.0.starts_with("A recipe has no [define], [keep], [columns], [totals] or [derived] table") && bare.0.contains("\nThe recipe stores nothing"), "{}", bare.0);
+    let empty = Recipe::read("format = \"rvr-recipe\"\nversion = 1\n[define]\n[keep]\n[columns]\n[totals]\n[derived]\n").unwrap_err();
+    assert!(empty.lacking().is_empty() && empty.0.starts_with("The recipe stores nothing: under [columns]"), "{}", empty.0);
 }
 
 /// Integer list reductions keep adjacent 64-bit values distinct without passing through floats.
@@ -785,13 +772,12 @@ fn mass_preserves_nan_instead_of_clipping_it_to_zero() {
 /// each file; only a derived column may use one, as `sample.NAME`.
 #[test]
 fn totals_are_sums_only_derived_columns_use() {
-    let head = "format = \"rvr-recipe\"\nversion = 1\n";
-    let text = format!("{head}[columns]\nbranches = [\"w\"]\n[totals]\nsumw = \"genWeight\"\nruns = {{ value = \"genEventSumw\", tree = \"Runs\" }}\n[derived]\nweight = \"w / sample.sumw\"\n");
+    let text = complete("[columns]\nbranches = [\"w\"]\n[totals]\nsumw = \"genWeight\"\nruns = { value = \"genEventSumw\", tree = \"Runs\" }\n[derived]\nweight = \"w / sample.sumw\"\n");
     let read = Recipe::read(&text).unwrap();
     let totals: Vec<(&str, Option<&str>)> = read.totals.iter().map(|t| (t.name.as_str(), t.tree.as_deref())).collect();
     assert_eq!(totals, [("sumw", None), ("runs", Some("Runs"))]);
     assert_eq!(read.derived, [("weight".to_owned(), "w / sample.sumw".to_owned())]);
-    let refused = |body: &str| Recipe::read(&format!("{head}{body}")).unwrap_err().0;
+    let refused = |body: &str| Recipe::read(&complete(body)).unwrap_err().0;
     for (body, said) in [
         ("[keep]\nx = \"sample.sumw > 0\"\n[totals]\nsumw = \"w\"\n", "[keep] x uses sample.sumw, a total of [totals], known only once every event is read: use it under [derived]"),
         ("[columns]\ny = \"w / sample.sumw\"\n[totals]\nsumw = \"w\"\n", "[columns] y uses sample.sumw"),

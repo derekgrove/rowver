@@ -1,6 +1,7 @@
 //! Which entries of a sample a press reads when it chooses them at random: the algorithm a file
 //! names as `splitmix64-selection-sampling`, so a reader can choose them again from the seed.
 
+use crate::json::natural as whole;
 use crate::{invalid, Result};
 use serde_json::{json, Value};
 
@@ -35,8 +36,7 @@ impl Events {
         }
     }
 
-    /// The choice an `events` record names; a record with any other field, or another
-    /// algorithm, is refused.
+    /// The choice an `events` record names, refused with any other field or algorithm.
     pub fn read(record: &Value) -> Result<Events> {
         let n = || {
             whole(&record["n"])
@@ -70,46 +70,23 @@ impl Events {
     }
 }
 
-/// A whole number from 0 to 2^64 − 1 written without a fraction or an exponent (`-0` is 0).
-fn whole(value: &Value) -> Option<u64> {
-    let text = value.as_number()?.to_string();
-    let n: i128 = text.parse().ok().filter(|_| !text.contains(['.', 'e', 'E']))?;
-    u64::try_from(n).ok()
-}
-
-/// SplitMix64 (Steele, Lea and Flood 2014): the generator a random choice is drawn from.
-pub(crate) struct SplitMix64(u64);
-
-impl SplitMix64 {
-    /// The generator at the state `seed`.
-    pub(crate) fn new(seed: u64) -> Self {
-        SplitMix64(seed)
-    }
-
-    /// The next draw.
-    pub(crate) fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    /// A number in [0, 1) from the top 53 bits.
-    pub(crate) fn uniform(&mut self) -> f64 {
-        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
-    }
-}
-
 /// The entries a random choice of n out of `total` picks, ascending, counted over the files
 /// one after another: Knuth's selection sampling (Algorithm S), entry i chosen when
-/// (total - i) * u < still needed, with u drawn from SplitMix64(seed) for every entry in turn.
+/// (total - i) * u < still needed, with u drawn from SplitMix64(seed) (Steele, Lea and Flood
+/// 2014) for every entry in turn, from the top 53 bits of each draw.
 pub(crate) fn chosen(total: u64, n: u64, seed: u64, mut each: impl FnMut(u64)) {
-    let mut rng = SplitMix64::new(seed);
+    let mut state = seed;
+    let mut uniform = || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64
+    };
     let mut needed = n.min(total);
     let mut i = 0;
     while needed > 0 {
-        if ((total - i) as f64) * rng.uniform() < needed as f64 {
+        if ((total - i) as f64) * uniform() < needed as f64 {
             each(i);
             needed -= 1;
         }
@@ -124,8 +101,7 @@ pub(crate) fn counts(entries: &[u64], n: u64, seed: u64) -> Vec<u64> {
     taken
 }
 
-/// The chosen entries of each file, counted from the file's own first entry, given each file's
-/// entries in order.
+/// The chosen entries of each file of these entries, counted from the file's own first entry.
 pub fn per_file(entries: &[u64], n: u64, seed: u64) -> Vec<Vec<u64>> {
     let mut taken = vec![Vec::new(); entries.len()];
     each_file(entries, n, seed, |file, entry| taken[file].push(entry));

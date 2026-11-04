@@ -3,7 +3,7 @@
 //! as and whether it holds one value or a list per event. No file is opened.
 
 use crate::options::Options;
-use crate::press::count;
+use rowver::rvr::grouped as count;
 use std::path::Path;
 
 pub(crate) const USAGE: &str = "usage:
@@ -14,13 +14,7 @@ pub(crate) const USAGE: &str = "usage:
 
 /// `rvr branches` with its options: the exit status.
 pub fn main(options: &Options) -> u8 {
-    match run(options) {
-        Ok(()) => 0,
-        Err(error) => {
-            eprintln!("rvr branches: {error}");
-            1
-        }
-    }
+    crate::report("branches", run(options).map(|()| 0))
 }
 
 fn run(options: &Options) -> Result<(), String> {
@@ -29,12 +23,12 @@ fn run(options: &Options) -> Result<(), String> {
     let lock = crate::texts::lock(dir)?;
     // It needs only the lock, but says when the lock is not of samples.toml as it is now.
     let samples = std::fs::read_to_string(dir.join("samples.toml")).unwrap_or_default();
-    if rowver::write::text_checksum(&samples) != lock.samples_toml_sha256 {
+    if crate::agree::stale(&samples, &lock) {
         println!("samples.toml has changed since samples.lock was written: these are the files of the lock ({}).", lock.resolved);
     }
     let index = crate::open::sample_at(&lock, options.value("--sample"))?;
     let sample = &lock.samples[index];
-    let list = lock.branches_of(sample).ok_or_else(|| format!("samples.lock has no branch list for {}: run rvr samples resolve samples.toml again", sample.name))?;
+    let list = lock.branches_of(sample).expect("the lock validator checks every sample names a branch list it holds");
     let first = sample.files.first().map_or("", |f| f.at.rsplit('/').next().unwrap_or(&f.at));
     let found = |name: &str| find.as_ref().is_none_or(|text| name.to_lowercase().contains(text));
     let total = count(list.list.len() as u64);

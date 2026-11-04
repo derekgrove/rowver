@@ -14,20 +14,12 @@ pub const USAGE: &str = "usage:
                                            relative path in the lock is read from FOLDER
                                            (FILE's folder when not given)";
 
-/// The study texts a file's header carries, and its study's name.
-pub(crate) fn study_texts(header: &serde_json::Value, file: &Path) -> Result<(Texts, String), String> {
+/// The study texts a checked header carries, and its study's name.
+pub(crate) fn study_texts(header: &serde_json::Value) -> (Texts, String) {
     let made = &header["made"];
     let text = |name: &str| made[name]["text"].as_str().unwrap_or_default().to_owned();
-    let texts = Texts {
-        recipe: text("recipe"),
-        samples: text("samples"),
-        lock: text("lock"),
-    };
-    let name = made["study"].as_str().unwrap_or_default();
-    if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\']) {
-        return Err(format!("{} names its study {name:?}, which is not a folder name; it cannot be written as one.", file.display()));
-    }
-    Ok((texts, name.to_owned()))
+    let texts = Texts { recipe: text("recipe"), samples: text("samples"), lock: text("lock") };
+    (texts, made["study"].as_str().unwrap_or_default().to_owned())
 }
 
 /// The folder a file's lock's relative paths are from: `study`, or else where press wrote the
@@ -54,7 +46,7 @@ fn run(
     let shown = file.display();
     let reader = rowver::rvr::Reader::open(file).map_err(|e| rowver::plain(file, &e))?;
     let made = &reader.header()["made"];
-    let (texts, name) = study_texts(reader.header(), file)?;
+    let (texts, name) = study_texts(reader.header());
     let name = name.as_str();
     let base = base(file, study.as_deref())?;
     let lock = Lock::read(&texts.lock).map_err(|p| format!("{shown}: its samples.lock does not check out: {p}"))?;
@@ -113,11 +105,5 @@ pub fn main(options: &Options) -> u8 {
     };
     let file = PathBuf::from(&options.words[0]);
     let dir = options.words.get(1).map(PathBuf::from);
-    match run(&file, dir, options.value("--study").map(PathBuf::from), workers) {
-        Ok(code) => code,
-        Err(why) => {
-            eprintln!("rvr reproduce: {why}");
-            1
-        }
-    }
+    crate::report("reproduce", run(&file, dir, options.value("--study").map(PathBuf::from), workers))
 }

@@ -11,7 +11,7 @@ use rvr_recipe::{Array, Columns, Constant, Kind, Recipe, Values};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
-use crate::press::count;
+use rowver::rvr::grouped as count;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -25,8 +25,7 @@ pub(crate) struct Reach<'a> {
     pub dir: &'a Path,
     /// What every read shares while it waits; it stops once an input ends the press.
     pub watch: Arc<Watch>,
-    /// Whether a local file is read whole for its adler32 before it is opened (a press reads it;
-    /// a look at its branches or first events does not).
+    /// Whether a local file is read whole for its adler32 before it is opened (a press's, not a look's).
     pub whole: bool,
     /// Where every file counts the bytes it reads (the bars').
     pub read: Arc<AtomicU64>,
@@ -124,11 +123,9 @@ pub(crate) fn changed(file: &File, bytes: Option<u64>, adler32: Option<String>) 
     }
 }
 
-/// Check one input against the lock and open it, local or remote; a failure says what it means
-/// for the file.
-/// It is read from `read_at`, where the Plan says it is: its local path, or its door's HTTPS URL; the
-/// lock's name for it is what every message says.
-pub(crate) fn open(reach: &Reach, file: &File, read_at: &str) -> Result<RootFile<Held>, Failed> {
+/// Check one input against the lock and open it from `read_at` (its path, or its door's HTTPS URL),
+/// a failure said by the lock's name for it; one gone says to put it back and `then`.
+pub(crate) fn open(reach: &Reach, file: &File, read_at: &str, then: &str) -> Result<RootFile<Held>, Failed> {
     let at = &file.at;
     // No usable grid proxy is not the file's fault: every remote file would fail the same.
     let offline = || Failed::new(Fault::Save, format!("{at}: {}", reach.offline));
@@ -143,7 +140,7 @@ pub(crate) fn open(reach: &Reach, file: &File, read_at: &str) -> Result<RootFile
                 "{at} cannot be read: its folder is not there either (a disk not mounted?)"
             )),
             std::io::ErrorKind::NotFound => Failed::new(Fault::Gone, format!(
-                "{at} no longer exists: put it back and run rvr press --fill (if it moved, run rvr samples resolve samples.toml again, then rvr press)."
+                "{at} no longer exists: put it back and {then} (if it moved, run rvr samples resolve samples.toml again, then rvr press)."
             )),
             _ => Failed::new(Fault::Save, rowver::plain_io(at, &e)),
         })?;
@@ -203,7 +200,7 @@ pub(crate) fn first_readable<'a>(lock: &'a Lock, sample: usize, dir: &Path) -> R
         .files
         .iter()
         .find(|f| f.entries != 0)
-        .ok_or_else(|| format!("{} has no file with events", s.name))?;
+        .ok_or_else(|| format!("sample {} has no file with events: try another sample, with --sample NAME", s.name))?;
     let watch = Arc::new(Watch::default());
     let (storage, offline) = connect(&[(sample, file)], &watch);
     let read = Default::default();
@@ -212,7 +209,7 @@ pub(crate) fn first_readable<'a>(lock: &'a Lock, sample: usize, dir: &Path) -> R
         true => crate::samples::remote::https(&file.at)?,
         false => file.at.clone(),
     };
-    open(&reach, file, &url).map(|root| (root, file)).map_err(|failed| failed.why)
+    open(&reach, file, &url, "run rvr press --fill").map(|root| (root, file)).map_err(|failed| failed.why)
 }
 
 /// Open a checked input and refuse one whose ROOT UUID is not the lock's; `again`, `seen` and

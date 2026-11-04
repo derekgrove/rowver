@@ -8,8 +8,6 @@ use crate::samples::{some, Choice};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-pub(crate) use rowver::rvr::derived::ADDED;
-
 /// How `rvr press` is used.
 pub const USAGE: &str = "usage:
   rvr press [DIR] [--events N|all] [--random] [--seed S] [--out FILE] [--workers N] [--full]
@@ -34,21 +32,13 @@ struct Pressing {
     restart: bool,
 }
 
-/// `rvr press` with its options: the exit status, 3 when the file at the target has holes
-/// (whether or not this press wrote it).
+/// `rvr press` with its options: the exit status, 3 when the file at the target has holes.
 pub fn main(options: &Options) -> u8 {
     let pressing = match read(options) {
         Ok(pressing) => pressing,
         Err(why) => return crate::wrong("press", &why),
     };
-    match run(pressing) {
-        Ok(0) => 0,
-        Ok(_) => 3,
-        Err(why) => {
-            eprintln!("rvr press: {why}");
-            1
-        }
-    }
+    crate::report("press", run(pressing).map(|holes| if holes == 0 { 0 } else { 3 }))
 }
 
 /// The options of a press, or how they are wrong.
@@ -108,11 +98,6 @@ fn run(pressing: Pressing) -> Result<usize, String> {
         }
         _ => crate::core::press(plan),
     }
-}
-
-/// A whole number with thousands separated, as rvr prints them.
-pub(crate) fn count(n: u64) -> String {
-    rowver::rvr::grouped(n)
 }
 
 /// What built this rvr, as `made.toolchain` records it.

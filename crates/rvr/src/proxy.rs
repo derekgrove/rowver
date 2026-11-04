@@ -36,14 +36,7 @@ pub fn main(name: &str, options: &crate::options::Options) -> u8 {
             Err(why) => return crate::wrong(name, &why),
         },
     };
-    match result {
-        Ok(true) => 0,
-        Ok(false) => 1,
-        Err(why) => {
-            eprintln!("rvr {name}: {why}");
-            1
-        }
-    }
+    crate::report(name, result.map(|good| u8::from(!good)))
 }
 
 /// The seconds until the proxy or its VOMS attributes end, whichever is first.
@@ -54,8 +47,7 @@ pub fn left_of(status: &voms_proxy::Status) -> Option<i64> {
     }
 }
 
-/// Whether `rvr proxy init` is what an unusable proxy needs: there is none, it ended, or its
-/// file holds no proxy that can be used.
+/// Whether `rvr proxy init` is what an unusable proxy needs: there is none, it ended, or it cannot be used.
 pub fn renewable(status: &voms_proxy::Status) -> bool {
     status.renew || ["noCertificate", "noKey", "unreadable"].contains(&status.state)
 }

@@ -6,7 +6,7 @@ use crate::holes::{passing, Failed, Fault};
 use crate::journal::Staged;
 use crate::open::{connect, Reach};
 use crate::plan::{Base, Input, Plan};
-use crate::press::count;
+use rowver::rvr::grouped as count;
 use crate::samples::remote::{Watch, AGAIN, QUIET};
 use crate::samples::some;
 use crate::take::{chosen_of, missed, ranges, sentence, take, Shared, Taken};
@@ -59,6 +59,8 @@ pub fn press(plan: Plan) -> Result<usize, String> {
         carries: plan.carries,
         counts: &display.counts,
         tried: Mutex::new(BTreeSet::new()),
+        #[cfg(debug_assertions)]
+        stop_after: std::env::var("RVR_STOP_AFTER").ok().and_then(|n| n.parse().ok()),
     };
     // What was read made durable, and the folder kept when that holds any file.
     let save = || {
@@ -184,8 +186,6 @@ fn take_all(shared: &Shared, plan: &Plan, picked: BTreeMap<usize, Taken>) -> Res
         done[at] = Some(Ok(taken));
     }
     let done = Mutex::new(done);
-    // For the tests of picking up (a debug build): stop as a crash would once this many files are noted.
-    let stop_after: Option<usize> = std::env::var("RVR_STOP_AFTER").ok().filter(|_| cfg!(debug_assertions)).and_then(|n| n.parse().ok());
     let (ticking, ended) = std::sync::mpsc::channel::<()>();
     let crashed = std::thread::scope(|scope| {
         let keeper = scope.spawn(move || if shared.carries { shared.journal.keep_up(shared.spool, crate::journal::EVERY, ended) });
@@ -201,7 +201,7 @@ fn take_all(shared: &Shared, plan: &Plan, picked: BTreeMap<usize, Taken>) -> Res
                     shared.counts.begin(input.sample);
                     let taken = take(shared, &fields[input.sample], input, &mut progressed);
                     match &taken {
-                        Ok(taken) => finished_one(shared, input, at, taken, progressed, work.len(), &finished, stop_after),
+                        Ok(taken) => finished_one(shared, input, at, taken, progressed, work.len(), &finished),
                         Err(_) => watch.stop.store(true, Ordering::Release),
                     }
                     done.lock().unwrap_or_else(|e| e.into_inner())[at] = Some(taken);
@@ -234,8 +234,7 @@ fn take_all(shared: &Shared, plan: &Plan, picked: BTreeMap<usize, Taken>) -> Res
 }
 
 /// A file read: told to the bars, noted in the journal unless a hole of it may pass, and printed.
-#[allow(clippy::too_many_arguments)]
-fn finished_one(shared: &Shared, input: &Input, at: usize, taken: &Taken, progressed: u64, files: usize, finished: &AtomicUsize, stop_after: Option<usize>) {
+fn finished_one(shared: &Shared, input: &Input, at: usize, taken: &Taken, progressed: u64, files: usize, finished: &AtomicUsize) {
     // What its runs did not tell the bars: a hole, a file not read.
     let rest = (taken.entries + taken.missing).saturating_sub(progressed);
     shared.counts.ran(input.sample, rest, 0);
@@ -264,7 +263,8 @@ fn finished_one(shared: &Shared, input: &Input, at: usize, taken: &Taken, progre
         let (kind, why) = (hole["kind"].as_str().unwrap_or(""), hole["why"].as_str().unwrap_or(""));
         crate::progress::say(&format!("    hole ({kind}): {why}"));
     }
-    if stop_after == Some(n) {
+    #[cfg(debug_assertions)]
+    if shared.stop_after == Some(n) {
         crate::progress::say(&match shared.journal.checkpoint(shared.spool) {
             Ok(n) => format!("Stopped with {n} files done, as RVR_STOP_AFTER asks."),
             Err(why) => format!("Stopped as RVR_STOP_AFTER asks, but {why}."),

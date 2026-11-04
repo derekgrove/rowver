@@ -2,26 +2,14 @@
 //! depth limit, truth values only where one is needed, exact comparisons and conversions, and data
 //! errors that name their event.
 
-use rvr_recipe::{parse, Array, Columns, Constant, Kind, Recipe, Scope, Values, DEEPEST};
+mod common;
+use common::{complete, Held};
+use rvr_recipe::{parse, Array, Columns, Constant, Kind, Picked, Recipe, Scope, Values, DEEPEST};
 use std::collections::BTreeMap;
-
-struct Held(BTreeMap<String, Array>);
-
-impl Columns for Held {
-    fn column(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
-        Ok(self.0.get(name).cloned())
-    }
-
-    fn has(&self, name: &str) -> bool {
-        self.0.contains_key(name)
-    }
-}
-
-const HEAD: &str = "format = \"rvr-recipe\"\nversion = 1\n";
 
 /// Every problem `body` (after the header) is refused with, one a line.
 fn refused(body: &str) -> Vec<String> {
-    let said = Recipe::read(&format!("{HEAD}{body}")).unwrap_err().0;
+    let said = Recipe::read(&complete(body)).unwrap_err().0;
     said.lines().map(str::to_owned).collect()
 }
 
@@ -64,7 +52,7 @@ fn a_recipe_with_many_problems_is_refused_with_all_of_them() {
     // A branch stored as it is has a name every column may have: not sample, entry or file.
     assert_eq!(refused("[columns]\nbranches = [\"Jet_pt\", \"entry\"]\n"), ["[columns] branches lists entry, a name every row has already (sample, entry, file): store the branch under another name, as entry_branch = \"branch('entry')\""]);
     // Every problem on one line, for a sentence that holds them.
-    let both = Recipe::read(&format!("{HEAD}titel = 1\nx = 2\n")).unwrap_err();
+    let both = Recipe::read(&complete("titel = 1\nx = 2\n")).unwrap_err();
     assert!(both.0.contains('\n') && !both.line().contains('\n') && both.line().contains("\"titel\"; it takes") && both.line().contains("; A recipe has no key \"x\""), "{}", both.line());
 }
 
@@ -102,7 +90,7 @@ fn truth_values_stand_wherever_one_is_needed() {
         ("[keep]\nx = \"count(Jet_pt)\"\n", "[keep] x: A cut's condition"),
         ("[keep]\nx = { if = \"sample.era\", apply = \"2\" }\n", "[keep] x: A cut's condition"),
         ("[columns]\nx = \"not count(Jet_pt)\"\n", "[columns] x: not"),
-        ("[columns]\nx = \"MET_pt > 3 and 2\"\n", "[columns] x: and"),
+        ("[columns]\nx = \"MET_pt > 3 and 2\"\n", "[columns] x: and's right side"),
         ("[columns]\nx = \"if(nJet + 1, 1, 0)\"\n", "[columns] x: if's condition"),
         ("[define]\nn = \"count(Jet_pt)\"\n[columns]\nx = \"Jet_pt[n]\"\n", "[columns] x: A mask"),
     ] {
@@ -229,20 +217,19 @@ fn every_recursive_construct_counts_toward_one_depth_limit() {
     assert!(parse(&vec!["x"; 200_000].join(" * ")).is_err());
     // A defined name is as deep as its expression.
     let half = deepest("-", "", 60);
-    assert!(Recipe::read(&format!("{HEAD}[define]\na = \"{half}\"\n[columns]\nb = \"{half}\"\n")).is_ok());
+    assert!(Recipe::read(&complete(&format!("[define]\na = \"{half}\"\n[columns]\nb = \"{half}\"\n"))).is_ok());
     let said = refused(&format!("[define]\na = \"{half}\"\n[columns]\nb = \"{}a\"\n", "-".repeat(50)));
     assert!(said.len() == 1 && said[0].starts_with("[columns] b: The expression is more than 100 levels deep"), "{said:?}");
     // An expression read beside a recipe, as rvr try reads one, counts its defined names alike.
-    let recipe = Recipe::read(&format!("{HEAD}[define]\na = \"{half}\"\n")).unwrap();
-    assert!(recipe.expression(&format!("{}a", "-".repeat(30))).is_ok());
-    let deep = recipe.expression(&format!("{}a", "-".repeat(50))).unwrap_err().0;
+    let read = Recipe::read(&complete(&format!("[define]\na = \"{half}\"\n"))).unwrap();
+    assert!(read.expression(&format!("{}a", "-".repeat(30))).is_ok());
+    let deep = read.expression(&format!("{}a", "-".repeat(50))).unwrap_err().0;
     assert!(deep.starts_with("The expression is more than 100 levels deep"), "{deep}");
     // Its brackets count as the recipe counts them when it is read.
     let bracketed = format!("{}x{}", "(".repeat(59), ")".repeat(59));
-    let recipe = Recipe::read(&format!("{HEAD}[define]\na = \"{bracketed}\"\n")).unwrap();
-    assert_eq!(recipe.depths, [("a".to_owned(), 60)]);
-    assert!(recipe.expression(&format!("{}a", "-".repeat(40))).is_ok());
-    assert!(recipe.expression(&format!("{}a", "-".repeat(41))).is_err());
+    let read = Recipe::read(&complete(&format!("[define]\na = \"{bracketed}\"\n"))).unwrap();
+    assert!(read.expression(&format!("{}a", "-".repeat(40))).is_ok());
+    assert!(read.expression(&format!("{}a", "-".repeat(41))).is_err());
 }
 
 #[test]
@@ -296,4 +283,82 @@ fn runs_are_joined_whatever_their_lists_begin_at() {
     let joined = Array::joined(vec![first, second]).unwrap();
     assert_eq!(joined, Array::object(&[1, 2, 0, 1], Values::whole(Kind::I4, vec![1, 2, 3, 4])).unwrap());
     assert!(Array::joined(vec![flat(Kind::I4, vec![1]), flat(Kind::I8, vec![2])]).is_err());
+}
+
+/// A flat column `x` and a list column `l` over four rows.
+fn four() -> Held {
+    let x = Array::Event(Values::float(Kind::F8, vec![0.0, 1.0, 2.0, 3.0]));
+    let l = Array::object(&[1, 0, 2, 1], Values::whole(Kind::I4, vec![10, 20, 30, 40])).unwrap();
+    Held(BTreeMap::from([("x".to_owned(), x), ("l".to_owned(), l)]))
+}
+
+#[test]
+fn picked_rows_are_the_rows_at_their_positions_and_every_row_is_the_columns_themselves() {
+    let held = four();
+    let picked = Picked::new(&held, &[1, 2], 4);
+    assert_eq!(picked.column("x").unwrap(), Some(Array::Event(Values::float(Kind::F8, vec![1.0, 2.0]))));
+    assert_eq!(picked.column("l").unwrap(), Some(Array::object(&[0, 2], Values::whole(Kind::I4, vec![20, 30])).unwrap()));
+    assert_eq!(picked.column("y").unwrap(), None);
+    let every = Picked::new(&held, &[0, 1, 2, 3], 4);
+    assert_eq!(every.column("l").unwrap(), four().column("l").unwrap());
+}
+
+#[test]
+fn a_missing_column_and_a_defined_name_a_column_has_are_told_by_kind_not_words() {
+    let defines = BTreeMap::from([("x".to_owned(), parse("1").unwrap())]);
+    let sample = BTreeMap::new();
+    let held = four();
+    let scope = Scope::new(&held, &sample, &defines);
+    let missing = scope.evaluate(&parse("y + 1").unwrap()).unwrap_err().at("[columns] z");
+    assert_eq!((missing.missing(), missing.clash()), (Some("y"), false));
+    let shadowed = BTreeMap::from([("l".to_owned(), parse("1").unwrap())]);
+    let clash = Scope::new(&held, &sample, &shadowed).evaluate(&parse("l").unwrap()).unwrap_err();
+    assert!(clash.clash() && clash.missing().is_none());
+    assert_eq!(missing.of_event(Some(3)).missing(), Some("y"));
+}
+
+#[test]
+fn a_defined_name_worked_out_in_one_scope_is_known_to_another() {
+    let defines = BTreeMap::from([("big".to_owned(), parse("x > 1").unwrap())]);
+    let sample = BTreeMap::new();
+    let held = four();
+    let cuts = Scope::new(&held, &sample, &defines);
+    cuts.evaluate(&parse("big").unwrap()).unwrap();
+    let known = cuts.worked_out();
+    assert_eq!(known.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["big"]);
+    // Given another value than its expression's, the other scope takes it as worked out.
+    let seeded = vec![("big".to_owned(), Array::Event(Values::whole(Kind::B1, vec![1, 1, 1, 1])))];
+    let columns = Scope::new(&held, &sample, &defines).knowing(seeded);
+    assert_eq!(columns.evaluate(&parse("big").unwrap()).unwrap(), Array::Event(Values::whole(Kind::B1, vec![1, 1, 1, 1])));
+}
+
+#[test]
+fn a_promotion_that_does_not_fit_is_refused_not_a_panic() {
+    assert!(Values::float(Kind::F8, vec![f64::NAN]).convert(Kind::I4).is_err());
+    assert!(Values::whole(Kind::I8, vec![300]).convert(Kind::U1).is_err());
+    assert_eq!(Values::whole(Kind::B1, vec![1]).convert(Kind::I8).unwrap(), Values::whole(Kind::I8, vec![1]));
+}
+
+#[test]
+fn a_slip_of_syntax_says_what_to_write() {
+    let said = |text: &str| parse(text).unwrap_err().0;
+    assert!(said("a < b < c").contains("write a < b and b < c"));
+    assert!(said("a == not b").contains("write a == (not b)"));
+    assert!(said("a = 1").contains("write =="));
+    assert!(said("!a").contains("write not"));
+    assert!(said("a && b").starts_with("Unexpected && at column 3: write and"));
+    assert!(said("a | b").contains("write or"));
+    assert!(said("+x").contains("there is no unary +"));
+    assert!(said("9223372036854775808").contains("the largest whole number, 9223372036854775807"));
+    assert!(parse("9_223_372_036_854_775_807 + 0.000_1").is_ok());
+    // Both sides of and are checked at once.
+    let both = refused("[keep]\nk = \"1 and 2\"\n");
+    assert!(both.len() == 2 && both[0].contains("and's left side") && both[1].contains("and's right side"), "{both:?}");
+    // A field the sample lacks is said as one, wherever it stands.
+    let lists = Array::object(&[2], Values::float(Kind::F4, vec![1.0, 2.0])).unwrap();
+    let columns = [("l", lists), ("n", flat(Kind::I4, vec![3]))];
+    for text in ["nth(l, sample.k, 0)", "bit_and(n, sample.k)", "nearest_index(l, l, l, l, sample.k)"] {
+        assert!(run(&columns, &[], text).unwrap_err().0.contains("this sample has no k"), "{text}");
+    }
+    assert!(Array::joined(Vec::new()).is_err());
 }

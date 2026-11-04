@@ -1,13 +1,5 @@
-//! What a press has finished, kept beside its target, so that a press that stopped (Ctrl-C, a
-//! killed process, a sleeping laptop, a failure that is not the files' own) carries on where it
-//! stopped. A press stages its output in a folder, `<target>.partial/`: the spool of kept
-//! values, the file being written, and `journal.jsonl`, which the press holds locked from the
-//! start. The journal's first line says which press it is; then come the lines of the inputs
-//! finished (what each gave, and where its values lie in the spool), written every `EVERY` while
-//! inputs finish at a checkpoint: the spool is synced, the lines and a checkpoint line written,
-//! and the journal synced. A press picking up trusts only the lines a checkpoint covers, so not
-//! even a power cut gives it values that never reached the disk. The folder goes once the file is
-//! in place.
+//! What a press has finished, in `<target>.partial/` beside the spool, so that one stopped carries
+//! on (SPEC §7.5): a line for the press, then each input finished, trusted only up to a checkpoint.
 
 use crate::take::Taken;
 use rowver::write::Spool;
@@ -21,8 +13,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-/// How often finished inputs are made durable (a sync costs ~4 ms on macOS, and a checkpoint
-/// makes two: too much per file).
+/// How often finished inputs are made durable (a checkpoint costs two syncs of ~4 ms: too much per file).
 pub const EVERY: Duration = Duration::from_secs(2);
 
 /// The journal's name in the folder, and the spool's.
@@ -31,7 +22,7 @@ const SPOOL: &str = "spool";
 
 /// The folder a press stages `target` in: its name with `.partial` added.
 pub fn folder(target: &Path) -> PathBuf {
-    crate::empty::beside(target, ".partial")
+    crate::files::beside(target, ".partial")
 }
 
 /// The folder `target` is in.

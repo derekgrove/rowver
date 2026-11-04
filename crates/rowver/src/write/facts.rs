@@ -23,7 +23,8 @@ fn whole(value: i128) -> Value {
 /// The facts of one flat column, gathered a piece at a time in row order.
 pub(crate) struct Facts {
     kind: String,
-    seen: usize,
+    whole: bool,
+    bytes: usize,
     low: f64,
     high: f64,
     lo: i128,
@@ -37,7 +38,8 @@ impl Facts {
     pub(crate) fn new(kind: &str) -> Self {
         Self {
             kind: kind.to_owned(),
-            seen: 0,
+            whole: crate::numeric::whole_kind(kind),
+            bytes: 0,
             low: f64::INFINITY,
             high: f64::NEG_INFINITY,
             lo: i128::MAX,
@@ -47,14 +49,10 @@ impl Facts {
         }
     }
 
-    fn integer(&self) -> bool {
-        !self.kind.starts_with('f')
-    }
-
     /// See the next values, as little-endian bytes. NaN and infinities are passed over.
     pub(crate) fn add(&mut self, bytes: &[u8]) -> Result<()> {
-        self.seen += bytes.len();
-        if !self.integer() {
+        self.bytes += bytes.len();
+        if !self.whole {
             let (low, high) = (&mut self.low, &mut self.high);
             return each_value(&self.kind, bytes, |value| {
                 if value.is_finite() {
@@ -78,7 +76,7 @@ impl Facts {
     /// The facts: `lim`, `nice`, and `vals` on a whole-number column of at most 64 values.
     pub(crate) fn finish(self) -> Map<String, Value> {
         let mut out = Map::new();
-        if !self.integer() {
+        if !self.whole {
             let [lo, hi] = match self.low <= self.high {
                 true => [self.low, self.high],
                 false => [0.0, 0.0],
@@ -88,7 +86,7 @@ impl Facts {
             out.insert("nice".into(), ends.iter().map(|end| float(end.to_f64())).collect());
             return out;
         }
-        let [lo, hi] = match self.seen {
+        let [lo, hi] = match self.bytes {
             0 => [0, 0],
             _ => [self.lo, self.hi],
         };

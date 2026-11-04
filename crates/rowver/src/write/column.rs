@@ -84,13 +84,10 @@ pub(super) struct Whole<'a> {
 impl Whole<'_> {
     /// Require bytes that are exactly the values of a supported kind.
     pub(super) fn new(values: Values, name: &str) -> Result<Self> {
-        let (buffer, counts) = match values {
-            Values::Flat(buffer) => (buffer, None),
-            Values::Jagged { counts, content } => (content, Some(counts)),
-        };
+        let (buffer, counts) = values.parts();
         let w = width(&buffer.kind)?;
         if buffer.count.checked_mul(w) != Some(buffer.bytes.len()) {
-            return Err(invalid(format!("{name}: bytes do not hold its values")));
+            return Err(invalid(format!("{name}: its {} bytes are not {} values of {}, {w} bytes each: give it exactly its values' bytes", buffer.bytes.len(), buffer.count, buffer.kind)));
         }
         Ok(Self {
             kind: buffer.kind,
@@ -131,21 +128,20 @@ impl Pieces for Whole<'_> {
 /// How many values are unshuffled, or read of a decoded array, at a time.
 const AT_ONCE: usize = 1 << 16;
 
-/// Where the cursor of a file shared between threads is moved, where reads cannot be placed.
-#[cfg(not(unix))]
-static CURSOR: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// Read `buffer.len()` bytes of `file` from `at`, without moving a shared cursor.
 pub(super) fn read_at(file: &std::fs::File, buffer: &mut [u8], at: u64) -> std::io::Result<()> {
     #[cfg(unix)]
     return std::os::unix::fs::FileExt::read_exact_at(file, buffer, at);
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        use std::io::{Seek, SeekFrom};
-        let _held = CURSOR.lock().unwrap_or_else(|e| e.into_inner());
-        let mut file = file;
-        file.seek(SeekFrom::Start(at))?;
-        file.read_exact(buffer)
+        let (mut buffer, mut at) = (buffer, at);
+        while !buffer.is_empty() {
+            match std::os::windows::fs::FileExt::seek_read(file, buffer, at)? {
+                0 => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+                n => (buffer, at) = (&mut buffer[n..], at + n as u64),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -153,13 +149,16 @@ pub(super) fn read_at(file: &std::fs::File, buffer: &mut [u8], at: u64) -> std::
 pub(super) fn write_at(file: &std::fs::File, bytes: &[u8], at: u64) -> std::io::Result<()> {
     #[cfg(unix)]
     return std::os::unix::fs::FileExt::write_all_at(file, bytes, at);
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        use std::io::{Seek, SeekFrom};
-        let _held = CURSOR.lock().unwrap_or_else(|e| e.into_inner());
-        let mut file = file;
-        file.seek(SeekFrom::Start(at))?;
-        file.write_all(bytes)
+        let (mut bytes, mut at) = (bytes, at);
+        while !bytes.is_empty() {
+            match std::os::windows::fs::FileExt::seek_write(file, bytes, at)? {
+                0 => return Err(std::io::ErrorKind::WriteZero.into()),
+                n => (bytes, at) = (&bytes[n..], at + n as u64),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -353,11 +352,10 @@ impl<'a> Meter<'a> {
 
     /// See the next values, as little-endian bytes.
     fn add(&mut self, bytes: &[u8]) -> Result<()> {
-        if self.kind == "b1" && bytes.iter().any(|byte| *byte > 1) {
-            return Err(invalid(format!(
-                "{}: boolean bytes must be 0 or 1",
-                self.name
-            )));
+        if self.kind == "b1" {
+            if let Some(byte) = bytes.iter().find(|byte| **byte > 1) {
+                return Err(invalid(format!("{}: a b1 value is the byte 0 or 1, and one is {byte}: give false as 0 and true as 1", self.name)));
+            }
         }
         self.total.update(bytes);
         if let Some(facts) = &mut self.facts {
@@ -664,12 +662,12 @@ pub(super) fn entry(source: Source, edges: &[usize], files: &[usize], out: &mut 
     let held = match source {
         Source::Values(values) => Held::Whole(Whole::new(values, "entry")?),
         Source::Spooled(spooled) => Held::Spooled(spooled),
-        Source::Copied(..) => return Err(invalid("The entry array is not copied")),
+        Source::Copied(..) => return Err(invalid("the entry array cannot be copied from another file: give it as values or spooled pieces")),
     };
     let pieces = held.pieces();
     let total: usize = (0..pieces.pieces()).map(|p| pieces.values(p)).sum();
     if pieces.listed() || pieces.kind() != "i8" || total != edges[edges.len() - 1] {
-        return Err(invalid("The entry array must hold one i8 value per row"));
+        return Err(invalid(format!("the entry array holds {total} {} values{}, and it holds one i8 value per row, {}: give each row's entry as an i8", pieces.kind(), if pieces.listed() { " in lists" } else { "" }, edges[edges.len() - 1])));
     }
     plain("entry", pieces, &Measure::Entries(edges, files), out)
 }
@@ -730,7 +728,7 @@ fn laid<'w>(
     record.insert("name".into(), name.into());
     if !pieces.listed() {
         if total != rows {
-            return Err(invalid(format!("{name}: needs one value per row")));
+            return Err(invalid(format!("{name}: it holds {total} values for {rows} rows: give it one value per row")));
         }
         record.insert("kind".into(), pieces.kind().into());
         let mut placed = array(name, pieces, &Measure::Column(edges), out)?;
@@ -741,7 +739,7 @@ fn laid<'w>(
     let mut bases = Vec::with_capacity(pieces.pieces() + 1);
     let mut held = Vec::with_capacity(pieces.pieces());
     let (mut row, mut offset, mut bounds) = (0_usize, 0_i64, Vec::with_capacity(edges.len()));
-    let too_many = || invalid(format!("{name}: too many values"));
+    let too_many = || invalid(format!("{name}: its lists hold more values than an offset counts (2^63 − 1): write fewer rows into one file"));
     for piece in 0..pieces.pieces() {
         bases.push(offset);
         let counts = pieces.counts(piece)?.unwrap_or_default();
@@ -760,9 +758,7 @@ fn laid<'w>(
         bounds.push(offset as usize);
     }
     if row != rows || offset as usize != total || bounds.len() != edges.len() {
-        return Err(invalid(format!(
-            "{name}: needs one list per row, together holding its content"
-        )));
+        return Err(invalid(format!("{name}: it holds {row} lists of {total} values for {rows} rows: give it one list per row, the lists together holding every value")));
     }
     let steps = Steps {
         column: pieces,

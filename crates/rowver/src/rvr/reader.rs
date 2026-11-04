@@ -5,14 +5,13 @@
 //! array against its `sha256` when it is read. Per-sample array checksums, column facts and
 //! the event choice need every array; `validate_file` checks those.
 
-use super::{checksum, count, digest, header_end, text, MEND};
-use crate::numeric::width;
+use super::{count, text};
 use crate::{invalid, Result};
 use serde_json::Value;
 use std::fs::File;
-use std::sync::Arc;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// An open `.rvr` file whose header has been read and whose arrays are read on request.
 #[derive(Debug)]
@@ -112,17 +111,11 @@ impl Reader {
         checked.map(|()| reader)
     }
 
-    /// Open a file to look inside it, even one whose header fails its checks: the reader, and
-    /// what checking the header found.
+    /// Open a file to look inside it, even one whose header fails its checks: the reader, and what checking the header found.
     pub fn inspect(path: impl AsRef<Path>) -> Result<(Self, Result<()>)> {
         let path = path.as_ref().to_path_buf();
-        let (mut file, size) = super::opened(&path)?;
-        let mut prefix = [0; 12];
-        file.read_exact(&mut prefix)
-            .map_err(|_| invalid(super::NOT_RVR))?;
-        let start = header_end(&prefix, size)?;
-        let mut text = vec![0; start - 12];
-        file.read_exact(&mut text)?;
+        let (file, size, text) = super::head(&path)?;
+        let start = 12 + text.len();
         let length = size - start;
         let size = size as u64;
         // Parsed once: strictly, or, when that fails, as it is, to look inside all the same.
@@ -157,6 +150,18 @@ impl Reader {
     /// Whether the file is empty: its header alone, its arrays let go by `write::empty`.
     pub fn empty(&self) -> bool {
         self.parts.iter().all(|part| part.length == 0)
+    }
+
+    /// The header's text as the file opened holds it, read through the handle it was opened with.
+    pub fn header_text(&self) -> Result<Vec<u8>> {
+        let part = &self.parts[0];
+        let Reading::Held(file, _) = &part.from else {
+            return Err(invalid("the file is being written: its header has no text yet"));
+        };
+        let mut text = vec![0; part.start.saturating_sub(12) as usize];
+        let mut span = Span { file: file.clone(), path: self.path.clone(), at: 12, end: part.start };
+        span.read_exact(&mut text).map_err(|e| if part.changed() { changed(&self.path) } else { e.into() })?;
+        Ok(text)
     }
 
     /// Where the file is.
@@ -216,22 +221,11 @@ impl Reader {
         Ok((span, size))
     }
 
-    /// Decompress one array and refuse it unless its bytes have the checksum its record states; a
-    /// file changed in place since it was opened is said to be.
+    /// Decompress one array, checked against its record's sha256; a file changed in place since it was opened is said to be.
     fn array(&self, record: &Value, kind: &str, values: usize, label: &str) -> Result<Vec<u8>> {
-        let w = width(kind)?;
-        let expected = values
-            .checked_mul(w)
-            .ok_or_else(|| invalid(format!("{label}: byte count overflows")))?;
         let (part, mut span) = self.part(record, label)?;
         let mut packed = vec![0; (span.end - span.at) as usize];
-        let read = span.read_exact(&mut packed).map_err(crate::Error::from).and_then(|()| {
-            let bytes = crate::codec::unpack(packed, w, expected, label)?;
-            match digest(&bytes) == checksum(record, label)? {
-                true => Ok(bytes),
-                false => Err(invalid(format!("{label}: its array's bytes are not the sha256 its record states (docs/FORMAT.md §8): the file is damaged; copy it again, or press its study again"))),
-            }
-        });
+        let read = span.read_exact(&mut packed).map_err(crate::Error::from).and_then(|()| super::arrays::unpacked(packed, record, kind, values, label));
         read.map_err(|e| if part.changed() { changed(&self.path) } else { e })
     }
 
@@ -263,38 +257,21 @@ impl Reader {
             }
             return Ok(None);
         };
+        self.stored(name, record).map(Some)
+    }
+
+    /// The stored column `name`, read by its record.
+    pub(super) fn stored(&self, name: &str, record: &Value) -> Result<Held> {
         let rows = self.rows()?;
         let place = format!("data.cols[{name:?}]");
         let kind = text(record, &place, "kind")?;
         if kind != "jagged" {
-            return Ok(Some(Held {
-                kind: kind.to_owned(),
-                bytes: self.array(record, kind, rows, &place)?,
-                offsets: None,
-            }));
+            return Ok(Held { kind: kind.to_owned(), bytes: self.array(record, kind, rows, &place)?, offsets: None });
         }
         let content = &record["content"];
         let (kind, values) = (text(content, &place, "kind")?, count(content, &place, "count")?);
         let label = format!("{place}.offsets");
-        let steps = self.array(&record["offsets"], "i8", rows + 1, &label)?;
-        let (steps, _) = steps.as_chunks::<8>();
-        let mut offsets = Vec::with_capacity(steps.len());
-        for step in steps {
-            let offset = usize::try_from(i64::from_le_bytes(*step)).ok();
-            let ordered = offset.filter(|offset| {
-                *offset <= values && offsets.last().is_none_or(|before| before <= offset)
-            });
-            offsets.push(ordered.ok_or_else(|| {
-                invalid(format!("{label} decrease, or pass the content's count (docs/FORMAT.md §4): {MEND}"))
-            })?);
-        }
-        if offsets.first() != Some(&0) || offsets.last() != Some(&values) {
-            return Err(invalid(format!("{label} must start at 0 and end at content.count, {values} (docs/FORMAT.md §4): {MEND}")));
-        }
-        Ok(Some(Held {
-            kind: kind.to_owned(),
-            bytes: self.array(content, kind, values, &format!("{place}.content"))?,
-            offsets: Some(offsets),
-        }))
+        let offsets = super::jagged_offsets(&self.array(&record["offsets"], "i8", rows + 1, &label)?, values, &label)?;
+        Ok(Held { kind: kind.to_owned(), bytes: self.array(content, kind, values, &format!("{place}.content"))?, offsets: Some(offsets) })
     }
 }

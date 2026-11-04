@@ -49,8 +49,7 @@ impl Cut {
     }
 }
 
-/// One line of `[totals]`: an expression summed over every event read, before the cuts, for each
-/// sample; over the entries of another tree of each file when `tree` names one.
+/// One line of `[totals]`: a sum over every event read before the cuts, or over another `tree`'s entries.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Total {
     pub name: String,
@@ -78,8 +77,7 @@ pub struct Recipe {
     pub depths: Vec<(String, usize)>,
 }
 
-/// The names an expression gives each row, which no column may have: its sample, its entry, and
-/// its sample's file.
+/// The names every row has (its sample, entry and file), which no column may have.
 pub const RESERVED: [&str; 3] = ["sample", "entry", "file"];
 
 /// The metadata a press gives every sample beside the keys of samples.toml, which no expression sees.
@@ -90,8 +88,7 @@ pub fn plain(text: &str) -> bool {
     matches!(parse(text), Ok(Expression::Name(name)) if name == text)
 }
 
-/// Add every name an expression mentions: branches, defined names, and text that may name a
-/// branch (`branch('…')`).
+/// Add every name an expression mentions: branches, defined names, and any text (`branch('…')`'s).
 pub fn names(expression: &Expression, found: &mut BTreeSet<String>) {
     gather(expression, found, true, false);
 }
@@ -106,99 +103,54 @@ pub fn reads(expression: &Expression, found: &mut BTreeSet<String>) {
     gather(expression, found, false, true);
 }
 
-/// Add what a `branch(…)` not given text may name: the sample fields its argument reads to
-/// `fields`, and the text and names it holds to `texts`.
+/// Add what a `branch(…)` not given text may name: its sample fields to `fields`, its text and names to `texts`.
 pub fn branch_names(expression: &Expression, fields: &mut BTreeSet<String>, texts: &mut BTreeSet<String>) {
-    use Expression::*;
     match expression {
-        Call(function, arguments) if function == "branch" && !matches!(arguments.as_slice(), [Constant(crate::Constant::Text(_))]) => {
+        Expression::Call(function, arguments) if function == "branch" && named(arguments).is_none() => {
             for argument in arguments {
                 fields_of(argument, fields);
                 gather(argument, texts, true, false);
             }
         }
-        Call(_, arguments) => arguments.iter().for_each(|a| branch_names(a, fields, texts)),
-        In(left, list) => {
-            branch_names(left, fields, texts);
-            list.iter().for_each(|member| branch_names(member, fields, texts));
-        }
-        Negate(inner) | Not(inner) => branch_names(inner, fields, texts),
-        Binary(_, left, right) | Pick(left, right) => {
-            branch_names(left, fields, texts);
-            branch_names(right, fields, texts);
-        }
-        Constant(_) | Sample(_) | Name(_) => {}
+        _ => expression.children().for_each(|child| branch_names(child, fields, texts)),
+    }
+}
+
+/// The text a call's only value is, as `branch('Jet.pt')` names its branch.
+fn named(arguments: &[Expression]) -> Option<&String> {
+    match arguments {
+        [Expression::Constant(crate::Constant::Text(held))] => Some(held),
+        _ => None,
     }
 }
 
 /// Add the bare names an expression holds; with `text` the text it holds too, and with
 /// `branches` the text each `branch` names.
 fn gather(expression: &Expression, found: &mut BTreeSet<String>, text: bool, branches: bool) {
-    use Expression::*;
-    match expression {
-        Constant(crate::Constant::Text(held)) if text => {
-            found.insert(held.clone());
-        }
-        Constant(_) | Sample(_) => {}
-        Name(name) => {
-            found.insert(name.clone());
-        }
-        Call(function, arguments) if branches && function == "branch" => match arguments.as_slice() {
-            [Constant(crate::Constant::Text(held))] => {
-                found.insert(held.clone());
-            }
-            _ => arguments.iter().for_each(|argument| gather(argument, found, text, branches)),
-        },
-        Call(_, arguments) => arguments
-            .iter()
-            .for_each(|argument| gather(argument, found, text, branches)),
-        In(left, list) => {
-            gather(left, found, text, branches);
-            list.iter().for_each(|member| gather(member, found, text, branches));
-        }
-        Negate(inner) | Not(inner) => gather(inner, found, text, branches),
-        Binary(_, left, right) | Pick(left, right) => {
-            gather(left, found, text, branches);
-            gather(right, found, text, branches);
-        }
+    let held = match expression {
+        Expression::Constant(crate::Constant::Text(held)) if text => Some(held),
+        Expression::Name(name) => Some(name),
+        Expression::Call(function, arguments) if branches && function == "branch" => named(arguments),
+        _ => None,
+    };
+    match held {
+        Some(held) => drop(found.insert(held.clone())),
+        None => expression.children().for_each(|child| gather(child, found, text, branches)),
     }
 }
 
-/// The sample fields an expression reads, `sample.KEY`, by key.
 /// Add the sample fields an expression reads (`sample.KEY`).
 pub fn fields_of(expression: &Expression, found: &mut BTreeSet<String>) {
-    use Expression::*;
     match expression {
-        Sample(field) => {
-            found.insert(field.clone());
-        }
-        Call(_, arguments) => arguments.iter().for_each(|a| fields_of(a, found)),
-        In(left, list) => {
-            fields_of(left, found);
-            list.iter().for_each(|e| fields_of(e, found));
-        }
-        Negate(inner) | Not(inner) => fields_of(inner, found),
-        Binary(_, left, right) | Pick(left, right) => {
-            fields_of(left, found);
-            fields_of(right, found);
-        }
-        Constant(_) | Name(_) => {}
+        Expression::Sample(field) => drop(found.insert(field.clone())),
+        _ => expression.children().for_each(|child| fields_of(child, found)),
     }
 }
 
 /// Whether an expression names a branch by anything but text, as `branch(sample.KEY)`.
 fn by_sample(expression: &Expression) -> bool {
-    use Expression::*;
-    match expression {
-        Call(function, arguments) => {
-            let text = matches!(arguments.as_slice(), [Constant(crate::Constant::Text(_))]);
-            (function == "branch" && !text) || arguments.iter().any(by_sample)
-        }
-        In(left, list) => by_sample(left) || list.iter().any(by_sample),
-        Negate(inner) | Not(inner) => by_sample(inner),
-        Binary(_, left, right) | Pick(left, right) => by_sample(left) || by_sample(right),
-        Constant(_) | Sample(_) | Name(_) => false,
-    }
+    matches!(expression, Expression::Call(function, arguments) if function == "branch" && named(arguments).is_none())
+        || expression.children().any(by_sample)
 }
 
 /// Say why a recipe's text is not TOML: the line, and what the parser found there. The
@@ -222,9 +174,32 @@ fn unparsed(text: &str, error: &toml::de::Error) -> String {
 /// The keys a recipe has at its top: these and no others.
 const TOP: [&str; 8] = ["format", "version", "title", "define", "keep", "columns", "totals", "derived"];
 
+/// The tables every recipe writes, even empty, in their order.
+pub const TABLES: [&str; 5] = ["define", "keep", "columns", "totals", "derived"];
+
+/// `tables` in brackets, the last joined by `word`: "[define], [keep] and [totals]".
+fn listed(tables: &[&str], word: &str) -> String {
+    let named: Vec<String> = tables.iter().map(|table| format!("[{table}]")).collect();
+    match named.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} {word} {last}", rest.join(", ")),
+        _ => named.concat(),
+    }
+}
+
+/// Why a recipe that leaves out the tables `missing` is refused, and what to add.
+fn lacks(missing: &[&str]) -> String {
+    let add = match missing {
+        [one] => format!("Add the line [{one}]."),
+        _ => format!("Add {}, each on a line of its own.", listed(missing, "and")),
+    };
+    format!("A recipe has no {} table: every recipe has its five tables, {}, each written even when it is empty. {add}", listed(missing, "or"), listed(&TABLES, "and"))
+}
+
 /// A recipe as it is read: every problem found so far, and what each name read gives.
 struct Reading {
     said: Vec<String>,
+    /// The tables of the five it leaves out.
+    lacking: Vec<&'static str>,
     /// What each defined name gives, as far as its text tells.
     sorts: BTreeMap<String, Sort>,
     /// How many levels deep each name is, a defined or derived name as deep as its expression.
@@ -284,16 +259,15 @@ impl Recipe {
     /// Read a recipe from its TOML text, refusing it with every problem it has, one a line.
     pub fn read(text: &str) -> Result<Self> {
         let root: Table = text.parse().map_err(|error: toml::de::Error| problem(unparsed(text, &error)))?;
-        let mut reading = Reading { said: Vec::new(), sorts: BTreeMap::new(), depths: BTreeMap::new() };
+        let mut reading = Reading { said: Vec::new(), lacking: Vec::new(), sorts: BTreeMap::new(), depths: BTreeMap::new() };
         let recipe = reading.recipe(&root);
         match reading.said.is_empty() {
             true => Ok(recipe),
-            false => Err(problem(reading.said.join("\n"))),
+            false => Err(crate::Error(reading.said.join("\n"), None, crate::Cause::Lacking(reading.lacking))),
         }
     }
 
-    /// Read one expression as a line of this recipe's `[columns]` is read: parsed and checked, with
-    /// the names `[define]` gives; refused with every problem it has, one a line.
+    /// Read one expression as a line of this recipe's `[columns]`, refused with every problem it has.
     pub fn expression(&self, text: &str) -> Result<Expression> {
         // What each defined name gives, in the order written: each uses only those above it.
         let mut sorts = BTreeMap::new();
@@ -319,6 +293,10 @@ impl Reading {
         if root.get("format").and_then(Value::as_str) != Some("rvr-recipe") || root.get("version").and_then(Value::as_integer) != Some(1) {
             self.said.push("A recipe starts with format = \"rvr-recipe\" and version = 1".into());
         }
+        self.lacking = TABLES.into_iter().filter(|table| !root.contains_key(*table)).collect();
+        if !self.lacking.is_empty() {
+            self.said.push(lacks(&self.lacking));
+        }
         let mut recipe = Recipe::default();
         match root.get("title") {
             None => {}
@@ -327,7 +305,11 @@ impl Reading {
         }
         self.defines(root, &mut recipe);
         self.keep(root, &mut recipe);
+        let before = self.said.len();
         self.columns(root, &mut recipe);
+        if recipe.columns.is_empty() && self.said.len() == before {
+            self.said.push("The recipe stores nothing: under [columns], list branches (branches = [\"MET_pt\"]) or name computed columns (ht = \"sum(Jet_pt)\")".into());
+        }
         self.totals(root, &mut recipe);
         // A total is known once every event is read: only a derived column may use one.
         let total = |expression: &Expression| {
@@ -484,7 +466,6 @@ impl Reading {
         for name in sorted.iter().filter(|name| named.iter().filter(|n| n == name).count() > 1) {
             self.said.push(format!("Two columns are named {name}: give one another name"));
         }
-        recipe.stored.retain(|name, _| recipe.columns.iter().any(|(n, _)| n == name));
     }
 
     /// `[totals]`: sums over every event read, or over another tree of each file.

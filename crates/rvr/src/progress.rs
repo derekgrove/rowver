@@ -70,8 +70,7 @@ pub fn file(counts: &Counts, line: &str) {
     }
 }
 
-/// Print a line: above the bars while there are bars. Failing to, it panics as `println!` does,
-/// so that a closed pipe ends rvr at once.
+/// Print a line above the bars while there are bars, panicking as `println!` does on a closed pipe.
 pub fn say(line: &str) {
     let mut drawn = DRAWN.lock().unwrap_or_else(|e| e.into_inner());
     let mut out = std::io::stdout().lock();
@@ -100,7 +99,7 @@ fn clear(drawn: &Drawn) -> String {
 
 /// How wide the names and the bars of these samples (name, chosen) are drawn, to fit in `line`.
 fn widths(samples: &[(&str, u64)], line: usize) -> (usize, usize) {
-    let numbers = samples.iter().map(|(_, chosen)| 2 * crate::press::count(*chosen).len() + 3).max().unwrap_or(0);
+    let numbers = samples.iter().map(|(_, chosen)| 2 * rowver::rvr::grouped(*chosen).len() + 3).max().unwrap_or(0);
     let longest = samples.iter().map(|(name, _)| name.chars().count()).max().unwrap_or(0);
     let room = line.saturating_sub(2 + 2 + 1 + 4 + 2 + numbers);
     let name = longest.min(room.saturating_sub(WIDE.0));
@@ -124,7 +123,7 @@ fn bar(name: &str, done: u64, chosen: u64, (width, wide): (usize, usize)) -> Str
         true => name.chars().take(width.saturating_sub(1)).chain(['…']).collect(),
         false => name.to_string(),
     };
-    let shown = format!("{} / {}", crate::press::count(done.min(chosen)), crate::press::count(chosen));
+    let shown = format!("{} / {}", rowver::rvr::grouped(done.min(chosen)), rowver::rvr::grouped(chosen));
     format!("  {name:width$}  {cells} {percent:>3.0}%  {shown}")
 }
 
@@ -185,7 +184,7 @@ fn frame(drawn: &Drawn) -> String {
         0 => String::new(),
         n => format!(" · {}", crate::samples::some(n, "hole", "holes")),
     };
-    let kept = crate::press::count(counts.kept.load(Ordering::Relaxed));
+    let kept = rowver::rvr::grouped(counts.kept.load(Ordering::Relaxed));
     text + &format!("\n{}\n", fits(format!("  {kept} kept so far{holes}{rate} · {}", elapsed(seconds))))
 }
 
@@ -219,8 +218,7 @@ pub struct Display {
 }
 
 impl Display {
-    /// Show a press of these samples (name, entries chosen, entries already done), which has kept
-    /// `kept` and found `holes` already: bars on a terminal.
+    /// Show bars on a terminal for these samples (name, entries chosen, entries done), `kept` and `holes` so far.
     pub fn start(samples: Vec<(String, u64, u64)>, kept: u64, holes: usize) -> Self {
         let counts = Arc::new(Counts {
             done: samples.iter().map(|(_, _, done)| AtomicU64::new(*done)).collect(),

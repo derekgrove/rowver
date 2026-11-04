@@ -168,9 +168,9 @@ pub struct Plan {
     /// The recipe the core evaluates: the whole one, or for a build on columns, what those read.
     pub reader: Recipe,
     /// Each stored column's kind and whether it is a list, in the recipe's order; the derived ones'.
-    pub kinds: Vec<(Kind, bool)>,
+    pub kinds: Vec<Shape>,
     /// Each derived column's kind and whether it is a list.
-    pub derived: Vec<(Kind, bool)>,
+    pub derived: Vec<Shape>,
     /// The stored columns read, by place in the recipe; the others are copied.
     pub reading: Vec<usize>,
     /// By sample, the branches of its list its files are compared on before they are read.
@@ -194,8 +194,8 @@ pub struct Plan {
     pub toolchain: Value,
     /// Whether the press keeps a journal, so that one stopped is carried on.
     pub carries: bool,
-    /// Whether the file is signed with your key, when you have one.
-    pub sign: bool,
+    /// The key the file is signed with: yours, when it is signed and you have one.
+    pub signer: Option<[u8; 32]>,
     /// What the journal's first line says this press is.
     pub identity: Value,
     /// The tool keys of the file it replaces at the target, which the new file carries.
@@ -214,8 +214,7 @@ impl Plan {
     }
 }
 
-/// What every command that reads events takes from a study: each input through its validator,
-/// then the agreement check, every problem at once.
+/// What every command that reads events takes from a study: its inputs validated and checked together.
 pub struct Checked {
     /// The recipe, as its validator read it.
     pub recipe: Recipe,
@@ -359,7 +358,7 @@ fn base(place: &Place, at: At, texts: &Texts, checked: &Checked, on: &On) -> Res
             Ok((Base::Holes(fill), None))
         }
         On::Earlier => {
-            let base = crate::reuse::earlier(at.file(), texts, recipe, lock, asked);
+            let base = at.file().map(|file| crate::reuse::read(file, texts, recipe, lock, asked));
             // Its columns copied, or every column packed again from it, are of this press's kinds.
             let kinds_held = match &base {
                 Some(Ok(Base::Samples(fill))) => same_kinds(&fill.file, recipe, kinds, &all),
@@ -383,6 +382,10 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
     let toolchain = crate::press::toolchain();
     rowver::rvr::toolchain(&toolchain).map_err(|e| format!("this rvr cannot record what built it, as every file it writes does ({e}): build it again from a git checkout of its repository, or install a released rvr"))?;
     let checked = checked(&texts, &asked.choose)?;
+    let signer = match asked.sign {
+        true => crate::key::secret()?,
+        false => None,
+    };
     // A press that replaces the file at its target keeps its tool keys (docs/FORMAT.md §11); a
     // file that does not open has none to keep.
     let at = std::mem::replace(&mut place.at, At::Missing);
@@ -469,7 +472,7 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
         workers: asked.workers,
         toolchain,
         carries,
-        sign: asked.sign,
+        signer,
         identity,
         tools,
     })
@@ -498,7 +501,7 @@ fn compared(lock: &Lock, reader: &Recipe, columns: &[&Expression]) -> Result<Com
     by_name.extend(by_text);
     let mut checked = Vec::new();
     for s in &lock.samples {
-        let list = lock.branches_of(s).ok_or("samples.lock names a branch list it does not hold (a bug in rvr: please report it)")?;
+        let list = lock.branches_of(s).expect("the lock validator checks every sample names a branch list it holds");
         let named = |b: &&Branch| by_name.contains(&b.name) || fields.iter().any(|f| s.metadata.get(f).and_then(Value::as_str) == Some(b.name.as_str()));
         checked.push(list.list.iter().filter(named).map(|b| (b.name.clone(), b.clone())).collect());
     }
@@ -526,7 +529,7 @@ mod tests {
         let mut lock = rowver::study::lock::Lock::read(&LOCK.replace("BR", &list)).unwrap();
         lock.samples[0].files = vec![file("root://eospublic.cern.ch//eos/opendata/x.root"), file("davs://h.org:1094/d/y.root"), file("./z.root")];
         let read_at = crate::agree::doors(&lock).unwrap();
-        let urls: Vec<String> = super::inputs(&lock, &[rowver::study::samples::Events::All], &read_at).into_iter().map(|i| i.read_at).collect();
+        let urls: Vec<String> = super::inputs(&lock, &[rowver::choice::Events::All], &read_at).into_iter().map(|i| i.read_at).collect();
         assert_eq!(urls, ["https://eospublic.cern.ch:443/eos/opendata/x.root", "https://h.org:1094/d/y.root", "./z.root"]);
         lock.samples[0].files.push(file("root://no-door.invalid//d/w.root"));
         assert!(crate::agree::doors(&lock).unwrap_err()[0].contains("no-door.invalid has no WebDAV door"));

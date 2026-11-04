@@ -4,14 +4,19 @@
 use crate::plan::Choose;
 use crate::texts::Texts;
 use rowver::choice::Events;
-use rowver::rvr::derived::ADDED;
+use rvr_recipe::ADDED;
 use rowver::study::lock::Lock;
 use crate::plan::Shape;
 use rvr_recipe::Recipe;
 
+/// Whether `lock` was resolved from another samples.toml than `samples`.
+pub fn stale(samples: &str, lock: &Lock) -> bool {
+    rowver::write::text_checksum(samples) != lock.samples_toml_sha256
+}
+
 /// The lock was resolved from this samples.toml, and its samples are what samples.toml makes.
 pub fn lock(texts: &Texts, lock: &Lock) -> Vec<String> {
-    if rowver::write::text_checksum(&texts.samples) != lock.samples_toml_sha256 {
+    if stale(&texts.samples, lock) {
         return vec![format!("samples.toml has changed since samples.lock was written ({}). Run rvr samples resolve samples.toml, review the new lock, then press.", lock.resolved)];
     }
     match rowver::study::lock::agree(&texts.samples, lock) {
@@ -44,8 +49,7 @@ pub fn doors(lock: &Lock) -> Result<Vec<Vec<String>>, Vec<String>> {
     }
 }
 
-/// The lock with each sample's event choice applied, and those choices; or every way the choice
-/// does not fit the samples (`--seed` without a random sample, `--random` without a number).
+/// The lock with each sample's event choice applied, and those choices; or every way the choice does not fit.
 pub fn planned(lock: Lock, choose: &Choose) -> Result<(Lock, Vec<Events>), Vec<String>> {
     let (lock, asked, said) = choices(lock, choose);
     match said.is_empty() {
@@ -54,8 +58,7 @@ pub fn planned(lock: Lock, choose: &Choose) -> Result<(Lock, Vec<Events>), Vec<S
     }
 }
 
-/// `planned`, with every problem beside a lock that the other checks can go on with: a sample
-/// whose choice does not fit keeps its own.
+/// `planned`, with every problem beside a lock the other checks can go on with (a misfit choice kept as its own).
 pub fn choices(mut lock: Lock, choose: &Choose) -> (Lock, Vec<Events>, Vec<String>) {
     let mut said = Vec::new();
     if let Choose::Options(choice) = choose {
@@ -79,10 +82,7 @@ pub fn choices(mut lock: Lock, choose: &Choose) -> (Lock, Vec<Events>, Vec<Strin
     (lock, asked, said)
 }
 
-/// The kind of every stored and every derived column, worked out over each sample's branch list
-/// and metadata; or every way the recipe does not fit the samples: a column of two kinds, a name
-/// that means two things, a total over the events' own tree, or over another tree of a sample that
-/// reads only some of its files.
+/// The kind of every stored and derived column over each sample's branch list and metadata; or every misfit.
 pub fn recipe(recipe: &Recipe, lock: &Lock, asked: &[Events]) -> Result<[Vec<Shape>; 2], Vec<String>> {
     let mut said: Vec<String> = Vec::new();
     let lines = |e: rowver::Error| e.to_string().lines().map(str::to_owned).collect::<Vec<_>>();

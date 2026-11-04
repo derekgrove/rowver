@@ -1,13 +1,5 @@
-//! `rvr press --fill`: read only the holes of a file the same study pressed, and write the file
-//! again with their rows in place. Within each input file, the file's rows and the new ones are
-//! merged by entry: a hole is a range of entries, so the merge is the old rows before it, its
-//! rows, then the old rows after. Every column is packed again (each is compressed whole), but
-//! nothing but the holes is read from storage. The study must be the one that pressed the file,
-//! except that the lock may have been resolved again for the files whose holes are read (a file
-//! put back where it was, or another copy in its place): every other file must be the lock's as it
-//! was, and a file the old file holds rows of must be the same ROOT file (its UUID).
-//! A press of samples added since builds on a file the same way (`crate::reuse`): their files are
-//! read whole, and every other sample's rows are the file's own.
+//! `rvr press --fill` (SPEC §8.7): read only a file's holes, and write it again with their rows
+//! merged by entry among its own; a press of samples added builds on a file the same way.
 
 use crate::plan::Input;
 use crate::take::{missed, ranges, Taken};
@@ -35,8 +27,7 @@ pub struct Plan {
     pub unread: bool,
 }
 
-/// A file with holes, and what filling it reads; or a file of other samples, and what a press of
-/// the samples added reads.
+/// A file with holes and what filling them reads; or a file of other samples and what the samples added read.
 pub struct Fill {
     /// The file being filled.
     pub file: Reader,
@@ -56,8 +47,7 @@ pub fn kinds(given: Option<&str>) -> Vec<String> {
     }
 }
 
-/// Whether `--fill` would fill a file with this header, or why not; the files it read none of,
-/// when it had to work them out.
+/// Whether `--fill` would fill a file with this header, or why not; the files it read none of, when worked out.
 pub fn fits(
     header: &Value,
     shown: &str,
@@ -182,12 +172,12 @@ pub fn plan(
 /// A file's rows by the file each came from, each reading again its holes of `kinds`; `unread`,
 /// the files it read none of.
 pub(crate) fn rows(file: Reader, kinds: &[String], unread: &HashSet<(String, String)>) -> Result<Fill, String> {
-    let shown = file.path().display().to_string();
     let header = file.header();
     let made = &header["made"];
     let entries = file.entry().map_err(|e| rowver::plain(file.path(), &e))?;
+    let short = || format!("{}: its files hold more rows than it has: a bug in rvr, as the file was checked; please report it", file.path().display());
     if entries.len() < header["data"]["rows"].as_u64().unwrap_or(0) as usize {
-        return Err(format!("{shown}: its files hold more rows than it has"));
+        return Err(short());
     }
     let mut files = HashMap::new();
     let mut at = 0;
@@ -201,7 +191,7 @@ pub(crate) fn rows(file: Reader, kinds: &[String], unread: &HashSet<(String, Str
         let kept = kept.into_iter().cloned().collect();
         let rows = at..at + n;
         if rows.end > entries.len() {
-            return Err(format!("{shown}: its files hold more rows than it has"));
+            return Err(short());
         }
         let unread = unread.contains(&(sample.to_owned(), path.to_owned()));
         let plan = Plan { rows, read, kept, record, unread };
@@ -211,9 +201,7 @@ pub(crate) fn rows(file: Reader, kinds: &[String], unread: &HashSet<(String, Str
     Ok(Fill { file, files, entries, added: None })
 }
 
-/// How a fill writes one input: the old file's rows it keeps, in stretches between the holes it
-/// reads, each with its place among the spool's pieces; and which of the inputs read is this one,
-/// when it has holes to read.
+/// How a fill writes one input: the old rows it keeps, each with its place in the spool, and which read input it is.
 pub struct Laid {
     old: Vec<(usize, Range<usize>)>,
     read: Option<usize>,
@@ -276,15 +264,14 @@ pub(crate) fn laid(work: &[Input], lock: &Lock, plans: &HashMap<(String, String)
 /// spooled by `workers` threads.
 pub(crate) fn spool_old(spool: &write::Spool, fill: &Fill, columns: &[&str], laid: &[Laid], workers: usize) -> Result<(), String> {
     let file = &fill.file;
-    let shown = file.path().display();
     let failed = |e: rowver::Error| rowver::plain(file.path(), &e);
     let old: Vec<&(usize, Range<usize>)> = laid.iter().flat_map(|l| &l.old).filter(|(_, rows)| !rows.is_empty()).collect();
     rowver::parallel::map(&old, workers, |(order, rows)| {
         spool.add(columns.len(), (*order, 0), write::Values::Flat(write::array(&fill.entries[rows.clone()]))).map_err(failed)
     })?;
     for (index, name) in columns.iter().enumerate() {
-        let held = file.column(name).map_err(failed)?.ok_or_else(|| format!("{shown} has no column {name}"))?;
-        let w = rvr_recipe::Kind::named(&held.kind).map_err(|_| format!("{shown} holds {name} as {}, a kind rvr does not press", held.kind))?.width();
+        let held = file.column(name).map_err(failed)?.expect("the Plan copies only the columns the file has");
+        let w = rvr_recipe::Kind::named(&held.kind).expect("the file validator checked its kinds").width();
         rowver::parallel::map(&old, workers, |(order, rows)| {
             let (from, to, counts) = match &held.offsets {
                 Some(offsets) => {
@@ -329,10 +316,10 @@ pub(crate) fn merged(
         if let Some(taken) = taken {
             (rows, entries, cutflow) = (old + taken.rows, taken.entries, taken.cutflow.clone());
             holes.extend(taken.record["holes"].as_array().into_iter().flatten().cloned());
-            // The rows kept and the rows read must be of one ROOT file.
+            // The rows kept and the rows read are of one ROOT file, as the agreement check found.
             match (&record["uuid"], &taken.record["uuid"]) {
                 (Value::String(was), Value::String(now)) if was != now && !plan.unread => {
-                    return Err(format!("{} is another ROOT file than the one the filled file read (its UUID was {was}, it is {now}): press with --full", input.file.at));
+                    return Err(format!("{} is another ROOT file than the one the filled file read (its UUID was {was}, it is {now}): a bug in rvr, as the lock was checked against the file; please report it", input.file.at));
                 }
                 (_, now @ Value::String(_)) => record["uuid"] = now.clone(),
                 _ => {}
@@ -360,7 +347,7 @@ pub(crate) fn merged(
             }
         }
         holes.sort_by_key(|hole| hole["entries"][0].as_u64());
-        let object = record.as_object_mut().ok_or("a file's record is not an object")?;
+        let object = record.as_object_mut().expect("a checked file record is an object");
         match holes.is_empty() {
             true => object.shift_remove("holes"),
             false => object.insert("holes".into(), holes.into()),

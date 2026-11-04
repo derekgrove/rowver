@@ -140,8 +140,7 @@ fn whole(text: &str) -> Option<u64> {
     (digits && between && !text.is_empty()).then(|| text.replace('_', "").parse().ok()).flatten()
 }
 
-/// A count given as `flag`'s value: a whole number from 1, and at most `most` when that is less
-/// than `u64::MAX` (SPEC §5.1.4).
+/// A count given as `flag`'s value: a whole number from 1 to `most` (SPEC §5.1.4).
 pub fn count(flag: &str, text: &str, most: u64) -> Result<u64, String> {
     let range = match most {
         u64::MAX => "from 1".to_owned(),
@@ -157,11 +156,11 @@ pub fn seed(text: &str) -> Result<u64, String> {
     whole(text).ok_or_else(|| format!("--seed is a whole number from 0 to 2^64 − 1, written in digits, not {text:?}"))
 }
 
-/// `--events N|all`: `all`, or a number of events from 1 to 2^63 − 1.
-pub fn events(text: &str) -> Result<(), String> {
+/// `--events N|all`: every event, or the first N, from 1 to 2^63 − 1.
+pub fn events(text: &str) -> Result<rowver::choice::Events, String> {
     match text {
-        "all" => Ok(()),
-        n => count("--events", n, i64::MAX as u64).map(drop).map_err(|_| format!("--events is a number of events from 1 to 2^63 − 1, or all, not {n:?} (in digits, with _ between them if you like, as 50_000)")),
+        "all" => Ok(rowver::choice::Events::All),
+        n => count("--events", n, i64::MAX as u64).map(rowver::choice::Events::First).map_err(|_| format!("--events is a number of events from 1 to 2^63 − 1, or all, not {n:?} (in digits, with _ between them if you like, as 50_000)")),
     }
 }
 

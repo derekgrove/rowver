@@ -25,13 +25,7 @@ pub fn main(options: &Options) -> u8 {
         Err(why) => return crate::wrong("status", &why),
     };
     let (dir, out) = (options.words.first().map(PathBuf::from), options.value("--out").map(PathBuf::from));
-    match run(dir, out, choice, options.has("--holes")) {
-        Ok(current) => u8::from(!current),
-        Err(why) => {
-            eprintln!("rvr status: {why}");
-            1
-        }
-    }
+    crate::report("status", run(dir, out, choice, options.has("--holes")).map(|current| u8::from(!current)))
 }
 
 fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) -> Result<bool, String> {
@@ -40,7 +34,7 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
     let lock = rowver::study::lock::Lock::read(&texts.lock).ok();
     let names: Vec<String> = lock.iter().flat_map(|lock| lock.samples.iter().map(|s| s.name.clone())).collect();
     // Said only of a lock that reads: one that does not is among what rvr press would refuse.
-    let stale = lock.as_ref().is_some_and(|lock| rowver::write::text_checksum(&texts.samples) != lock.samples_toml_sha256);
+    let stale = lock.as_ref().is_some_and(|lock| crate::agree::stale(&texts.samples, lock));
     if stale {
         println!("samples.toml has changed since samples.lock was written: run rvr samples resolve samples.toml and review the new lock.");
     }
@@ -85,10 +79,7 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
     let plan = match plan {
         Ok(plan) => plan,
         Err(why) => {
-            println!("rvr press would refuse:");
-            for line in why.lines() {
-                println!("  {line}");
-            }
+            refused(&why);
             return Ok(false);
         }
     };
@@ -154,14 +145,19 @@ fn missing(dir: PathBuf, study: String, target: PathBuf, texts: crate::texts::Te
             if let Some(note) = stopped_note(&stopped) {
                 println!("{note}");
             }
-            println!("rvr press would refuse:");
-            for line in why.lines() {
-                println!("  {line}");
-            }
+            refused(&why);
         }
     }
     println!("{} is not there yet: rvr press makes it.", target.display());
     Ok(false)
+}
+
+/// What rvr press would refuse with, one problem a line.
+fn refused(why: &str) {
+    println!("rvr press would refuse:");
+    for line in why.lines() {
+        println!("  {line}");
+    }
 }
 
 /// A press stopped in `stopped` (its staging folder) with files done, said; none, nothing.

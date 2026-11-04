@@ -5,8 +5,7 @@
 pub mod lock;
 pub mod samples;
 
-/// Every problem a validator found in its input, each said so that its author can fix it, and the
-/// lines that mend what was left out where the mending is mechanical (a table or a header line).
+/// Every problem a validator found in its input, and the lines that mend what was left out (a table or a header line).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Problems {
     /// Each problem, in a sentence.
@@ -54,9 +53,8 @@ impl std::fmt::Display for Problems {
 
 pub(crate) use rvr_recipe::unknown;
 
-/// A local path with its `.` and `..` taken out by its text alone (no link is followed), so that
-/// one file written two ways is told to be one.
-pub fn plain(path: &std::path::Path) -> std::path::PathBuf {
+/// A local path with its `.` and `..` taken out by its text alone (no link followed), so one file written two ways is one.
+pub fn lexical(path: &std::path::Path) -> std::path::PathBuf {
     use std::path::Component;
     let mut out = std::path::PathBuf::new();
     for part in path.components() {
@@ -142,7 +140,7 @@ mod tests {
         assert!(utc("2026-02-28T23:59:59Z") && utc("2024-02-29T00:00:00Z"));
         assert!(!utc("2026-02-29T00:00:00Z") && !utc("2026-13-01T00:00:00Z") && !utc("2026-01-01 00:00:00"));
         assert!(hex("0a1b2c3d", 8) && !hex("0A1B2C3D", 8) && !hex("0a1b2c3", 8));
-        let p = |text: &str| plain(std::path::Path::new(text));
+        let p = |text: &str| lexical(std::path::Path::new(text));
         assert_eq!(p("./d/x.root"), p("d/x.root"));
         assert_eq!(p("d/../e/./x.root"), p("e/x.root"));
         assert_eq!(p("../x.root"), std::path::PathBuf::from("../x.root"));

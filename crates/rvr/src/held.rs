@@ -99,9 +99,7 @@ impl Held {
         *self.held.lock().unwrap() = kept;
         Ok(())
     }
-}
 
-impl Held {
     /// Bytes of `ranges` read from the file.
     fn counted(&self, ranges: &[(u64, usize)]) {
         let bytes: usize = ranges.iter().map(|(_, len)| len).sum();

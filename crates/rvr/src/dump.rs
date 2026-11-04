@@ -5,6 +5,11 @@ use rowver::rvr::{push_shown, width, Held, Reader};
 use serde_json::Value;
 use std::rc::Rc;
 
+/// What a column record of `data.cols` the file does not hold (a damaged header, as one with no name) is said as.
+fn unheld(reader: &rowver::rvr::Reader, name: &str) -> String {
+    format!("{}: data.cols records a column {name:?}, which the file does not hold: its header is damaged; copy it again, or press its study again", reader.path().display())
+}
+
 /// The first `n` values of little-endian bytes of a kind, as text, ending in `...` when there are more.
 fn first(kind: &str, bytes: &[u8], n: usize) -> String {
     let w = width(kind).unwrap_or(1);
@@ -103,7 +108,7 @@ fn print_columns(reader: &Reader) -> Result<(), String> {
     println!("{:wide$} i8[{rows}]  {}", "entry", first("i8", &entry, 5));
     for record in data["cols"].as_array().into_iter().flatten() {
         let name = record["name"].as_str().unwrap_or_default();
-        let held = reader.column(name).map_err(failed)?.ok_or(format!("no column {name}"))?;
+        let held = reader.column(name).map_err(failed)?.ok_or_else(|| unheld(reader, name))?;
         show(name, wide, &held, None);
     }
     // The derived columns are worked out together, each column they use read once; when that
@@ -143,7 +148,7 @@ fn print_all(reader: &Reader) -> Result<(), String> {
     let mut columns = Vec::new();
     for record in data["cols"].as_array().into_iter().flatten() {
         let name = record["name"].as_str().unwrap_or_default();
-        columns.push((name.to_owned(), Rc::new(reader.column(name).map_err(failed)?.ok_or(format!("no column {name}"))?)));
+        columns.push((name.to_owned(), Rc::new(reader.column(name).map_err(failed)?.ok_or_else(|| unheld(reader, name))?)));
     }
     // The derived columns are worked out from the stored ones held, none of them read again.
     let names: Vec<String> = rowver::rvr::derived::listed(reader.header()).into_iter().map(|(name, _)| name).collect();
@@ -177,10 +182,7 @@ const TEXTS: [(&str, &str, &str); 3] = [
     ("--lock", "lock", "samples.lock"),
 ];
 
-/// Print the parts the flags ask for (`--files`, `--recipe`, `--samples`, `--lock`,
-/// `--columns`), or everything: the header with the texts printed after it, then every column
-/// (with `all`, every value of it). A file whose header fails its checks is still shown, after
-/// one line saying what is wrong.
+/// Print the parts the flags ask for, or everything (with `all`, every value); a header that fails its checks too.
 pub fn main(file: &str, flags: &[&str], all: bool) -> Result<(), String> {
     let (reader, checked) = Reader::inspect(file).map_err(|e| rowver::plain(file, &e))?;
     if let Err(why) = &checked {

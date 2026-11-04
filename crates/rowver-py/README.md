@@ -48,5 +48,6 @@ whole package; every other name in it begins with `_`.
 
 From this folder, with Rust 1.91 or later: `maturin develop --release` installs it into the
 active Python; `maturin build --release` writes a wheel (one for every Python from 3.11).
+It builds on Linux and macOS.
 
 MIT licensed.

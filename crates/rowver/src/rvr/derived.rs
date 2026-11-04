@@ -44,16 +44,13 @@ pub(super) fn validate(derived: &Value, data: &Value) -> Result<()> {
 /// depends on it, only how much is held at once.
 const RUN: usize = 1 << 20;
 
-/// The metadata a press gives every sample beside the keys of samples.toml, which no expression sees.
-pub use rvr_recipe::ADDED;
-
 /// The metadata fields an expression can read: numbers, text, and truth values.
 pub fn fields(metadata: &Map<String, Value>) -> BTreeMap<String, Constant> {
     let read = |value: &Value| match value {
         Value::Bool(truth) => Some(Constant::Truth(*truth)),
         Value::String(text) => Some(Constant::Text(text.clone())),
         Value::Number(number) => match number.as_i64() {
-            Some(whole) if !number.to_string().contains(['.', 'e', 'E']) => Some(Constant::Whole(whole)),
+            Some(whole) if crate::json::whole(number) => Some(Constant::Whole(whole)),
             _ => number.as_f64().map(Constant::Float),
         },
         _ => None,
@@ -61,26 +58,20 @@ pub fn fields(metadata: &Map<String, Value>) -> BTreeMap<String, Constant> {
     metadata.iter().filter_map(|(name, value)| Some((name.clone(), read(value)?))).collect()
 }
 
-/// One derived column's values over the `rows` rows of `columns`, of the kind and shape `seen` holds.
-pub(crate) fn evaluate(place: &str, expression: &Expression, columns: &dyn Columns, metadata: &BTreeMap<String, Constant>, rows: usize, seen: &mut Option<(Kind, bool)>, row: &dyn Fn(usize) -> String) -> Result<Array> {
+/// `metadata` with each total of `recipe` standing in as 1, as a derived column is tried before every event is read.
+pub fn standing_in(metadata: &mut BTreeMap<String, Constant>, recipe: &Recipe) {
+    for total in &recipe.totals {
+        metadata.entry(total.name.clone()).or_insert(Constant::Float(1.0));
+    }
+}
+
+/// A derived column's values over the `rows` rows of `columns`, worked out a run at a time; a data error names its row.
+pub fn evaluate(expression: &Expression, columns: &dyn Columns, metadata: &BTreeMap<String, Constant>, rows: usize) -> rvr_recipe::Result<Array> {
     let defines = BTreeMap::new();
     let mut work = |run: &dyn Columns, from: usize, to: usize| {
         Scope::new(run, metadata, &defines).evaluate(expression).and_then(|value| per_event(value, to - from))
     };
-    let runs = rvr_recipe::over_runs(columns, rows, &mut work).map_err(|(e, _)| e).and_then(Array::joined);
-    let array = runs.map_err(|e| match e.1 {
-        Some(at) => invalid(format!("{place}, {}: {}", row(at), e.0)),
-        None => invalid(format!("{place}: {}", e.0)),
-    })?;
-    let (values, listed) = match &array {
-        Array::Event(values) => (values, false),
-        Array::Object { values, .. } => (values, true),
-        Array::Constant(_) => unreachable!("per_event gives one value per row"),
-    };
-    if *seen.get_or_insert((values.kind, listed)) != (values.kind, listed) {
-        return Err(invalid(format!("{place} is not the same kind of column for every sample: give each sample's value the same type")));
-    }
-    Ok(array)
+    rvr_recipe::over_runs(columns, rows, &mut work).map_err(|(e, _)| e).and_then(Array::joined)
 }
 
 /// Add one run's values, of the kind and shape of those before, to a column over every row.
@@ -150,13 +141,11 @@ impl<'a> Store<'a> {
         if let Some(held) = self.held.borrow().get(name) {
             return Ok(Some(held.clone()));
         }
-        let whole = if let Some(record) = self.file.record(name).filter(|_| self.hollow) {
-            Self::none_of(record)
-        } else if self.file.record(name).is_some() {
-            let Some(held) = self.file.column(name)? else {
-                return Ok(None);
-            };
-            held
+        let whole = if let Some(record) = self.file.record(name) {
+            match self.hollow {
+                true => Self::none_of(record),
+                false => self.file.stored(name, record)?,
+            }
         } else if let Some((_, expression)) = self.derived.iter().find(|(n, _)| n == name) {
             if !self.working.borrow_mut().insert(name.to_owned()) {
                 return Err(invalid(format!("{} uses itself, directly or through other derived columns: rvr derive drops one of them", self.place(name))));
@@ -170,6 +159,11 @@ impl<'a> Store<'a> {
         let whole = Rc::new(whole);
         self.held.borrow_mut().insert(name.to_owned(), whole.clone());
         Ok(Some(whole))
+    }
+
+    /// A column the file has, stored or derived.
+    fn had(&self, name: &str) -> Result<Rc<Held>> {
+        Ok(self.get(name)?.expect("a derived column is worked out"))
     }
 
     /// Let go of every column held that working out `rest` does not need.
@@ -241,13 +235,20 @@ impl<'a> Store<'a> {
         for (first, last, sample, path) in runs {
             let metadata = &header["made"]["files"][sample]["metadata"];
             let mut metadata = metadata.as_object().map(fields).unwrap_or_default();
-            metadata.retain(|key, _| !ADDED.contains(&key.as_str()));
+            metadata.retain(|key, _| !rvr_recipe::ADDED.contains(&key.as_str()));
             metadata.insert("file".into(), Constant::Text(path.into()));
             let run = Run { store: self, first, last, held: RefCell::default() };
-            let values = evaluate(&place, &parsed, &run, &metadata, last - first, &mut seen, &|at| format!("row {}", first + at));
-            add(&mut whole, values.map_err(|e| invalid(format!("sample {sample}: {e}")))?);
+            let values = evaluate(&parsed, &run, &metadata, last - first).map_err(|e| match e.1 {
+                Some(at) => invalid(format!("sample {sample}: {place}, row {}: {}", first + at, e.0)),
+                None => invalid(format!("sample {sample}: {place}: {}", e.0)),
+            })?;
+            let shape = values.shape().expect("per_event gives one value per row");
+            if *seen.get_or_insert(shape) != shape {
+                return Err(invalid(format!("sample {sample}: {place} is not the same kind of column for every sample: give each sample's value the same type")));
+            }
+            add(&mut whole, values);
         }
-        whole.ok_or_else(|| invalid(format!("{place} has no values")))
+        Ok(whole.expect("one run or more is worked out"))
     }
 }
 
@@ -278,7 +279,7 @@ fn later(made: &str, this: &str) -> bool {
 }
 
 /// Rows `first..last` of a file's columns, as an expression reads them: each read from the file's
-/// bytes once, when first asked for (a part of the run is sliced from it by `rvr_recipe::Slice`).
+/// bytes once, when first asked for (`rvr_recipe::over_runs` slices a part of the run from it).
 struct Run<'s, 'a> {
     store: &'s Store<'a>,
     first: usize,
@@ -354,7 +355,7 @@ pub fn records(file: &Reader, derived: &[(String, String)], before: &[Value]) ->
             out.push(kept.clone());
             continue;
         }
-        let whole = store.get(name)?.ok_or_else(|| invalid(format!("derived column {name} has no values")))?;
+        let whole = store.had(name)?;
         let record = crate::write::derived(name, expression, &whole, &rows).map_err(|e| invalid(format!("derived column {e}")))?;
         out.push(record);
     }
@@ -383,7 +384,7 @@ pub fn columns_with(file: &Reader, names: &[String], held: &[(String, Rc<Held>)]
             .find(|r| r["name"] == name.as_str())
             .ok_or_else(|| invalid(format!("the file has no derived column named {name}")))?;
         let place = store.place(name);
-        let whole = store.get(name)?.ok_or_else(|| invalid(format!("{place} has no values")))?;
+        let whole = store.had(name)?;
         let expression = record["expression"].as_str().unwrap_or_default();
         let again = crate::write::derived(name, expression, &whole, &rows).map_err(|e| invalid(format!("derived column {e}")))?;
         // A jagged record's only number is its content's count.
@@ -417,7 +418,7 @@ pub(super) fn checked_empty(file: &Reader) -> Result<usize> {
     store.hollow = true;
     let records = file.header()["derived"]["columns"].as_array().map_or(&[][..], Vec::as_slice);
     for ((name, _), record) in derived.iter().zip(records) {
-        let whole = store.get(name)?.ok_or_else(|| invalid(format!("{} has no values", store.place(name))))?;
+        let whole = store.had(name)?;
         let want = Store::none_of(record);
         if (&whole.kind, whole.offsets.is_some()) != (&want.kind, want.offsets.is_some()) {
             let shape = |held: &Held| if held.offsets.is_some() { format!("jagged of {}", held.kind) } else { held.kind.clone() };
@@ -449,7 +450,7 @@ pub(super) fn agreed(header: &Value) -> Result<usize> {
         Some(Err(e)) if !derived.is_empty() => {
             return Err(invalid(format!("the recipe it carries cannot be read ({}), so its derived columns cannot be worked out. {}", e.line(), remedy(header))))
         }
-        None if !derived.is_empty() => return Err(invalid("it has derived columns but carries no recipe to say what they are")),
+        None if !derived.is_empty() => return Err(invalid(format!("it has derived columns but carries no recipe to say what they are. {}", remedy(header)))),
         _ => {}
     }
     Ok(derived.len())

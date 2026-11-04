@@ -8,7 +8,7 @@ use crate::samples::some;
 use rowver::study::lock::Lock;
 use rowver::rvr::Reader;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub(crate) const USAGE: &str = "usage:
   rvr empty FILE... [--study FOLDER] [--anyway] [--force | -f]
@@ -23,11 +23,11 @@ pub(crate) const USAGE: &str = "usage:
 pub fn empty_main(options: &Options) -> u8 {
     let force = options.has("--force");
     if !force && !crate::at_terminal() {
-        return said(Err("nothing was emptied: rvr empty asks before it lets a file's columns go, and no one is at a terminal to answer. Give --force (or -f) to empty without asking.".into()), "empty");
+        return crate::report("empty", Err("nothing was emptied: rvr empty asks before it lets a file's columns go, and no one is at a terminal to answer. Give --force (or -f) to empty without asking.".into()));
     }
     let mut code = 0;
     for file in &options.words {
-        code = code.max(said(empty(Path::new(file), options.value("--study").map(Path::new), options.has("--anyway"), force), "empty"));
+        code = code.max(crate::report("empty", empty(Path::new(file), options.value("--study").map(Path::new), options.has("--anyway"), force).map(|()| 0)));
     }
     code
 }
@@ -38,18 +38,7 @@ pub fn refill_main(options: &Options) -> u8 {
         Ok(workers) => workers,
         Err(why) => return crate::wrong("refill", &why),
     };
-    said(refill(Path::new(&options.words[0]), options.value("--study").map(Path::new), workers), "refill")
-}
-
-/// Print what stops a command: the exit status.
-fn said(result: Result<(), String>, command: &str) -> u8 {
-    match result {
-        Ok(()) => 0,
-        Err(why) => {
-            eprintln!("rvr {command}: {why}");
-            1
-        }
-    }
+    crate::report("refill", refill(Path::new(&options.words[0]), options.value("--study").map(Path::new), workers).map(|()| 0))
 }
 
 /// Empty `file`, unless it has holes or, without `anyway`, an input differs from its lock; asked
@@ -121,13 +110,6 @@ fn amount(bytes: u64) -> String {
     }
 }
 
-/// `path` with `suffix` added to its name.
-pub(crate) fn beside(path: &Path, suffix: &str) -> PathBuf {
-    let mut name = path.as_os_str().to_owned();
-    name.push(suffix);
-    PathBuf::from(name)
-}
-
 /// Press the empty `file`'s columns again from its study, and put them in it when they are what
 /// it records.
 fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), String> {
@@ -138,9 +120,9 @@ fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), Strin
     if !shell.empty() {
         return Err(format!("{shown} holds its columns: there is nothing to refill."));
     }
-    let (texts, name) = study_texts(shell.header(), file)?;
+    let (texts, name) = study_texts(shell.header());
     let base = base(file, study)?;
-    let (staged, out) = (beside(file, ".refill"), beside(file, ".refilled"));
+    let (staged, out) = (crate::files::beside(file, ".refill"), crate::files::beside(file, ".refilled"));
     if let Some(there) = [&staged, &out].into_iter().find(|p| p.exists()) {
         return Err(format!("{} is in the way: remove it, and refill again.", there.display()));
     }
@@ -149,14 +131,21 @@ fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), Strin
     // The copy pressed beside it is not signed: only its arrays are kept.
     let asked = Asked { choose: Choose::Recorded(shell.header()["made"]["files"].clone()), on: On::Once, workers, sign: false };
     let pressed = crate::plan::build(place, texts, asked).and_then(crate::core::press);
-    let settled = pressed.and_then(|holes| settle(file, &shell, &staged, &out, holes));
+    let checked = pressed.and_then(|holes| settle(file, &shell, &staged, &out, holes));
     let _ = std::fs::remove_file(&staged);
-    let _ = std::fs::remove_file(&out);
-    settled.map_err(|why| format!("{why}\n{shown} is still empty."))
+    let said = checked.map_err(|why| {
+        let _ = std::fs::remove_file(&out);
+        format!("{why}\n{shown} is still empty.")
+    })?;
+    // The file refilled is checked: when it cannot be put in place it stays, to be moved by hand.
+    let settled = std::fs::File::open(&out).and_then(|f| f.sync_all()).and_then(|()| std::fs::rename(&out, file));
+    settled.map_err(|e| format!("{shown} could not be put in place ({}): the refilled file, checked, is at {}; mv '{}' '{shown}' puts it in place", rowver::described(&e), out.display(), out.display()))?;
+    println!("Refilled {shown}: {said}.");
+    Ok(())
 }
 
-/// Put the arrays pressed into `staged` in `file` when their values are what it records.
-fn settle(file: &Path, shell: &Reader, staged: &Path, out: &Path, holes: usize) -> Result<(), String> {
+/// Write at `out` the file refilled with the arrays pressed into `staged`, when their values are what it records, checked; what was done, in words.
+fn settle(file: &Path, shell: &Reader, staged: &Path, out: &Path, holes: usize) -> Result<String, String> {
     let shown = file.display();
     if holes > 0 {
         return Err(format!("pressed again, it has {} its press did not have: an input could not be read, as the holes listed above say. Their fixes are a press's: for a refill, put each input back as its lock recorded it, then run rvr refill {shown} again.", some(holes, "hole", "holes")));
@@ -191,10 +180,7 @@ fn settle(file: &Path, shell: &Reader, staged: &Path, out: &Path, holes: usize) 
         Err(e @ (rowver::Error::Io(_) | rowver::Error::File(..))) => return Err(rowver::plain(out, &e)),
         Err(e) => return Err(format!("{}, the file refilled, does not check out: {e}", out.display())),
     }
-    std::fs::File::open(out).and_then(|f| f.sync_all()).map_err(|e| rowver::plain_io(out, &e))?;
-    std::fs::rename(out, file).map_err(|e| rowver::plain_io(file, &e))?;
-    println!("Refilled {shown}: {said}.");
-    Ok(())
+    Ok(said)
 }
 
 /// A data section without where its arrays lie: what two presses of the same values share.

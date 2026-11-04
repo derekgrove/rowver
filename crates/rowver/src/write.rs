@@ -20,9 +20,6 @@ use column::{Indices, Measure, Packed};
 pub use derived::derived;
 pub use spool::{Order, Spool, Spooled};
 
-/// The first eight bytes of every `.rvr` file.
-const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
-
 /// Values of one kind, as the little-endian bytes of that kind.
 #[derive(Debug)]
 pub struct NumericBuffer {
@@ -46,6 +43,16 @@ pub enum Values {
         /// Every row's values, in row order.
         content: NumericBuffer,
     },
+}
+
+impl Values {
+    /// Its values, and for a list column how many each row holds.
+    pub(crate) fn parts(self) -> (NumericBuffer, Option<Vec<usize>>) {
+        match self {
+            Values::Flat(buffer) => (buffer, None),
+            Values::Jagged { counts, content } => (content, Some(counts)),
+        }
+    }
 }
 
 /// A number that an `.rvr` array can hold.
@@ -124,16 +131,13 @@ pub fn stream(
     let mut seen = HashSet::new();
     for Sample { name, rows, .. } in &rows.samples {
         if name.is_empty() || !seen.insert(name) {
-            return Err(invalid("Sample names must be nonempty and unique"));
+            return Err(invalid(format!("the sample name {name:?} is empty or given twice: give each sample a name of its own")));
         }
         edges.push(edges[edges.len() - 1] + rows);
     }
     let mut unique = HashSet::new();
-    if columns
-        .iter()
-        .any(|(name, _)| name.is_empty() || !unique.insert(name))
-    {
-        return Err(invalid("Column names must be nonempty and unique"));
+    if let Some((name, _)) = columns.iter().find(|(name, _)| name.is_empty() || !unique.insert(name)) {
+        return Err(invalid(format!("the column name {name:?} is empty or given twice: give each column a name of its own")));
     }
     let count = edges[edges.len() - 1];
     let per_sample: Vec<usize> = rows.samples.iter().map(|s| s.rows).collect();
@@ -147,12 +151,12 @@ pub fn stream(
     let take = |at: usize| {
         let mut held = sources[at].lock().unwrap_or_else(|e| e.into_inner());
         held.take()
-            .ok_or_else(|| invalid("A column was packed twice"))
+            .ok_or_else(|| invalid("a bug in rowver: a column was packed twice; please report it"))
     };
     // Each file's row bounds, within which its entries strictly increase.
     let mut files = vec![0_usize];
     for file in &rows.files {
-        let held = file["rows"].as_u64().ok_or_else(|| invalid("A data.files record has no rows"))?;
+        let held = file["rows"].as_u64().ok_or_else(|| invalid(format!("the data.files record {file} has no rows: give each file record its rows, a whole number")))?;
         files.push(files[files.len() - 1] + held as usize);
     }
     let mut items: Vec<usize> = (0..names.len() + 2).collect();
@@ -200,7 +204,7 @@ pub fn stream(
         .map(|one| Value::Object(one.record.clone()));
     data.insert("cols".into(), cols.collect());
     let mut data = Value::Object(data);
-    let checksum = data_checksum(&data)?;
+    let checksum = data_checksum(&data).map_err(|_| invalid("a bug: an array record has no sha256; please report it"))?;
     data["sha256"] = checksum.into();
     laid.files = files;
     Ok((data, laid))
@@ -242,29 +246,16 @@ impl Drop for Laid {
     }
 }
 
-/// SHA-256 of every array's sha256, in file order, as one ASCII string.
-pub(crate) fn data_checksum(data: &Value) -> Result<String> {
+/// SHA-256 of every array's sha256, in file order, as one ASCII string; or the place of an array record with none.
+pub(crate) fn data_checksum(data: &Value) -> std::result::Result<String, String> {
     let mut all = String::new();
-    let mut add = |record: &Value| {
-        let hash = record.get("sha256").and_then(Value::as_str);
-        hash.map(|hash| all.push_str(hash))
-            .ok_or_else(|| invalid("An array record has no sha256"))
-    };
-    add(&data["sample"])?;
-    add(&data["entry"])?;
-    for col in data["cols"].as_array().into_iter().flatten() {
-        if col["kind"] == "jagged" {
-            add(&col["offsets"])?;
-            add(&col["content"])?;
-        } else {
-            add(col)?;
-        }
+    for (record, place) in crate::rvr::arrays::records(data) {
+        all.push_str(record.get("sha256").and_then(Value::as_str).ok_or_else(|| place.to_string())?);
     }
     Ok(digest(all.as_bytes()))
 }
 
-/// The sample columns of a file: every metadata key of `made.files` that makes one over the
-/// samples named, in the order the keys first appear, but for a row column's name (`taken`).
+/// The sample columns of the samples named: each metadata key of `made.files` that makes one, in order, but `taken`.
 pub fn sample_cols(samples: &[&str], files: &Value, taken: &[&str]) -> Result<Vec<Value>> {
     let records: Vec<&Value> = samples
         .iter()
@@ -316,7 +307,7 @@ pub fn made_checksum(made: &Value) -> Result<String> {
 fn frame(mut out: impl Write, header: &Value) -> Result<()> {
     let text = serde_json::to_string(header)?;
     let length = u32::try_from(text.len()).map_err(|_| invalid("the header is longer than 4 GiB, more than the format holds: press fewer samples or files into one file"))?;
-    out.write_all(MAGIC)?;
+    out.write_all(crate::rvr::MAGIC)?;
     out.write_all(&length.to_le_bytes())?;
     out.write_all(text.as_bytes())?;
     Ok(())
@@ -338,7 +329,7 @@ pub fn write_laid(path: impl AsRef<Path>, header: &Value, laid: Laid) -> Result<
 pub fn rewrite(from: impl AsRef<Path>, to: impl AsRef<Path>, header: &Value) -> Result<()> {
     use crate::about;
     let (from, to) = (from.as_ref(), to.as_ref());
-    if std::fs::canonicalize(to).is_ok_and(|to| std::fs::canonicalize(from).is_ok_and(|from| from == to)) {
+    if same_file(from, to) {
         return Err(invalid(format!("{} cannot be written again into itself: write it at another path, then move that over it", from.display())));
     }
     let (start, _) = header_end(from).map_err(|e| about(from, e))?;
@@ -346,6 +337,11 @@ pub fn rewrite(from: impl AsRef<Path>, to: impl AsRef<Path>, header: &Value) -> 
     let mut out = std::io::BufWriter::new(std::fs::File::create(to).map_err(|e| about(to, e.into()))?);
     frame(&mut out, header).map_err(|e| about(to, e))?;
     copied(source, from, out, to)
+}
+
+/// Whether two paths name one file.
+fn same_file(a: &Path, b: &Path) -> bool {
+    std::fs::canonicalize(a).is_ok_and(|a| std::fs::canonicalize(b).is_ok_and(|b| a == b))
 }
 
 /// The file at `path`, opened at its arrays, which begin at `start`.
@@ -383,8 +379,7 @@ pub fn refilled(shell: impl AsRef<Path>, from: impl AsRef<Path>, to: impl AsRef<
     use crate::about;
     use std::io::Read;
     let (shell, from, to) = (shell.as_ref(), from.as_ref(), to.as_ref());
-    let same = |a: &Path| std::fs::canonicalize(to).is_ok_and(|to| std::fs::canonicalize(a).is_ok_and(|a| a == to));
-    if same(shell) || same(from) {
+    if same_file(shell, to) || same_file(from, to) {
         return Err(invalid(format!("{} cannot be written into a file it is made from: write it at another path, then move that over it", to.display())));
     }
     let (end, size) = header_end(shell).map_err(|e| about(shell, e))?;
@@ -403,12 +398,6 @@ pub fn refilled(shell: impl AsRef<Path>, from: impl AsRef<Path>, to: impl AsRef<
 
 /// Where a file's header ends, and how long the file is.
 fn header_end(path: &Path) -> Result<(u64, u64)> {
-    use std::io::Read;
-    let (mut file, size) = crate::rvr::opened(path)?;
-    let mut prefix = vec![0; 12];
-    if file.read_exact(&mut prefix).is_err() {
-        prefix.clear();
-    }
-    let end = crate::rvr::header_end(&prefix, size)?;
+    let (_, size, end) = crate::rvr::framed(path)?;
     Ok((end as u64, size as u64))
 }

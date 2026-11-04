@@ -242,3 +242,15 @@ fn a_failed_read_is_said_in_plain_words() {
     let said = rowver::plain(&folder, &validate_file(&folder).unwrap_err());
     assert!(said.ends_with("is a folder, not a file: name a file in it"), "{said}");
 }
+
+#[cfg(unix)]
+#[test]
+fn the_header_text_is_the_file_opened_even_with_another_renamed_over_it() {
+    let bytes = golden();
+    let path = written(&bytes, "renamed");
+    let reader = Reader::open(&path).unwrap();
+    let other = written(&to_bytes(&json!({"rowver": 15}), &[]), "other");
+    std::fs::rename(&other, &path).unwrap();
+    let start = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    assert_eq!(reader.header_text().unwrap(), &bytes[12..start]);
+}

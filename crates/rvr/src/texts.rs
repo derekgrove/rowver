@@ -78,32 +78,15 @@ pub fn read(dir: &Path) -> Result<Texts, String> {
 
 /// A study's lock, read on rails.
 pub fn lock(dir: &Path) -> Result<Lock, String> {
-    let text = study_file(dir, "samples.lock")?;
-    Lock::read(&text).map_err(|p| format!("samples.lock does not check out: {}. Run rvr samples resolve samples.toml again.", p.to_string().replace('\n', "; ")))
+    lock_of(&study_file(dir, "samples.lock")?, "samples.lock")
 }
 
-/// The recipe a press runs, or every problem with it, one a line: what `Recipe::read` refuses,
-/// any of the five tables left out, and a `[columns]` that stores nothing.
+/// The lock `text` holds, read on rails; `name` names it in a refusal.
+pub fn lock_of(text: &str, name: &str) -> Result<Lock, String> {
+    Lock::read(text).map_err(|p| format!("{name} does not check out: {}. Run rvr samples resolve samples.toml again.", p.to_string().replace('\n', "; ")))
+}
+
+/// The recipe a press runs, or every problem `Recipe::read` finds with it, one a line.
 pub fn read_recipe(source: &str) -> Result<Recipe, String> {
-    let mut said: Vec<String> = Vec::new();
-    let recipe = match Recipe::read(source) {
-        Ok(recipe) => Some(recipe),
-        Err(e) => {
-            said.extend(e.0.lines().map(|line| format!("recipe.toml: {line}")));
-            None
-        }
-    };
-    if let Ok(root) = source.parse::<toml::Table>() {
-        let missing = crate::tables::lacking(&root);
-        if !missing.is_empty() {
-            said.push(crate::tables::refusal(&missing));
-        }
-    }
-    if recipe.as_ref().is_some_and(|recipe| recipe.columns.is_empty()) {
-        said.push("recipe.toml stores nothing: under [columns], list branches (branches = [\"MET_pt\"]) or name computed columns (ht = \"sum(Jet_pt)\").".into());
-    }
-    match (recipe, said.is_empty()) {
-        (Some(recipe), true) => Ok(recipe),
-        _ => Err(said.join("\n")),
-    }
+    Recipe::read(source).map_err(|e| e.0.lines().map(|line| format!("recipe.toml: {line}")).collect::<Vec<_>>().join("\n"))
 }

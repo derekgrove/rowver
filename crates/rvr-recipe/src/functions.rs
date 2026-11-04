@@ -2,7 +2,7 @@
 //! kinematics (the kinematic kernels are hep-columns'). The README's "Functions, exactly" defines
 //! each to the bit.
 
-use crate::array::{lacking, not_truth, together, unlike, Array, Constant, Store, Values};
+use crate::array::{adopt, lacking, not_truth, together, unlike, Array, Constant, Store, Values};
 use crate::kind::Kind;
 use crate::{data, problem, Result};
 use hep_columns::vectors::Momentum;
@@ -18,24 +18,13 @@ fn lists<'a>(array: &'a Array, what: &str) -> Result<(&'a Arc<Vec<usize>>, &'a V
 
 /// Apply a float function to every value, in the float kind of the input.
 pub(crate) fn float_map(array: &Array, function: fn(f64) -> f64) -> Result<Array> {
-    let map = |values: &Values| {
-        let kind = values.kind.floating();
-        let numbers = values
-            .numbers()
-            .into_iter()
-            .map(|value| kind.round(function(value)));
-        Values::float(kind, numbers.collect())
-    };
-    Ok(match array {
-        Array::Constant(constant) => {
-            Array::Constant(Constant::Float(function(constant.alone(1)?.number(0))))
-        }
-        Array::Event(values) => Array::Event(map(values)),
-        Array::Object { offsets, values } => Array::Object {
-            offsets: offsets.clone(),
-            values: map(values),
+    array.map_values(
+        |constant| Ok(Array::Constant(Constant::Float(function(constant.alone(1)?.number(0))))),
+        |values| {
+            let kind = values.kind.floating();
+            Ok(Values::float(kind, values.numbers().into_iter().map(|value| kind.round(function(value))).collect()))
         },
-    })
+    )
 }
 
 /// Apply a function that keeps the kind to every value; `what` names it in a refusal.
@@ -45,31 +34,19 @@ pub(crate) fn same_map(
     whole: fn(i64) -> i64,
     float: fn(f64) -> f64,
 ) -> Result<Array> {
-    let map = |values: &Values| match &values.store {
-        Store::Whole(held) => Values::whole(
-            values.kind,
-            held.iter().map(|v| values.kind.wrap(whole(*v))).collect(),
-        ),
-        Store::Float(held) => Values::float(values.kind, held.iter().map(|v| float(*v)).collect()),
+    let fixed = |constant: &Constant| match constant {
+        Constant::Whole(value) => Ok(Array::Constant(Constant::Whole(whole(*value)))),
+        Constant::Float(value) => Ok(Array::Constant(Constant::Float(float(*value)))),
+        Constant::Missing(key) => Err(lacking(key, &format!("a number in {what}"))),
+        Constant::Truth(_) => Ok(array.clone()),
+        Constant::Text(text) => Err(problem(format!("{what} needs a number, not the text {text:?}"))),
     };
-    Ok(match array {
-        Array::Constant(Constant::Whole(value)) => Array::Constant(Constant::Whole(whole(*value))),
-        Array::Constant(Constant::Float(value)) => Array::Constant(Constant::Float(float(*value))),
-        Array::Constant(Constant::Missing(key)) => return Err(lacking(key, &format!("a number in {what}"))),
-        Array::Constant(Constant::Truth(_)) => return Ok(array.clone()),
-        Array::Constant(Constant::Text(text)) => return Err(problem(format!("{what} needs a number, not the text {text:?}"))),
-        Array::Event(values) => Array::Event(map(values)),
-        Array::Object { offsets, values } => Array::Object {
-            offsets: offsets.clone(),
-            values: map(values),
-        },
+    array.map_values(fixed, |values| {
+        Ok(match &values.store {
+            Store::Whole(held) => Values::whole(values.kind, held.iter().map(|v| values.kind.wrap(whole(*v))).collect()),
+            Store::Float(held) => Values::float(values.kind, held.iter().map(|v| float(*v)).collect()),
+        })
     })
-}
-
-/// Every value rounded down or up by `function` in its own kind: whole numbers and true-or-false
-/// values are kept as they are.
-pub(crate) fn kept_whole(array: &Array, what: &str, function: fn(f64) -> f64) -> Result<Array> {
-    same_map(array, what, |v| v, function)
 }
 
 /// Every value rounded to the nearest whole number, halves to even, in its own kind: whole numbers
@@ -87,43 +64,20 @@ pub(crate) fn rounded(array: &Array) -> Result<Array> {
 
 /// Say for every value whether it is a finite number.
 pub(crate) fn finite(array: &Array) -> Result<Array> {
-    let map = |values: &Values| {
-        Values::whole(
-            Kind::B1,
-            values
-                .numbers()
-                .into_iter()
-                .map(|v| v.is_finite() as i64)
-                .collect(),
-        )
-    };
-    Ok(match array {
-        Array::Constant(constant) => {
-            Array::Constant(Constant::Truth(constant.alone(1)?.number(0).is_finite()))
-        }
-        Array::Event(values) => Array::Event(map(values)),
-        Array::Object { offsets, values } => Array::Object {
-            offsets: offsets.clone(),
-            values: map(values),
-        },
-    })
-}
-
-/// Which of two values to keep.
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum Extreme {
-    Least,
-    Greatest,
+    array.map_values(
+        |constant| Ok(Array::Constant(Constant::Truth(constant.alone(1)?.number(0).is_finite()))),
+        |values| Ok(Values::whole(Kind::B1, values.numbers().into_iter().map(|v| v.is_finite() as i64).collect())),
+    )
 }
 
 /// The lesser or greater of two arrays value by value, in their common kind, as NumPy's `minimum`
 /// and `maximum`: a NaN on either side (the first when both), else the left one only when it is
 /// strictly less (greater), so that between equal values the right one is given.
-pub(crate) fn pairwise(left: &Array, right: &Array, which: Extreme) -> Result<Array> {
+pub(crate) fn pairwise(left: &Array, right: &Array, greatest: bool) -> Result<Array> {
     let float = move |x: f64, y: f64| {
         if x.is_nan() || y.is_nan() {
             if x.is_nan() { x } else { y }
-        } else if (which == Extreme::Greatest && x > y) || (which == Extreme::Least && x < y) {
+        } else if (greatest && x > y) || (!greatest && x < y) {
             x
         } else {
             y
@@ -131,7 +85,7 @@ pub(crate) fn pairwise(left: &Array, right: &Array, which: Extreme) -> Result<Ar
     };
     let whole = move |kind: Kind, x: i64, y: i64| {
         let (a, b) = (kind.widen(x), kind.widen(y));
-        if (which == Extreme::Greatest && a > b) || (which == Extreme::Least && a < b) { x } else { y }
+        if (greatest && a > b) || (!greatest && a < b) { x } else { y }
     };
     let apply = |a: &Values, b: &Values| -> Result<Values> {
         let (a, b) = together(a, b)?;
@@ -141,19 +95,7 @@ pub(crate) fn pairwise(left: &Array, right: &Array, which: Extreme) -> Result<Ar
             _ => unreachable!("one kind"),
         })
     };
-    left.zip(
-        right,
-        &|constant, beside| constant.repeat(constant.beside(beside.kind)?, beside.len()),
-        &|a, b| {
-            let pair = apply(&a.alone(1)?, &b.alone(1)?)?;
-            Ok(match (&pair.store, pair.kind) {
-                (Store::Float(values), _) => Constant::Float(values[0]),
-                (Store::Whole(values), Kind::B1) => Constant::Truth(values[0] != 0),
-                (Store::Whole(values), _) => Constant::Whole(values[0]),
-            })
-        },
-        &apply,
-    )
+    left.zip(right, &adopt, &|a, b| Ok(apply(&a.alone(1)?, &b.alone(1)?)?.constant()), &apply)
 }
 
 /// A float function of two arrays (hypot, atan2), value by value, in their common float kind.
@@ -170,7 +112,7 @@ pub(crate) fn float_pair(left: &Array, right: &Array, function: fn(f64, f64) -> 
     };
     left.zip(
         right,
-        &|constant, beside| constant.repeat(constant.beside(beside.kind)?, beside.len()),
+        &adopt,
         &|a, b| {
             Ok(Constant::Float(
                 function(a.alone(1)?.number(0), b.alone(1)?.number(0)),
@@ -206,35 +148,29 @@ pub(crate) fn sign(array: &Array) -> Result<Array> {
 /// (wrapping, as an unsigned kind does); a true-or-false value is refused.
 pub(crate) fn negated(array: &Array) -> Result<Array> {
     let truth = || problem("- needs a number, not a true-or-false value: write if(x, -1, 0), or not x");
-    let map = |values: &Values| match &values.store {
+    let fixed = |constant: &Constant| match constant {
+        Constant::Whole(value) => Ok(Array::Constant(Constant::Whole(value.wrapping_neg()))),
+        Constant::Float(value) => Ok(Array::Constant(Constant::Float(-value))),
+        Constant::Truth(_) => Err(truth()),
+        Constant::Missing(key) => Err(lacking(key, "a number")),
+        Constant::Text(text) => Err(problem(format!("- needs a number, not the text {text:?}"))),
+    };
+    array.map_values(fixed, |values| match &values.store {
         Store::Float(held) => Ok(Values::float(values.kind, held.iter().map(|v| -v).collect())),
         Store::Whole(_) if values.kind == Kind::B1 => Err(truth()),
         Store::Whole(held) => Ok(Values::whole(values.kind, held.iter().map(|v| values.kind.wrap(v.wrapping_neg())).collect())),
-    };
-    Ok(match array {
-        Array::Constant(Constant::Whole(value)) => Array::Constant(Constant::Whole(value.wrapping_neg())),
-        Array::Constant(Constant::Float(value)) => Array::Constant(Constant::Float(-value)),
-        Array::Constant(Constant::Truth(_)) => return Err(truth()),
-        Array::Constant(Constant::Missing(key)) => return Err(lacking(key, "a number")),
-        Array::Constant(Constant::Text(text)) => return Err(problem(format!("- needs a number, not the text {text:?}"))),
-        Array::Event(values) => Array::Event(map(values)?),
-        Array::Object { offsets, values } => Array::Object { offsets: offsets.clone(), values: map(values)? },
     })
 }
 
 /// Each truth value turned over, for `not`: it takes only true-or-false values.
 pub(crate) fn denied(array: &Array) -> Result<Array> {
-    let map = |values: &Values| -> Result<Values> {
-        Ok(Values::whole(Kind::B1, values.truths("not")?.iter().map(|v| 1 - v).collect()))
+    let fixed = |constant: &Constant| match constant {
+        Constant::Truth(truth) => Ok(Array::Constant(Constant::Truth(!truth))),
+        Constant::Missing(key) => Err(lacking(key, "a true-or-false value")),
+        Constant::Text(text) => Err(problem(format!("not needs a true-or-false value, not the text {text:?}"))),
+        _ => Err(not_truth("not", "a number")),
     };
-    Ok(match array {
-        Array::Constant(Constant::Truth(truth)) => Array::Constant(Constant::Truth(!truth)),
-        Array::Constant(Constant::Missing(key)) => return Err(lacking(key, "a true-or-false value")),
-        Array::Constant(Constant::Text(text)) => return Err(problem(format!("not needs a true-or-false value, not the text {text:?}"))),
-        Array::Constant(_) => return Err(not_truth("not", "a number")),
-        Array::Event(values) => Array::Event(map(values)?),
-        Array::Object { offsets, values } => Array::Object { offsets: offsets.clone(), values: map(values)? },
-    })
+    array.map_values(fixed, |values| Ok(Values::whole(Kind::B1, values.truths("not")?.iter().map(|v| 1 - v).collect())))
 }
 
 /// How many members each event's list has, or for true-or-false members how many are true.
@@ -314,19 +250,6 @@ macro_rules! in_own_numbers {
     };
 }
 
-/// One member of each event's list chosen by `choose`, or `otherwise` where the list is empty.
-fn chosen(
-    array: &Array,
-    otherwise: &Array,
-    what: &str,
-    choose: impl Fn(&Values, usize, usize) -> Option<usize>,
-) -> Result<Array> {
-    let (offsets, values) = lists(array, what)?;
-    let spans = offsets.windows(2);
-    let picks: Vec<Option<usize>> = spans.map(|pair| choose(values, pair[0], pair[1])).collect();
-    Ok(Array::Event(filled(values, &picks, otherwise, what)?))
-}
-
 /// Values at chosen positions, or `otherwise` where there is no choice, in the kind the two
 /// share.
 fn filled(
@@ -342,7 +265,7 @@ fn filled(
     };
     let kind = otherwise.beside(values.kind)?.with(values.kind);
     let fallback = otherwise.repeat(kind, 1)?;
-    let wide = values.cast(kind)?;
+    let wide = values.convert(kind)?;
     Ok(match (&wide.store, &fallback.store) {
         (Store::Float(held), Store::Float(other)) => Values::float(
             kind,
@@ -364,10 +287,10 @@ fn filled(
 
 /// Positions counting from 0 as a whole-number column, with `otherwise` where there is none.
 fn positions_or(picks: &[Option<usize>], otherwise: &Array, what: &str) -> Result<Values> {
-    let Array::Constant(Constant::Whole(fallback)) = otherwise else {
-        return Err(problem(format!(
-            "{what} needs a whole number to use when there is no member"
-        )));
+    let fallback = match otherwise {
+        Array::Constant(Constant::Whole(fallback)) => fallback,
+        Array::Constant(Constant::Missing(key)) => return Err(lacking(key, &format!("the whole number {what} uses when there is no member"))),
+        _ => return Err(problem(format!("{what} needs a whole number to use when there is no member"))),
     };
     let positions = picks
         .iter()
@@ -392,10 +315,7 @@ fn floats_or(found: &[Option<f64>], kind: Kind, otherwise: &Array, what: &str) -
 
 /// The float kind a kernel's result takes: the kind the inputs combine in, as a float.
 fn float_kind(arrays: &[&Values]) -> Kind {
-    let kind = arrays.iter().fold(None, |held: Option<Kind>, values| {
-        Some(held.map_or(values.kind, |held| held.with(values.kind)))
-    });
-    kind.map_or(Kind::F8, Kind::floating)
+    arrays.iter().map(|values| values.kind).reduce(Kind::with).map_or(Kind::F8, Kind::floating)
 }
 
 /// The least or greatest member of each event's list, or `otherwise` where it is empty: the first
@@ -410,7 +330,9 @@ pub(crate) fn extreme(array: &Array, otherwise: &Array, greatest: bool) -> Resul
 
 /// The member at a position of each event's list, counting from 0, or `otherwise`; `what` names it.
 pub(crate) fn nth(array: &Array, position: usize, otherwise: &Array, what: &str) -> Result<Array> {
-    chosen(array, otherwise, what, |_, from, to| (from + position < to).then_some(from + position))
+    let (offsets, values) = lists(array, what)?;
+    let picks: Vec<Option<usize>> = offsets.windows(2).map(|pair| (pair[0] + position < pair[1]).then_some(pair[0] + position)).collect();
+    Ok(Array::Event(filled(values, &picks, otherwise, what)?))
 }
 
 /// Keep the members of each event's list that a true-or-false list of the same shape marks.
@@ -481,9 +403,6 @@ fn two_lists<'a>(arguments: &'a [Array], what: &str) -> Result<[List<'a>; 4]> {
     if others != other_phi_offsets {
         return Err(unlike(others, other_phi_offsets, &format!("{what} needs the eta and phi of the other list, member by member")));
     }
-    if eta.len() != phi.len() || other_eta.len() != other_phi.len() {
-        return Err(problem(format!("{what} needs eta and phi of two lists over the same events")));
-    }
     Ok([
         (offsets, eta),
         (phi_offsets, phi),
@@ -548,9 +467,6 @@ fn particles<'a>(
         if own != offsets {
             return Err(unlike(offsets, own, &format!("{what} needs pt, eta, phi, and any mass of the same list, member by member")));
         }
-        if values.len() != pt.len() {
-            return Err(problem(format!("{what} needs pt, eta, phi, and any mass of the same list")));
-        }
         held.push(values);
     }
     Ok((offsets, held))
@@ -568,10 +484,10 @@ pub(crate) fn summed(arguments: &[Array], name: &str, of: fn(Momentum) -> f64) -
 }
 
 /// How many pairs one event's list may make: 65,536 (a list of 362 members makes 65,341).
-pub const MOST_PAIRS: usize = 1 << 16;
+pub(crate) const MOST_PAIRS: usize = 1 << 16;
 
 /// How many pairs the events worked on at once may make together, past which they are `crowded`.
-pub const RUN_PAIRS: usize = 1 << 26;
+pub(crate) const RUN_PAIRS: usize = 1 << 26;
 
 /// The pairs of each event's list as positions into its values; an event whose list would make
 /// more than `MOST_PAIRS` is a data error, and events making more than `RUN_PAIRS` together are
@@ -621,9 +537,6 @@ pub(crate) fn pair_dr(eta: &Array, phi: &Array) -> Result<Array> {
     let (phi_offsets, phi) = lists(phi, "pair_dr")?;
     if offsets != phi_offsets {
         return Err(unlike(offsets, phi_offsets, "pair_dr needs the eta and phi of one list, member by member"));
-    }
-    if eta.len() != phi.len() {
-        return Err(problem("pair_dr needs eta and phi of the same list"));
     }
     let (first, second) = pairs_of(offsets, "pair_dr")?;
     let kind = float_kind(&[eta, phi]);
@@ -702,9 +615,9 @@ pub(crate) fn take(array: &Array, positions: &Array, otherwise: &Array) -> Resul
 /// kind they combine in.
 pub(crate) fn join(arguments: &[Array]) -> Result<Array> {
     let lists = arguments.iter().map(|argument| lists(argument, "join")).collect::<Result<Vec<_>>>()?;
-    let kind = lists.iter().map(|(_, values)| values.kind).fold(lists[0].1.kind, Kind::with);
+    let kind = lists.iter().map(|(_, values)| values.kind).reduce(Kind::with).ok_or_else(|| problem("join needs two lists or more"))?;
     // Each list in that kind (itself when it is already): floats or whole numbers, as it holds.
-    let cast: Vec<Values> = lists.iter().map(|(_, values)| values.cast(kind)).collect::<Result<_>>()?;
+    let cast: Vec<Values> = lists.iter().map(|(_, values)| values.convert(kind)).collect::<Result<_>>()?;
     let offsets = lists.iter().map(|(offsets, _)| offsets.as_slice());
     let joined = if kind.float() {
         let parts: Option<Vec<(&[usize], &[f64])>> = offsets.zip(&cast).map(|(o, v)| v.floats().map(|held| (o, held))).collect();
@@ -784,10 +697,10 @@ pub(crate) fn bits(
     what: &str,
     function: impl Fn(i64, i64, bool) -> i64,
 ) -> Result<Array> {
-    let Array::Constant(Constant::Whole(amount)) = amount else {
-        return Err(problem(format!(
-            "{what} needs a whole number as its second value"
-        )));
+    let amount = match amount {
+        Array::Constant(Constant::Whole(amount)) => amount,
+        Array::Constant(Constant::Missing(key)) => return Err(lacking(key, &format!("the second value of {what}"))),
+        _ => return Err(problem(format!("{what} needs a whole number as its second value"))),
     };
     let apply = |values: &Values| match &values.store {
         Store::Whole(_) if values.kind == Kind::B1 => Err(problem(format!(
@@ -812,17 +725,12 @@ pub(crate) fn bits(
             values.kind.name()
         ))),
     };
-    Ok(match array {
-        Array::Constant(Constant::Whole(value)) => {
-            Array::Constant(Constant::Whole(function(*value, *amount, false)))
-        }
-        Array::Constant(_) => return Err(problem(format!("{what} needs whole numbers"))),
-        Array::Event(values) => Array::Event(apply(values)?),
-        Array::Object { offsets, values } => Array::Object {
-            offsets: offsets.clone(),
-            values: apply(values)?,
-        },
-    })
+    let fixed = |constant: &Constant| match constant {
+        Constant::Whole(value) => Ok(Array::Constant(Constant::Whole(function(*value, *amount, false)))),
+        Constant::Missing(key) => Err(lacking(key, &format!("a whole number in {what}"))),
+        _ => Err(problem(format!("{what} needs whole numbers"))),
+    };
+    array.map_values(fixed, apply)
 }
 
 /// Lay an array out over a shape: per event, or per member when `offsets` is given.
@@ -846,11 +754,9 @@ fn laid(
             constant.beside(kind)?;
             constant.repeat(kind, members)
         }
-        (Array::Event(values), None) if values.len() == events => values.cast(kind),
-        (Array::Event(values), Some(offsets)) if values.len() == events => {
-            Array::spread(values, offsets).cast(kind)
-        }
-        (Array::Object { offsets: own, values }, Some(offsets)) if own == offsets => values.cast(kind),
+        (Array::Event(values), None) => values.convert(kind),
+        (Array::Event(values), Some(offsets)) => Array::spread(values, offsets).convert(kind),
+        (Array::Object { offsets: own, values }, Some(offsets)) if own == offsets => values.convert(kind),
         (Array::Object { offsets: own, .. }, Some(offsets)) => Err(unlike(offsets, own, &format!("The lists of {what} are taken member by member"))),
         _ => Err(problem(format!("The parts of {what} do not cover the same events and members"))),
     }
@@ -860,9 +766,8 @@ fn laid(
 /// condition is a true-or-false value.
 pub(crate) fn choose(condition: &Array, yes: &Array, no: &Array) -> Result<Array> {
     match condition {
-        Array::Constant(Constant::Truth(true)) => return Ok(yes.clone()),
-        Array::Constant(Constant::Truth(false)) => return Ok(no.clone()),
         Array::Constant(Constant::Missing(key)) => return Err(lacking(key, "the condition of if")),
+        Array::Constant(Constant::Text(text)) => return Err(problem(format!("if's condition needs a true-or-false value, not the text {text:?}"))),
         Array::Constant(_) => return Err(not_truth("if's condition", "a fixed value")),
         Array::Event(values) | Array::Object { values, .. } if values.kind != Kind::B1 => return Err(not_truth("if's condition", values.kind.name())),
         _ => {}

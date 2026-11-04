@@ -2,7 +2,7 @@
 //! calls exists and is given its number of values, the fixed values some take are of their kind,
 //! and a true-or-false value stands wherever one is needed, as far as the text tells.
 
-use crate::array::{Constant, Operator};
+use crate::array::{text_refused, Constant, Operator};
 use crate::evaluate::uncallable;
 use crate::parse::Expression;
 use std::collections::BTreeMap;
@@ -44,8 +44,9 @@ fn list_at(name: &str, at: usize) -> bool {
         | "index" | "sorted" | "order" | "pair_first" | "pair_second" => at == 0,
         "take" | "listed" | "pair_dr" => at < 2,
         "join" => true,
-        _ if name.starts_with("dr_") || name.ends_with("_index") || name.contains("mass") => at < 4,
-        "pt" | "eta" | "phi" | "rapidity" | "pair_pt" | "pair_eta" | "pair_phi" | "pair_rapidity" => at < 4,
+        "dr_nearest" | "dr_second_nearest" | "dr_farthest" | "dr_second_farthest" | "nearest_index" | "second_nearest_index"
+        | "farthest_index" | "second_farthest_index" | "mass" | "pt" | "eta" | "phi" | "rapidity" | "pair_mass" | "pair_pt"
+        | "pair_eta" | "pair_phi" | "pair_rapidity" => at < 4,
         _ => false,
     }
 }
@@ -68,7 +69,7 @@ impl Checks<'_> {
             Name(name) => self.sorts.get(name).copied().unwrap_or(Unknown),
             Sample(field) => {
                 if crate::ADDED.contains(&field.as_str()) {
-                    self.said.push(format!("sample.{field} is a count rvr press records of each sample, which no expression can read"));
+                    self.said.push(format!("sample.{}", crate::array::recorded(field)));
                 }
                 Unknown
             }
@@ -113,12 +114,13 @@ impl Checks<'_> {
         use Operator::*;
         match operator {
             And | Or => {
-                self.said.extend(untrue(a, operator.word()).or_else(|| untrue(b, operator.word())));
+                self.said.extend(untrue(a, &format!("{}'s left side", operator.word())));
+                self.said.extend(untrue(b, &format!("{}'s right side", operator.word())));
                 Truth
             }
             _ if operator.arithmetic() => {
                 if a == Text || b == Text {
-                    self.said.push(format!("Text cannot be combined with a number: {} takes numbers", operator.word()));
+                    self.said.push(text_refused(operator));
                 } else if (a, b) == (Truth, Truth) {
                     self.said.push("Arithmetic on two true-or-false values: use and, or, or count, or make one a number, as if(x, 1, 0)".into());
                 }
@@ -127,7 +129,7 @@ impl Checks<'_> {
             Equal | NotEqual => Truth,
             _ => {
                 if a == Text || b == Text {
-                    self.said.push(format!("Text can only be compared with == and !=, not {}", operator.word()));
+                    self.said.push(text_refused(operator));
                 }
                 Truth
             }

@@ -3,7 +3,7 @@
 //! worked out, signed, and put in place whole (docs/SPEC.md §7.5.1, §7.7.3, §7.8).
 
 use crate::plan::{Base, Plan};
-use crate::press::count;
+use rowver::rvr::grouped as count;
 use crate::samples::some;
 use crate::take::Taken;
 use rowver::study::lock::Sample;
@@ -169,10 +169,7 @@ pub(crate) fn write(plan: &Plan, mut done: Done) -> Result<usize, String> {
     made["sha256"] = write::made_checksum(&made).map_err(failed)?.into();
     let rows = data["rows"].as_u64().unwrap_or(0);
     let mut header = json!({"rowver": rowver::VERSION, "data": data, "made": made});
-    let signer = match plan.sign {
-        true => crate::key::secret().map_err(stuck)?,
-        false => None,
-    };
+    let signer = plan.signer;
     // The derived columns are worked out once, from the arrays laid for the file, for their
     // records. One that fails leaves what was read: the file, without its derived columns.
     let mut underived = None;
@@ -186,19 +183,12 @@ pub(crate) fn write(plan: &Plan, mut done: Done) -> Result<usize, String> {
         root.extend(plan.tools.clone());
     }
     // A press of more than a few seconds is on disk before what would carry it on goes.
-    let durable = |path: &Path| match done.worth {
-        true => std::fs::File::open(path).and_then(|f| f.sync_all()),
-        false => Ok(()),
+    let write = || {
+        crate::derive::sealed(&mut header, signer.as_ref())
+            .map_err(|why| format!("{} could not be written: {why}", target.display()))
+            .and_then(|()| write::write_laid(&staged_file, &header, laid).map_err(|e| what(&staged_file, e)))
     };
-    let put = crate::derive::sealed(&mut header, signer.as_ref())
-        .map_err(|why| format!("{} could not be written: {why}", target.display()))
-        .and_then(|()| write::write_laid(&staged_file, &header, laid).map_err(|e| what(&staged_file, e)))
-        .and_then(|()| durable(&staged_file).map_err(|e| what(&staged_file, e.into())))
-        .and_then(|()| std::fs::rename(&staged_file, target).map_err(|e| what(target, e.into())));
-    if let Err(e) = put {
-        let _ = std::fs::remove_file(&staged_file);
-        return Err(stuck(e));
-    }
+    crate::files::in_place(&staged_file, target, done.worth, write, |at, e| what(at, e.into())).map_err(stuck)?;
     if done.worth {
         let _ = std::fs::File::open(crate::journal::parent(target)).and_then(|f| f.sync_all());
     }

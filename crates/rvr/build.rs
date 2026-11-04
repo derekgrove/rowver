@@ -7,10 +7,7 @@ use std::process::{Command, Stdio};
 
 /// What a command prints, trimmed, or `None` when it cannot run or fails.
 fn said(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program).args(args).output().ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    printed(program, args).map(|out| String::from_utf8_lossy(&out).trim().to_owned())
 }
 
 /// What a command prints, as it prints it, or `None` when it cannot run or fails.

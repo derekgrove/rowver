@@ -21,29 +21,16 @@ pub enum Kind {
 
 use Kind::*;
 
-/// Every kind's `.rvr` spelling.
-const NAMES: [&str; 11] = ["b1", "i1", "i2", "i4", "i8", "u1", "u2", "u4", "u8", "f4", "f8"];
+/// Every kind, in the order declared.
+const ALL: [Kind; 11] = [B1, I1, I2, I4, I8, U1, U2, U4, U8, F4, F8];
 
 impl Kind {
     /// Read the `.rvr` spelling of a kind.
     pub fn named(name: &str) -> Result<Self> {
-        Ok(match name {
-            "b1" => B1,
-            "i1" => I1,
-            "i2" => I2,
-            "i4" => I4,
-            "i8" => I8,
-            "u1" => U1,
-            "u2" => U2,
-            "u4" => U4,
-            "u8" => U8,
-            "f4" => F4,
-            "f8" => F8,
-            other => {
-                let near = crate::meant(other, NAMES.into_iter());
-                return Err(problem(format!("{other:?} is not a number kind: the kinds are {}.{near}", NAMES.join(", "))));
-            }
-        })
+        match ALL.into_iter().find(|kind| kind.name() == name) {
+            Some(kind) => Ok(kind),
+            None => Err(problem(format!("{name:?} is not a number kind: the kinds are {}.{}", ALL.map(Kind::name).join(", "), crate::meant(name, ALL.into_iter().map(Kind::name))))),
+        }
     }
 
     /// The `.rvr` spelling of a kind.
@@ -79,7 +66,7 @@ impl Kind {
     }
 
     /// Whether a whole-number kind has no sign.
-    pub fn unsigned(self) -> bool {
+    pub(crate) fn unsigned(self) -> bool {
         matches!(self, B1 | U1 | U2 | U4 | U8)
     }
 
@@ -107,7 +94,7 @@ impl Kind {
     }
 
     /// Bring a whole number computed in 64 bits back into this kind, wrapping as NumPy does.
-    pub fn wrap(self, value: i64) -> i64 {
+    pub(crate) fn wrap(self, value: i64) -> i64 {
         match self {
             B1 => (value != 0) as i64,
             I1 => value as i8 as i64,
@@ -169,11 +156,10 @@ impl Kind {
     }
 
     /// The float kind a whole-number kind takes in a function that returns floats.
-    pub fn floating(self) -> Kind {
+    pub(crate) fn floating(self) -> Kind {
         match self {
             F4 | F8 => self,
-            B1 | I1 | U1 => F4,
-            I2 | U2 => F4,
+            B1 | I1 | U1 | I2 | U2 => F4,
             _ => F8,
         }
     }

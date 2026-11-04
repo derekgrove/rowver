@@ -8,9 +8,7 @@ pub fn cores() -> usize {
     std::thread::available_parallelism().map_or(1, usize::from)
 }
 
-/// Apply `work` to every item on up to `workers` threads and return the results in the items'
-/// order. After one item fails no further item is started, and the first failure in the
-/// items' order is the one returned.
+/// `work` of every item, in order, on up to `workers` threads; after a failure none starts, and the first in order is returned.
 pub fn map<T: Sync, R: Send, E: Send + From<&'static str>>(
     items: &[T],
     workers: usize,

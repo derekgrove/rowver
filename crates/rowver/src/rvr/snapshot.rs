@@ -2,7 +2,6 @@
 //! checksums, and `made.sha256`.
 
 use super::{checksum, digest, exactly, list, nonempty, object, text, MEND};
-pub(super) use crate::json::canonical;
 use crate::{invalid, Result};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -104,9 +103,7 @@ pub(super) fn validate(made: &Value) -> Result<()> {
             return Err(invalid(format!("made.recipe.columns must name each column the recipe stores once, as nonempty text, and it holds {column} (docs/FORMAT.md §6): {MEND}")));
         }
     }
-    let mut body = made.clone();
-    body.as_object_mut().unwrap().shift_remove("sha256");
-    if digest(canonical(&body)?.as_bytes()) != checksum(made, "made")? {
+    if crate::write::made_checksum(made)? != checksum(made, "made")? {
         return Err(invalid("made.sha256 is not the SHA-256 of made's canonical JSON without it (docs/FORMAT.md §8): made was changed after the file was written; press its study again"));
     }
     Ok(())

@@ -2,7 +2,7 @@
 //! `by_sample`, and the forms of its facts.
 
 use super::samples::RESERVED;
-use super::{checksum, count, exactly, facts, field, hex64, list, nonempty, text, MEND};
+use super::{checksum, count, exactly, facts, field, list, nonempty, text, MEND};
 use crate::numeric::width;
 use crate::{invalid, Result};
 use serde_json::Value;
@@ -21,7 +21,7 @@ pub(super) fn unknown_kind(place: &str, kind: &str) -> crate::Error {
 /// Check a record's `by_sample`: one SHA-256 per sample, as 64 lowercase hexadecimal characters.
 pub(super) fn by_sample(record: &Value, place: &str, samples: usize) -> Result<()> {
     let sums = list(record, place, "by_sample")?;
-    if sums.len() != samples || !sums.iter().all(|sum| sum.as_str().is_some_and(hex64)) {
+    if sums.len() != samples || !sums.iter().all(|sum| sum.as_str().is_some_and(|sum| crate::study::hex(sum, 64))) {
         return Err(invalid(format!("{place}.by_sample must hold one SHA-256 per sample of data.samples ({samples}), each 64 lowercase hexadecimal characters (docs/FORMAT.md §8): {MEND}")));
     }
     Ok(())

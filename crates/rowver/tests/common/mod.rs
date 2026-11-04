@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 
 use rowver::study::lock::{Branch, Branches, File, Lock, Sample, Shape};
-use rowver::study::samples::Events;
+use rowver::choice::Events;
 use rowver::write::{array, made_checksum, sample_cols, stream, text_checksum, write_laid, Rows, Source, Values};
 use serde_json::{json, Value};
 

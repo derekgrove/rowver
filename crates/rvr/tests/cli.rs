@@ -3,8 +3,11 @@
 use rowver::study::lock::{Branch, Branches, File, Lock, Sample, Shape};
 use rowver::write::{array, made_checksum, sample_cols, stream, text_checksum, write_laid, Rows, Sample as Rowed, Source, Values};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
+
+mod common;
+use common::Study as Scratch;
 
 /// A small pressed file: samples A (3 rows) and B (2 rows), a flat and a jagged column, and an
 /// `xsec` sample column. `met_b` is MET's first value in sample B; `xsec_b` is B's cross-section.
@@ -67,23 +70,6 @@ fn framed(header: &Value, arrays: &[u8]) -> Vec<u8> {
     bytes.extend(text.as_bytes());
     bytes.extend(arrays);
     bytes
-}
-
-/// A fresh scratch folder in the temporary directory, removed when dropped.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("rvr-cli-{}-{name}", std::process::id()));
-        std::fs::create_dir_all(&path).unwrap();
-        Scratch(path)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
 }
 
 /// Run rvr; its exit status and standard output.
@@ -275,8 +261,8 @@ fn diff_compares_labels_and_reading_failures_are_said_plainly() {
     let folder = dir.0.to_str().unwrap();
     let (code, _, err) = said(&["dump", folder]);
     assert!(code == 1 && err.contains(&format!("{folder} is a folder, not a file")), "{err}");
-    let (code, out, _) = said(&["diff", a, missing]);
-    assert_eq!((code, out), (2, format!("cannot compare: {missing} is not there\n")));
+    let (code, out, err) = said(&["diff", a, missing]);
+    assert_eq!((code, out.as_str(), err), (2, "", format!("rvr diff: {missing} is not there\n")));
 }
 
 #[cfg(unix)]

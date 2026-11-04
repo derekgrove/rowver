@@ -875,7 +875,6 @@ dependencies = [
  "pyo3",
  "rowver",
  "rvr",
- "serde_json",
 ]
 
 [[package]]
@@ -974,7 +973,6 @@ dependencies = [
  "hep-root",
  "rowver",
  "rvr-recipe",
- "serde",
  "serde_json",
  "toml",
  "ureq",

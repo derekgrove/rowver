@@ -18,7 +18,6 @@ hep-root.workspace = true
 wlcg-doors.workspace = true
 voms-proxy.workspace = true
 grid-trust.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 ureq.workspace = true
 toml.workspace = true

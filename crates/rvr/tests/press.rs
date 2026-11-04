@@ -1,67 +1,12 @@
 //! `rvr press` on small ROOT files written by uproot and ROOT: the rows its cuts keep, the
 //! columns it copies and computes, what it records, and the presses it refuses.
 
+mod common;
+
+use common::{rvr, rvr_at_home, study, Study};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
-
-/// A study folder of its own, deleted when the test ends, passed or failed.
-struct Study(PathBuf);
-
-impl std::ops::Deref for Study {
-    type Target = Path;
-    fn deref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for Study {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// A study folder of its own: the fixtures beside a samples.toml and a recipe.toml.
-fn study(name: &str, samples: &str, recipe: &str) -> Study {
-    let dir = std::env::temp_dir().join(format!("rvr-press-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    for file in ["uproot_flat.root", "stl_vectors.root", "codecs-zlib.root"] {
-        let from = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures")
-            .join(file);
-        std::fs::copy(from, dir.join(file)).unwrap();
-    }
-    std::fs::write(dir.join("samples.toml"), samples).unwrap();
-    std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
-    Study(dir)
-}
-
-/// Run rvr in `dir`: its exit status, and what it printed and complained.
-fn rvr(dir: &Path, args: &[&str]) -> (i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
-        .args(args)
-        .current_dir(dir)
-        .env("RVR_CONFIG", dir.join(".rvr-config"))
-        .output()
-        .unwrap();
-    let text =
-        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
-    (out.status.code().unwrap_or(-1), text)
-}
-
-/// Run rvr in `dir` with `home` as the home folder.
-fn rvr_at_home(dir: &Path, home: &Path, args: &[&str]) -> (i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
-        .args(args)
-        .current_dir(dir)
-        .env("RVR_CONFIG", dir.join(".rvr-config"))
-        .env("HOME", home)
-        .output()
-        .unwrap();
-    let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
-    (out.status.code().unwrap_or(-1), text)
-}
 
 /// Resolve and press a study, and read back the file's header.
 fn pressed(dir: &Path, flags: &[&str]) -> Value {
@@ -1365,11 +1310,11 @@ fn a_mistake_in_the_recipe_stops_the_press_with_no_file_and_no_holes() {
     std::fs::write(dir.join("recipe.toml"), both.replace("\n[keep]\n", "")).unwrap();
     for args in [&["press"][..], &["try", "nJet"]] {
         let (code, said) = rvr(&dir, args);
-        assert!(code == 1 && said.contains("recipe.toml has no [keep] table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty. Add the line [keep]."), "{said}");
+        assert!(code == 1 && said.contains("recipe.toml: A recipe has no [keep] table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty. Add the line [keep]."), "{said}");
     }
     std::fs::write(dir.join("recipe.toml"), "version = 1\nformat = \"rvr-recipe\"\n\n[columns]\nbranches = [\"nJet\"]\n").unwrap();
     let (code, said) = rvr(&dir, &["status"]);
-    assert!(code == 1 && said.contains("recipe.toml has no [define], [keep], [totals] or [derived] table") && said.contains("Add [define], [keep], [totals] and [derived], each on a line of its own."), "{said}");
+    assert!(code == 1 && said.contains("recipe.toml: A recipe has no [define], [keep], [totals] or [derived] table") && said.contains("Add [define], [keep], [totals] and [derived], each on a line of its own."), "{said}");
 }
 
 #[test]

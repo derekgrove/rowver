@@ -184,7 +184,7 @@ usage:
 |---|---|
 | 0 | done, or, for `status`, `diff`, `samples check` and `proxy`, the answer is yes |
 | 1 | failed, or the answer is no (a file that differs, a study not current, a file invalid) |
-| 2 | wrong use, or an unknown command |
+| 2 | wrong use, an unknown command, or a file `rvr diff` cannot read |
 | 3 | `rvr press` wrote, or found, a file with holes |
 | 141 | the output pipe closed before the command finished, as a C tool stopped by SIGPIPE |
 
@@ -299,7 +299,7 @@ what the files hold. How a press runs, and the few ways the core can fail, is
 
 ```text
 $ rvr press
-rvr press: recipe.toml has no [totals] table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty. Add the line [totals].
+rvr press: recipe.toml: A recipe has no [totals] table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty. Add the line [totals].
 ```
 
 (At a terminal, `rvr press` offers to write the missing tables in and goes on:
@@ -994,7 +994,7 @@ valid proxy, local files and public storage still resolve.
 | `… has no tree "Events". Its trees: …` | set `tree` (or `[defaults] tree`) to one of the trees listed |
 | `{lcp} is not defined here; defined: {lpc}` | a misspelt place, or a place missing from `[places]` |
 | `a name holds only ASCII letters, digits, _ and - …` | use the name it suggests, and put the text in `label` |
-| `recipe.toml has no [totals] table: …` | add the table it names, empty if need be; at a terminal, `rvr press` offers to |
+| `recipe.toml: A recipe has no [totals] table: …` | add the table it names, empty if need be; at a terminal, `rvr press` offers to |
 | `… refused the listing (403). It needs a grid proxy: run rvr proxy init.` | run `rvr proxy init` |
 | `No usable grid proxy: …` | run `rvr proxy init` |
 | `… holds your private key, and other accounts on this machine can read it` (from `proxy init`) | run the `chmod 600` given |
@@ -1014,6 +1014,6 @@ valid proxy, local files and public storage still resolve.
 | `rvr press would press every column, as it was made by another build of rvr (…)` (from `status`) | a full press, by design: columns made by another build are not copied |
 | `This file is rowver 14; this reader reads rowver 15 only.` | press its study again with `rvr press` |
 | `The file was made by rvr …, newer than this one (…), and may use what only a newer version reads` | update rvr and rowver to that version or later |
-| `The header changed after it was signed` | the file was edited after it was pressed: press it again |
+| `the header changed after it was signed` | the file was edited after it was pressed: press it again |
 
 MIT licensed.

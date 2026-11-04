@@ -4,50 +4,36 @@
 
 use std::path::Path;
 
-pub use rowver::rvr::RECIPE_TABLES as TABLES;
+pub use rvr_recipe::TABLES;
 
-/// The tables of the five that `root` does not write.
-pub fn lacking(root: &toml::Table) -> Vec<&'static str> {
-    TABLES.into_iter().filter(|table| !root.contains_key(*table)).collect()
-}
-
-/// Why a recipe lacking `missing` is refused, and what to add.
-pub fn refusal(missing: &[&str]) -> String {
-    let add = match missing {
-        [one] => format!("Add the line [{one}]."),
-        _ => format!("Add {}, each on a line of its own.", listed(missing, "and")),
-    };
-    format!("{} {add}", lacks(missing))
-}
-
-/// At a terminal, offer to write in the tables `source`, recipe.toml in `dir`, lacks, before
-/// `going` on (as "continue pressing") with the command `then` ("press"): whether it did.
+/// At a terminal, offer to write in the tables recipe.toml (`source`, in `dir`) lacks, then go on: whether it did.
 pub fn offer(dir: &Path, source: &str, then: &str, going: &str) -> Result<bool, String> {
+    let Err(refused) = rvr_recipe::Recipe::read(source) else { return Ok(false) };
+    let missing = refused.lacking();
     let Ok(root) = source.parse() else { return Ok(false) };
-    let missing = lacking(&root);
-    let asking = crate::at_terminal();
-    // A recipe whose [columns] stores nothing, which no press takes, is the user's to write.
-    let stores = || rvr_recipe::Recipe::read(source).is_ok_and(|recipe| !recipe.columns.is_empty());
-    if missing.is_empty() || !asking || !stores() {
+    if missing.is_empty() || !crate::at_terminal() {
         return Ok(false);
     }
     // Placed before asking, so that a yes is not refused after.
-    let text = match written(source, &root, &missing, &TABLES, "recipe.toml") {
+    let text = match written(source, &root, missing, &TABLES, "recipe.toml") {
         Ok(text) => text,
         Err(why) => {
             eprintln!("{why}");
             return Ok(false);
         }
     };
-    let named = listed(&missing, "and");
+    // Offered only when the tables are all it lacks: a [columns] that stores nothing is the user's to write.
+    if rvr_recipe::Recipe::read(&text).is_err() {
+        return Ok(false);
+    }
+    let named = listed(missing, "and");
     let by_hand = format!("add {named} to it");
-    ask_and_write(&dir.join("recipe.toml"), source, &text, &asked(&missing, &named, going), &by_hand, then)?;
+    ask_and_write(&dir.join("recipe.toml"), source, &text, &asked(missing, &named, going), &by_hand, then)?;
     eprintln!("Added {named} to recipe.toml.");
     Ok(true)
 }
 
-/// Ask `question`, and on a yes write `text` over the file at `path`, which read `source`; refused
-/// on a no, or when rvr cannot ask, the file as it was and `by_hand`, then `then`, the way on.
+/// Ask `question`, and on a yes write `text` over `path` (which read `source`); else say to do `by_hand`, then `then`.
 pub fn ask_and_write(path: &Path, source: &str, text: &str, question: &str, by_hand: &str, then: &str) -> Result<(), String> {
     let name = path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
     let unchanged = |why: String| Err(format!("{why}, so {name} is as it was: {by_hand}, then {then} again."));
@@ -58,10 +44,7 @@ pub fn ask_and_write(path: &Path, source: &str, text: &str, question: &str, by_h
     }
 }
 
-/// Write `text` over the file at `path`, which read `source` when rvr asked: beside the file (the
-/// one a link names) and renamed over it, so that a failed write leaves it as it was, with its
-/// permissions; refused, in a sentence of its own, when it was edited while rvr asked, saying to
-/// `then` again, or when it cannot be written, saying to do `by_hand` first.
+/// Write `text` over `path`, which read `source` when rvr asked, whole or not at all, refused when edited since.
 pub fn rewrite(path: &Path, source: &str, text: &str, then: &str, by_hand: &str) -> Result<(), String> {
     let name = path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
     let path = path.canonicalize().map_err(|e| rowver::plain_io(&name, &e))?;
@@ -71,27 +54,20 @@ pub fn rewrite(path: &Path, source: &str, text: &str, then: &str, by_hand: &str)
     put(&path, text).map_err(|e| format!("{name} could not be written ({}), so it is as it was: {by_hand}, then {then} again.", rowver::described(&e)))
 }
 
-/// Write `text` as the file at `path` (the one a link names), whole or not at all: beside it, with
-/// its permissions when it is there, and renamed over it.
+/// Write `text` as the file at `path` (the one a link names), whole or not at all, keeping its permissions.
 pub fn put(path: &Path, text: &str) -> std::io::Result<()> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let staged = crate::empty::beside(&path, ".rvr-new");
-    let wrote = std::fs::write(&staged, text)
-        .and_then(|()| match std::fs::metadata(&path) {
+    let staged = crate::files::beside(&path, ".rvr-new");
+    let write = || {
+        std::fs::write(&staged, text).and_then(|()| match std::fs::metadata(&path) {
             Ok(was) => std::fs::set_permissions(&staged, was.permissions()),
             Err(_) => Ok(()),
         })
-        .and_then(|()| std::fs::File::open(&staged)?.sync_all())
-        .and_then(|()| std::fs::rename(&staged, &path));
-    if wrote.is_err() {
-        _ = std::fs::remove_file(&staged);
-    }
-    wrote
+    };
+    crate::files::in_place(&staged, &path, true, write, |_, e| e)
 }
 
-/// `source` (read as `root`) with each of `missing` written in, empty, before the next of `order`
-/// (the tables in their order, `[[name]]` ones too) it has, else at the end; refused unless it reads
-/// as `source` did with only those tables added. `file` names it in the refusal.
+/// `source` with each of `missing` written in, empty, in its place among `order`; refused unless it reads as before plus them.
 pub fn written(source: &str, root: &toml::Table, missing: &[&str], order: &[&str], file: &str) -> Result<String, String> {
     let lines: Vec<(usize, &str)> = source
         .split_inclusive('\n')
@@ -254,7 +230,6 @@ mod tests {
         let source = "[define]\n\n[keep]\n\n[columns]\nnote = \"\"\"\n[derived]\n\"\"\"\n\n[derived]\n";
         let refused = written(source, &source.parse().unwrap(), &["totals"], &TABLES, "recipe.toml").unwrap_err();
         assert_eq!(refused, "[totals] could not be written into recipe.toml in its place, so it is as it was: add it by hand.");
-        assert_eq!(refusal(&["keep"]), "recipe.toml has no [keep] table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty. Add the line [keep].");
     }
 
     #[test]

@@ -62,41 +62,43 @@ fn trusted() -> Result<Vec<(String, String)>, String> {
         .collect())
 }
 
+/// Whose `key` is: yours, a trusted key's owner's (by name), or no one's you know.
+enum Owner {
+    You,
+    Trusted(String),
+    Unknown,
+}
+
+/// Whose `key` is, as your key and the keys you trust say.
+fn owner(key: &str) -> Owner {
+    if secret().ok().flatten().is_some_and(|own| rowver::sign::public_key(&own) == key) {
+        return Owner::You;
+    }
+    match trusted().unwrap_or_default().into_iter().find(|(k, _)| k == key) {
+        Some((_, name)) => Owner::Trusted(name),
+        None => Owner::Unknown,
+    }
+}
+
 /// Who signed a file, in words: you, a trusted key's owner, or an unknown key.
 pub fn signer(key: &str) -> String {
-    if secret()
-        .ok()
-        .flatten()
-        .is_some_and(|own| rowver::sign::public_key(&own) == key)
-    {
-        return "signed by you".into();
-    }
-    match trusted()
-        .unwrap_or_default()
-        .into_iter()
-        .find(|(k, _)| k == key)
-    {
-        Some((_, name)) => format!("signed by {name} (trusted)"),
-        None => format!(
-            "signed by key {}, which you do not trust yet (rvr key trust {key} NAME)",
-            short(key)
-        ),
+    match owner(key) {
+        Owner::You => "signed by you".into(),
+        Owner::Trusted(name) => format!("signed by {name} (trusted)"),
+        Owner::Unknown => format!("signed by key {}, which you do not trust yet (rvr key trust {key} NAME)", short(key)),
     }
 }
 
 /// Whose a signature is, in words: your own key, a trusted key's owner, or a key you do not trust.
 pub fn whose(key: &str) -> String {
-    if secret().ok().flatten().is_some_and(|own| rowver::sign::public_key(&own) == key) {
-        return format!("your own key {}", short(key));
-    }
-    match trusted().unwrap_or_default().into_iter().find(|(k, _)| k == key) {
-        Some((_, name)) => format!("{name} (trusted)"),
-        None => format!("key {}, which you do not trust", short(key)),
+    match owner(key) {
+        Owner::You => format!("your own key {}", short(key)),
+        Owner::Trusted(name) => format!("{name} (trusted)"),
+        Owner::Unknown => format!("key {}, which you do not trust", short(key)),
     }
 }
 
-/// What signing a file again with `signer` (your key, when you have one) does to its signature by
-/// `was`, in words.
+/// What signing a file again with `signer` (yours, when you have one) does to its signature by `was`, in words.
 pub fn resigned(signer: Option<&[u8; 32]>, was: Option<&str>) -> String {
     match (signer, was) {
         (Some(secret), Some(was)) => format!("signed with your key {}, which replaces the signature of {}", short(&rowver::sign::public_key(secret)), whose(was)),
@@ -205,11 +207,5 @@ pub fn main(name: &str, words: &[&str]) -> u8 {
         (_, [key, owner @ ..]) if !owner.is_empty() => trust(key, &owner.join(" ")),
         _ => Err("rvr key trust takes a key and its owner's name".into()),
     };
-    match result {
-        Ok(()) => 0,
-        Err(why) => {
-            eprintln!("rvr {name}: {why}");
-            1
-        }
-    }
+    crate::report(name, result.map(|()| 0))
 }

@@ -36,32 +36,18 @@ struct Part {
     counts: Option<Span>,
 }
 
-/// Pieces of columns in a file of their own beside the file they will be written into. Pieces
-/// are added in any order and packed in the order of their `order`.
+/// Pieces of columns in a file of their own, added in any order and packed in the order of their `order`.
 pub struct Spool {
     path: PathBuf,
     file: std::fs::File,
     /// How many bytes it holds.
     end: Mutex<u64>,
     parts: Mutex<BTreeMap<(usize, Order), Part>>,
-    /// Whether its file stays when it is dropped (whoever made its folder removes it).
-    keep: bool,
 }
 
 impl Spool {
-    /// An empty spool at `path` with `.spool` added to its name, deleted when dropped.
-    pub fn beside(path: &Path) -> Result<Self> {
-        let mut name = path.as_os_str().to_owned();
-        name.push(".spool");
-        Self::empty(&PathBuf::from(name), false)
-    }
-
     /// An empty spool in a file at `path`, which stays when it is dropped.
     pub fn create(path: &Path) -> Result<Self> {
-        Self::empty(path, true)
-    }
-
-    fn empty(path: &Path, keep: bool) -> Result<Self> {
         let file = std::fs::File::options()
             .read(true)
             .write(true)
@@ -73,7 +59,6 @@ impl Spool {
             file,
             end: Mutex::new(0),
             parts: Mutex::new(BTreeMap::new()),
-            keep,
         })
     }
 
@@ -115,12 +100,12 @@ impl Spool {
             Some(((column.as_u64()? as usize, order), part))
         };
         let mut parts = BTreeMap::new();
-        let held = held.iter().map(|held| held.as_array().ok_or_else(|| invalid("A journal line names no spooled pieces")));
+        let damaged = |why: &str| invalid(format!("{why}: what names the pieces and the spool do not agree; spool the pieces again"));
+        let held = held.iter().map(|held| held.as_array().ok_or_else(|| damaged("a journal line names no spooled pieces")));
         for value in held.collect::<Result<Vec<_>>>()?.into_iter().flatten() {
-            let (key, part) = piece(value)
-                .ok_or_else(|| invalid("A piece the journal names is not in the spool"))?;
+            let (key, part) = piece(value).ok_or_else(|| damaged("a piece the journal names is not in the spool"))?;
             if parts.insert(key, part).is_some() {
-                return Err(invalid("The journal names a spooled piece twice"));
+                return Err(damaged("the journal names a spooled piece twice"));
             }
         }
         let spans = parts.values().flat_map(|part: &Part| part.lanes.iter().chain(&part.counts));
@@ -131,7 +116,6 @@ impl Spool {
             file,
             end: Mutex::new(end),
             parts: Mutex::new(parts),
-            keep: true,
         })
     }
 
@@ -158,9 +142,8 @@ impl Spool {
         Ok(self.file.sync_data()?)
     }
 
-    /// Add `bytes` at the end, compressed when `compress` and a sample of them shrinks by a
-    /// fifth: the low bytes of measured values are mostly noise, which costs time to compress
-    /// for little.
+    /// Add `bytes` at the end, compressed when `compress` and a sample of them shrinks by a fifth
+    /// (the low bytes of measured values are mostly noise, which costs time to compress for little).
     fn put(&self, bytes: &[u8], compress: bool) -> Result<Span> {
         let probe = &bytes[..bytes.len().min(PROBE)];
         let worth = compress && codec::pack(probe, 1).len() * 5 < probe.len() * 4;
@@ -194,13 +177,10 @@ impl Spool {
 
     /// Hold a piece of column `column`, placed among its pieces by `order`.
     pub fn add(&self, column: usize, order: Order, values: Values) -> Result<()> {
-        let (buffer, counts) = match values {
-            Values::Flat(buffer) => (buffer, None),
-            Values::Jagged { counts, content } => (content, Some(counts)),
-        };
+        let (buffer, counts) = values.parts();
         let w = width(&buffer.kind)?;
         if buffer.count.checked_mul(w) != Some(buffer.bytes.len()) {
-            return Err(invalid("A spooled piece's bytes do not hold its values"));
+            return Err(invalid(format!("a spooled piece's {} bytes are not {} values of {}, {w} bytes each: give it exactly its values' bytes", buffer.bytes.len(), buffer.count, buffer.kind)));
         }
         let shuffled = codec::shuffle(&buffer.bytes, w);
         drop(buffer.bytes);
@@ -235,12 +215,11 @@ impl Spool {
                 free.insert(part);
                 Ok(())
             }
-            _ => Err(invalid("A piece was spooled twice")),
+            _ => Err(invalid(format!("piece {order:?} of column {column} was spooled twice: spool each piece once"))),
         }
     }
 
-    /// Every piece of column `column`, in order, or `None` when it has none; the spool lets
-    /// them go.
+    /// Every piece of column `column`, in order, or `None` when it has none; the spool lets them go.
     pub fn take(&self, column: usize) -> Result<Option<Spooled<'_>>> {
         let parts: Vec<Part> = {
             let mut held = self.parts.lock().unwrap_or_else(|e| e.into_inner());
@@ -257,7 +236,7 @@ impl Spool {
             .iter()
             .any(|part| part.kind != kind || part.counts.is_some() != listed)
         {
-            return Err(invalid("A spooled column's pieces differ in kind"));
+            return Err(invalid(format!("the spooled pieces of column {column} differ in kind or shape: spool every piece of a column as one kind, flat or in lists alike")));
         }
         Ok(Some(Spooled {
             spool: self,
@@ -265,14 +244,6 @@ impl Spool {
             kind,
             listed,
         }))
-    }
-}
-
-impl Drop for Spool {
-    fn drop(&mut self) {
-        if !self.keep {
-            let _ = std::fs::remove_file(&self.path);
-        }
     }
 }
 
@@ -347,10 +318,10 @@ mod tests {
     }
 
     #[test]
-    fn pieces_come_back_in_their_order_and_the_file_goes() {
+    fn pieces_come_back_in_their_order() {
         let dir = std::env::temp_dir().join(format!("rowver-spool-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let spool = Spool::beside(&dir.join("out.rvr")).unwrap();
+        let spool = Spool::create(&dir.join("spool")).unwrap();
         let jagged = |counts: Vec<usize>, values: &[f32]| Values::Jagged {
             counts,
             content: array(values),
@@ -379,11 +350,8 @@ mod tests {
         spool.add(2, (0, 0), Values::Flat(array(&[1_u8]))).unwrap();
         spool.add(2, (1, 0), Values::Flat(array(&[1_i8]))).unwrap();
         assert!(spool.take(2).is_err(), "pieces of two kinds");
-        let path = spool.path.clone();
-        assert!(path.exists());
         drop((flat, listed));
         drop(spool);
-        assert!(!path.exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

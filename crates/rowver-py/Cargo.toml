@@ -17,6 +17,5 @@ crate-type = ["cdylib"]
 [dependencies]
 rowver.workspace = true
 rvr.workspace = true
-serde_json.workspace = true
 pyo3.workspace = true
 numpy.workspace = true

@@ -2,11 +2,10 @@
 //! on opening; in full validation, the event choice made again with the holes and counts against
 //! it, then each row's sample and entry.
 
-use super::samples::whole as written_whole;
 use super::{count, exactly, list, nonempty, object, text, whole_count, MEND};
 use crate::choice::{per_file, Events};
-use crate::numeric::NumericArray;
-use crate::study::lock::{uuid, MOST_ENTRIES};
+use crate::write::NumericBuffer;
+use crate::study::lock::{self, uuid, MOST_ENTRIES};
 use crate::{invalid, Result};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -90,52 +89,65 @@ fn ordered<'a>(data: &'a Value, made: &'a Value, sample: &str) -> Vec<(&'a str, 
     }).collect()
 }
 
-/// What a press read of each of a sample's files, from its `events` record and each file's
-/// entries; with `choose` false, a random choice is only counted, not made again.
-fn reads(files: &[(&str, &Value)], events: &Value, place: &str, choose: bool) -> Result<Vec<Read>> {
+/// What a sample's event choice says a press read: each file's first entries, or a random choice
+/// to make again (its n and seed, and each file's entries and take).
+enum Counted {
+    Below(Vec<u64>),
+    Random(u64, u64, Vec<u64>, Vec<u64>),
+}
+
+/// The refusal of a file's `what` (stop, take) that its sample's event choice does not give.
+fn wrong(place: &str, path: &str, what: &str) -> crate::Error {
+    invalid(format!("{place}: the file {path}'s {what} is not what {place} gives (docs/FORMAT.md §6.1): {MEND}"))
+}
+
+/// A sample's `events` record checked against each file's entries, stop and take: what it says a press read.
+fn counted(files: &[(&str, &Value)], events: &Value, place: &str) -> Result<Counted> {
     let entries: Vec<u64> = files.iter().map(|(_, record)| whole_count(&record["entries"]).unwrap_or(0)).collect();
     let total = entries.iter().try_fold(0_u64, |sum, n| sum.checked_add(*n)).filter(|total| *total <= MOST_ENTRIES);
     let total = total.ok_or_else(|| invalid(format!("{place}: the sample's files hold more than 2^40 entries in all, more than a file's samples may, so that a random choice is made again in bounded time (docs/FORMAT.md §6.1): split the sample")))?;
     let field = |record: &Value, key: &str| record.get(key).and_then(whole_count);
-    let wrong = |path: &str, what: &str| invalid(format!("{place}: the file {path}'s {what} is not what {place} gives (docs/FORMAT.md §6.1): {MEND}"));
     let choice = Events::read(events).map_err(|e| invalid(format!("{place}: {e} (docs/FORMAT.md §6.1): {MEND}")))?;
     match choice {
         Events::All => files.iter().zip(&entries).map(|((path, record), &n)| match (field(record, "stop"), field(record, "take")) {
-            (None, None) => Ok(Read::Below(n)),
-            _ => Err(wrong(path, "stop or take")),
-        }).collect(),
-        Events::First(mut left) => files.iter().zip(&entries).map(|((path, record), &n)| {
-            let read = n.min(left);
-            left -= read;
-            let stop = (read < n).then_some(read);
-            match field(record, "stop") != stop || field(record, "take").is_some() {
-                true => Err(wrong(path, "stop")),
-                false => Ok(Read::Below(read)),
+            (None, None) => Ok(n),
+            _ => Err(wrong(place, path, "stop or take")),
+        }).collect::<Result<_>>().map(Counted::Below),
+        Events::First(_) => files.iter().zip(lock::reads(&entries, choice)).map(|((path, record), planned)| {
+            match field(record, "stop") != planned.stop || field(record, "take").is_some() {
+                true => Err(wrong(place, path, "stop")),
+                false => Ok(planned.read),
             }
-        }).collect(),
+        }).collect::<Result<_>>().map(Counted::Below),
         Events::Random { n, seed } => {
             let mut taken = Vec::new();
             for (path, record) in files {
                 match (field(record, "stop"), field(record, "take")) {
                     (None, Some(take)) if Some(take) <= whole_count(&record["entries"]) => taken.push(take),
-                    _ => return Err(wrong(path, "take")),
+                    _ => return Err(wrong(place, path, "take")),
                 }
             }
             if taken.iter().sum::<u64>() != n.min(total) {
                 return Err(invalid(format!("{place}: the files' take adds up to {}, and a random choice of {n} takes {} (docs/FORMAT.md §6.1): {MEND}", taken.iter().sum::<u64>(), n.min(total))));
             }
-            if !choose {
-                return Ok(taken.into_iter().map(|_| Read::Below(0)).collect());
-            }
-            let chosen = per_file(&entries, n, seed);
-            for ((path, _), (chosen, take)) in files.iter().zip(chosen.iter().zip(&taken)) {
-                if chosen.len() as u64 != *take {
-                    return Err(wrong(path, "take"));
-                }
-            }
-            Ok(chosen.into_iter().map(Read::Chosen).collect())
+            Ok(Counted::Random(n, seed, entries, taken))
         }
     }
+}
+
+/// What a press read of each of a sample's files, a random choice made again.
+fn reads(files: &[(&str, &Value)], events: &Value, place: &str) -> Result<Vec<Read>> {
+    let (n, seed, entries, taken) = match counted(files, events, place)? {
+        Counted::Below(read) => return Ok(read.into_iter().map(Read::Below).collect()),
+        Counted::Random(n, seed, entries, taken) => (n, seed, entries, taken),
+    };
+    let chosen = per_file(&entries, n, seed);
+    for ((path, _), (chosen, take)) in files.iter().zip(chosen.iter().zip(&taken)) {
+        if chosen.len() as u64 != *take {
+            return Err(wrong(place, path, "take"));
+        }
+    }
+    Ok(chosen.into_iter().map(Read::Chosen).collect())
 }
 
 /// The refusal of counts that add up past what a count holds.
@@ -148,7 +160,7 @@ fn past(what: &str) -> crate::Error {
 fn metadata_value(value: &Value, place: &str) -> Result<()> {
     match value {
         Value::Null => Err(invalid(format!("{place} is null, and metadata holds text, whole numbers, finite floats, true and false, and lists and objects of those (docs/FORMAT.md §6): {MEND}"))),
-        Value::Number(n) if !written_whole(n) && !n.as_f64().is_some_and(f64::is_finite) => Err(invalid(format!("{place} is {n}, not a finite float (docs/FORMAT.md §6): {MEND}"))),
+        Value::Number(n) if !crate::json::whole(n) && !n.as_f64().is_some_and(f64::is_finite) => Err(invalid(format!("{place} is {n}, not a finite float (docs/FORMAT.md §6): {MEND}"))),
         Value::Array(values) => values.iter().enumerate().try_for_each(|(i, v)| metadata_value(v, &format!("{place}[{i}]"))),
         Value::Object(values) => values.iter().try_for_each(|(k, v)| metadata_value(v, &format!("{place}.{k}"))),
         _ => Ok(()),
@@ -157,7 +169,7 @@ fn metadata_value(value: &Value, place: &str) -> Result<()> {
 
 /// A total's value: a finite double written as one, with a `.` or an exponent.
 pub(super) fn total(value: &Value, place: &str) -> Result<f64> {
-    let number = value.as_number().filter(|n| !written_whole(n));
+    let number = value.as_number().filter(|n| !crate::json::whole(n));
     number.and_then(serde_json::Number::as_f64).filter(|v| v.is_finite()).ok_or_else(|| {
         invalid(format!("{place} is {value}, and a total is a finite double, written with a . or an exponent (docs/FORMAT.md §6): {MEND}"))
     })
@@ -251,7 +263,7 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
         for (path, record) in records {
             holed |= file_record(record, &format!("{place}.files[{path:?}]"))?;
         }
-        reads(&ordered(data, made, name), &source["events"], &format!("{place}.events"), false)?;
+        counted(&ordered(data, made, name), &source["events"], &format!("{place}.events"))?;
         sums(records, metadata, &paths, &place)?;
         for key in ["events_read", "events_total"] {
             if metadata.get(key).and_then(whole_count).is_none() {
@@ -303,7 +315,7 @@ pub(super) fn choices(header: &Value) -> Result<Reads<'_>> {
         let place = format!("made.files[{name:?}]");
         let files = ordered(data, made, name);
         let (mut chosen, mut missing) = (0_u64, 0_u64);
-        for ((path, record), read) in files.iter().zip(reads(&files, &made["files"][name]["events"], &format!("{place}.events"), true)?) {
+        for ((path, record), read) in files.iter().zip(reads(&files, &made["files"][name]["events"], &format!("{place}.events"))?) {
             let at = format!("{place}.files[{path:?}]");
             let holes = holes(record, &at, u64::MAX)?;
             let all = read.within(0, u64::MAX);
@@ -333,8 +345,8 @@ pub(super) fn choices(header: &Value) -> Result<Reads<'_>> {
     Ok(out)
 }
 
-/// How many entries the choice chose in each hole, in the order of `rvr::holes`.
-pub(super) fn chosen_in_holes(header: &Value) -> Result<Vec<u64>> {
+/// How many entries the event choice chose in each of `holes(header)`.
+pub fn chosen_in_holes(header: &Value) -> Result<Vec<u64>> {
     let (data, made) = (&header["data"], &header["made"]);
     let mut out = Vec::new();
     let samples = data["samples"].as_array().into_iter().flatten().filter_map(|s| s["name"].as_str());
@@ -344,7 +356,7 @@ pub(super) fn chosen_in_holes(header: &Value) -> Result<Vec<u64>> {
             continue;
         }
         let place = format!("made.files[{name:?}]");
-        for ((path, record), read) in files.iter().zip(reads(&files, &made["files"][name]["events"], &format!("{place}.events"), true)?) {
+        for ((path, record), read) in files.iter().zip(reads(&files, &made["files"][name]["events"], &format!("{place}.events"))?) {
             for (first, last) in holes(record, &format!("{place}.files[{path:?}]"), u64::MAX)? {
                 out.push(read.within(first, last));
             }
@@ -356,7 +368,7 @@ pub(super) fn chosen_in_holes(header: &Value) -> Result<Vec<u64>> {
 
 /// Check each row against the samples and files: the sample index running through the samples in
 /// order, and each file's entries strictly increasing, each chosen and in no hole.
-pub(super) fn rows(header: &Value, sample: &NumericArray, entry: &NumericArray, reads: &Reads) -> Result<()> {
+pub(super) fn rows(header: &Value, sample: &NumericBuffer, entry: &NumericBuffer, reads: &Reads) -> Result<()> {
     let data = &header["data"];
     for (at, (start, end)) in super::samples::spans(data)?.into_iter().enumerate() {
         for row in start..end {

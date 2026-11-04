@@ -1,45 +1,12 @@
 //! The validators, the agreement check and the Plan in front of the pressing core: every problem
 //! of a study at once, the options read one way, and a core that fails only on the data.
 
+mod common;
+
+use common::{rvr, study, Study};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
-
-/// A folder of its own in the temporary directory, deleted when the test ends.
-struct Study(PathBuf);
-
-impl std::ops::Deref for Study {
-    type Target = Path;
-    fn deref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for Study {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// A study folder: the fixtures beside a samples.toml and a recipe.toml.
-fn study(name: &str, samples: &str, recipe: &str) -> Study {
-    let dir = std::env::temp_dir().join(format!("rvr-plan-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    for file in ["uproot_flat.root", "stl_vectors.root"] {
-        std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(file), dir.join(file)).unwrap();
-    }
-    std::fs::write(dir.join("samples.toml"), samples).unwrap();
-    std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
-    Study(dir)
-}
-
-/// Run rvr in `dir`: its exit status, and what it printed and complained.
-fn rvr(dir: &Path, args: &[&str]) -> (i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_rvr")).args(args).current_dir(dir).env("RVR_CONFIG", dir.join(".rvr-config")).output().unwrap();
-    let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
-    (out.status.code().unwrap_or(-1), text)
-}
 
 /// The file a press of `dir` writes.
 fn target(dir: &Path) -> String {

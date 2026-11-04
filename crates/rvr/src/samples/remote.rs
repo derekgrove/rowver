@@ -193,8 +193,7 @@ struct Last {
 }
 
 impl Watch {
-    /// A press's watch: the network asked about after `quiet` with no answer, and again after
-    /// `again`.
+    /// A press's watch: the network asked about after `quiet` with no answer, and again after `again`.
     pub fn press(quiet: Duration, again: Duration) -> Self {
         let heard = Heard {
             quiet,
@@ -425,8 +424,7 @@ fn passing(error: &ureq::Error, proxied: bool) -> Option<String> {
     }
 }
 
-/// `ask` until it succeeds, retrying after each of `waits` while `passing` says it may, until the
-/// watch stops.
+/// `ask` until it succeeds, retrying after each of `waits` while `passing` says it may and the watch runs.
 pub fn patiently<T, E>(
     waits: &[u64],
     watch: &Watch,
@@ -638,9 +636,7 @@ pub fn why(error: &ureq::Error) -> String {
 /// A file's size and adler32, as its storage reports them.
 pub type Digest = (Option<u64>, Option<String>);
 
-/// A storage file's size and adler32 as its storage reports them, asked with one HEAD (asked
-/// again after each of `waits` while it fails at a busy storage); a failure also says what it
-/// means for the file.
+/// A storage file's size and adler32, asked with one HEAD (again after each of `waits` at a busy storage).
 pub fn digest_seen(
     agent: &ureq::Agent,
     shown: &str,
@@ -715,8 +711,7 @@ fn adler32_of(digest: &str) -> Option<String> {
         .map(|sum| format!("{sum:08x}"))
 }
 
-/// A storage file read in byte ranges over HTTPS, for hep-root: the door's URL first, then the
-/// disk server it redirects to. Only the ranges hep-root asks for are read.
+/// A storage file read in the byte ranges hep-root asks for over HTTPS: from its door, then the disk server.
 pub struct HttpsFile {
     agent: ureq::Agent,
     door: String,
@@ -727,9 +722,6 @@ pub struct HttpsFile {
     len: u64,
     /// Whether a proxy is presented, so that a 403 may be the storage being busy.
     proxied: bool,
-    /// Requests made and bytes read, for the timing the resolver reports.
-    pub requests: std::sync::atomic::AtomicUsize,
-    pub bytes: std::sync::atomic::AtomicUsize,
     /// What its last failed request said, shared with whoever reads through it.
     pub seen: Arc<Seen>,
     /// The press's, which hears each answer, and the door's `host:port` it is noted under.
@@ -757,8 +749,6 @@ impl HttpsFile {
             shown: shown.to_string(),
             len,
             proxied: storage.proxy.is_some(),
-            requests: Default::default(),
-            bytes: Default::default(),
             seen: Default::default(),
             watch: storage.watch.clone(),
             host: host_port(https),
@@ -800,8 +790,7 @@ fn at_once<T: Sync, R: Send>(items: &[T], ask: impl Fn(&T) -> R + Sync) -> Vec<R
 /// The most bytes one joined range holds (as hep-root's `read_spans`).
 const MOST: u64 = 32 * 1024 * 1024;
 
-/// Sorted or not, ranges joined where they lie within `gap` of each other, up to `MOST` bytes
-/// each, sorted.
+/// Ranges sorted and joined where they lie within `gap` of each other, up to `MOST` bytes each.
 pub fn joined(ranges: &[(u64, usize)], gap: u64) -> Vec<(u64, usize)> {
     let mut sorted = ranges.to_vec();
     sorted.sort_unstable();
@@ -834,6 +823,26 @@ impl HttpsFile {
             }
             _ => self.lasting(why(error)),
         }
+    }
+
+    /// The answer to a request for the byte ranges `range` (traced as `asked`, `bytes` bytes):
+    /// from the disk server that answered last, else the door; where it came from, and it.
+    fn ask(&self, range: &str, asked: &str, bytes: u64) -> (String, Result<ureq::Response, ureq::Error>) {
+        let ask = |url: &str| {
+            follow(url, |url| {
+                let reply = self.agent.get(url).set("Range", range).call();
+                self.watch.note(self.host.as_deref().filter(|_| url == self.door), &reply);
+                trace(asked, bytes, &self.shown, &reply);
+                reply
+            })
+        };
+        let start = self.url.lock().unwrap().clone();
+        let (mut to, mut reply) = ask(&start);
+        // A disk server kept from an earlier read can expire (its token) or go down: ask the door again.
+        if start != self.door && !matches!(&reply, Ok(r) if r.status() == 206) {
+            (to, reply) = ask(&self.door);
+        }
+        (to, reply)
     }
 
     /// A failure asking again would not mend.
@@ -889,29 +898,10 @@ impl HttpsFile {
             return self.read_at(*at, &mut buf).map(|()| Some(vec![buf]));
         }
         let fail = |e: String| hep_root::Error::Remote(format!("{}: {e}", self.shown));
-        let asked: Vec<String> = ranges
-            .iter()
-            .filter(|(_, len)| *len > 0)
-            .map(|(at, len)| format!("{at}-{}", at + *len as u64 - 1))
-            .collect();
+        let asked: Vec<String> = ranges.iter().map(|(at, len)| format!("{at}-{}", at + *len as u64 - 1)).collect();
         let header = format!("bytes={}", asked.join(","));
         let (count, total): (String, u64) = (format!("{} ranges", ranges.len()), ranges.iter().map(|(_, len)| *len as u64).sum());
-        let ask = |url: &str| {
-            follow(url, |url| {
-                self.requests
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let reply = self.agent.get(url).set("Range", &header).call();
-                self.watch.note(self.host.as_deref().filter(|_| url == self.door), &reply);
-                trace(&count, total, &self.shown, &reply);
-                reply
-            })
-        };
-        let start = self.url.lock().unwrap().clone();
-        let (mut to, mut reply) = ask(&start);
-        // As for one range: a disk server kept from an earlier read may have expired.
-        if start != self.door && !matches!(&reply, Ok(r) if r.status() == 206) {
-            (to, reply) = ask(&self.door);
-        }
+        let (to, reply) = self.ask(&header, &count, total);
         let reply = match reply {
             Ok(reply) => reply,
             // A storage that refuses so many ranges at once is asked one at a time.
@@ -932,7 +922,6 @@ impl HttpsFile {
                 let Some((at, len)) = reply
                     .header("Content-Range")
                     .and_then(super::multipart::range)
-                    .map(|(at, len, _)| (at, len))
                 else {
                     return Ok(None);
                 };
@@ -942,16 +931,10 @@ impl HttpsFile {
                 let mut bytes = vec![0; len as usize];
                 std::io::Read::read_exact(&mut reply.into_reader(), &mut bytes)
                     .map_err(|e| fail(e.to_string()))?;
-                vec![super::multipart::Part {
-                    at,
-                    whole: None,
-                    bytes,
-                }]
+                vec![super::multipart::Part { at, bytes }]
             }
             None => return Ok(None),
         };
-        self.bytes
-            .fetch_add(total as usize, std::sync::atomic::Ordering::Relaxed);
         ranges
             .iter()
             .map(|&(at, len)| {
@@ -998,29 +981,11 @@ impl ByteSource for HttpsFile {
             return Ok(());
         }
         let range = format!("bytes={offset}-{}", offset + buf.len() as u64 - 1);
-        let ask = |url: &str| {
-            follow(url, |url| {
-                self.requests
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let reply = self.agent.get(url).set("Range", &range).call();
-                self.watch.note(self.host.as_deref().filter(|_| url == self.door), &reply);
-                trace(&range, buf.len() as u64, &self.shown, &reply);
-                reply
-            })
-        };
-        let start = self.url.lock().unwrap().clone();
-        let (mut to, mut reply) = ask(&start);
-        // A disk server kept from an earlier read can expire (its token) or go down: ask the door again.
-        let failed = !matches!(&reply, Ok(r) if r.status() == 206);
-        if failed && start != self.door {
-            (to, reply) = ask(&self.door);
-        }
+        let (to, reply) = self.ask(&range, &range, buf.len() as u64);
         *self.url.lock().unwrap() = to;
         match reply {
             Ok(reply) if reply.status() == 206 => {
                 use std::io::Read;
-                self.bytes
-                    .fetch_add(buf.len(), std::sync::atomic::Ordering::Relaxed);
                 reply
                     .into_reader()
                     .read_exact(buf)

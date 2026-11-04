@@ -10,8 +10,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-/// Every function an expression can call, as the README lists them, with the fewest and the most
-/// values it takes (`usize::MAX`: as many as wanted).
+/// Every function an expression can call, with the fewest and most values it takes (`usize::MAX`: any number).
 pub const FUNCTIONS: &[(&str, usize, usize)] = &[
     ("count", 1, 1), ("sum", 1, 1), ("any", 1, 1), ("all", 1, 1), ("least", 2, 2), ("greatest", 2, 2),
     ("least_index", 2, 2), ("greatest_index", 2, 2), ("first", 2, 2), ("nth", 3, 3), ("index", 1, 1),
@@ -61,54 +60,29 @@ pub trait Columns {
     fn has(&self, name: &str) -> bool;
 }
 
-/// Rows `from..to` of other columns, each sliced once, when an expression first asks for it; the
-/// columns themselves when they are all of it.
-pub struct Slice<'a> {
+/// Which rows of other columns a `Picked` holds.
+enum Rows<'a> {
+    Run(usize, usize),
+    At(&'a [usize]),
+}
+
+/// Some rows of other columns, each column cut once when first asked for; the columns themselves when every row is kept.
+pub struct Picked<'a> {
     columns: &'a dyn Columns,
-    from: usize,
-    to: usize,
+    rows: Rows<'a>,
     whole: bool,
     cut: RefCell<BTreeMap<String, Option<Array>>>,
 }
 
-impl<'a> Slice<'a> {
-    /// Rows `from..to` of `columns`, which cover `rows`.
-    pub fn new(columns: &'a dyn Columns, from: usize, to: usize, rows: usize) -> Self {
-        Slice { columns, from, to, whole: from == 0 && to == rows, cut: RefCell::default() }
-    }
-}
-
-impl Columns for Slice<'_> {
-    fn column(&self, name: &str) -> Result<Option<Array>> {
-        if self.whole {
-            return self.columns.column(name);
-        }
-        if let Some(held) = self.cut.borrow().get(name) {
-            return Ok(held.clone());
-        }
-        let held = self.columns.column(name)?.map(|array| array.rows(self.from, self.to));
-        self.cut.borrow_mut().insert(name.to_owned(), held.clone());
-        Ok(held)
-    }
-
-    fn has(&self, name: &str) -> bool {
-        self.columns.has(name)
-    }
-}
-
-/// The rows at `positions` (ascending, distinct) of other columns, each picked once, when an
-/// expression first asks for it; the columns themselves when every row is picked.
-pub struct Picked<'a> {
-    columns: &'a dyn Columns,
-    positions: &'a [usize],
-    whole: bool,
-    picked: RefCell<BTreeMap<String, Option<Array>>>,
-}
-
 impl<'a> Picked<'a> {
-    /// The rows at `positions` of `columns`, which cover `rows`.
+    /// The rows at `positions` (ascending, distinct) of `columns`, which cover `rows`.
     pub fn new(columns: &'a dyn Columns, positions: &'a [usize], rows: usize) -> Self {
-        Picked { columns, positions, whole: positions.len() == rows, picked: RefCell::default() }
+        Picked { columns, rows: Rows::At(positions), whole: positions.len() == rows, cut: RefCell::default() }
+    }
+
+    /// Rows `from..to` of `columns`, which cover `rows`.
+    pub(crate) fn run(columns: &'a dyn Columns, from: usize, to: usize, rows: usize) -> Self {
+        Picked { columns, rows: Rows::Run(from, to), whole: from == 0 && to == rows, cut: RefCell::default() }
     }
 }
 
@@ -117,11 +91,14 @@ impl Columns for Picked<'_> {
         if self.whole {
             return self.columns.column(name);
         }
-        if let Some(held) = self.picked.borrow().get(name) {
+        if let Some(held) = self.cut.borrow().get(name) {
             return Ok(held.clone());
         }
-        let held = self.columns.column(name)?.map(|array| array.picked(self.positions));
-        self.picked.borrow_mut().insert(name.to_owned(), held.clone());
+        let held = self.columns.column(name)?.map(|array| match self.rows {
+            Rows::Run(from, to) => array.rows(from, to),
+            Rows::At(positions) => array.picked(positions),
+        });
+        self.cut.borrow_mut().insert(name.to_owned(), held.clone());
         Ok(held)
     }
 
@@ -135,14 +112,12 @@ pub fn over_runs<T>(columns: &dyn Columns, rows: usize, work: &mut dyn FnMut(&dy
     let mut part = 0..rows;
     let done = crate::in_runs(0, rows, &mut |from, to| {
         part = from..to;
-        work(&Slice::new(columns, from, to, rows), from, to).map_err(|e| e.later(from))
+        work(&Picked::run(columns, from, to, rows), from, to).map_err(|e| e.later(from))
     });
     done.map_err(|e| (e, part))
 }
 
-/// Everything an expression can refer to: the columns, the sample's metadata, and the names a
-/// recipe defines. A defined name that is also a column's is refused when it is used, so that a
-/// name means one thing.
+/// Everything an expression can refer to: the columns, the sample's metadata, and the recipe's defined names.
 pub struct Scope<'a> {
     pub columns: &'a dyn Columns,
     /// The sample's metadata fields.
@@ -153,14 +128,8 @@ pub struct Scope<'a> {
     known: RefCell<BTreeMap<String, Option<Result<Array>>>>,
 }
 
-/// What a name that is no column is refused with.
-fn unknown(name: &str) -> crate::Error {
-    crate::missing(name)
-}
-
 impl<'a> Scope<'a> {
-    /// A scope over these columns, for a sample with this metadata and a recipe with these
-    /// defined names.
+    /// A scope over these columns, this sample's metadata and these defined names.
     pub fn new(
         columns: &'a dyn Columns,
         sample: &'a BTreeMap<String, Constant>,
@@ -205,7 +174,7 @@ impl<'a> Scope<'a> {
 
     /// Fetch a column that must exist.
     fn column(&self, name: &str) -> Result<Array> {
-        self.columns.column(name)?.ok_or_else(|| unknown(name))
+        self.columns.column(name)?.ok_or_else(|| crate::missing(name))
     }
 
     /// Evaluate an expression to a constant, one value per event, or a list per event.
@@ -333,19 +302,21 @@ impl<'a> Scope<'a> {
             "tanh" => float(libm::tanh)?,
             // floor and ceil keep whole numbers and true-or-false values; round takes no
             // true-or-false values.
-            "floor" => f::kept_whole(&arrays[0], "floor", libm::floor)?,
-            "ceil" => f::kept_whole(&arrays[0], "ceil", libm::ceil)?,
+            "floor" => f::same_map(&arrays[0], "floor", |v| v, libm::floor)?,
+            "ceil" => f::same_map(&arrays[0], "ceil", |v| v, libm::ceil)?,
             "round" => one(f::rounded)?,
             "atan2" => f::float_pair(&arrays[0], &arrays[1], libm::atan2)?,
-            "min" => f::pairwise(&arrays[0], &arrays[1], f::Extreme::Least)?,
-            "max" => f::pairwise(&arrays[0], &arrays[1], f::Extreme::Greatest)?,
+            "min" => f::pairwise(&arrays[0], &arrays[1], false)?,
+            "max" => f::pairwise(&arrays[0], &arrays[1], true)?,
             "hypot" => f::float_pair(&arrays[0], &arrays[1], libm::hypot)?,
             "least" => f::extreme(&arrays[0], &arrays[1], false)?,
             "greatest" => f::extreme(&arrays[0], &arrays[1], true)?,
             "first" => f::nth(&arrays[0], 0, &arrays[1], "first")?,
             "nth" => {
-                let Array::Constant(crate::Constant::Whole(position)) = &arrays[1] else {
-                    return Err(problem("nth needs a whole number for the position, counting from 0, such as nth(Jet_pt, 1, -1)"));
+                let position = match &arrays[1] {
+                    Array::Constant(crate::Constant::Whole(position)) => position,
+                    Array::Constant(crate::Constant::Missing(key)) => return Err(lacking(key, "the position in nth")),
+                    _ => return Err(problem("nth needs a whole number for the position, counting from 0, such as nth(Jet_pt, 1, -1)")),
                 };
                 let position = usize::try_from(*position).map_err(|_| problem("nth counts positions from 0, so its position is 0 or more"))?;
                 f::nth(&arrays[0], position, &arrays[2], "nth")?
@@ -364,8 +335,8 @@ impl<'a> Scope<'a> {
                 f::formula(&parts, "delta_r", |v| hep_columns::angles::delta_r(v[0], v[1], v[2], v[3]))?
             }
             "clip" => {
-                let floor = f::pairwise(&arrays[0], &arrays[1], f::Extreme::Greatest)?;
-                f::pairwise(&floor, &arrays[2], f::Extreme::Least)?
+                let floor = f::pairwise(&arrays[0], &arrays[1], true)?;
+                f::pairwise(&floor, &arrays[2], false)?
             }
             "bit_and" => f::bits(&arrays[0], &arrays[1], "bit_and", |v, m, _| hep_columns::bits::bit_and(v, m))?,
             "shift_right" => {

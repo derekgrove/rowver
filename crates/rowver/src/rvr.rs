@@ -1,6 +1,5 @@
 //! Read and check `.rvr` files: a header on opening, the whole file in full validation.
 
-use crate::numeric::NumericArray;
 use crate::write::data_checksum;
 use crate::{invalid, Result, VERSION};
 use serde::Serialize;
@@ -9,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::Path;
 
-mod arrays;
+pub(crate) mod arrays;
 mod columns;
 pub mod derived;
 mod facts;
@@ -21,20 +20,19 @@ mod texts;
 
 use arrays::Arrays;
 pub use crate::numeric::{push_shown, width};
+pub use identity::chosen_in_holes;
 pub use reader::{Held, Reader};
 pub use snapshot::{study_name, toolchain};
 pub use texts::{derived_kinds, kinds};
 
-const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
-
-/// The tables every recipe writes, even empty, in their order.
-pub const RECIPE_TABLES: [&str; 5] = ["define", "keep", "columns", "totals", "derived"];
+/// The first eight bytes of every `.rvr` file.
+pub(crate) const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
 
 /// The kinds of hole a file records (docs/FORMAT.md, "Holes"); a reader refuses any other.
 pub const HOLE_KINDS: [&str; 5] = ["unreachable", "damaged", "gone", "changed", "refused"];
 
 /// What every refusal of a file's own facts says to do.
-const MEND: &str = "press its study again with rvr press, which writes it as docs/FORMAT.md says";
+pub(crate) const MEND: &str = "press its study again with rvr press, which writes it as docs/FORMAT.md says";
 
 /// Entries `[first, last)` of one file's tree that a press chose but could not read.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -57,11 +55,6 @@ pub struct Hole {
 pub fn read_file(chosen: u64, in_holes: u64, random: bool) -> bool {
     // Choosing none, all or the first N opens a file of no entries; a random choice opens none.
     chosen > in_holes || (chosen == 0 && !random)
-}
-
-/// How many entries the event choice chose in each of `holes(header)`.
-pub fn chosen_in_holes(header: &Value) -> Result<Vec<u64>> {
-    identity::chosen_in_holes(header)
 }
 
 /// Every hole a checked header records, in the order of `data.files`, then of entries.
@@ -101,15 +94,8 @@ pub struct Validated {
 /// Validate a file in full (docs/FORMAT.md §12), one column at a time, its derived columns worked out.
 pub fn validate_file(path: impl AsRef<Path>) -> Result<Validated> {
     let path = path.as_ref();
-    let (mut file, size) = opened(path)?;
-    if size < 12 {
-        return Err(invalid(NOT_RVR));
-    }
-    let mut prefix = [0; 12];
-    file.read_exact(&mut prefix)?;
-    let start = header_end(&prefix, size)?;
-    let mut text = vec![0; start - 12];
-    file.read_exact(&mut text)?;
+    let (file, size, text) = head(path)?;
+    let start = 12 + text.len();
     let (header, end) = checked(&text)?;
     let empty = size == start;
     arrays::fill(end, size - start)?;
@@ -158,19 +144,40 @@ fn listed_derived(header: &Value) -> usize {
 
 /// A file's header as the file holds it: the JSON text between its length and its arrays, unchecked.
 pub fn header_text(path: impl AsRef<Path>) -> Result<Vec<u8>> {
-    let (mut file, size) = opened(path.as_ref())?;
-    let mut prefix = [0; 12];
-    file.read_exact(&mut prefix).map_err(|_| invalid(NOT_RVR))?;
-    let mut text = vec![0; header_end(&prefix, size)? - 12];
+    head(path.as_ref()).map(|(_, _, text)| text)
+}
+
+/// The file at `path` opened and read past its header: the file, its length, and the header's text.
+pub(crate) fn head(path: &Path) -> Result<(std::fs::File, usize, Vec<u8>)> {
+    let (mut file, size, end) = framed(path)?;
+    let mut text = vec![0; end - 12];
     file.read_exact(&mut text)?;
-    Ok(text)
+    Ok((file, size, text))
+}
+
+/// The file at `path` opened and read past its 12-byte frame: the file, its length, and where its header ends.
+pub(crate) fn framed(path: &Path) -> Result<(std::fs::File, usize, usize)> {
+    let (mut file, size) = opened(path)?;
+    if size < 12 {
+        return Err(invalid(NOT_RVR));
+    }
+    let mut prefix = [0; 12];
+    file.read_exact(&mut prefix)?;
+    if &prefix[..8] != MAGIC {
+        return Err(invalid(NOT_RVR));
+    }
+    let length = u32::from_le_bytes([prefix[8], prefix[9], prefix[10], prefix[11]]) as usize;
+    match 12_usize.checked_add(length).filter(|end| *end <= size) {
+        Some(end) => Ok((file, size, end)),
+        None => Err(invalid("the header's length (bytes 8 to 11) is more than the file holds: the file was cut short; copy it again")),
+    }
 }
 
 /// What a reader of an empty file's columns is told.
 const EMPTY: &str = "the file is empty: rvr empty let its columns go, and rvr refill presses them again from the study it carries";
 
 /// What a file that is not an `.rvr` file is told.
-const NOT_RVR: &str = "Input is not an .rvr file (its first bytes are not the .rvr magic)";
+const NOT_RVR: &str = "it is not an .rvr file (its first 8 bytes are not the .rvr magic): name an .rvr file";
 
 /// Refuse a header of another version, saying what to do.
 fn version(header: &Value) -> Result<()> {
@@ -218,9 +225,7 @@ fn tool_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
 }
 
-/// Parse a header's text and check every fact it holds that needs no array and no parse of the
-/// study's texts (docs/FORMAT.md §12, "On opening"), but that the arrays fill the file, which the
-/// caller checks with `arrays::fill`.
+/// Parse a header's text and check every fact docs/FORMAT.md §12 checks "On opening" but that the arrays fill the file.
 pub fn checked_header(text: &[u8]) -> Result<Value> {
     checked(text).map(|(header, _)| header)
 }
@@ -256,23 +261,11 @@ fn checks(header: &Value) -> Result<u64> {
     if let Some(derived) = header.get("derived") {
         derived::validate(derived, data)?;
     }
-    if data_checksum(data)? != checksum(data, "data")? {
+    if data_checksum(data).map_err(|place| invalid(format!("{place} has no sha256: {MEND}")))? != checksum(data, "data")? {
         return Err(invalid(format!("data.sha256 is not the SHA-256 of the arrays' sha256s joined in file order (docs/FORMAT.md §8): {MEND}")));
     }
     crate::sign::verify(header)?;
     Ok(end)
-}
-
-/// Validate the shared magic and JSON framing before allocating header storage.
-pub(crate) fn header_end(prefix: &[u8], size: usize) -> Result<usize> {
-    if prefix.len() < 12 || &prefix[..8] != MAGIC {
-        return Err(invalid(NOT_RVR));
-    }
-    let length = u32::from_le_bytes(prefix[8..12].try_into().unwrap()) as usize;
-    12_usize
-        .checked_add(length)
-        .filter(|end| *end <= size)
-        .ok_or_else(|| invalid("the header's length (bytes 8 to 11) is more than the file holds: the file was cut short; copy it again"))
 }
 
 /// Check every array of a checked header as it streams past, one at a time.
@@ -295,7 +288,7 @@ fn read_body(header: &Value, mut decoder: Arrays<impl Read>, reads: &identity::R
             let content = &record["content"];
             let count = count(content, &place, "count")?;
             let array = decoder.read(content, text(content, &place, "kind")?, count, &format!("{place}.content"))?;
-            let offsets = jagged_offsets(&offsets, count, &place)?;
+            let offsets = jagged_offsets(&offsets.bytes, count, &format!("{place}.offsets"))?;
             samples::jagged(record, &offsets, &array, &spans, &place)?;
         } else {
             let array = decoder.read(record, kind, rows, &place)?;
@@ -303,20 +296,19 @@ fn read_body(header: &Value, mut decoder: Arrays<impl Read>, reads: &identity::R
             samples::per_row(record, &array, &spans, &place)?;
         }
     }
-    decoder.finish(data)
+    decoder.finish()
 }
 
-/// Require offsets that start at 0, never decrease, and end at the content's count.
-fn jagged_offsets(array: &NumericArray, count: usize, place: &str) -> Result<Vec<usize>> {
-    let mut offsets = Vec::with_capacity(array.count);
-    for index in 0..array.count {
-        let offset = usize::try_from(array.signed(index)?).ok().filter(|offset| *offset <= count && offsets.last().is_none_or(|before| before <= offset));
-        offsets.push(offset.ok_or_else(|| {
-            invalid(format!("{place}.offsets decrease, or pass the content's count, at row {index} (docs/FORMAT.md §4): {MEND}"))
-        })?);
+/// The `i8` offsets `bytes` holds, refused unless they start at 0, never decrease, and end at the content's `count`.
+pub(crate) fn jagged_offsets(bytes: &[u8], count: usize, place: &str) -> Result<Vec<usize>> {
+    let (steps, _) = bytes.as_chunks::<8>();
+    let mut offsets = Vec::with_capacity(steps.len());
+    for (index, step) in steps.iter().enumerate() {
+        let offset = usize::try_from(i64::from_le_bytes(*step)).ok().filter(|offset| *offset <= count && offsets.last().is_none_or(|before| before <= offset));
+        offsets.push(offset.ok_or_else(|| invalid(format!("{place} decrease, or pass the content's count, at row {index} (docs/FORMAT.md §4): {MEND}")))?);
     }
     if offsets.first() != Some(&0) || offsets.last() != Some(&count) {
-        return Err(invalid(format!("{place}.offsets must start at 0 and end at content.count, {count} (docs/FORMAT.md §4): {MEND}")));
+        return Err(invalid(format!("{place} must start at 0 and end at content.count, {count} (docs/FORMAT.md §4): {MEND}")));
     }
     Ok(offsets)
 }
@@ -365,12 +357,9 @@ fn nonempty<'a>(value: &'a Value, place: &str, key: &str) -> Result<&'a str> {
     }
 }
 
-/// A count, as every count of the format is: a whole number written without a fraction or an
-/// exponent, from 0 to 2^63 − 1.
+/// A count, as every count of the format is: a whole number written as one, from 0 to 2^63 − 1.
 fn whole_count(value: &Value) -> Option<u64> {
-    let text = value.as_number()?.to_string();
-    let n: i128 = text.parse().ok().filter(|_| !text.contains(['.', 'e', 'E']))?;
-    u64::try_from(n).ok().filter(|n| *n <= i64::MAX as u64)
+    crate::json::natural(value).filter(|n| *n <= i64::MAX as u64)
 }
 
 /// A member that must be a count.
@@ -380,15 +369,10 @@ fn count(value: &Value, place: &str, key: &str) -> Result<usize> {
         .ok_or_else(|| invalid(format!("{} must be a whole number from 0 to 2^63 − 1, written without a fraction or an exponent (docs/FORMAT.md §1): {MEND}", at(place, key))))
 }
 
-/// Whether text is 64 lowercase hexadecimal characters.
-fn hex64(text: &str) -> bool {
-    crate::study::hex(text, 64)
-}
-
 /// A record's `sha256`: 64 lowercase hexadecimal characters.
 fn checksum<'a>(value: &'a Value, place: &str) -> Result<&'a str> {
     let hash = text(value, place, "sha256")?;
-    match hex64(hash) {
+    match crate::study::hex(hash, 64) {
         true => Ok(hash),
         false => Err(invalid(format!("{} must be 64 lowercase hexadecimal characters (docs/FORMAT.md §8): {MEND}", at(place, "sha256")))),
     }

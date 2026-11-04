@@ -1,5 +1,6 @@
 use super::{checksum, digest, exactly, hex, list, nonempty, MEND};
-use crate::numeric::{width, NumericArray};
+use crate::numeric::width;
+use crate::write::NumericBuffer;
 use crate::{invalid, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -38,7 +39,7 @@ fn compare(
 /// Check the per-sample checksums of an array holding one value per row.
 pub(super) fn per_row(
     record: &Value,
-    array: &NumericArray,
+    array: &NumericBuffer,
     spans: &[(usize, usize)],
     place: &str,
 ) -> Result<()> {
@@ -50,7 +51,7 @@ pub(super) fn per_row(
 pub(super) fn jagged(
     record: &Value,
     offsets: &[usize],
-    content: &NumericArray,
+    content: &NumericBuffer,
     spans: &[(usize, usize)],
     place: &str,
 ) -> Result<()> {
@@ -63,11 +64,6 @@ pub(super) fn jagged(
     })?;
     let w = width(&content.kind)?;
     compare(&record["content"], spans, &format!("{place}.content"), |start, end| Ok(digest(&content.bytes[offsets[start] * w..offsets[end] * w])))
-}
-
-/// Whether a JSON number is written as a whole number.
-pub(super) fn whole(number: &serde_json::Number) -> bool {
-    !number.to_string().contains(['.', 'e', 'E'])
 }
 
 /// Work out the kind of sample column these per-sample values make, if they make one.
@@ -87,7 +83,7 @@ pub(crate) fn kind_of(values: &[&Value]) -> Option<&'static str> {
         .iter()
         .map(|value| value.as_number())
         .collect::<Option<_>>()?;
-    if complete && numbers.iter().all(|number| whole(number)) {
+    if complete && numbers.iter().all(|number| crate::json::whole(number)) {
         return numbers
             .iter()
             .all(|number| number.as_i64().is_some())
@@ -106,7 +102,7 @@ pub(crate) fn value_checksum(kind: &str, values: &[&Value], name: &str) -> Resul
     for value in values {
         match (kind, value) {
             ("b1", Value::Bool(flag)) => bytes.push(u8::from(*flag)),
-            ("i8", Value::Number(number)) if whole(number) => {
+            ("i8", Value::Number(number)) if crate::json::whole(number) => {
                 bytes.extend(number.as_i64().ok_or_else(refused)?.to_le_bytes())
             }
             ("f8", Value::Null) => bytes.extend(f64::NAN.to_bits().to_le_bytes()),

@@ -25,6 +25,20 @@ pub enum Expression {
     In(Box<Expression>, Vec<Expression>),
 }
 
+impl Expression {
+    /// The expressions it holds, in the order written.
+    pub(crate) fn children(&self) -> impl Iterator<Item = &Expression> {
+        let (one, two, rest): (Option<&Expression>, Option<&Expression>, &[Expression]) = match self {
+            Expression::Constant(_) | Expression::Name(_) | Expression::Sample(_) => (None, None, &[]),
+            Expression::Call(_, arguments) => (None, None, arguments),
+            Expression::Negate(inner) | Expression::Not(inner) => (Some(inner), None, &[]),
+            Expression::Binary(_, left, right) | Expression::Pick(left, right) => (Some(left), Some(right), &[]),
+            Expression::In(left, list) => (Some(left), None, list),
+        };
+        one.into_iter().chain(two).chain(rest)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Token {
     Number(Constant),
@@ -73,14 +87,10 @@ fn tokens(text: &str) -> Result<Vec<(Token, usize)>> {
                 .iter()
                 .filter(|c| **c != '_')
                 .collect();
-            let number = if float {
-                written.parse().map(Constant::Float).ok()
-            } else {
-                written.parse().map(Constant::Whole).ok()
-            };
-            let number = number.ok_or_else(|| {
-                problem(format!("{written} is not a number (column {})", start + 1))
-            })?;
+            let number = match float {
+                true => written.parse().map(Constant::Float).map_err(|_| problem(format!("{written} is not a number (column {})", start + 1))),
+                false => written.parse().map(Constant::Whole).map_err(|_| problem(format!("{written} is more than the largest whole number, {} (column {}): write it as a float, as {written}.0", i64::MAX, start + 1))),
+            }?;
             out.push((Token::Number(number), start));
         } else if character.is_alphabetic() || character == '_' {
             while at < characters.len()
@@ -107,10 +117,18 @@ fn tokens(text: &str) -> Result<Vec<(Token, usize)>> {
             at += 1;
         } else {
             let rest: String = characters[at..].iter().take(2).collect();
-            let symbol = SYMBOLS.iter().find(|symbol| rest.starts_with(**symbol));
-            let symbol = symbol.ok_or_else(|| {
-                problem(format!("Unexpected {character} at column {}", start + 1))
-            })?;
+            let Some(symbol) = SYMBOLS.iter().find(|symbol| rest.starts_with(**symbol)) else {
+                let doubled = rest.len() == 2 && rest.chars().all(|c| c == character) && "&|".contains(character);
+                let found = if doubled { rest.as_str() } else { &rest[..character.len_utf8()] };
+                let write = match character {
+                    '=' => ": to compare, write ==, as x == 1",
+                    '!' => ": write not, as not x",
+                    '&' => ": write and, as a and b",
+                    '|' => ": write or, as a or b",
+                    _ => "",
+                };
+                return Err(problem(format!("Unexpected {found} at column {}{write}", start + 1)));
+            };
             out.push((Token::Symbol(symbol), start));
             at += symbol.len();
         }
@@ -273,6 +291,9 @@ impl Parser<'_> {
         for (symbol, operator) in pairs {
             if self.symbol(symbol) {
                 let (right, deep) = self.sum()?;
+                if pairs.iter().any(|(next, _)| matches!(self.peek(), Some(Token::Symbol(found)) if found == next)) {
+                    return Err(problem(format!("Comparisons do not chain (the second at {}): write a < b and b < c, not a < b < c", self.place())));
+                }
                 let compared = Expression::Binary(operator, Box::new(left), Box::new(right));
                 return Ok((compared, self.level(depth.max(deep))?));
             }
@@ -361,7 +382,8 @@ impl Parser<'_> {
                 "false" => Expression::Constant(Constant::Truth(false)),
                 "pi" => Expression::Constant(Constant::Float(std::f64::consts::PI)),
                 "inf" => Expression::Constant(Constant::Float(f64::INFINITY)),
-                "and" | "or" | "not" | "in" => return Err(problem(format!("Unexpected {name} at {place}"))),
+                "not" => return Err(problem(format!("Unexpected not at {place}: not comes at the start of what it turns over, never straight after an operator: write a == (not b)"))),
+                "and" | "or" | "in" => return Err(problem(format!("Unexpected {name} at {place}"))),
                 _ if self.symbol("(") => {
                     let (arguments, depth) = self.members(")")?;
                     return Ok((Expression::Call(name, arguments), self.level(depth)?));
@@ -371,6 +393,7 @@ impl Parser<'_> {
                     return Ok((Expression::Name(name), self.level(depth.max(1) - 1)?));
                 }
             },
+            Some(Token::Symbol("+")) => return Err(problem(format!("Unexpected + at {place}: there is no unary +, so write the value alone, as x"))),
             _ => return Err(problem(format!("Expected a value at {place}"))),
         };
         Ok((value, 1))

@@ -1,13 +1,5 @@
-//! Pressing a study again on the file a press of it wrote, which says which events its cuts kept
-//! (`data.files` and `entry`). With the same cuts and the same build of rvr:
-//! - with the same samples and event choice, only the columns that are new or whose definition
-//!   changed are computed, over the entries a full press reads, keeping the events the earlier
-//!   file kept; every other column is copied from it as it lies, compressed;
-//! - with samples added, removed or reordered and the same columns, the rows of every sample the
-//!   lock holds as it did are the file's, and only the other samples are read (as a fill reads
-//!   holes: each column is packed again, since it is compressed whole).
-//!
-//! The file written is the one a full press of the recipe writes.
+//! Pressing again on the file an earlier press wrote (SPEC §8): only the columns that changed, or
+//! only the samples added, are read; the rest is the file's. The result is what a full press writes.
 
 use crate::fill::{unplanned, Fill, Plan};
 use crate::plan::Base;
@@ -124,8 +116,7 @@ fn same_samples(header: &Value, lock: &Lock) -> Result<(), String> {
     }
 }
 
-/// Whether this build of rvr names one build: a commit that is known, and when its code had
-/// changes, with a record of them (docs/SPEC.md §12.3); or why not.
+/// Whether this build of rvr names one build (a known commit, its changes recorded: SPEC §12.3), or why not.
 pub fn identified() -> Result<(), String> {
     match env!("RVR_COMMIT") {
         "unknown" => Err("this rvr was built from no known commit (its commit is unknown), so what it made cannot be told from another build's: build it from a git checkout, or install a released rvr".into()),
@@ -149,19 +140,8 @@ pub fn same_build(made: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// What the file at the target, as opened (`None` when there is none), gives this press, or why it cannot.
-pub fn earlier(
-    file: Option<rowver::Result<Reader>>,
-    texts: &crate::texts::Texts,
-    recipe: &Recipe,
-    lock: &Lock,
-    asked: &[Events],
-) -> Option<Result<Base, String>> {
-    file.map(|file| read(file, texts, recipe, lock, asked))
-}
-
 /// What a file at the target gives this press, or why it cannot.
-fn read(
+pub fn read(
     file: rowver::Result<Reader>,
     texts: &crate::texts::Texts,
     recipe: &Recipe,
@@ -271,6 +251,8 @@ one_hard = "count(Jet_pt > 50) >= 1"
 MET = "MET_pt"
 n_jet = "count(good_jet)"
 n_hard = "count(hard_jet)"
+
+[totals]
 
 [derived]
 "#;

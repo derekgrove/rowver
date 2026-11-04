@@ -163,15 +163,13 @@ fn compare(a: &str, b: &str, headers: [&Value; 2]) -> Vec<String> {
     said
 }
 
-/// Print one line per difference; the exit status is 0 when the headers show none, 1 when they
-/// show some (a header that fails its checks, or one file empty and the other not, is one), and 2
-/// when the files cannot be compared.
+/// Print one line per difference; the exit status: 0 for none, 1 for some, 2 when a file cannot be read.
 pub fn main(a: &str, b: &str) -> u8 {
     let read = |path: &str| rowver::rvr::Reader::inspect(path).map_err(|e| rowver::plain(path, &e));
     let (first, second) = match (read(a), read(b)) {
         (Ok(first), Ok(second)) => (first, second),
         (Err(e), _) | (_, Err(e)) => {
-            println!("cannot compare: {e}");
+            eprintln!("rvr diff: {e}");
             return 2;
         }
     };

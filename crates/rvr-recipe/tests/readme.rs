@@ -1,22 +1,12 @@
 //! Every expression in the README's tables, evaluated on its three example events, gives the
 //! result the README says, and every mistake it lists is refused with the words it shows.
 
-use rvr_recipe::{parse, Array, Columns, Constant, Kind, Recipe, Scope, Store, Values};
+use rvr_recipe::{parse, Array, Constant, Kind, Recipe, Scope, Store, Values};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-/// The README's example events, as columns by name.
-struct Events(BTreeMap<String, Array>);
-
-impl Columns for Events {
-    fn column(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
-        Ok(self.0.get(name).cloned())
-    }
-
-    fn has(&self, name: &str) -> bool {
-        self.0.contains_key(name)
-    }
-}
+mod common;
+use common::Held as Events;
 
 fn values(kind: &str, numbers: &[f64]) -> Values {
     let kind = Kind::named(kind).unwrap();
@@ -71,6 +61,15 @@ good_muon = "Muon_tightId and Muon_pt > 20"
 hard_central = "good_jet and Jet_pt > 100"
 clean_jet = "Jet_pt > 30 and dr_nearest(Jet_eta, Jet_phi, Muon_eta[good_muon], Muon_phi[good_muon]) > 0.4"
 hem_veto = "count(Jet_eta < -1.3 and Jet_phi > 2.5) == 0"
+
+[keep]
+
+[columns]
+branches = ["MET_pt"]
+
+[totals]
+
+[derived]
 "#;
 
 /// The README's tables: for each row, its cells by the header above them.
@@ -187,7 +186,7 @@ fn every_readme_example_gives_the_result_it_shows() {
         }
         // A line of a recipe (`select = "…"`) is read as one; anything else is an expression.
         let result = match expression.split_once(" = ") {
-            Some(_) => Recipe::read(&format!("format = \"rvr-recipe\"\nversion = 1\n{expression}")).map(|_| Array::Constant(Constant::Missing(String::new()))),
+            Some(_) => Recipe::read(&common::complete(expression)).map(|_| Array::Constant(Constant::Missing(String::new()))),
             None => parse(expression).and_then(|e| scope.evaluate(&e)),
         };
         checked += 1;

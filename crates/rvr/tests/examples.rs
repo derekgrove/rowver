@@ -5,6 +5,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod common;
+use common::Study as Scratch;
+
 /// Every example study, by folder; none when the docs are not there (the crate as published).
 fn studies() -> Vec<PathBuf> {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
@@ -18,15 +21,6 @@ fn studies() -> Vec<PathBuf> {
     studies.sort();
     assert!(!studies.is_empty(), "no study in {}", examples.display());
     studies
-}
-
-/// A folder removed when it goes out of scope, even when a check in it failed.
-struct Scratch(PathBuf);
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
 }
 
 /// Run rvr in `dir`, and fail naming the study when it fails.

@@ -84,7 +84,7 @@ fn free(header: &Value, recipe: &Recipe, name: &str, path: &Path) -> Result<(), 
         return Err(format!("{name:?} is not a name a derived column can have: one plain name, such as ht_over_met"));
     }
     let has = |key: &str| header["data"][key].as_array().into_iter().flatten().any(|c| c["name"] == name);
-    let added = crate::press::ADDED;
+    let added = rvr_recipe::ADDED;
     let mut samples = header["made"]["files"].as_object().into_iter().flat_map(|files| files.values());
     let keyed = samples.any(|sample| sample["metadata"].get(name).is_some());
     let whose = if has("cols") {
@@ -107,13 +107,7 @@ pub fn main(options: &Options) -> u8 {
         Ok(asked) => asked,
         Err(why) => return crate::wrong("derive", &why),
     };
-    match run(path, change) {
-        Ok(()) => 0,
-        Err(error) => {
-            eprintln!("rvr derive: {error}");
-            1
-        }
-    }
+    crate::report("derive", run(path, change).map(|()| 0))
 }
 
 /// What `rvr derive` is asked to change, its words read.
@@ -299,7 +293,7 @@ fn run(path: &Path, change: Asked) -> Result<(), String> {
     made["recipe"]["text"] = text.as_str().into();
     made["recipe"]["sha256"] = rowver::write::text_checksum(&text).into();
     made["sha256"] = rowver::write::made_checksum(made).map_err(|e| e.to_string())?.into();
-    let root = header.as_object_mut().ok_or("the header is not an object")?;
+    let root = header.as_object_mut().expect("a checked header is an object");
     match records.is_empty() {
         true => root.shift_remove("derived"),
         false => root.insert("derived".into(), json!({ "columns": records })),
@@ -307,14 +301,8 @@ fn run(path: &Path, change: Asked) -> Result<(), String> {
     let was = root.shift_remove("signature");
     let signed = crate::key::resigned(secret.as_ref(), was.as_ref().and_then(|s| s["key"].as_str()));
     // The file is replaced only by one every reader opens, and only once it is on disk.
-    let staged = crate::empty::beside(path, ".derive");
-    let written = rewritten(path, &staged, &mut header, secret.as_ref())
-        .and_then(|()| std::fs::File::open(&staged).and_then(|f| f.sync_all()).map_err(|e| rowver::plain_io(&staged, &e)))
-        .and_then(|()| std::fs::rename(&staged, path).map_err(|e| rowver::plain_io(path, &e)));
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&staged);
-        return Err(e);
-    }
+    let staged = crate::files::beside(path, ".derive");
+    crate::files::in_place(&staged, path, true, || rewritten(path, &staged, &mut header, secret.as_ref()), |at, e| rowver::plain_io(at, &e))?;
     println!(
         "{said} {}: it has {}; {signed}",
         path.display(),

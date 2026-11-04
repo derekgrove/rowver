@@ -21,10 +21,6 @@ pub(super) fn validate(header: &Value, reads: &Reads) -> Result<()> {
     let recipe = Recipe::read(source).map_err(|e| {
         invalid(format!("made.recipe.text cannot be read as a recipe the recipe reference accepts ({}). {}", e.line(), super::derived::remedy(header)))
     })?;
-    let root: toml::Table = source.parse().map_err(|e| invalid(format!("made.recipe.text is not TOML ({e}): {MEND}")))?;
-    if let Some(table) = super::RECIPE_TABLES.iter().find(|table| !root.get(**table).is_some_and(toml::Value::is_table)) {
-        return Err(invalid(format!("made.recipe.text has no [{table}] table, and a recipe writes all five, even empty (docs/FORMAT.md §6): {MEND}")));
-    }
     let stored: Vec<&str> = recipe.columns.iter().map(|(name, _)| name.as_str()).collect();
     if stored != super::snapshot::pressed(made) {
         return Err(invalid(format!("made.recipe.columns is {}, and the recipe's [columns] stores {stored:?}, in that order (docs/FORMAT.md §6): {MEND}", made["recipe"]["columns"])));
@@ -66,15 +62,13 @@ fn samples(header: &Value, lock: &Lock, recipe: &Recipe, reads: &Reads) -> Resul
         let source = &made["files"][name];
         // A first-N choice leaves out each file with entries that none of the N was left for.
         let events = Events::read(&source["events"])?;
-        let mut left = match events {
-            Events::First(n) => n,
-            _ => u64::MAX,
+        let want: Vec<&lock::File> = match events {
+            Events::First(_) => {
+                let entries: Vec<u64> = locked.files.iter().map(|f| f.entries).collect();
+                locked.files.iter().zip(lock::reads(&entries, events)).filter(|(f, planned)| planned.read > 0 || f.entries == 0).map(|(f, _)| f).collect()
+            }
+            _ => locked.files.iter().collect(),
         };
-        let want: Vec<&lock::File> = locked.files.iter().filter(|f| {
-            let read = f.entries.min(left);
-            left -= read;
-            read > 0 || f.entries == 0
-        }).collect();
         let paths: Vec<&str> = data["files"].as_array().into_iter().flatten().filter(|f| f["sample"] == name).filter_map(|f| f["path"].as_str()).collect();
         let wanted: Vec<&str> = want.iter().map(|f| f.at.as_str()).collect();
         if paths != wanted {
@@ -207,15 +201,44 @@ fn shape(kind: Kind, listed: bool) -> String {
     if listed { format!("a list of {}", kind.name()) } else { kind.name().to_owned() }
 }
 
-/// Each `[columns]` column's kind and whether it is a list per row, worked out over every
-/// sample's branch list; every problem found, one a line (SPEC.md §2.3).
+/// A kind and shape, with the sample and file it was found in.
+type Where<'a> = (Kind, bool, &'a str, &'a str);
+
+/// Each column's kind and shape as first found, and whether another has been found since.
+struct Seen<'a>(Vec<(Option<Where<'a>>, bool)>);
+
+impl<'a> Seen<'a> {
+    /// Nothing found yet of `columns` columns.
+    fn new(columns: usize) -> Self {
+        Seen(vec![(None, false); columns])
+    }
+
+    /// Column `at` found as `kind` in file `path` of `sample`: where it was found as another, the first time it is.
+    fn found(&mut self, at: usize, kind: (Kind, bool), sample: &'a str, path: &'a str) -> Option<Where<'a>> {
+        match &mut self.0[at] {
+            (held @ None, _) => *held = Some((kind.0, kind.1, sample, path)),
+            (Some(first), mixed) if (first.0, first.1) != kind && !*mixed => {
+                *mixed = true;
+                return Some(*first);
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Each column's kind and shape as first found (`f8` for one never found).
+    fn kinds(self) -> Vec<(Kind, bool)> {
+        self.0.into_iter().map(|(held, _)| held.map_or((Kind::F8, false), |(kind, listed, _, _)| (kind, listed))).collect()
+    }
+}
+
+/// Each `[columns]` column's kind and whether it is a list per row over every sample's branch list; every problem, one a line.
 pub fn kinds(recipe: &Recipe, lock: &Lock) -> Result<Vec<(Kind, bool)>> {
     let mut said = defines_apart(recipe, lock);
     let clashes = !said.is_empty();
     let every = reads_file(recipe);
     let mut found = Found::default();
-    let mut held: Vec<Option<(Kind, bool, &str, &str)>> = vec![None; recipe.columns.len()];
-    let mut mixed = vec![false; recipe.columns.len()];
+    let mut seen = Seen::new(recipe.columns.len());
     for sample in &lock.samples {
         let Some(list) = lock.branches_of(sample) else {
             said.push(format!("samples.lock sample {:?} names a branch list it does not hold: resolve again", sample.name));
@@ -271,23 +294,14 @@ pub fn kinds(recipe: &Recipe, lock: &Lock) -> Result<Vec<(Kind, bool)>> {
                         continue;
                     }
                 };
-                let (values, listed) = match &array {
-                    Array::Event(values) => (values, false),
-                    Array::Object { values, .. } => (values, true),
-                    Array::Constant(_) => unreachable!("per_event gives one value per event"),
-                };
-                let kind = recipe.stored.get(name).copied().unwrap_or(values.kind);
-                match held[at] {
-                    None => held[at] = Some((kind, listed, &sample.name, path)),
-                    Some((first, was, before, there)) if (first, was) != (kind, listed) && !mixed[at] => {
-                        mixed[at] = true;
-                        said.push(match before == sample.name {
-                            // Within one sample, it is sample.file that tells its files apart.
-                            true => format!("[columns] {name} is {} in file {there} and {} in file {path} of sample {before}, as sample.file gives them, and a column has one kind in every file: give each value it takes there one kind, or store it as one, as {name} = {{ value = \"…\", stored = \"f8\" }}", shape(first, was), shape(kind, listed)),
-                            false => format!("[columns] {name} is {} in sample {before} and {} in sample {}, as their branch lists in samples.lock give, and a column has one kind in every file: name the samples' branches apart, or convert it in the recipe, as {name} = {{ value = \"…\", stored = \"f8\" }}", shape(first, was), shape(kind, listed), sample.name),
-                        });
-                    }
-                    _ => {}
+                let (kind, listed) = array.shape().expect("per_event gives one value per event");
+                let kind = recipe.stored.get(name).copied().unwrap_or(kind);
+                if let Some((first, was, before, there)) = seen.found(at, (kind, listed), &sample.name, path) {
+                    said.push(match before == sample.name {
+                        // Within one sample, it is sample.file that tells its files apart.
+                        true => format!("[columns] {name} is {} in file {there} and {} in file {path} of sample {before}, as sample.file gives them, and a column has one kind in every file: give each value it takes there one kind, or store it as one, as {name} = {{ value = \"…\", stored = \"f8\" }}", shape(first, was), shape(kind, listed)),
+                        false => format!("[columns] {name} is {} in sample {before} and {} in sample {}, as their branch lists in samples.lock give, and a column has one kind in every file: name the samples' branches apart, or convert it in the recipe, as {name} = {{ value = \"…\", stored = \"f8\" }}", shape(first, was), shape(kind, listed), sample.name),
+                    });
                 }
             }
         }
@@ -297,19 +311,16 @@ pub fn kinds(recipe: &Recipe, lock: &Lock) -> Result<Vec<(Kind, bool)>> {
         true => format!("samples {samples}, over the branches samples.lock lists for each"),
     }));
     match said.is_empty() {
-        true => Ok(held.into_iter().map(|held| held.map_or((Kind::F8, false), |(kind, listed, _, _)| (kind, listed))).collect()),
+        true => Ok(seen.kinds()),
         false => Err(invalid(said.join("\n"))),
     }
 }
 
-/// Each `[derived]` column's kind and whether it is a list per row, worked out over every
-/// sample's stored columns (of `kinds`, as `kinds` gives them) and its metadata, with its totals
-/// as f8 and `file` its first file's path; every problem found, one a line (SPEC.md §2.3).
+/// Each `[derived]` column's kind and shape over every sample's stored columns (`kinds`) and metadata; every problem, one a line.
 pub fn derived_kinds(recipe: &Recipe, lock: &Lock, kinds: &[(Kind, bool)]) -> Result<Vec<(Kind, bool)>> {
     let mut said = Vec::new();
     let mut found = Found::default();
-    let mut held: Vec<Option<(Kind, bool, &str, &str)>> = vec![None; recipe.derived.len()];
-    let mut mixed = vec![false; recipe.derived.len()];
+    let mut seen = Seen::new(recipe.derived.len());
     let parsed: Vec<Option<rvr_recipe::Expression>> = recipe.derived.iter().map(|(_, e)| rvr_recipe::parse(e).ok()).collect();
     let stored: BTreeMap<&str, (Kind, bool)> = recipe.columns.iter().map(|(n, _)| n.as_str()).zip(kinds.iter().copied()).collect();
     let defines = BTreeMap::new();
@@ -318,9 +329,7 @@ pub fn derived_kinds(recipe: &Recipe, lock: &Lock, kinds: &[(Kind, bool)]) -> Re
         for path in paths(sample, every) {
             let mut columns = Branches(stored.clone());
             let mut metadata: BTreeMap<String, Constant> = super::derived::fields(&sample.metadata);
-            for total in &recipe.totals {
-                metadata.insert(total.name.clone(), Constant::Float(1.0));
-            }
+            super::derived::standing_in(&mut metadata, recipe);
             metadata.insert("file".into(), Constant::Text(path.to_owned()));
             let mut failed = std::collections::BTreeSet::new();
             for (at, ((name, _), expression)) in recipe.derived.iter().zip(&parsed).enumerate() {
@@ -333,9 +342,7 @@ pub fn derived_kinds(recipe: &Recipe, lock: &Lock, kinds: &[(Kind, bool)]) -> Re
                 }
                 let array = Scope::new(&columns, &metadata, &defines).evaluate(expression).and_then(|v| per_event(v, 0));
                 let (kind, listed) = match &array {
-                    Ok(Array::Event(values)) => (values.kind, false),
-                    Ok(Array::Object { values, .. }) => (values.kind, true),
-                    Ok(Array::Constant(_)) => unreachable!("per_event gives one value per row"),
+                    Ok(array) => array.shape().expect("per_event gives one value per row"),
                     Err(e) => {
                         let text = if e.0.ends_with(['.', '?']) { e.0.clone() } else { format!("{}.", e.0) };
                         found.add(format!("[derived] {name}: {text}"), &sample.name);
@@ -344,16 +351,11 @@ pub fn derived_kinds(recipe: &Recipe, lock: &Lock, kinds: &[(Kind, bool)]) -> Re
                     }
                 };
                 columns.0.insert(name.as_str(), (kind, listed));
-                match held[at] {
-                    None => held[at] = Some((kind, listed, &sample.name, path)),
-                    Some((first, was, before, there)) if (first, was) != (kind, listed) && !mixed[at] => {
-                        mixed[at] = true;
-                        said.push(match before == sample.name {
-                            true => format!("[derived] {name} is {} in file {there} and {} in file {path} of sample {before}, as sample.file gives them, and a derived column has one kind in every file: give each value it takes there one kind, as stored(…, \"f8\")", shape(first, was), shape(kind, listed)),
-                            false => format!("[derived] {name} is {} in sample {before} and {} in sample {}, and a derived column has one kind in every sample: give each sample's value the same kind, as stored(…, \"f8\")", shape(first, was), shape(kind, listed), sample.name),
-                        });
-                    }
-                    _ => {}
+                if let Some((first, was, before, there)) = seen.found(at, (kind, listed), &sample.name, path) {
+                    said.push(match before == sample.name {
+                        true => format!("[derived] {name} is {} in file {there} and {} in file {path} of sample {before}, as sample.file gives them, and a derived column has one kind in every file: give each value it takes there one kind, as stored(…, \"f8\")", shape(first, was), shape(kind, listed)),
+                        false => format!("[derived] {name} is {} in sample {before} and {} in sample {}, and a derived column has one kind in every sample: give each sample's value the same kind, as stored(…, \"f8\")", shape(first, was), shape(kind, listed), sample.name),
+                    });
                 }
             }
         }
@@ -363,7 +365,7 @@ pub fn derived_kinds(recipe: &Recipe, lock: &Lock, kinds: &[(Kind, bool)]) -> Re
         true => format!("samples {samples}, over their stored columns and metadata"),
     }));
     match said.is_empty() {
-        true => Ok(held.into_iter().map(|held| held.map_or((Kind::F8, false), |(kind, listed, _, _)| (kind, listed))).collect()),
+        true => Ok(seen.kinds()),
         false => Err(invalid(said.join("\n"))),
     }
 }

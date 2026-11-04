@@ -63,8 +63,7 @@ fn adler32(sum: u32, data: &[u8]) -> u32 {
     ((b << 16) | a) as u32
 }
 
-/// Where a local path of samples.toml or the lock is: under the home folder (`~/`), absolute, or
-/// relative to `base`, the folder holding samples.toml.
+/// Where a local path of samples.toml or the lock is: under `~/`, absolute, or relative to `base`.
 pub fn local(text: &str, base: &Path) -> PathBuf {
     let home = |rest: &str| std::env::var("HOME").map(|h| PathBuf::from(h).join(rest)).unwrap_or_else(|_| PathBuf::from(text));
     let expanded = match text.strip_prefix("~/") {
@@ -79,8 +78,7 @@ pub fn local(text: &str, base: &Path) -> PathBuf {
     }
 }
 
-/// How a file differs from what the lock recorded of it, in words, if it does. A size is compared
-/// when the storage gives one, an adler32 when both the lock and the storage give one, as a number.
+/// How a file differs from what the lock recorded, in words: its size, and its adler32 when both have one.
 pub fn differs(file: &File, bytes: Option<u64>, adler32: Option<&str>) -> Option<String> {
     let number = |hex: Option<&str>| hex.and_then(|h| u32::from_str_radix(h.trim(), 16).ok());
     let size = bytes.is_some_and(|b| b != file.bytes);
@@ -121,9 +119,7 @@ pub fn branch_list(tree: &hep_root::Tree) -> Branches {
     Branches::new(branches_named(tree, |_| true))
 }
 
-/// The branches of a tree whose name `wanted` takes, in the tree's order: each one's name, the
-/// kind rvr reads it as (or `none`, with why), and its shape. A name the tree gives twice is
-/// listed once, the first time.
+/// The branches of a tree `wanted` takes, in order and once each: name, kind (or `none`, with why) and shape.
 pub fn branches_named(tree: &hep_root::Tree, wanted: impl Fn(&str) -> bool) -> Vec<Branch> {
     let mut seen = std::collections::BTreeSet::new();
     // hep-root's inventory gives every branch of the tree, depth first as `Tree::walk`: one entry each.
@@ -151,9 +147,7 @@ pub fn branches_named(tree: &hep_root::Tree, wanted: impl Fn(&str) -> bool) -> V
         .collect()
 }
 
-/// How `have` falls short of `want`, in words, by name, kind and shape (not why a branch is
-/// unreadable, which words can change): the first few of `want` it lacks, or has as another kind
-/// or shape; empty when it has them all as they are.
+/// How `have` falls short of `want` by name, kind and shape: the first few it lacks or has otherwise; empty if none.
 pub fn differ<'a>(want: impl Iterator<Item = &'a Branch>, have: impl Iterator<Item = &'a Branch>) -> String {
     let index = |list: &mut dyn Iterator<Item = &'a Branch>| list.map(|b| (b.name.as_str(), (b.kind.as_str(), b.shape))).collect::<std::collections::BTreeMap<_, _>>();
     let (want, have) = (index(&mut { want }), index(&mut { have }));
@@ -263,17 +257,16 @@ impl Context {
         .clone()
     }
 
-    /// Which file a path or URL of the lock is, however it is written: a local file as its path
-    /// with links followed, a storage file as the door and path it is read at.
+    /// Which file a path or URL of the lock is: a local path with links followed, or a storage file's door and path.
     pub fn which(&self, at: &str) -> PathBuf {
         match at.contains("://") {
             true => match super::remote::door(at) {
-                Ok((door, path)) => PathBuf::from(format!("{door}{}", rowver::study::plain(Path::new(&path)).display())),
+                Ok((door, path)) => PathBuf::from(format!("{door}{}", rowver::study::lexical(Path::new(&path)).display())),
                 Err(_) => PathBuf::from(at),
             },
             false => {
                 let path = local(at, &self.base);
-                path.canonicalize().unwrap_or_else(|_| rowver::study::plain(&path))
+                path.canonicalize().unwrap_or_else(|_| rowver::study::lexical(&path))
             }
         }
     }
@@ -345,8 +338,7 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool) -> Result<Vec<
     }
 }
 
-/// One sample resolved: every file it asks for, pinned, with what its own event choice reads of
-/// each, its metadata's `{file}` filled; and its branch list, its first file's.
+/// One sample resolved: every file pinned with what its choice reads, `{file}` filled, and its branch list.
 pub fn resolve(ctx: &Context, sample: &Sample) -> Result<(lock::Sample, Branches), String> {
     let mut files: Vec<File> = Vec::new();
     let mut seen = std::collections::HashSet::new();

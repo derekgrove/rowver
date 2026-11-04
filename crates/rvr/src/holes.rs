@@ -1,8 +1,5 @@
-//! What a press does when it cannot read something: a file, or a run of its entries, becomes a
-//! hole of one kind (docs/FORMAT.md, "Holes"), or the press ends: a value the recipe cannot take
-//! (a data error), or a failure that is not the file's own (a proxy or certificate refused, a
-//! local file that cannot be read for want of rights), which would fail every later file the same,
-//! and so makes no holes.
+//! What a press does with what it cannot read (SPEC §7.3, §7.4): a hole of one kind, or the end of
+//! the press, for a data error or a failure that is not the file's own.
 
 use std::sync::Mutex;
 
@@ -48,8 +45,7 @@ impl Fault {
         })
     }
 
-    /// Whether the entries after it in the same file can still be read: only a damaged basket
-    /// leaves the rest of its file readable.
+    /// Whether the entries after it in the same file can still be read (only after a damaged basket).
     pub fn local(self) -> bool {
         self == Fault::Damaged
     }

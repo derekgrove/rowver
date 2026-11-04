@@ -1,7 +1,6 @@
 //! The known names nearest to a name that is not one, for "Did you mean" in a refusal.
 
-/// The few `names` nearest to `asked`, when they are near enough to be what was meant: within a
-/// tenth of its length in edits (at least 2, a slip of a letter or two); at most 3, nearest first.
+/// The `names` (at most 3, nearest first) within a tenth of `asked`'s length in edits, and at least 2.
 pub fn nearest<'a>(asked: &str, names: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
     let limit = (asked.chars().count() / 10).max(2);
     let mut ranked: Vec<(usize, &str)> = names

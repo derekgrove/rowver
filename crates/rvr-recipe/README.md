@@ -86,7 +86,7 @@ weight = "genWeight / sample.sumw"  # a total, read as sample.NAME
 | `[keep]` | Your cuts, in order. Each one is `name = "condition"`, true or false for each event, and an event is kept only if all of them are true. `rvr press` prints how many events are left after each cut, so this is your cutflow too. |
 | `[columns]` | What the file stores. `branches = [...]` stores branches just as the ROOT file has them, types and all. `NAME = "expression"` stores a column you compute, flat or jagged; a branch's name alone (`npv = "PV_npvs"`) stores that branch under a new name, and `NAME = "branch(sample.FIELD)"` a branch whose name each sample gives in its metadata. Write `NAME = { value = "expression", stored = "f4" }` to choose the type it's stored as. |
 | `[totals]` | `NAME = "expression"`: the expression summed over every event read, before the cuts, one number for each sample, such as `sumw = "genWeight"` to normalize simulation, which needs the sum over every event, not only those kept. `NAME = { value = "expression", tree = "Runs" }` sums over every entry of another tree of each file instead (NanoAOD's `genEventSumw`, for a skim whose events were filtered before), for a sample that reads its files whole. A total is stored as a sample column, and only `[derived]` can use it, as `sample.NAME`: it is known once every event is read. |
-| `[derived]` | `NAME = "expression"`: a column the file keeps as its expression, not as an array, worked out when it is read. It uses only what the file holds: the columns under `[columns]`, the derived columns above it, and `sample.KEY`. A stored column costs space in the file; a derived one costs a moment each time it is worked out. |
+| `[derived]` | `NAME = "expression"`: a column the file keeps as its expression, not as an array, worked out when it is read. It uses only what the file holds: the columns under `[columns]`, the derived columns above it, and `sample.KEY`; `branch(sample.KEY)`, a column that each sample names, is refused there (name the column). A stored column costs space in the file; a derived one costs a moment each time it is worked out. |
 
 ### The keys, exactly
 
@@ -124,10 +124,11 @@ order `samples.lock` lists them. A total of `b1` values counts the true ones.
 
 Every recipe writes all five tables, even the ones it leaves empty, so that it says at a glance
 what it does and does not use: an empty `[define]` defines nothing, an empty `[keep]` keeps every
-event, an empty `[totals]` sums nothing, and an empty `[derived]` adds nothing. `rvr press`,
-`rvr try` and `rvr status` refuse a `recipe.toml` that leaves one out, and say the line to add; at
-a terminal, `rvr press` and `rvr try` first ask whether to write the missing tables in, empty and
-in their places, and go on (unless `[columns]` stores nothing, which only the recipe can fix).
+event, an empty `[totals]` sums nothing, and an empty `[derived]` adds nothing; `[columns]` stores
+at least one column. A recipe that leaves a table out is refused, with the line to add, and so is
+one whose `[columns]` stores nothing; at a terminal, `rvr press` and `rvr try` first ask whether to
+write the missing tables in, empty and in their places, and go on (unless `[columns]` stores
+nothing, which only the recipe can fix).
 
 Only what `[columns]` names ends up in the file; a defined name is a working name. A cut on
 `good_jet` decides which *events* you keep, but `Jet_pt` in `branches` still stores every jet of
@@ -183,13 +184,14 @@ Written into an expression:
 
 | you write | it is |
 |---|---|
-| `30`, `1_000` | a whole number: digits, with any `_` after the first ignored, up to 9223372036854775807 |
+| `30`, `1_000` | a whole number: digits, up to 9223372036854775807 |
 | `2.5`, `.5`, `5.`, `1e3`, `1.5E-3` | a float: digits with a `.` or an exponent (`e` or `E`, an optional sign, then digits), read as the nearest double |
 | `'signal'`, `"signal"` | text, which holds no quote of the kind around it (there are no escapes) |
 | `true`, `false` | the two truth values |
 | `pi`, `inf` | π and infinity, as doubles (NaN has no name: `inf - inf` is one) |
 | `Jet_pt`, `good_jet` | a name: a letter or `_`, then letters, digits and `_` (any alphabet), a branch or a defined name; `and`, `or`, `not`, `in`, `true`, `false`, `pi` and `inf` are words of the language, so a branch named so is read as `branch('in')` |
 
+In any number, whole or float, a `_` after its first character is ignored (`1_000`, `0.000_1`).
 There is no unary `+`, and no hexadecimal. Spaces of any kind may stand between the parts.
 
 ## Operators
@@ -223,8 +225,8 @@ The comparisons are `==`, `!=`, `<`, `<=`, `>` and `>=`; one compares two values
 chain (`a < b < c` is refused: write `a < b and b < c`). `x in [a, b, …]` is
 `(x == a) or (x == b) or …`, and `x in []` is false; a list, like a call's values, may end with a
 comma. `not`, `and` and `or` take only true-or-false values: a number is refused (write `x != 0`).
-`and` with `false` written on its left, or `or` with `true`, gives that without working out its
-right side. `not` comes at the start of what it turns over, never straight after an operator
+`and` whose left side is a fixed `false` (written, a sample's field, or worked out from fixed
+values), or `or` whose left side is a fixed `true`, gives it without working out its right side. `not` comes at the start of what it turns over, never straight after an operator
 (`a == not b` is refused: write `a == (not b)`).
 
 Text compares only with `==` and `!=`: two texts are equal when they are the same characters, and

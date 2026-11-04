@@ -293,7 +293,7 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
         );
     };
     // Every column and the entries in uneven pieces, added out of order, one of them empty.
-    let spool = Spool::beside(&file("spooled.rvr")).unwrap();
+    let spool = Spool::create(&file("spooled.rvr.spool")).unwrap();
     let cuts = [
         (3, 5, (1, 0)),
         (1, 3, (0, 1)),
@@ -372,8 +372,9 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
         .to_string()
         .contains("does not hold what its record says"));
     std::fs::remove_file(file("lying.rvr")).unwrap();
-    // Nothing is left beside the files.
+    // Nothing is left beside the files but the spool, which its maker removes.
     drop(spool);
+    std::fs::remove_file(file("spooled.rvr.spool")).unwrap();
     let mut left: Vec<String> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())

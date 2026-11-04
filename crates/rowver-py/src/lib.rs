@@ -1,10 +1,11 @@
-//! The native part of the Python package `rowver`: an open `.rvr` file's header and columns,
-//! handed to NumPy without a copy, and the `rvr` command itself. `python/rowver` builds the
-//! Python API on these.
+//! The native part of the Python package `rowver`: an open `.rvr` file's header and columns, each
+//! column's bytes handed to NumPy as read (a list column's offsets copied into `i64`), and the `rvr`
+//! command itself. `python/rowver` builds the Python API on these.
 
 use numpy::{IntoPyArray, PyArray1};
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use rowver::rvr::{Held, Reader};
 use std::path::PathBuf;
 
@@ -63,10 +64,16 @@ impl File {
         }
     }
 
-    /// The JSON header, as the file holds it.
+    /// The JSON header's bytes, as the file holds them.
     #[getter]
-    fn header_text(&self) -> String {
-        serde_json::to_string(self.reader.header()).expect("a header read from JSON writes as JSON")
+    fn header_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let text = self.reader.header_text().map_err(|e| self.located(&e))?;
+        Ok(PyBytes::new(py, &text))
+    }
+
+    /// Every hole the header records, as (sample, file, first entry, entry after the last, kind, why).
+    fn holes(&self) -> Vec<(String, String, u64, u64, String, String)> {
+        rowver::rvr::holes(self.reader.header()).into_iter().map(|h| (h.sample, h.file, h.first, h.last, h.kind, h.why)).collect()
     }
 
     /// Whether the file is empty: its header alone, its columns let go by `rvr empty`.

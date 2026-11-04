@@ -104,8 +104,7 @@ pub(crate) fn stored(recipe: &Recipe, scope: &Scope, (column, expression): &(Str
     }
 }
 
-/// Add every event of a column's values to what the file has gathered; one of another kind than
-/// the Plan's is a bug.
+/// Add every event of a column's values to what the file has gathered; one of another kind than the Plan's is a bug.
 pub(crate) fn gather(held: &mut Gathered, column: Array) -> Result<(), String> {
     let (values, offsets) = match &column {
         Array::Event(values) => (values, None),
@@ -156,9 +155,8 @@ impl Columns for Run {
     }
 }
 
-/// Work the derived columns out over the events a run kept (`entries`, the file's entries of
-/// them), gathered since `before`: a value one cannot take stops the press naming its entry, and
-/// anything else is a bug, as the agreement check found each one's kind (`kinds`).
+/// Work the derived columns out over the events a run kept (`entries`, the file's entries of them),
+/// gathered since `before`: a value one cannot take stops the press naming its entry.
 pub(crate) fn derived_tried(recipe: &Recipe, kinds: &[(Kind, bool)], gathered: &[Gathered], before: &[(usize, usize)], sample: &BTreeMap<String, Constant>, entries: &[u64]) -> Result<(), Failed> {
     let mut held = BTreeMap::new();
     for (column, (bytes, counts)) in gathered.iter().zip(before) {
@@ -178,29 +176,18 @@ pub(crate) fn derived_tried(recipe: &Recipe, kinds: &[(Kind, bool)], gathered: &
     let run = Run(RefCell::new(held));
     // A total is known only once every event is read: the trial gives it a stand-in.
     let mut sample = sample.clone();
-    for total in &recipe.totals {
-        sample.entry(total.name.clone()).or_insert(Constant::Float(1.0));
-    }
-    let defines = BTreeMap::new();
+    rowver::rvr::derived::standing_in(&mut sample, recipe);
     for ((name, expression), want) in recipe.derived.iter().zip(kinds) {
-        let bug = |why: String| Failed::new(Fault::Bug, format!("derived column {name}: {why}"));
-        let parsed = rvr_recipe::parse(expression).map_err(|e| bug(e.0))?;
-        let mut work = |part: &dyn Columns, from: usize, to: usize| Scope::new(part, &sample, &defines).evaluate(&parsed).and_then(|v| rvr_recipe::per_event(v, to - from));
-        let array = rvr_recipe::over_runs(&run, entries.len(), &mut work).map_err(|(e, _)| e).and_then(Array::joined);
-        let array = match array {
-            Ok(array) => array,
-            Err(e) => match e.1 {
-                Some(row) => return Err(Failed::new(Fault::Data, format!("entry {}: derived column {name}: {}", crate::press::count(entries[row]), e.0))),
-                None => return Err(bug(e.0)),
-            },
-        };
-        let found = match &array {
-            Array::Event(values) => (values.kind, false),
-            Array::Object { values, .. } => (values.kind, true),
-            Array::Constant(_) => return Err(bug("a fixed value, not a column".into())),
+        let parsed = rvr_recipe::parse(expression).expect("the recipe validator read every derived column");
+        let array = rowver::rvr::derived::evaluate(&parsed, &run, &sample, entries.len()).map_err(|e| match e.1 {
+            Some(row) => Failed::new(Fault::Data, format!("entry {}: derived column {name}: {}", rowver::rvr::grouped(entries[row]), e.0)),
+            None => Failed::new(Fault::Bug, format!("derived column {name}: {}", e.0)),
+        })?;
+        let Some(found) = array.shape() else {
+            return Err(Failed::new(Fault::Bug, format!("derived column {name}: a fixed value, not a column")));
         };
         if found != *want {
-            return Err(bug(format!("it gave {} where the agreement check found {}", found.0.name(), want.0.name())));
+            return Err(Failed::new(Fault::Bug, format!("derived column {name}: it gave {} where the agreement check found {}", found.0.name(), want.0.name())));
         }
         run.0.borrow_mut().insert(name.clone(), array);
     }

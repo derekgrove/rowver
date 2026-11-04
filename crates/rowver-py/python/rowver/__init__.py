@@ -46,6 +46,13 @@ def _names(names, every):
     return [names] if isinstance(names, str) else list(names)
 
 
+def _arrow(values, offsets):
+    """One column as Arrow: its values, or for a list column a list (64-bit offsets)."""
+    import pyarrow as pa
+
+    return pa.array(values) if offsets is None else pa.LargeListArray.from_arrays(offsets, values)
+
+
 def _needs(module, what):
     """Import an optional package, or say how to install it."""
     try:
@@ -117,10 +124,8 @@ class File:
     def holes(self):
         """What the press chose but could not read, per hole: {sample, file, entries, kind, why},
         `entries` as the file records them, (first, last) with `last` not among them."""
-        made = self.header["made"]["files"]
-        return [{"sample": f["sample"], "file": f["path"], "entries": tuple(h["entries"]),
-                 "kind": h["kind"], "why": h["why"]}
-                for f in self.header["data"]["files"] for h in made[f["sample"]]["files"][f["path"]].get("holes", [])]
+        return [{"sample": sample, "file": file, "entries": (first, last), "kind": kind, "why": why}
+                for sample, file, first, last, kind, why in self._file.holes()]
 
     @property
     def complete(self):
@@ -190,12 +195,6 @@ class File:
         sample = ak.contents.IndexedArray(codes, ak.to_layout(self.samples), parameters={"__array__": "categorical"})
         return ak.zip({"sample": ak.Array(sample), "entry": read["entry"][0], **{n: self[n] for n in names}}, depth_limit=1)
 
-    def _arrow(self, name, values, offsets):
-        """One column as Arrow: its values, or for a list column a list (64-bit offsets)."""
-        import pyarrow as pa
-
-        return pa.array(values) if offsets is None else pa.LargeListArray.from_arrays(offsets, values)
-
     def to_arrow(self, columns=None):
         """The columns (all when not given) as a pyarrow Table, with `sample` (each row's sample
         name) and `entry` first; a list column is an Arrow large list."""
@@ -206,7 +205,7 @@ class File:
             "sample": pa.DictionaryArray.from_arrays(read["sample"][0], pa.array(self.samples)),
             "entry": read["entry"][0],
         }
-        table.update({n: self._arrow(n, *read[n]) for n in names})
+        table.update({n: _arrow(*read[n]) for n in names})
         return pa.table(table)
 
     def to_pandas(self, columns=None):
@@ -226,7 +225,7 @@ class File:
                 frame[name] = values
             else:
                 _needs("pyarrow", "to_pandas() of a list column")
-                frame[name] = pd.arrays.ArrowExtensionArray(self._arrow(name, values, offsets))
+                frame[name] = pd.arrays.ArrowExtensionArray(_arrow(values, offsets))
         return pd.DataFrame(frame)
 
     def to_parquet(self, path, columns=None):
