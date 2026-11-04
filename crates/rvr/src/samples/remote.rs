@@ -762,8 +762,9 @@ impl HttpsFile {
     }
 }
 
-/// The most ranges one request asks for, the gap a range is joined across when each request is
-/// one range, and how many requests run at once (measured on FNAL EOS, 2026-10-07).
+/// The most ranges one request asks for, the gap a range is joined across (by
+/// `hep_root::source::joined`, each at most its `MOST_JOINED`) when each request is one range,
+/// and how many requests run at once (measured on FNAL EOS, 2026-10-07).
 const SPANS: usize = 256;
 const GAP: u64 = 512 * 1024;
 const FETCHERS: usize = 6;
@@ -785,28 +786,6 @@ fn at_once<T: Sync, R: Send>(items: &[T], ask: impl Fn(&T) -> R + Sync) -> Vec<R
     let mut done = done.into_inner().unwrap();
     done.sort_by_key(|(i, _)| *i);
     done.into_iter().map(|(_, r)| r).collect()
-}
-
-/// The most bytes one joined range holds (as hep-root's `read_spans`).
-const MOST: u64 = 32 * 1024 * 1024;
-
-/// Ranges sorted and joined where they lie within `gap` of each other, up to `MOST` bytes each.
-pub fn joined(ranges: &[(u64, usize)], gap: u64) -> Vec<(u64, usize)> {
-    let mut sorted = ranges.to_vec();
-    sorted.sort_unstable();
-    let mut out: Vec<(u64, u64)> = Vec::new();
-    for (at, len) in sorted {
-        let end = at + len as u64;
-        match out.last_mut() {
-            Some((first, last)) if at <= *last + gap && end.max(*last) - *first <= MOST => {
-                *last = end.max(*last)
-            }
-            _ => out.push((at, end)),
-        }
-    }
-    out.into_iter()
-        .map(|(s, e)| (s, (e - s) as usize))
-        .collect()
 }
 
 impl HttpsFile {
@@ -852,7 +831,7 @@ impl HttpsFile {
 
     /// Ranges joined across gaps and asked one per request, `FETCHERS` at once.
     fn one_at_a_time(&self, ranges: &[(u64, usize)]) -> hep_root::Result<Vec<Vec<u8>>> {
-        let joined = joined(ranges, GAP);
+        let joined = hep_root::source::joined(ranges, GAP);
         let read = at_once(&joined, |&(at, len)| {
             let mut buf = vec![0; len];
             self.read_at(at, &mut buf).map(|()| buf)
@@ -1070,19 +1049,6 @@ mod tests {
         assert_eq!(adler32_of("adler32=not-hex"), None);
     }
 
-    #[test]
-    fn ranges_join_across_gaps_but_not_past_the_most_one_holds() {
-        assert_eq!(
-            joined(&[(100, 10), (0, 10), (15, 5)], 10),
-            [(0, 20), (100, 10)]
-        );
-        let big = (MOST / 2) as usize;
-        assert_eq!(
-            joined(&[(0, big), (big as u64, big), (2 * big as u64, 1)], 0).len(),
-            2
-        );
-    }
-
     /// A read that fails its first `failing` tries with `error`, counting its tries.
     fn flaky(
         failing: usize,
@@ -1097,7 +1063,6 @@ mod tests {
             }
         }
     }
-
 
     #[test]
     fn a_read_refused_by_a_busy_storage_is_asked_again_until_the_waits_run_out() {

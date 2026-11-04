@@ -71,7 +71,7 @@ impl Held {
     pub(crate) fn hold(&self, spans: Vec<(u64, u64)>) -> hep_root::Result<()> {
         const NEAR: u64 = 16 * 1024;
         let ranges: Vec<(u64, usize)> = spans.iter().map(|&(at, len)| (at, len as usize)).collect();
-        let wanted = crate::samples::remote::joined(&ranges, NEAR);
+        let wanted = hep_root::source::joined(&ranges, NEAR);
         let overlaps = |start: u64, len: usize| {
             wanted
                 .iter()
