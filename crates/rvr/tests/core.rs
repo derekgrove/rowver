@@ -231,43 +231,51 @@ fn peak(dir: &Path, args: &[&str]) -> (u64, String) {
 
 // SPEC 7.6.1, 7.6.2
 #[test]
-#[ignore = "presses a large study, named by RVR_MEMORY_STUDY (a folder with samples.toml, samples.lock and recipe.toml)"]
+#[ignore = "makes a 2.1M-row ntuple with uproot (RVR_PYTHON, `mamba run -n rowver python` when not set) and presses it four times: run it in a release build"]
 fn what_a_press_holds_does_not_grow_with_the_events_it_keeps() {
-    let from = std::path::PathBuf::from(std::env::var("RVR_MEMORY_STUDY").expect("RVR_MEMORY_STUDY names a study folder"));
-    let run = Study::new("memory");
-    let dir = run.join(from.file_name().unwrap());
-    std::fs::create_dir(&dir).unwrap();
-    // The texts copied, and everything else the study folder holds linked, so its relative paths read the same files.
-    for entry in std::fs::read_dir(&from).unwrap().flatten() {
-        let name = entry.file_name();
-        match ["samples.toml", "samples.lock", "recipe.toml"].contains(&name.to_str().unwrap()) {
-            true => std::fs::copy(entry.path(), dir.join(&name)).map(drop).unwrap(),
-            false if !name.to_string_lossy().ends_with(".rvr") => std::os::unix::fs::symlink(entry.path(), dir.join(&name)).unwrap(),
-            false => {}
-        }
-    }
-    let lock = std::fs::read_to_string(dir.join("samples.lock")).unwrap();
-    let total: u64 = lock.lines().filter_map(|l| l.strip_prefix("events_total = ")).map(|n| n.parse::<u64>().unwrap()).sum();
-    let mut seen = Vec::new();
-    for share in [8, 2] {
+    let jets = "branches = [\"run\", \"luminosityBlock\", \"event\", \"nJet\", \"Jet_pt\", \"Jet_eta\", \"MET\", \"weight\", \"x0\", \"x1\", \"x2\", \"x3\", \"x4\", \"x5\", \"x6\", \"x7\", \"x8\", \"x9\"]\nht = \"sum(Jet_pt)\"\n";
+    let recipe = recipe("", jets, "ratio = \"ht / MET\"\nlead = \"greatest(Jet_pt, -1)\"\n");
+    let dir = study("memory", &samples("[[sample]]\nname = \"big\"\nfiles = \"big.root\"\ntree = \"Events\"\n"), &recipe);
+    let python = std::env::var("RVR_PYTHON").unwrap_or_else(|_| "mamba run -n rowver python".into());
+    let mut words = python.split_whitespace();
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/make_large_ntuple.py");
+    let made = std::process::Command::new(words.next().unwrap()).args(words).arg(script).arg(dir.join("big.root")).arg("2100000").output().unwrap();
+    assert!(made.status.success(), "the ntuple was not made (RVR_PYTHON names a Python with uproot and awkward): {}", String::from_utf8_lossy(&made.stderr));
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    // A million kept events and two million: past the first million, reading holds what it will
+    // hold (hep-root's basket cache is full: measured without [derived], 59 and 69 MB at one worker).
+    let (mut pressed, mut built, mut widest) = (Vec::new(), Vec::new(), 0);
+    for events in ["1000000", "2000000"] {
         let _ = std::fs::remove_file(dir.join(name(&dir)));
-        let events = (total / share).to_string();
-        let (pressed, said) = peak(&dir, &["press", "--events", &events]);
-        let rows = header(&dir)["data"]["rows"].as_u64().unwrap();
-        // Building on it: a column dropped, only derived ones changed, nothing read.
-        let recipe = std::fs::read_to_string(dir.join("recipe.toml")).unwrap();
+        let (peak_of, said) = peak(&dir, &["press", "--events", events]);
+        let data = header(&dir)["data"].clone();
+        let rows = data["rows"].as_u64().unwrap();
+        eprintln!("--events {events}: {rows} rows kept, press peak {} MB\n{said}", peak_of >> 20);
+        pressed.push((rows, peak_of));
+        // The most bytes a row one stored column holds: a flat one's width, a jagged one's offset
+        // (8) and its members (their width, times its members a row).
+        for c in data["cols"].as_array().unwrap() {
+            let width = |kind: &Value| rowver::rvr::width(kind.as_str().unwrap()).unwrap() as u64;
+            let bytes = match c["kind"].as_str().unwrap() {
+                "jagged" => 8 + width(&c["content"]["kind"]) * c["content"]["count"].as_u64().unwrap() / rows,
+                _ => width(&c["kind"]),
+            };
+            widest = widest.max(bytes);
+        }
+        // Building on it: a derived column added, nothing read.
         std::fs::write(dir.join("recipe.toml"), recipe.replace("[derived]\n", "[derived]\nmemory_probe = \"1\"\n")).unwrap();
-        let (built, _) = peak(&dir, &["press", "--events", &events]);
-        std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
-        eprintln!("1/{share} of {total}: {rows} rows kept, press peak {} MB, build-on peak {} MB\n{said}", pressed >> 20, built >> 20);
-        seen.push((rows, pressed, built));
+        let (peak_of, _) = peak(&dir, &["press", "--events", events]);
+        std::fs::write(dir.join("recipe.toml"), &recipe).unwrap();
+        eprintln!("--events {events}: build-on peak {} MB", peak_of >> 20);
+        built.push((rows, peak_of));
     }
-    let ((few, small, built_small), (many, large, built_large)) = (seen[0], seen[1]);
-    assert!(many >= 3 * few, "{seen:?}");
-    // Four times the rows: the press holds at most a quarter more.
-    assert!(large <= small + small / 4, "{seen:?}");
-    // Building on it: 8 bytes a row more, and one of its columns (at most 8 bytes a row again).
-    assert!(built_large <= built_small + 16 * (many - few) + (64 << 20), "{seen:?}");
+    // Twice the events kept: a press holds at most a tenth more, and 8 MB (SPEC 7.6.1).
+    let ((few, small), (many, large)) = (pressed[0], pressed[1]);
+    assert!(many >= 2 * few - 1 && large <= small + small / 10 + (8 << 20), "{pressed:?}");
+    // Building on it, a press also holds 8 bytes a row of the file, and one of its columns at a
+    // time (SPEC 7.6.2): at most `8 + widest` bytes a row more for each row more.
+    let ((few, small), (many, large)) = (built[0], built[1]);
+    assert!(large <= small + small / 10 + (8 << 20) + (8 + widest) * (many - few), "{built:?}, {widest} bytes a row in the widest column");
 }
 
 // SPEC 8.5

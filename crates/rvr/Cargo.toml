@@ -27,3 +27,7 @@ rustls.workspace = true
 
 [build-dependencies]
 serde_json.workspace = true
+
+# cargo fuzz builds with `--cfg fuzzing`, which opens the entry points of the fuzz harness (fuzz/).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }

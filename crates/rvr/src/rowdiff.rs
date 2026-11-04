@@ -6,6 +6,7 @@
 //! flag per event both hold; and, while the values are compared, one stored column of each file,
 //! then the derived columns both hold, worked out together.
 
+use crate::samples::some;
 use rowver::rvr::{derived, grouped as count, Held, Reader};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -195,7 +196,7 @@ fn compare(a: &str, b: &str, key: Option<&str>, only: Option<&str>) -> Result<bo
     for (path, one, other) in [(a, 0, 1), (b, 1, 0)] {
         for (name, from, to) in sides[one].samples.iter().filter(|(n, _, _)| wanted(n)) {
             if !sides[other].samples.iter().any(|(m, _, _)| m == name) {
-                said.push(format!("sample {name}: only {path} holds it ({} events)", count((to - from) as u64)));
+                said.push(format!("sample {name}: only {path} holds it ({})", some(to - from, "event", "events")));
             }
         }
     }
@@ -259,10 +260,11 @@ fn compare(a: &str, b: &str, key: Option<&str>, only: Option<&str>) -> Result<bo
     for (join, flags) in joined.iter_mut().zip(&differs) {
         join.differ = flags.iter().filter(|f| **f).count();
         let n = |n: usize| count(n as u64);
-        println!("sample {}: {} events in both, {} only in A, {} only in B", join.name, n(join.pairs.len()), n(join.only[0]), n(join.only[1]));
+        println!("sample {}: {} in both, {} only in A, {} only in B", join.name, some(join.pairs.len(), "event", "events"), n(join.only[0]), n(join.only[1]));
         if let Some((k, column, x, y)) = &join.first {
             let event = describe(0, join.pairs[*k].0 as usize);
-            println!("  first difference: {event}, column {column}: {x} in A, {y} in B; {} events differ", count(join.differ as u64));
+            let differ = if join.differ == 1 { "1 event differs".to_owned() } else { format!("{} events differ", count(join.differ as u64)) };
+            println!("  first difference: {event}, column {column}: {x} in A, {y} in B; {differ}");
         }
         same &= join.only == [0, 0] && join.differ == 0;
     }

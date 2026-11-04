@@ -16,6 +16,8 @@ pub struct Request {
     pub method: String,
     pub path: String,
     pub range: Option<String>,
+    /// Which request of its connection it is: 1 for the first, 2 for one sent on a kept connection.
+    pub nth: usize,
 }
 
 impl Request {
@@ -46,6 +48,8 @@ pub enum Answer {
     Late(Duration, Box<Answer>),
     /// The server gone: this connection closed, and no other taken.
     Vanish,
+    /// The request taken and never answered, its connection held open until the server stops.
+    Silent,
     /// The answer, once this many requests have come (or after 30 s, so a test never hangs).
     #[allow(dead_code)] // remote.rs's tests only
     Together(usize, Box<Answer>),
@@ -121,7 +125,7 @@ impl Server {
                 let (config, files, log, script, multipart, stop, busy) = (config.clone(), shared.0.clone(), shared.1.clone(), shared.2.clone(), shared.3.clone(), shared.4.clone(), shared.5.clone());
                 std::thread::spawn(move || {
                     let Ok(tls) = rustls::ServerConnection::new(config) else { return };
-                    let vanished = serve(rustls::StreamOwned::new(tls, stream), &files, &log, &script, &multipart, &busy);
+                    let vanished = serve(rustls::StreamOwned::new(tls, stream), &files, &log, &script, &multipart, &busy, &stop);
                     if matches!(vanished, Ok(true)) {
                         stop.store(true, Ordering::Relaxed);
                         let _ = TcpStream::connect(("127.0.0.1", port));
@@ -180,9 +184,10 @@ fn serve(
     script: &Mutex<Script>,
     multipart: &Mutex<bool>,
     busy: &(AtomicUsize, AtomicUsize, AtomicUsize),
+    stop: &std::sync::atomic::AtomicBool,
 ) -> std::io::Result<bool> {
     let mut reader = BufReader::new(stream);
-    loop {
+    for nth in 1.. {
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 {
             return Ok(false);
@@ -206,7 +211,7 @@ fn serve(
         }
         let mut body = vec![0; length];
         reader.read_exact(&mut body)?;
-        let request = Request { method, path, range };
+        let request = Request { method, path, range, nth };
         log.lock().unwrap().push(request.clone());
         let answer = (script.lock().unwrap())(&request);
         let now = busy.0.fetch_add(1, Ordering::SeqCst) + 1;
@@ -234,6 +239,12 @@ fn serve(
         let several = *multipart.lock().unwrap();
         let out = reader.get_mut();
         match answer {
+            Answer::Silent => {
+                while !stop.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                return Ok(false);
+            }
             Answer::Drop | Answer::Vanish => {
                 let _ = out.sock.shutdown(std::net::Shutdown::Both);
                 return Ok(matches!(answer, Answer::Vanish));
@@ -256,6 +267,7 @@ fn serve(
             Answer::Late(..) | Answer::Together(..) => unreachable!(),
         }
     }
+    Ok(false)
 }
 
 /// What a door answers: a listing, a digest, the file, or byte ranges of it.

@@ -602,7 +602,8 @@ saying why.
 Says, from the study's three texts and the file's header alone (no input is read), whether the
 `.rvr` file `rvr press` with the same options would write holds the study as it is: what changed in
 each text, what a press would do, how much each sample holds of what it chose, and its holes by
-kind; `--holes` lists every hole. It shows a press stopped part way (above), or under way. Exit
+kind; `--holes` lists every hole. It shows a press stopped part way (above), one stopped before it
+finished a file (which `rvr press` starts over), or one under way. Exit
 status 0 only when `rvr press` with the same options would have nothing to do: the file current and
 without holes, so a script can ask before pressing. Whether the input files changed since the lock
 is `rvr samples check`.

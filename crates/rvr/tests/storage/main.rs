@@ -409,6 +409,125 @@ fn a_read_waits_120_s_for_its_answer() {
     assert!((120..135).contains(&took), "{took} s: {said}");
 }
 
+/// rvr in `dir` as `rvr` runs it, started: the child, and the file it says what it says in.
+fn spawned(dir: &Path, args: &[&str]) -> (std::process::Child, std::path::PathBuf) {
+    let said = dir.join("said.txt");
+    let out = std::fs::File::create(&said).unwrap();
+    let child = std::process::Command::new(env!("CARGO_BIN_EXE_rvr"))
+        .args(args)
+        .current_dir(dir)
+        .env("RVR_CONFIG", dir.join(".rvr-config"))
+        .env("X509_CERT_DIR", fixtures().join("tls/authority"))
+        .env("X509_USER_PROXY", dir.join("no-proxy"))
+        .env("RVR_SECOND_MS", "1")
+        .stdout(out.try_clone().unwrap())
+        .stderr(out)
+        .spawn()
+        .unwrap();
+    (child, said)
+}
+
+/// rvr in `dir`, killed should it run `limit` seconds: its exit status (`None` when killed), what
+/// it said, and the seconds it took.
+fn rvr_within(dir: &Path, limit: u64, args: &[&str]) -> (Option<i32>, String, u64) {
+    let started = std::time::Instant::now();
+    let (mut child, said) = spawned(dir, args);
+    let code = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status.code();
+        }
+        if started.elapsed().as_secs() >= limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    (code, std::fs::read_to_string(said).unwrap(), started.elapsed().as_secs())
+}
+
+/// Every request served but the first sent on a kept connection (its second or later), never answered.
+fn silent_on_a_kept_connection() -> impl FnMut(&server::Request) -> Answer + Send + 'static {
+    let mut silenced = false;
+    move |request| match request.nth >= 2 && !silenced {
+        true => {
+            silenced = true;
+            Answer::Silent
+        }
+        false => Answer::Serve,
+    }
+}
+
+// SPEC 7.2.4
+#[test]
+#[ignore = "waits two minutes for an answer never given on a kept connection"]
+fn a_read_on_a_kept_connection_waits_120_s_for_its_answer() {
+    let (dir, server) = remote("kept-read", |s| format!("{:?}", s.url("/store/flat.root")));
+    resolved(&dir);
+    server.script(silent_on_a_kept_connection());
+    server.taken();
+    let (code, said, took) = rvr_within(&dir, 200, &["press"]);
+    assert!(server.taken().iter().any(|r| r.nth >= 2), "the press sent no request on a kept connection: {said}");
+    assert_eq!(code, Some(0), "{took} s: {said}");
+    assert_eq!(hole(&dir), None, "{said}");
+    assert!(said.contains("it did not answer in time"), "{said}");
+    assert!((120..135).contains(&took), "{took} s: {said}");
+}
+
+// SPEC 7.2.4, 6.2.6
+#[test]
+#[ignore = "waits two minutes for an answer never given on a kept connection"]
+fn a_listing_on_a_kept_connection_waits_120_s_for_its_answer() {
+    let (dir, server) = remote("kept-resolve", |s| format!("{:?}", s.url("/store/flat.root")));
+    server.script(silent_on_a_kept_connection());
+    let (code, said, took) = rvr_within(&dir, 200, &["samples", "resolve", "samples.toml"]);
+    assert!(server.taken().iter().any(|r| r.nth >= 2), "resolve sent no request on a kept connection: {said}");
+    assert_eq!(code, Some(0), "{took} s: {said}");
+    assert!(dir.join("samples.lock").exists(), "{said}");
+    assert!((120..135).contains(&took), "{took} s: {said}");
+}
+
+// SPEC 9.5
+#[test]
+fn a_press_stopped_before_it_finished_a_file_is_shown_by_status() {
+    let (dir, server) = remote("stopped-early", |s| format!("{:?}", s.url("/store/flat.root")));
+    resolved(&dir);
+    // A press stuck on a door that never answers, stopped once its journal is on disk.
+    server.script(|request| match request.method.as_str() {
+        "GET" => Answer::Silent,
+        _ => Answer::Serve,
+    });
+    let (mut child, said) = spawned(&dir, &["press"]);
+    let journal = dir.join(format!("{}.partial/journal.jsonl", file(&dir)));
+    let started = std::time::Instant::now();
+    while std::fs::read(&journal).map_or(true, |bytes| !bytes.ends_with(b"\n")) {
+        assert!(started.elapsed().as_secs() < 30, "the press wrote no journal: {}", std::fs::read_to_string(&said).unwrap_or_default());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let (code, said) = rvr(&dir, None, &["status"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains(".rvr.partial: a press stopped there before it finished a file (journal from ") && said.contains("); rvr press starts it over."), "{said}");
+    assert!(said.contains(" is not there yet: rvr press makes it."), "{said}");
+    // When a press would refuse, nothing is said of starting over.
+    let recipe = std::fs::read_to_string(dir.join("recipe.toml")).unwrap();
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("version = 1", "version = 2")).unwrap();
+    let (_, said) = rvr(&dir, None, &["status"]);
+    assert!(said.contains("before it finished a file (journal from ") && said.contains("rvr press would refuse") && !said.contains("starts it over"), "{said}");
+    std::fs::write(dir.join("recipe.toml"), &recipe).unwrap();
+    // Nor beside a file that is current, when rvr press has nothing to do.
+    let stopped = std::fs::read(&journal).unwrap();
+    server.script(|_| Answer::Serve);
+    let (code, said) = rvr(&dir, None, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    std::fs::write(&journal, stopped).unwrap();
+    let (code, said) = rvr(&dir, None, &["status"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("before it finished a file (journal from ") && said.contains("It is current") && !said.contains("starts it over"), "{said}");
+}
+
 // SPEC 7.2.4
 #[test]
 #[ignore = "waits a minute for connections that never open (10.255.255.1 must drop packets, as most networks do)"]

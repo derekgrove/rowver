@@ -1,0 +1,79 @@
+# The fuzz harness of docs/testing-course.md phase 3: cargo fuzz (nightly) only, never part of the
+# workspace or a release. fuzz/seed.py makes the seeds; fuzz/run.sh runs one target, detached.
+[package]
+name = "rowver-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rowver = { path = "../crates/rowver" }
+rvr-recipe = { path = "../crates/rvr-recipe" }
+rvr = { path = "../crates/rvr" }
+
+# Its own workspace, so that the crates' workspace and lock know nothing of it.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "open"
+path = "fuzz_targets/open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validate"
+path = "fuzz_targets/validate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lock"
+path = "fuzz_targets/lock.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "samples"
+path = "fuzz_targets/samples.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "recipe"
+path = "fuzz_targets/recipe.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "expression"
+path = "fuzz_targets/expression.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "multipart"
+path = "fuzz_targets/multipart.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "words"
+path = "fuzz_targets/words.rs"
+test = false
+doc = false
+bench = false

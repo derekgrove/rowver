@@ -161,17 +161,25 @@ pub fn run(args: &[std::ffi::OsString]) -> u8 {
             }
         }
     }
-    let args = words;
+    match read_words(&words) {
+        Ok((command, options)) => command_run(command.name, &options),
+        Err(status) => status,
+    }
+}
+
+/// The command these words name, with its options read; or, when they name none rightly, the exit
+/// status of saying so (or of `rvr` alone).
+fn read_words(args: &[&str]) -> Result<(&'static Command, Options), u8> {
     let mut tops: Vec<&str> = COMMANDS.iter().map(|c| c.name.split(' ').next().unwrap_or(c.name)).collect();
     tops.dedup();
     // The command is the first word that is not a flag (flags before it, with their values, are
     // passed over); for samples, key and proxy, the next such word names what it does.
-    let Some(at) = first_word(&args) else {
-        return bare(&args);
+    let Some(at) = first_word(args) else {
+        return Err(bare(args));
     };
     if !tops.contains(&args[at]) {
         eprintln!("rvr: {} is not a command.{}\n{USAGE}", args[at], rvr_recipe::meant(args[at], tops.iter().copied()));
-        return 2;
+        return Err(2);
     }
     let mut rest: Vec<&str> = args.iter().enumerate().filter(|(i, _)| *i != at).map(|(_, a)| *a).collect();
     let mut name = args[at].to_owned();
@@ -182,20 +190,34 @@ pub fn run(args: &[std::ffi::OsString]) -> u8 {
             _ if *top == "proxy" => {}
             Some(sub) => {
                 eprintln!("rvr {top}: {} is not one of its commands, {}.{}\n{usage}", rest[sub], subs.join(", "), rvr_recipe::meant(rest[sub], subs.iter().copied()));
-                return 2;
+                return Err(2);
             }
             None => {
                 eprintln!("rvr {top}: give one of {}.\n{usage}", subs.join(", "));
-                return 2;
+                return Err(2);
             }
         }
     }
     let Some(command) = COMMANDS.iter().find(|c| c.name == name) else {
-        return wrong(&name, "it is not a command");
+        return Err(wrong(&name, "it is not a command"));
     };
-    match options::read(command, &rest) {
-        Ok(options) => command_run(command.name, &options),
-        Err(why) => wrong(command.name, &why),
+    options::read(command, &rest).map(|options| (command, options)).map_err(|why| wrong(command.name, &why))
+}
+
+/// What the fuzz harness (fuzz/) calls, built only by cargo fuzz (`--cfg fuzzing`).
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod fuzzing {
+    /// Read `args` as `rvr` reads its arguments, running no command.
+    pub fn words(args: &[&str]) {
+        let _ = super::read_words(args);
+    }
+
+    /// Read `answer` as rvr reads a server's answer of this content type to a request for `asked` bytes.
+    pub fn multipart(content_type: &str, answer: &[u8], asked: u64) {
+        if let Some(boundary) = crate::samples::multipart::boundary(content_type) {
+            let _ = crate::samples::multipart::parts(answer, &boundary, asked);
+        }
     }
 }
 

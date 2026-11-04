@@ -1,7 +1,7 @@
 //! `rvr samples`: samples.toml in, samples.lock out, and what a press reads of each sample.
 //! samples.toml and samples.lock are rowver's (`rowver::study`); see docs/SPEC.md §6.
 
-mod multipart;
+pub(crate) mod multipart;
 pub(crate) mod remote;
 pub(crate) mod resolve;
 

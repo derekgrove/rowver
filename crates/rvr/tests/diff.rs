@@ -74,6 +74,11 @@ fn the_first_differing_value_is_named_with_how_many_events_differ() {
     // The first event of five jets differs in ht, and in ratio, a derived column of it.
     assert!(said.contains("0 only in A, 0 only in B") && said.contains("first difference: entry "), "{said}");
     assert!(said.contains(", column ht: ") && said.contains("events differ"), "{said}");
+    // One event of each sample differs, in the singular.
+    let one = pressed(&root, "values-one", SAMPLES, "1", "if(event == 375462394065, sum(Jet_pt) + 1, sum(Jet_pt))");
+    let (code, said) = diff(&root, &a, &one, &[]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("; 1 event differs") && !said.contains(" 1 events"), "{said}");
     // Two values whose words are alike (NaNs of two signs) are told apart by their bits.
     let nan = pressed(&root, "values-nan", SAMPLES, "1", "if(nJet == 5, inf - inf, sum(Jet_pt))");
     let negated = pressed(&root, "values-negated", SAMPLES, "1", "if(nJet == 5, -(inf - inf), sum(Jet_pt))");

@@ -24,3 +24,10 @@ dist/
 
 # What the retired Python presser left on this disk (its studies, notes); its code is at tag v13.0.1.
 /python/
+
+# The fuzz harness's seeds (fuzz/seed.py makes them again), the corpora it grows, its findings and logs.
+/fuzz/seeds/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
+/fuzz/logs/

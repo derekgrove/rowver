@@ -49,16 +49,17 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
         At::Missing => return missing(dir, study, target, texts, choice),
         At::Unopened(e) => return Err(rowver::plain(&target, e)),
     };
-    if let Some(note) = stopped_note(&stopped) {
+    // The Plan rvr press would make, with these options, of the file there.
+    let place = Place { base: dir, study, target: target.clone(), at };
+    let asked = Asked { choose: Choose::Options(choice.clone()), on: On::Earlier, workers: 1, sign: true };
+    let plan = crate::plan::build(place, texts.clone(), asked);
+    let pressing = plan.as_ref().is_ok_and(|plan| !matches!(plan.from, Base::Current(_)));
+    if let Some(note) = stopped_note(&stopped, pressing) {
         println!("{note}");
     }
     let made = &header["made"];
     let held = |key: &str| made[key]["text"].as_str().unwrap_or_default();
     println!("{}: pressed {} by {}", target.display(), made["built"].as_str().unwrap_or("?"), made["by"].as_str().unwrap_or("?"));
-    // The Plan rvr press would make, with these options, of the file there.
-    let place = Place { base: dir, study, target: target.clone(), at };
-    let asked = Asked { choose: Choose::Options(choice.clone()), on: On::Earlier, workers: 1, sign: true };
-    let plan = crate::plan::build(place, texts.clone(), asked);
     let events = match &plan {
         Ok(plan) => Some(plan.asked.clone()),
         Err(_) => lock.and_then(|lock| crate::agree::planned(lock, &Choose::Options(choice)).ok()).map(|(_, asked)| asked),
@@ -135,14 +136,14 @@ fn missing(dir: PathBuf, study: String, target: PathBuf, texts: crate::texts::Te
                 );
             }
             _ => {
-                if let Some(note) = stopped_note(&stopped) {
+                if let Some(note) = stopped_note(&stopped, true) {
                     println!("{note}");
                 }
                 println!("rvr press would press every column: {}.", crate::core::pressed(&plan));
             }
         },
         Err(why) => {
-            if let Some(note) = stopped_note(&stopped) {
+            if let Some(note) = stopped_note(&stopped, false) {
                 println!("{note}");
             }
             refused(&why);
@@ -160,12 +161,21 @@ fn refused(why: &str) {
     }
 }
 
-/// A press stopped in `stopped` (its staging folder) with files done, said; none, nothing.
-fn stopped_note(stopped: &std::path::Path) -> Option<String> {
+/// A press stopped in `stopped` (its staging folder), said; none, nothing. One that saved no
+/// finished file is said to start over only when a press would read (`pressing`).
+fn stopped_note(stopped: &std::path::Path, pressing: bool) -> Option<String> {
     if crate::journal::under_way(stopped) {
         return None;
     }
-    let (press, done) = crate::journal::unfinished(stopped).filter(|(_, done)| !done.inputs.is_empty())?;
+    let (press, done) = crate::journal::unfinished(stopped)?;
+    if done.inputs.is_empty() {
+        let what = match done.named {
+            0 => "before it finished a file",
+            _ => "with no finished file saved",
+        };
+        let then = if pressing { "; rvr press starts it over." } else { "." };
+        return Some(format!("{}: a press stopped there {what} (journal from {}){then}", stopped.display(), done.when));
+    }
     let inputs = press["inputs"].as_u64().unwrap_or(0) as usize;
     Some(format!(
         "{}: a press stopped there with {} of {} done (journal from {}). rvr press carries on from there when the study and the press are the same, and --restart starts over.",

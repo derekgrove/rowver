@@ -323,9 +323,9 @@ dependencies = [
 
 [[package]]
 name = "grid-trust"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0217bcc0284b68cc01555c52c60a2f96cd1348ecc1f40ebe4a4cd662c73193f1"
+checksum = "6dd34f3018d4b10588adf36c0eed027e815de933738f9316e987bfb8e8afefe7"
 dependencies = [
  "rustls",
  "rustls-pemfile",

@@ -204,6 +204,8 @@ pub struct Done {
     pub inputs: BTreeMap<usize, Value>,
     /// When its journal was last written, UTC.
     pub when: String,
+    /// How many inputs the journal names as finished, a checkpoint covering them or not.
+    pub named: usize,
     /// Where its last checkpoint line ends: what follows is not trusted, and is cut off.
     end: u64,
 }
@@ -240,16 +242,17 @@ fn lines(folder: &Path) -> Option<(Vec<(Value, u64)>, String)> {
 
 /// The inputs the checkpoints among `lines` cover (the lines after the first, which ends at `end`).
 fn covered(lines: impl Iterator<Item = (Value, u64)>, when: String, mut end: u64) -> Done {
-    let (mut inputs, mut held) = (BTreeMap::new(), Vec::new());
+    let (mut inputs, mut held, mut named) = (BTreeMap::new(), Vec::new(), 0);
     for (line, at) in lines {
         if line.get("checkpoint").is_some() {
             inputs.extend(held.drain(..));
             end = at;
         } else if let Some(input) = line["input"].as_u64() {
             held.push((input as usize, line));
+            named += 1;
         }
     }
-    Done { inputs, when, end }
+    Done { inputs, when, named, end }
 }
 
 /// The journal in `folder`, read against `press` (this press's first line).
