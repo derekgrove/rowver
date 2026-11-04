@@ -23,6 +23,17 @@ use std::sync::Mutex;
 /// How many entries of a file are read and held at a time.
 pub(crate) const CHUNK: u64 = 50_000;
 
+/// `CHUNK`; in a debug build, `RVR_RUN` when set (and said, once), so the tests can press in runs of any size.
+fn chunk() -> u64 {
+    #[cfg(debug_assertions)]
+    if let Some(n) = std::env::var("RVR_RUN").ok().and_then(|n| n.parse().ok()).filter(|n| *n > 0) {
+        static SAID: std::sync::Once = std::sync::Once::new();
+        SAID.call_once(|| eprintln!("rvr (a debug build): RVR_RUN: runs of {n} entries"));
+        return n;
+    }
+    CHUNK
+}
+
 /// How many bytes of kept values a file gathers before they go to the spool on disk.
 const SPOOLED: usize = 16 << 20;
 
@@ -76,17 +87,17 @@ pub(crate) struct Taken {
 }
 
 /// The runs of entries a press reads of entries `[from, to)` of a file, as [first, last): every
-/// `CHUNK` entries, or around the entries `chosen` (those in the range), cut where two are `gap`
-/// or more apart.
-fn runs(from: u64, to: u64, chosen: Option<&[u64]>, gap: u64) -> Vec<(u64, u64)> {
+/// `chunk` entries, or around the entries `chosen` (those in the range), cut where two are `gap`
+/// or more apart, each at most `chunk`.
+fn runs(from: u64, to: u64, chosen: Option<&[u64]>, gap: u64, chunk: u64) -> Vec<(u64, u64)> {
     let Some(chosen) = chosen else {
-        let starts = (from..to).step_by(CHUNK as usize);
-        return starts.map(|first| (first, to.min(first + CHUNK))).collect();
+        let starts = (from..to).step_by(chunk as usize);
+        return starts.map(|first| (first, to.min(first + chunk))).collect();
     };
     let mut runs: Vec<(u64, u64)> = Vec::new();
     for &e in chosen {
         match runs.last_mut() {
-            Some((first, last)) if e - *last < gap && e + 1 - *first <= CHUNK => *last = e + 1,
+            Some((first, last)) if e - *last < gap && e + 1 - *first <= chunk => *last = e + 1,
             _ => runs.push((e, e + 1)),
         }
     }
@@ -385,13 +396,13 @@ fn read_runs(shared: &Shared, input: &Input, file: &RootFile<Held>, tree: &Tree,
     let mut read = Read { rows: 0, holes: Vec::new(), cutflow: vec![0; recipe.keep.len()], totals: vec![0.0; recipe.totals.iter().filter(|t| t.tree.is_none()).count()] };
     let mut entry: Vec<i64> = Vec::new();
     let mut tried = recipe.derived.is_empty();
-    let gap = if remote { CHUNK } else { GAP };
+    let gap = if remote { chunk() } else { GAP };
     // Building on an earlier file, the events it kept and no others, without the cuts.
     let picks = input.kept.as_deref().or(input.chosen.as_deref());
     'ranges: for (at_range, &(from, to, order)) in to_read.iter().enumerate() {
         let (to, mut piece, mut ended) = (to.min(entries), 0, false);
         let here = picks.map(|c| &c[c.partition_point(|e| *e < from)..c.partition_point(|e| *e < to)]);
-        for (first, last) in runs(from, to, here, gap) {
+        for (first, last) in runs(from, to, here, gap, chunk()) {
             if shared.reach.watch.stop.load(Ordering::Acquire) {
                 return Err(Failed::new(Fault::Stopped, STOPPED));
             }
@@ -576,13 +587,13 @@ mod tests {
     // SPEC 4.2.1
     #[test]
     fn runs_are_every_chunk_or_the_chosen_entries_cut_at_gaps() {
-        assert_eq!(runs(0, 120_000, None, GAP), [(0, 50_000), (50_000, 100_000), (100_000, 120_000)]);
-        assert_eq!(runs(0, 0, None, GAP), []);
-        assert_eq!(runs(70_000, 125_000, None, GAP), [(70_000, 120_000), (120_000, 125_000)]);
+        assert_eq!(runs(0, 120_000, None, GAP, CHUNK), [(0, 50_000), (50_000, 100_000), (100_000, 120_000)]);
+        assert_eq!(runs(0, 0, None, GAP, CHUNK), []);
+        assert_eq!(runs(70_000, 125_000, None, GAP, CHUNK), [(70_000, 120_000), (120_000, 125_000)]);
         let chosen = [3, 10, 5_000, 5_001, 60_000];
-        assert_eq!(runs(0, 70_000, Some(&chosen), GAP), [(3, 11), (5_000, 5_002), (60_000, 60_001)]);
-        assert_eq!(runs(0, 70_000, Some(&chosen), CHUNK), [(3, 5_002), (60_000, 60_001)]);
+        assert_eq!(runs(0, 70_000, Some(&chosen), GAP, CHUNK), [(3, 11), (5_000, 5_002), (60_000, 60_001)]);
+        assert_eq!(runs(0, 70_000, Some(&chosen), CHUNK, CHUNK), [(3, 5_002), (60_000, 60_001)]);
         let dense: Vec<u64> = (0..120_000).step_by(10).collect();
-        assert_eq!(runs(0, 120_000, Some(&dense), GAP), [(0, 49_991), (50_000, 99_991), (100_000, 119_991)]);
+        assert_eq!(runs(0, 120_000, Some(&dense), GAP, CHUNK), [(0, 49_991), (50_000, 99_991), (100_000, 119_991)]);
     }
 }

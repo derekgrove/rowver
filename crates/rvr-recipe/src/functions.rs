@@ -489,6 +489,15 @@ pub(crate) const MOST_PAIRS: usize = 1 << 16;
 /// How many pairs the events worked on at once may make together, past which they are `crowded`.
 pub(crate) const RUN_PAIRS: usize = 1 << 26;
 
+/// `RUN_PAIRS`; in a debug build, `RVR_RUN_PAIRS` when set, so the tests can make a run crowded.
+fn run_pairs() -> usize {
+    #[cfg(debug_assertions)]
+    if let Some(n) = std::env::var("RVR_RUN_PAIRS").ok().and_then(|n| n.parse().ok()).filter(|n| *n > 0) {
+        return n;
+    }
+    RUN_PAIRS
+}
+
 /// The pairs of each event's list as positions into its values; an event whose list would make
 /// more than `MOST_PAIRS` is a data error, and events making more than `RUN_PAIRS` together are
 /// too many to work on at once.
@@ -499,7 +508,12 @@ fn pairs_of(offsets: &[usize], what: &str) -> Result<(hep_columns::Jagged<usize>
         return Err(data(event, format!("{what} would make {} pairs of this event's {members} members, more than the {MOST_PAIRS} one event may make: select fewer members first, as Jet_pt[Jet_pt > 30]", made(members))));
     }
     let count = hep_columns::lists::pair_count(offsets);
-    if count > RUN_PAIRS && offsets.len() > 2 {
+    if count > run_pairs() && offsets.len() > 2 {
+        #[cfg(debug_assertions)]
+        if run_pairs() != RUN_PAIRS {
+            static SAID: std::sync::Once = std::sync::Once::new();
+            SAID.call_once(|| eprintln!("rvr (a debug build): RVR_RUN_PAIRS: {count} pairs over {} events, more than {}: worked on in halves", offsets.len() - 1, run_pairs()));
+        }
         return Err(crate::crowded(format!("{what} would make {count} pairs over these events, more than one run of them may hold at once")));
     }
     Ok(hep_columns::lists::pairs(offsets))

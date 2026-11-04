@@ -461,7 +461,7 @@ terminals; `y` or `yes`, in any case, is yes, and any other answer is no.
 | `rvr validate FILE… [--complete]` | checks files in full | 9 |
 | `rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns] [--all]` | the inside of a file as text | 9 |
 | `rvr header FILE` | the header as the file holds it | 9 |
-| `rvr diff A B` | where two files differ, from their headers | 9 |
+| `rvr diff A B [--rows] [--key COLUMN,…] [--sample NAME]` | where two files differ: from their headers, or (`--rows`) event by event | 9 |
 | `rvr reproduce FILE [DIR] [--study FOLDER] [--workers N]` | presses a file's own study again and compares | 9 |
 | `rvr empty FILE… [--study FOLDER] [--anyway] [--force \| -f]` | lets a file's arrays go, keeping its header | 8 |
 | `rvr refill FILE [--study FOLDER] [--workers N]` | presses an empty file's arrays again | 8 |
@@ -854,6 +854,22 @@ whose contents changed (every array has one checksum per sample); and each sampl
 that changed. It says when a
 header fails its checks, and when one file is empty. Exit 0 when the headers show no difference, 1
 when they do, 2 when one cannot be read.
+
+**9.4.1 `rvr diff A B --rows [--key COLUMN,…] [--sample NAME]`** compares the two files' events
+themselves, so that files holding the same events in another order or layout (samples reordered,
+another implementation's press, two skims of the same data) can be compared. It reads the arrays.
+Rows are matched by sample name and an event's identity: by default the ROOT UUID of its file (from
+the lock the file carries), which of the sample's files with that UUID it is (the first, the second:
+copies of one file share a UUID), and its entry in that file; with `--key`, the values of those stored
+flat columns, which both files hold with the same kind (`--key run,luminosityBlock,event` matches
+an event's copies in two different skims). Two rows of one file with the same key are refused,
+naming the sample and the key. It says, per sample, how many events only A holds, how many only B
+holds, and, of the events both hold, compared column by column over the stored and derived columns
+both hold by name, the first event whose values differ (its sample, key, the column, and both
+values), with how many events differ in all; columns only one file holds are named, not compared.
+Values compare as FORMAT.md §4 stores them: floats bit for bit, NaN equal to the same NaN.
+`--sample NAME` compares that sample alone. Exit 0 when the two hold the same events with the same
+values, 1 when they do not, 2 when one cannot be read.
 
 **9.5 `rvr status [DIR]`** says, from the study's texts and the file's header alone (no input is read),
 whether the file holds the study as it is: what changed in each text, what a press would do (§8), how

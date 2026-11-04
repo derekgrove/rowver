@@ -151,7 +151,7 @@ The headers show no difference in rows, samples, labels, columns, derived column
 | `rvr validate FILE… [--complete]` | checks files in full | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
 | `rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns] [--all]` | the inside of a file as text | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
 | `rvr header FILE` | the header as the file holds it | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
-| `rvr diff A B` | where two files differ, from their headers | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
+| `rvr diff A B [--rows] [--key COLUMN,…] [--sample NAME]` | where two files differ: from their headers, or (`--rows`) event by event | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
 | `rvr reproduce FILE [DIR] [--study FOLDER] [--workers N]` | presses a file's own study again and compares | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
 | `rvr empty FILE… [--study FOLDER] [--anyway] [--force \| -f]` | lets a file's arrays go, keeping its header | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
 | `rvr refill FILE [--study FOLDER] [--workers N]` | presses an empty file's arrays again | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
@@ -776,7 +776,7 @@ Prints the header's bytes exactly as the file holds them (the JSON text between 
 arrays), without reading any array. A header that fails its checks is printed all the same, and
 why is said on standard error, with exit status 1.
 
-### `rvr diff A B`
+### `rvr diff A B [--rows] [--key COLUMN,…] [--sample NAME]`
 
 Says where two files differ, from their headers alone, without decompressing anything: the rows,
 in all and of each sample; samples, columns, derived columns and sample columns only one has; each
@@ -788,6 +788,29 @@ empty. Exit status 0 when the headers show no difference, 1 when they do, 2 when
 ```text
 $ rvr diff before.rvr after.rvr
 sample column xsec: differs in sample c: 2.5 in before.rvr, 3.5 in after.rvr
+```
+
+With `--rows` it compares the events themselves, reading the arrays, so that two files holding the
+same events in another order or layout can be compared: samples reordered, another program's
+press, two skims of the same data. Events are matched within each sample (by name) by their file's
+ROOT UUID, which of the sample's files with that UUID it is (copies of one file share one), and
+their entry in it, or with `--key COLUMN,…` by the values of those stored flat
+columns, which both files hold with one kind (`--key run,luminosityBlock,event` finds an event's
+copy in another skim; two events of one key in one file are refused). Per sample it says how many
+events only A holds, how many only B holds, and, of those both hold, the first whose values differ
+in a stored or derived column both hold (floats bit for bit), with how many differ; values are
+written as `rvr dump --all` writes them, with their bits in hex when two that differ read alike (as
+NaNs). `--sample NAME` compares one sample. A column held with two kinds, or as a list in one file
+only, is named and not compared, as is a column only one file holds. It holds the key columns of
+both files, two row numbers per event both hold, and one stored column of each file at a time,
+then the derived columns both hold, worked out together. Exit status 0 when the two hold the same events with the
+same values, 1 when they do not, 2 when one cannot be read.
+
+```text
+$ rvr diff loose.rvr tight.rvr --rows --key run,event
+Comparing the events of loose.rvr (A) and tight.rvr (B) by run, event:
+sample one: 998 events in both, 93 only in A, 0 only in B
+sample two: 998 events in both, 93 only in A, 0 only in B
 ```
 
 ### `rvr reproduce FILE [DIR] [--study FOLDER] [--workers N]`

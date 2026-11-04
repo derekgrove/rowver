@@ -11,6 +11,8 @@ build/
 dist/
 .DS_Store
 *.rvr
+# The conformance corpus's files are inputs other implementations check themselves against.
+!tests/conformance/**/*.rvr
 *.md
 !README.md
 # The documents in docs/, by name: the notes kept beside them stay out of git.

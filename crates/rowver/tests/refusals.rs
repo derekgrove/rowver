@@ -167,7 +167,12 @@ fn two_files(header: &mut Value, arrays: &mut [Vec<u8>], same: bool, swapped: bo
 
 /// The fixture's bytes with `change` made to them.
 fn bytes(change: Change) -> Vec<u8> {
-    let (mut header, mut arrays) = rebuilt(10.);
+    bytes_of(rebuilt(10.), change)
+}
+
+/// The bytes of `base` (the fixture, or a variant of its values) with `change` made to them.
+fn bytes_of(base: (Value, Vec<Vec<u8>>), change: Change) -> Vec<u8> {
+    let (mut header, mut arrays) = base;
     let lock = |header: &mut Value, text: String| set_text(header, "lock", &text);
     match change {
         Header(f) => {
@@ -245,20 +250,33 @@ fn bytes(change: Change) -> Vec<u8> {
 /// Whether the file of these bytes opens, and whether it validates in full: each refusal said.
 fn checked(bytes: &[u8]) -> (Result<(), String>, Result<(), String>) {
     let path = written(bytes, "refusal");
-    let opened = Reader::open(&path).map(drop).map_err(|e| e.to_string());
-    let validated = validate_file(&path).map(drop).map_err(|e| e.to_string());
+    // A refusal that names the file names it as FILE.rvr, the same wherever the test runs.
+    let said = |e: rowver::Error| e.to_string().replace(&*path.0.to_string_lossy(), "FILE.rvr");
+    let opened = Reader::open(&path).map(drop).map_err(said);
+    let validated = validate_file(&path).map(drop).map_err(said);
     (opened, validated)
 }
 
-/// A rule, by its section of docs/FORMAT.md; the change that breaks it; what its refusal says.
+/// A rule, by its section of docs/FORMAT.md; the change that breaks it; what its refusal says (of
+/// the fixture: a generated file's says what comes before a `|`, its values its own).
 type Row = (&'static str, &'static str, Change, &'static str);
 
 /// Every row refused as `opening` says (by `Reader::open` too, or only by full validation), with
 /// a message on one line holding its `said`.
 fn refused(rows: Vec<Row>, opening: bool) {
+    refused_of(|| rebuilt(10.), rows, opening, "")
+}
+
+/// The same, of `base`'s file, each failure said with `case`.
+fn refused_of(base: impl Fn() -> (Value, Vec<Vec<u8>>), rows: Vec<Row>, opening: bool, case: &str) {
     let mut wrong = Vec::new();
     for (section, rule, change, said) in rows {
-        let (opened, validated) = checked(&bytes(change));
+        let said = match case.is_empty() {
+            true => said.replace('|', ""),
+            false => said.split('|').next().unwrap_or(said).to_owned(),
+        };
+        let said = said.as_str();
+        let (opened, validated) = checked(&bytes_of(base(), change));
         let problem = match (&opened, &validated) {
             (_, Ok(())) => Some("accepted".to_owned()),
             (Ok(()), _) if opening => Some("opened".to_owned()),
@@ -267,7 +285,7 @@ fn refused(rows: Vec<Row>, opening: bool) {
             _ => None,
         };
         if let Some(problem) = problem {
-            wrong.push(format!("{section} {rule}: {problem}"));
+            wrong.push(format!("{case}{section} {rule}: {problem}"));
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
@@ -318,7 +336,16 @@ fn the_fixture_itself_is_valid() {
 // FORMAT 1, 4, 7, 8, 9, 11
 #[test]
 fn what_the_format_allows_is_valid() {
-    let allowed: Vec<(&str, Change)> = vec![
+    let wrong: Vec<String> = allowed().into_iter().filter_map(|(rule, change)| match checked(&bytes(change)) {
+        (Ok(()), Ok(())) => None,
+        said => Some(format!("{rule}: {said:?}")),
+    }).collect();
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Files the format allows, each the fixture changed one way.
+fn allowed() -> Vec<(&'static str, Change)> {
+    vec![
         ("§1 nesting to 64 deep", Raw(|h| h["fixture_tool"]["deep"] = nested(62))),
         ("§1 a count written -0", Header(|h| {
             h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["holes"] = json!([hole(3, 7)]);
@@ -343,18 +370,18 @@ fn what_the_format_allows_is_valid() {
         ("§11 a tool key far from every format key", Raw(|h| h["view"] = json!({}))),
         ("§11 a tool key four edits from signature", Raw(|h| h["signal"] = json!({}))),
         ("§9 a signed file", Signed(|_| {})),
-    ];
-    let wrong: Vec<String> = allowed.into_iter().filter_map(|(rule, change)| match checked(&bytes(change)) {
-        (Ok(()), Ok(())) => None,
-        said => Some(format!("{rule}: {said:?}")),
-    }).collect();
-    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    ]
 }
 
 // FORMAT 1, 2, 3, 4, 5, 6, 6.1, 6.2, 7, 8, 9, 10, 11, 12
 #[test]
 fn a_reader_refuses_on_opening_each_rule_it_checks_there() {
-    let rows: Vec<Row> = vec![
+    refused(opening(), true);
+}
+
+/// The rules a reader checks on opening, each with a change that breaks it alone.
+fn opening() -> Vec<Row> {
+    vec![
         // §1 The file and the header's JSON
         ("§1", "the magic", Bytes(|b| b[0] ^= 1), "it is not an .rvr file"),
         ("§1", "the header length within the file", Bytes(|b| b[8..12].copy_from_slice(&u32::MAX.to_le_bytes())), "the header's length (bytes 8 to 11)"),
@@ -404,7 +431,7 @@ fn a_reader_refuses_on_opening_each_rule_it_checks_there() {
         ("§4", "a jagged record is exactly its fields", Header(|h| h["data"]["cols"][2]["x"] = 1.into()), "data.cols[\"Muon_pt\"] has a field \"x\""),
         ("§4", "offsets are exactly their fields", Header(|h| h["data"]["cols"][2]["offsets"]["x"] = 1.into()), "data.cols[\"Muon_pt\"].offsets has a field \"x\""),
         ("§4", "content is exactly its fields", Header(|h| drop(h["data"]["cols"][2]["content"].as_object_mut().unwrap().shift_remove("count"))), "data.cols[\"Muon_pt\"].content.count is missing"),
-        ("§4 F3", "nice by the exact decimal rule", Header(|h| h["data"]["cols"][1]["nice"] = json!([0, 100])), "data.cols[\"MET\"].nice is [0,100], and the rule of docs/FORMAT.md §4 makes [0.0,40.0]"),
+        ("§4 F3", "nice by the exact decimal rule", Header(|h| h["data"]["cols"][1]["nice"] = json!([0, 100])), "data.cols[\"MET\"].nice is [0,100], and the rule of docs/FORMAT.md §4 makes |[0.0,40.0]"),
         ("§4 F9", "no finite value gives nice [0, 1]", Header(|h| { h["data"]["cols"][1]["lim"] = json!([0.0, 0.0]); h["data"]["cols"][1]["nice"] = json!([0.0, 2.0]) }), "makes [0.0,1.0]"),
         ("§4", "lim in order", Header(|h| h["data"]["cols"][1]["lim"] = json!([40.0, 0.0])), "data.cols[\"MET\"].lim is [40.0,0.0], and its first end is its least value"),
         ("§4", "vals ascending, from lim to lim", Header(|h| h["data"]["cols"][0]["vals"] = json!([0, 1, 2])), "data.cols[\"nlep\"].vals must be every distinct value"),
@@ -519,14 +546,18 @@ fn a_reader_refuses_on_opening_each_rule_it_checks_there() {
         ("§12 R18", "an empty file: kinds", Empty(|h| h["data"]["cols"][1]["kind"] = "f16".into()), "data.cols[\"MET\"].kind is \"f16\""),
         ("§12 R18", "an empty file: facts", Empty(|h| h["data"]["cols"][0]["lim"] = json!([5, 1])), "data.cols[\"nlep\"].lim is [5,1], and its first end is its least value"),
         ("§12 R18", "an empty file: the arrays' records laid out", Empty(|h| h["data"]["sample"]["size"] = 0.into()), "data.sample.size is 0"),
-    ];
-    refused(rows, true);
+    ]
 }
 
 // SPEC 2.3, 3.1.3, 3.5.10, 4.1.6, 4.4.1, 4.6.2; FORMAT 3, 4, 5, 6, 6.1, 6.2, 6.3, 7, 8, 10, 12
 #[test]
 fn full_validation_refuses_each_rule_it_alone_checks() {
-    let rows: Vec<Row> = vec![
+    refused(in_full(), false);
+}
+
+/// The rules only full validation checks, each with a change that breaks it alone.
+fn in_full() -> Vec<Row> {
+    vec![
         // §3 Rows, against the arrays and the lock
         ("§3 §6.3", "samples are the lock's, with its labels", Header(|h| h["data"]["samples"][1]["label"] = "Bee".into()), "data.samples holds A (Sample A, π⁰), B (Bee), and it holds the lock's samples"),
         ("§3", "the sample index runs through the samples", Arrays(|h, a| put(h, a, 0, &[0_i32, 0, 1, 1, 1].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), 4)), "data.sample: row 2 holds 1"),
@@ -543,7 +574,7 @@ fn full_validation_refuses_each_rule_it_alone_checks() {
         // §4 Columns, against their values and the lock
         ("§4", "a copied column keeps its branch's kind", Lock(|l| met_as(l, "f8")), "data.cols[\"MET\"] is f4, and the recipe makes it f8"),
         ("§4", "offsets never decrease", Arrays(|h, a| put(h, a, 4, &[0_i64, 2, 1, 3, 6, 6].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), 8)), "data.cols[\"Muon_pt\"].offsets decrease, or pass the content's count, at row 2"),
-        ("§4 F9", "lim made again from the values", Header(|h| { h["data"]["cols"][1]["lim"] = json!([0, 50]); h["data"]["cols"][1]["nice"] = json!([0, 50]) }), "data.cols[\"MET\"].lim is [0,50], and its values give [0.0,40.0]"),
+        ("§4 F9", "lim made again from the values", Header(|h| { h["data"]["cols"][1]["lim"] = json!([0, 50]); h["data"]["cols"][1]["nice"] = json!([0, 50]) }), "data.cols[\"MET\"].lim is [0,50], and its values give |[0.0,40.0]"),
         ("§4", "vals made again from the values", Header(|h| h["data"]["cols"][0]["vals"] = json!([0, 2, 3])), "data.cols[\"nlep\"].vals is [0,2,3], and its values give [0,1,2,3]"),
         ("§4", "a lim of 38 digits, wider than a span holds", Header(|h| {
             let ends: Value = serde_json::from_str("[-150000000000000000000000000000000000000, 150000000000000000000000000000000000000]").unwrap();
@@ -665,8 +696,35 @@ fn full_validation_refuses_each_rule_it_alone_checks() {
             h["made"]["files"]["B"]["metadata"]["events_missing"] = 0.into();
         }), "none of which the event choice chose"),
         ("§12 R18", "an empty file: derived columns worked out over no rows", EmptyDerived(|h| h["derived"]["columns"][0]["kind"] = "f8".into()), "derived.columns[\"twice\"] is f8, and its expression, worked out over no rows, gives f4"),
-    ];
-    refused(rows, false);
+    ]
+}
+
+/// Whether a row's change is made to the file as it is: not one that rebuilds the fixture itself
+/// (its derived columns, or sample B split in two).
+fn of_any_file(row: &Row) -> bool {
+    !matches!(row.2, Derived(_) | EmptyDerived(_) | SwappedTakes(_))
+}
+
+// FORMAT 12; SPEC 1.5
+#[test]
+fn every_rule_refuses_alone_in_generated_files() {
+    // The seeds shared out over every core, each seed's file checked against every row.
+    let (cases, next) = (common::gen::cases(4), std::sync::atomic::AtomicU64::new(0));
+    std::thread::scope(|scope| {
+        for _ in 0..std::thread::available_parallelism().map_or(1, |n| n.get()) {
+            scope.spawn(|| loop {
+                let seed = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if seed >= cases {
+                    return;
+                }
+                let base = || common::variant(seed);
+                let (opened, validated) = checked(&to_bytes(&base().0, &base().1));
+                assert!(opened.is_ok() && validated.is_ok(), "seed {seed}: the variant is not valid: {opened:?} {validated:?}");
+                refused_of(base, opening().into_iter().filter(of_any_file).collect(), true, &format!("seed {seed}: "));
+                refused_of(base, in_full().into_iter().filter(of_any_file).collect(), false, &format!("seed {seed}: "));
+            });
+        }
+    });
 }
 
 // FORMAT 3, 6, 6.1
@@ -773,4 +831,103 @@ fn a_two_file_random_sample_whose_takes_are_the_choices_shares_is_valid() {
         let path = written(&to_bytes(&sealed(header), &arrays), "two-files");
         validate_file(&path).unwrap_or_else(|e| panic!("same choice {same}: {e}"));
     }
+}
+
+
+/// A valid file's contents as the corpus states them: rows, each row's sample and entry, and every
+/// column and derived column (floats as the hex of their bits, at their own width).
+fn contents(bytes: &[u8]) -> Value {
+    let path = written(bytes, "corpus");
+    let reader = Reader::open(&path).unwrap();
+    let mut columns = serde_json::Map::new();
+    if !reader.empty() {
+        let names: Vec<String> = reader.header()["made"]["recipe"]["columns"].as_array().unwrap().iter().chain(reader.header()["derived"]["columns"].as_array().into_iter().flatten().map(|d| &d["name"])).map(|n| n.as_str().unwrap().to_owned()).collect();
+        for name in names {
+            let held = reader.column(&name).unwrap().unwrap();
+            let width = rowver::rvr::width(&held.kind).unwrap();
+            let values: Vec<Value> = held.bytes.chunks(width).map(|b| {
+                let mut wide = [0u8; 8];
+                wide[..width].copy_from_slice(b);
+                let raw = u64::from_le_bytes(wide);
+                let shift = 64 - 8 * width as u32;
+                match held.kind.as_str() {
+                    "f8" | "f4" => json!(format!("{raw:0w$x}", w = 2 * width)),
+                    "b1" => json!(raw != 0),
+                    k if k.starts_with('i') => json!(((raw << shift) as i64) >> shift),
+                    _ => json!(raw),
+                }
+            }).collect();
+            let mut column = json!({"kind": held.kind, "values": values});
+            if let Some(offsets) = held.offsets {
+                column["offsets"] = json!(offsets);
+            }
+            columns.insert(name, column);
+        }
+    }
+    let empty = reader.empty();
+    let (sample, entry) = match empty { true => (json!(null), json!(null)), false => (json!(reader.sample().unwrap()), json!(reader.entry().unwrap())) };
+    json!({"rows": reader.rows().unwrap(), "empty": empty, "sample": sample, "entry": entry, "columns": columns})
+}
+
+// FORMAT 12, example; SPEC 9.1
+#[test]
+fn the_conformance_corpus_holds_what_this_reader_says() {
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut valid = Vec::new();
+    let (header, arrays) = rebuilt(10.);
+    let mut signed = header.clone();
+    rowver::sign::sign(&mut signed, &[3; 32]).unwrap();
+    let (with_derived, derived_arrays) = derived();
+    let mut named: Vec<(String, Vec<u8>)> = vec![
+        ("fixture".into(), to_bytes(&header, &arrays)),
+        ("fixture-empty".into(), to_bytes(&header, &[])),
+        ("fixture-signed".into(), to_bytes(&signed, &arrays)),
+        ("fixture-derived".into(), to_bytes(&sealed(with_derived), &derived_arrays)),
+    ];
+    for seed in 0..12 {
+        let mut rng = common::gen::Rng::new(seed);
+        let table = common::gen::table(&mut rng, 8);
+        let values = common::gen::filled(&mut rng, &table);
+        let (header, arrays) = common::gen::file(&table, values);
+        named.push((format!("generated-{seed}"), to_bytes(&header, &arrays)));
+    }
+    for (name, bytes) in named {
+        let path = format!("valid/{name}.rvr");
+        valid.push(json!({"file": path, "verdict": "valid", "signed": name.ends_with("signed"), "contents": contents(&bytes)}));
+        files.push((path, bytes));
+    }
+    // Every case, one file after another in cases.bin: the files the format allows, and each rule broken alone.
+    let (mut cases, mut packed) = (Vec::new(), Vec::new());
+    let mut case = |rule: String, verdict: &str, bytes: Vec<u8>| {
+        let (opened, validated) = checked(&bytes);
+        let said = opened.clone().err().or(validated.clone().err());
+        let when = match (&opened, &validated) {
+            (Ok(()), Ok(())) => "",
+            (Err(_), _) => "opening",
+            _ => "full",
+        };
+        let sha: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+        cases.push(json!({"rule": rule, "verdict": verdict, "refused": when, "at": packed.len(), "size": bytes.len(), "sha256": sha, "rust_says": said}));
+        packed.extend(bytes);
+    };
+    for (rule, change) in allowed() {
+        case(format!("FORMAT {rule}"), "valid", bytes(change));
+    }
+    for (rows, when) in [(opening(), "opening"), (in_full(), "full")] {
+        for (section, rule, change, _) in rows {
+            case(format!("FORMAT {section} {rule}"), when, bytes(change));
+        }
+    }
+    for entry in &cases {
+        let verdict = entry["verdict"].as_str().unwrap();
+        let refused = entry["refused"].as_str().unwrap();
+        assert!((verdict == "valid" && refused.is_empty()) || verdict == refused, "{entry}");
+    }
+    files.push(("cases.zst".into(), ruzstd::encoding::compress_to_vec(&packed[..], ruzstd::encoding::CompressionLevel::Fastest)));
+    let manifest = json!({
+        "about": "rvr files: each valid one with its contents, and every case of cases.zst (one zstd frame of the cases end to end, each at its at and size) with its verdict; see README.md",
+        "valid": valid,
+        "cases": cases,
+    });
+    common::corpus::corpus("rvr", &files, &manifest);
 }

@@ -30,7 +30,7 @@ magic (8 bytes) | header length (4 bytes) | JSON header | compressed arrays
 The first bytes of a real file, `higgs_tautau.rvr` from the tutorial below:
 
 ```text
-00000000: 8952 5652 0d0a 1a0a 2b46 0000 7b22 726f  .RVR....+F..{"ro
+00000000: 8952 5652 0d0a 1a0a 4246 0000 7b22 726f  .RVR....BF..{"ro
 00000010: 7776 6572 223a 3135 2c22 6461 7461 223a  wver":15,"data":
 00000020: 7b22 726f 7773 223a 3232 3438 2c22 7361  {"rows":2248,"sa
 ```
@@ -73,9 +73,9 @@ marks what was cut, and checksums are shortened.
   "made": {
     "study": "higgs_tautau",
     "title": "higgs_tautau",
-    "built": "2026-11-03T19:54:12Z",
+    "built": "2026-11-04T17:59:21Z",
     "by": "rvr 15.0.0",
-    "toolchain": {"program": "rvr", "version": "15.0.0", "rowver": "15", "commit": "76ab18e2…", "compiler": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
+    "toolchain": {"program": "rvr", "version": "15.0.0", "rowver": "15", "commit": "04c81aa4…", "compiler": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
     "recipe":  {"sha256": "fcc933cd…", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
                 "columns": ["run", "luminosityBlock", "event", "PV_npvs", "MET_pt", "MET_phi", "Muon_pt", "Muon_eta", "Tau_pt", "Tau_eta", "Jet_pt"]},
     "samples": {"sha256": "…", "text": "…the whole samples.toml…"},
@@ -89,7 +89,7 @@ marks what was cut, and checksums are shortened.
       },
       …
     },
-    "sha256": "bb582c6c…"
+    "sha256": "79bdb805…"
   }
 }
 ```

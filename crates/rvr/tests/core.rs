@@ -287,3 +287,41 @@ fn a_file_another_program_made_is_not_built_on_and_its_program_is_named() {
     assert_eq!(code, 0, "{said}");
     assert!(said.contains(&format!("Pressing every column: {} cannot be built on, as it was made by rvrcpp 15.1.0, not rvr", name(&dir))), "{said}");
 }
+
+// SPEC 4.2.1, 4.2.2, 7.2.1, 7.2.2, 4.5.1, 4.5.3; RECIPE functions-exactly, pairs-within-a-list; FORMAT 10
+#[test]
+fn a_press_writes_the_same_file_whatever_its_runs_workers_and_crowding() {
+    // RVR_RUN and RVR_RUN_PAIRS are read by a debug build only.
+    if !cfg!(debug_assertions) {
+        return eprintln!("not checked here: a release build presses in runs of 50,000 alone");
+    }
+    let samples = samples("[[sample]]\nname = \"whole\"\nfiles = [\"runs.root\", \"copy.root\"]\ntree = \"Events\"\n\n[[sample]]\nname = \"picked\"\nfiles = \"runs.root\"\ntree = \"Events\"\nevents = 500\nchoose = \"random\"\nseed = 3\n");
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\ngood = \"Jet_pt > 40\"\n\n[keep]\nsome = \"nJet >= 2\"\n\n[columns]\nbranches = [\"nJet\", \"Jet_pt\", \"MET\"]\nht = \"sum(Jet_pt[good])\"\nmjj = \"greatest(pair_mass(Jet_pt, Jet_eta, Jet_phi), -1)\"\npairs = \"pair_first(Jet_pt) * pair_second(Jet_pt)\"\n\n[totals]\nsumw = \"weight\"\n\n[derived]\nfirst = \"pair_first(Jet_pt)\"\nratio = \"ht / MET\"\n";
+    let dir = study("runs", &samples, recipe);
+    for to in ["runs.root", "copy.root"] {
+        std::fs::copy(common::fixture("runs.root"), dir.join(to)).unwrap();
+    }
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    // What a press made, apart from when and by which build: the arrays, derived records and every sample's totals.
+    let made = |run: &str, workers: &str, pairs: &str| {
+        let _ = std::fs::remove_file(dir.join(name(&dir)));
+        let (code, said) = common::rvr_with(&dir, &[("RVR_RUN", run), ("RVR_RUN_PAIRS", pairs)], &["press", "--workers", workers]);
+        assert_eq!(code, 0, "run {run}, {workers} workers, pairs {pairs}: {said}");
+        // The settings were taken (a debug build says so): runs of that size, and halving when forced.
+        let halved = said.contains("RVR_RUN_PAIRS: ") && said.contains("worked on in halves");
+        assert!(said.contains(&format!("RVR_RUN: runs of {run} entries")) && halved == (pairs != "67108864"), "run {run}, pairs {pairs}: {said}");
+        let h = header(&dir);
+        serde_json::json!([h["data"], h["derived"], h["made"]["files"]])
+    };
+    let first = made("50000", "1", "67108864");
+    assert_eq!(rvr(&dir, &["validate", &name(&dir)]).0, 0);
+    let rows = first[0]["rows"].as_u64().unwrap();
+    assert!(rows > 900 && first[2]["whole"]["metadata"]["sumw"].as_f64().unwrap() > 0.0, "{rows}");
+    for run in ["1", "7", "997", "50000"] {
+        for workers in ["1", "2", "10"] {
+            for pairs in ["67108864", "60"] {
+                assert!(made(run, workers, pairs) == first, "run {run}, {workers} workers, pairs {pairs}: another file");
+            }
+        }
+    }
+}

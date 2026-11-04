@@ -30,11 +30,16 @@ impl Drop for Study {
     }
 }
 
-/// A study folder: the fixtures beside a samples.toml and a recipe.toml.
+/// The fixture `file` of tests/fixtures.
+pub fn fixture(file: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(file)
+}
+
+/// A study folder: three of the fixtures beside a samples.toml and a recipe.toml.
 pub fn study(name: &str, samples: &str, recipe: &str) -> Study {
     let dir = Study::new(name);
     for file in ["uproot_flat.root", "stl_vectors.root", "codecs-zlib.root"] {
-        std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(file), dir.join(file)).unwrap();
+        std::fs::copy(fixture(file), dir.join(file)).unwrap();
     }
     std::fs::write(dir.join("samples.toml"), samples).unwrap();
     std::fs::write(dir.join("recipe.toml"), recipe).unwrap();

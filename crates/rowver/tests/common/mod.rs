@@ -1,7 +1,10 @@
 //! A small file every test of this crate reads: the columns, samples and study it holds, built
-//! with the writer, and the bytes of it committed as `fixtures/rowver-v15.hex`; and the pieces a
-//! test builds a file of.
+//! with the writer, and the bytes of it committed as the conformance corpus's `valid/fixture.rvr`;
+//! and the pieces a test builds a file of.
 #![allow(dead_code)]
+
+pub mod corpus;
+pub mod gen;
 
 use rowver::study::lock::{Branch, Branches, File, Lock, Sample, Shape};
 use rowver::choice::Events;
@@ -89,28 +92,14 @@ pub fn pack(pieces: Vec<Piece>, files: Vec<Value>) -> rowver::Result<(Value, Vec
     Ok((data, arrays))
 }
 
-/// The committed fixture's bytes; `ROWVER_BLESS=1` writes them again from `rebuilt(10.)`.
+/// The committed fixture's bytes (the corpus's `valid/fixture.rvr`); with `CONFORMANCE_BLESS`, which
+/// writes the corpus again, those of `rebuilt(10.)`.
 pub fn golden() -> Vec<u8> {
-    let path = format!(
-        "{}/tests/fixtures/rowver-v15.hex",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    if std::env::var_os("ROWVER_BLESS").is_some() {
+    if std::env::var_os("CONFORMANCE_BLESS").is_some() {
         let (header, arrays) = rebuilt(10.);
-        let bytes = to_bytes(&header, &arrays);
-        let hex: Vec<String> = bytes
-            .chunks(32)
-            .map(|line| line.iter().map(|b| format!("{b:02x}")).collect())
-            .collect();
-        std::fs::write(&path, hex.join("\n") + "\n").unwrap();
+        return to_bytes(&header, &arrays);
     }
-    let text: String = std::fs::read_to_string(path)
-        .unwrap()
-        .split_whitespace()
-        .collect();
-    (0..text.len() / 2)
-        .map(|index| u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).unwrap())
-        .collect()
+    std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/conformance/rvr/valid/fixture.rvr")).unwrap()
 }
 
 /// The columns over the rows `from..to`, with a chosen first muon.
@@ -267,17 +256,42 @@ pub fn text(text: &str) -> Value {
 
 /// The fixture's header and arrays, with a chosen first muon.
 pub fn rebuilt(muon: f32) -> (Value, Vec<Vec<u8>>) {
+    rebuilt_with(muon, None)
+}
+
+/// The fixture with every column's values but nlep's drawn from `seed` instead (its kinds, rows,
+/// lists' lengths and study as they are): a generated valid file every refusal applies to. nlep
+/// keeps its few values, which the rules of `vals` need.
+pub fn variant(seed: u64) -> (Value, Vec<Vec<u8>>) {
+    rebuilt_with(10., Some(&mut gen::Rng::new(seed)))
+}
+
+fn rebuilt_with(muon: f32, mut drawn: Option<&mut gen::Rng>) -> (Value, Vec<Vec<u8>>) {
+    let mut redrawn = |columns: Vec<(String, Values)>| -> Vec<(String, Values)> {
+        let Some(rng) = drawn.as_deref_mut() else { return columns };
+        columns
+            .into_iter()
+            .map(|(name, values)| {
+                let values = match values {
+                    kept if name == "nlep" => kept,
+                    Values::Flat(v) => Values::Flat(gen::values(rng, &v.kind, v.count)),
+                    Values::Jagged { counts, content } => Values::Jagged { content: gen::values(rng, &content.kind, content.count), counts },
+                };
+                (name, values)
+            })
+            .collect()
+    };
     let pieces = vec![
         Piece {
             name: "A".into(),
             label: "Sample A, π⁰".into(),
-            columns: columns(0, 3, muon),
+            columns: redrawn(columns(0, 3, muon)),
             entry: vec![0, 2, 4],
         },
         Piece {
             name: "B".into(),
             label: "B".into(),
-            columns: columns(3, 5, muon),
+            columns: redrawn(columns(3, 5, muon)),
             entry: vec![1, 17],
         },
     ];
@@ -384,3 +398,4 @@ pub fn split(bytes: &[u8]) -> (Value, Vec<u8>) {
         bytes[start..].to_vec(),
     )
 }
+

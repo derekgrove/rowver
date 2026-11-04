@@ -24,6 +24,7 @@ mod progress;
 mod proxy;
 mod reproduce;
 mod reuse;
+mod rowdiff;
 mod samples;
 mod status;
 mod tables;
@@ -61,6 +62,9 @@ const USAGE: &str = "usage:
                                            (--all: every value, one row a line)
   rvr header FILE                          the JSON header only, as the file holds it
   rvr diff A B                             which column of which sample differs, from the headers
+  rvr diff A B --rows [--key COLUMN,…] [--sample NAME]
+                                           event by event: the events only one holds, the first
+                                           value that differs (matched by file and entry, or --key)
   rvr reproduce FILE [DIR] [--study FOLDER] [--workers N]
                                            press FILE's own study again and diff the two
   rvr empty FILE... [--study FOLDER] [--anyway] [--force | -f]
@@ -80,7 +84,7 @@ const NEW: &str = "usage:\n  rvr new DIR    start a study in DIR: samples.toml, 
 const VALIDATE: &str = "usage:\n  rvr validate FILE... [--complete]    check files in full; --complete fails a file with holes, or an empty one";
 const DUMP: &str = "usage:\n  rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns] [--all]\n      the header in full, the study's texts and every column, or only the parts named, in the order\n      given; --all prints every value of every column, one row a line (with --columns, or alone)";
 const HEADER: &str = "usage:\n  rvr header FILE    the header's bytes, as the file holds them";
-const DIFF: &str = "usage:\n  rvr diff A B    where two files differ, from their headers alone";
+const DIFF: &str = "usage:\n  rvr diff A B                                     where two files differ, from their headers alone\n  rvr diff A B --rows [--key COLUMN,…] [--sample NAME]\n      event by event: the events only one holds, and the first value that differs";
 
 /// Every command: its name after `rvr`, its flags, its words.
 const COMMANDS: &[Command] = &[
@@ -97,7 +101,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "validate", flags: &[("--complete", No, None)], words: (1, usize::MAX, "the files to check"), dashes: false, usage: VALIDATE },
     Command { name: "dump", flags: &[("--files", No, None), ("--recipe", No, None), ("--samples", No, None), ("--lock", No, None), ("--columns", No, None), ("--all", No, None)], words: (1, 1, "one file"), dashes: false, usage: DUMP },
     Command { name: "header", flags: &[], words: (1, 1, "one file"), dashes: false, usage: HEADER },
-    Command { name: "diff", flags: &[], words: (2, 2, "two files, A and B"), dashes: false, usage: DIFF },
+    Command { name: "diff", flags: &[("--rows", No, None), ("--key", Value, None), ("--sample", Value, None)], words: (2, 2, "two files, A and B"), dashes: false, usage: DIFF },
     Command { name: "reproduce", flags: &[("--study", Value, None), ("--workers", Value, None)], words: (1, 2, "a file and at most one folder"), dashes: false, usage: reproduce::USAGE },
     Command { name: "empty", flags: &[("--study", Value, None), ("--anyway", No, None), ("--force", No, Some("-f"))], words: (1, usize::MAX, "the files to empty"), dashes: false, usage: empty::USAGE },
     Command { name: "refill", flags: &[("--study", Value, None), ("--workers", Value, None)], words: (1, 1, "one file"), dashes: false, usage: empty::USAGE },
@@ -257,6 +261,8 @@ fn command_run(name: &str, options: &Options) -> u8 {
             report("dump", dump::main(words[0], &flags, options.has("--all")).map(|()| 0))
         }
         "header" => header(words[0]),
+        "diff" if options.has("--rows") => rowdiff::main(words[0], words[1], options.value("--key"), options.value("--sample")),
+        "diff" if options.has("--key") || options.has("--sample") => wrong("diff", "--key and --sample compare events, which only rvr diff A B --rows does: add --rows"),
         "diff" => diff::main(words[0], words[1]),
         "reproduce" => reproduce::main(options),
         "empty" => empty::empty_main(options),

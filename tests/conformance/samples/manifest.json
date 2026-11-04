@@ -1,0 +1,418 @@
+{
+  "about": "samples.toml texts: each valid one with the samples it makes (SPEC §3.7), each refused one with the rule it breaks; see README.md",
+  "cases": [
+    {
+      "rule": "one sample",
+      "samples": [
+        {
+          "events": {
+            "choose": "all"
+          },
+          "files": [
+            "x.root"
+          ],
+          "label": "a",
+          "metadata": {},
+          "name": "a",
+          "tree": "T"
+        }
+      ],
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\n",
+      "verdict": "valid"
+    },
+    {
+      "rule": "places, defaults, an era, trees and every form of files",
+      "samples": [
+        {
+          "events": {
+            "choose": "all"
+          },
+          "files": [
+            "/data/7.root",
+            "~/b.root",
+            "c/d.root",
+            "root://h.org//e.root",
+            "davs://h.org:443/f.root",
+            "https://h.org/g.root"
+          ],
+          "label": "a p1 (E)",
+          "metadata": {
+            "n": 7
+          },
+          "name": "a_p1_E",
+          "tree": "T1"
+        }
+      ],
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\np = \"/data/\"\n[defaults]\ntree = \"T\"\n[eras]\n[eras.E]\nn = 7\n[[sample]]\nname = \"a\"\nfiles = [\"{p}/{n}.root\", \"~/b.root\", \"c/d.root\", \"root://h.org//e.root\", \"davs://h.org:443/f.root\", \"https://h.org/g.root\"]\neras = [\"E\"]\ntrees = { p1 = \"T1\" }\n",
+      "verdict": "valid"
+    },
+    {
+      "rule": "eras and mass points named and labelled",
+      "samples": [
+        {
+          "events": {
+            "choose": "all"
+          },
+          "files": [
+            "root://cmseos.fnal.gov//store/x/UL17/s_UL17.root"
+          ],
+          "label": "Signal 300/292.5 (UL17)",
+          "metadata": {
+            "era": 2,
+            "kind": "signal",
+            "lumi": 59.8,
+            "xsec": 2
+          },
+          "name": "Signal_300_292p5_UL17",
+          "tree": "SMS_300"
+        },
+        {
+          "events": {
+            "choose": "all"
+          },
+          "files": [
+            "root://cmseos.fnal.gov//store/x/UL17/s_UL17.root"
+          ],
+          "label": "Signal 400/300 (UL17)",
+          "metadata": {
+            "era": 2,
+            "kind": "signal",
+            "lumi": 59.8,
+            "xsec": 2
+          },
+          "name": "Signal_400_300_UL17",
+          "tree": "SMS_400"
+        },
+        {
+          "events": {
+            "choose": "all"
+          },
+          "files": [
+            "root://cmseos.fnal.gov//store/x/UL18/s_UL18.root"
+          ],
+          "label": "Signal 300/292.5 (UL18)",
+          "metadata": {
+            "era": 3,
+            "kind": "signal",
+            "lumi": 59.8,
+            "xsec": 2
+          },
+          "name": "Signal_300_292p5_UL18",
+          "tree": "SMS_300"
+        },
+        {
+          "events": {
+            "choose": "all"
+          },
+          "files": [
+            "root://cmseos.fnal.gov//store/x/UL18/s_UL18.root"
+          ],
+          "label": "Signal 400/300 (UL18)",
+          "metadata": {
+            "era": 3,
+            "kind": "signal",
+            "lumi": 59.8,
+            "xsec": 2
+          },
+          "name": "Signal_400_300_UL18",
+          "tree": "SMS_400"
+        }
+      ],
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\nlpc = \"root://cmseos.fnal.gov//store/x/\"\n[defaults]\nmetadata = { lumi = 59.8 }\n[eras]\n[eras.UL17]\nera = 2\n[eras.UL18]\nera = 3\n[[sample]]\nname = \"Signal\"\nfiles = \"{lpc}/{era}/s_{era}.root\"\neras = [\"UL17\", \"UL18\"]\ntrees = { \"300/292.5\" = \"SMS_300\", \"400/300\" = \"SMS_400\" }\nmetadata = { kind = \"signal\", xsec = 2 }\n",
+      "verdict": "valid"
+    },
+    {
+      "rule": "choices: first N, random with a seed, a default seed",
+      "samples": [
+        {
+          "events": {
+            "algorithm": "splitmix64-selection-sampling",
+            "choose": "random",
+            "n": 10,
+            "seed": 7
+          },
+          "files": [
+            "x.root"
+          ],
+          "label": "a",
+          "metadata": {},
+          "name": "a",
+          "tree": "T"
+        },
+        {
+          "events": {
+            "choose": "first",
+            "n": 10
+          },
+          "files": [
+            "y.root"
+          ],
+          "label": "b",
+          "metadata": {},
+          "name": "b",
+          "tree": "T"
+        },
+        {
+          "events": {
+            "choose": "all"
+          },
+          "files": [
+            "z.root"
+          ],
+          "label": "c",
+          "metadata": {},
+          "name": "c",
+          "tree": "T"
+        }
+      ],
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n\n[defaults]\ntree = \"T\"\nevents = 10\nchoose = \"random\"\nseed = 7\n[eras]\n\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\n[[sample]]\nname = \"b\"\nfiles = \"y.root\"\nchoose = \"first\"\n[[sample]]\nname = \"c\"\nfiles = \"z.root\"\nevents = \"all\"\nchoose = \"first\"\n",
+      "verdict": "valid"
+    },
+    {
+      "rule": "SPEC 3.1.1 TOML",
+      "rust_says": "samples.toml is not TOML: TOML parse error at line 10, column 8\n   |\n10 | name = \n   |        ^\n\n",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\nname = ",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.1.2 top level",
+      "rust_says": "samples.toml has no key \"sampel\"; it takes format, version, places, defaults, eras, sample. Did you mean: sample?",
+      "text": "sampel = 1\nformat = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.1.5 one sample",
+      "rust_says": "samples.toml describes no sample: add one, [[sample]] with name = \"…\", files = \"…\" and tree = \"…\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.2.1 place era",
+      "rust_says": "[places] era: {era} is rvr's (an era's name, a sample's one file): give the place another name",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\nera = \"/d\"\n[defaults]\n\n[eras]\n\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.2.1 place characters",
+      "rust_says": "[places] \"a-b\": a place's name is one or more ASCII letters, digits and _, as {NAME} uses it",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n\"a-b\" = \"/d\"\n[defaults]\n\n[eras]\n\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.2.2 place text",
+      "rust_says": "[places] p must be text: a folder, a path or a URL",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\np = 3\n[defaults]\n\n[eras]\n\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.3.1 defaults name",
+      "rust_says": "[defaults] cannot hold name, which belongs to one sample: give it in each [[sample]]",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n\n[defaults]\nname = \"a\"\n[eras]\n\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.3.1 defaults files",
+      "rust_says": "[defaults] cannot hold files, which belongs to one sample: give it in each [[sample]]",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n\n[defaults]\nfiles = \"x\"\n[eras]\n\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.3.1 defaults trees",
+      "rust_says": "[defaults] cannot hold trees, which belongs to one sample: give it in each [[sample]]",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n\n[defaults]\ntrees = { a = \"T\" }\n[eras]\n\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.4.1 era name",
+      "rust_says": "the era \"UL 18\" must be a name (ASCII letters, digits, _ and -), since it becomes part of sample names: try \"UL_18\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n\n[defaults]\n\n[eras]\n[eras.\"UL 18\"]\nera = 3\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.4.2 era value",
+      "rust_says": "[eras.UL18] when: a date or time is not metadata: write it as text, in quotes",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n\n[defaults]\n\n[eras]\n[eras.UL18]\nwhen = 2026-11-02\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.2 name",
+      "rust_says": "sample \"a b\": a name holds only ASCII letters, digits, _ and -, since tools use it in commands and file names: use name = \"a_b\", and put the text in label",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\ntree = \"T\"\nfiles = \"x\"\nname = \"a b\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.3 label",
+      "rust_says": "sample \"a\": label must be nonempty text",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nlabel = \"\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.4 files empty",
+      "rust_says": "sample \"a\": files is a path or URL, or a nonempty list of them",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = []\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.4 files text",
+      "rust_says": "sample \"a\": files is a path or URL, or a nonempty list of them",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = 3\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.5 trees empty",
+      "rust_says": "sample \"a\": trees maps a label to a tree's name, like trees = { \"300/250\" = \"SMS_30000_25000\" }",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\nfiles = \"x\"\ntrees = {}\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.6 eras empty",
+      "rust_says": "sample \"a\": eras is a nonempty list of era names, like eras = [\"UL17\", \"UL18\"]",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\neras = []\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.6 era unknown",
+      "rust_says": "sample \"a\": the era \"UL19\" is not in [eras], which has none",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\neras = [\"UL19\"]\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.8 random",
+      "rust_says": "sample \"a\": choose = \"random\" needs a number of entries to choose, like events = 50_000",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nchoose = \"random\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.9 seed",
+      "rust_says": "sample \"a\": seed is a whole number from 0, like seed = 7",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nevents = 5\nchoose = \"random\"\nseed = -1\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.10 key start",
+      "rust_says": "sample \"a\" metadata: \"1a\" is not a name a recipe can read as sample.1a: use a letter or _, then letters, digits and _",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nmetadata = { \"1a\" = 1 }\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.10 key sample",
+      "rust_says": "sample \"a\" metadata: \"sample\" is not a name a recipe can read as sample.sample: use a letter or _, then letters, digits and _",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nmetadata = { sample = 1 }\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.10 key file",
+      "rust_says": "sample \"a\" metadata: file is given by rvr to every sample: name yours otherwise",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nmetadata = { file = 1 }\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.10 key word",
+      "rust_says": "sample \"a\" metadata: \"and\" is not a name a recipe can read as sample.and: use a letter or _, then letters, digits and _",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nmetadata = { and = 1 }\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.10 events_total",
+      "rust_says": "sample \"a\" metadata: events_total is given by rvr to every sample: name yours otherwise",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nmetadata = { events_total = 1 }\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.10 events_missing",
+      "rust_says": "sample \"a\" metadata: events_missing is given by rvr to every sample: name yours otherwise",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nmetadata = { events_missing = 1 }\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.10 nan",
+      "rust_says": "sample \"a\" metadata x: NaN is not a finite number",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nmetadata = { x = nan }\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.10 inf",
+      "rust_says": "sample \"a\" metadata x: -inf is not a finite number",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nmetadata = { x = [1.0, -inf] }\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.6.2 era float",
+      "rust_says": "sample \"a\": {v} is not text or a whole number, so it cannot be put into \"{v}/x\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n\n[defaults]\n\n[eras]\n[eras.E]\nv = 2.5\n[[sample]]\nname = \"a\"\nfiles = \"{v}/x\"\ntree = \"T\"\neras = [\"E\"]",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.6.4 unclosed",
+      "rust_says": "sample \"a\": a '{' is never closed in \"{x.root\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"{x.root\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.7.4 label twice",
+      "rust_says": "two samples are labelled \"L\", so plots could not tell them apart: give one of them another label",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\nlabel = \"L\"\n[[sample]]\nname = \"b\"\nfiles = \"y.root\"\ntree = \"T\"\nlabel = \"L\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.8.5 forms",
+      "rust_says": "sample \"a\": \"file:///d/x.root\" is not a form rvr reads: a local path, or a URL starting root://, davs:// or https://",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"file:///d/x.root\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.8.1 root:// with one slash",
+      "rust_says": "sample \"a\": \"root://h.org/store/x.root\" has one slash before its path, and a grid storage file is written root://host[:port]//path, with two slashes before the path: write it \"root://h.org//store/x.root\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"root://h.org/store/x.root\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.8.1 root:// with a port and one slash",
+      "rust_says": "sample \"a\": \"root://h.org:1094/store/x.root\" has one slash before its path, and a grid storage file is written root://host[:port]//path, with two slashes before the path: write it \"root://h.org:1094//store/x.root\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"root://h.org:1094/store/x.root\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.8.1 root:// with no path",
+      "rust_says": "sample \"a\": \"root://h.org\" has one slash before its path, and a grid storage file is written root://host[:port]//path, with two slashes before the path: write it \"root://h.org//path/file.root\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"root://h.org\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.8.1 a folder",
+      "rust_says": "sample \"a\": \"data/\" names a folder: name its files, or a pattern of them, such as \"data/*.root\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = [\"x.root\", \"data/\"]\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.8.1 a folder of storage",
+      "rust_says": "sample \"a\": \"https://h.org/store/\" names a folder: name its files, or a pattern of them, such as \"https://h.org/store/*.root\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"https://h.org/store/\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.8.1 the top folder of grid storage",
+      "rust_says": "sample \"a\": \"root://h.org//\" names a folder: name its files, or a pattern of them, such as \"root://h.org//*.root\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"root://h.org//\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.8.1 the folder itself",
+      "rust_says": "sample \"a\": \"data/..\" names a folder: name its files, or a pattern of them, such as \"data/../*.root\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"data/..\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.8.1 the home folder",
+      "rust_says": "sample \"a\": \"~\" names a folder: name its files, or a pattern of them, such as \"~/*.root\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"~\"\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.8.1 the home folder at the end",
+      "rust_says": "sample \"a\": \"data/~\" names a folder: name its files, or a pattern of them, such as \"data/~/*.root\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"data/~\"\n",
+      "verdict": "refused"
+    }
+  ]
+}

@@ -216,3 +216,30 @@ fn the_release_workflow_tests_and_builds_everything_before_it_publishes() {
         assert!(workflow.contains(part), "the release workflow lacks {part:?}");
     }
 }
+
+// SPEC 9.2
+#[test]
+fn dump_all_prints_every_row_of_every_valid_file_of_the_corpus() {
+    let corpus = root().join("tests/conformance/rvr");
+    let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(corpus.join("manifest.json")).unwrap()).unwrap();
+    let dir = Study::new("dump-corpus");
+    for entry in manifest["valid"].as_array().unwrap() {
+        let file = corpus.join(entry["file"].as_str().unwrap());
+        let (code, said) = rvr(&dir, &["dump", file.to_str().unwrap(), "--all"]);
+        assert_eq!(code, 0, "{file:?}: {said}");
+        let contents = &entry["contents"];
+        if contents["empty"] == true {
+            assert!(said.contains("No columns: the file is empty"), "{said}");
+            continue;
+        }
+        let columns = contents["columns"].as_object().unwrap().len();
+        let lines: Vec<&str> = said.lines().skip_while(|l| !l.starts_with("sample\tentry")).collect();
+        let rows = contents["rows"].as_u64().unwrap() as usize;
+        assert!(lines.len() > rows, "{file:?}: {said}");
+        for (row, line) in lines[1..=rows].iter().enumerate() {
+            let fields: Vec<&str> = line.split('\t').collect();
+            assert_eq!(fields.len(), 2 + columns, "{file:?} row {row}: {line}");
+            assert_eq!(fields[1], contents["entry"][row].to_string(), "{file:?} row {row}");
+        }
+    }
+}

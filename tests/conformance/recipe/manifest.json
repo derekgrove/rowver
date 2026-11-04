@@ -1,0 +1,487 @@
+{
+  "about": "recipe.toml texts, each valid (with what it names) or refused with the rule it breaks; expressions and their arrays are crates/rvr-recipe/tests/fixtures/recipe.json and properties.json; see README.md",
+  "cases": [
+    {
+      "names": {
+        "columns": [
+          "lep_pt",
+          "lep_eta",
+          "lep_phi",
+          "lep_type",
+          "met_et",
+          "m4l",
+          "weight"
+        ],
+        "defines": [
+          "scale_factors"
+        ],
+        "derived": [
+          {
+            "expression": "pt(lep_pt, lep_eta, lep_phi) / 1000",
+            "name": "pt4l"
+          }
+        ],
+        "keep": [
+          "four_leptons",
+          "zero_charge",
+          "same_flavour_pairs"
+        ],
+        "stored": {},
+        "title": "H → ZZ* → 4ℓ",
+        "totals": []
+      },
+      "rule": "the example atlas_higgs_4lep",
+      "text": "# A selection after ATLAS's H → ZZ* → 4ℓ open-data analysis: exactly four leptons, of total\n# charge zero, two or four of each flavour (lep_type is 11 for an electron and 13 for a muon, so\n# the sum is 44, 48 or 52; as in ATLAS's notebook, the charge of each flavour is not checked). The four-lepton mass is in GeV, the leptons taken as massless. The\n# weight scales each simulated event to the data's luminosity; the files carry every factor it\n# needs, the sum of weights included, so [totals] has nothing to add.\nformat = \"rvr-recipe\"\nversion = 1\ntitle = \"H → ZZ* → 4ℓ\"\n\n[define]\nscale_factors = \"scaleFactor_PILEUP * scaleFactor_ELE * scaleFactor_MUON * scaleFactor_LepTRIGGER\"\n\n[keep]\nfour_leptons = \"lep_n == 4\"\nzero_charge = \"sum(lep_charge) == 0\"\nsame_flavour_pairs = \"sum(lep_type) in [44, 48, 52]\"\n\n[columns]\nbranches = [\"lep_pt\", \"lep_eta\", \"lep_phi\", \"lep_type\", \"met_et\"]\nm4l = \"mass(lep_pt, lep_eta, lep_phi) / 1000\"\nweight = \"if(sample.kind == 'data', 0 * met_et + 1, mcWeight * scale_factors * XSection * 1000 * sample.lumi / SumWeights)\"\n\n[totals]\n\n# Worked out from the stored leptons when it is read: the four-lepton system's pt, in GeV.\n[derived]\npt4l = \"pt(lep_pt, lep_eta, lep_phi) / 1000\"\n",
+      "verdict": "valid"
+    },
+    {
+      "names": {
+        "columns": [
+          "Muon_pt",
+          "Muon_eta",
+          "mass"
+        ],
+        "defines": [],
+        "derived": [
+          {
+            "expression": "log(mass)",
+            "name": "log_mass"
+          }
+        ],
+        "keep": [
+          "two_muons",
+          "opposite_charge"
+        ],
+        "stored": {},
+        "title": "Dimuon mass spectrum",
+        "totals": []
+      },
+      "rule": "the example dimuon_spectrum",
+      "text": "# Events with exactly two muons of opposite charge, and the mass of the pair. Plotted on a log scale\n# from 0.25 to 300 GeV, it shows the resonances from the eta to the Z.\nformat = \"rvr-recipe\"\nversion = 1\ntitle = \"Dimuon mass spectrum\"\n\n[define]\n\n[keep]\ntwo_muons = \"nMuon == 2\"\nopposite_charge = \"sum(Muon_charge) == 0\"\n\n[columns]\nbranches = [\"Muon_pt\", \"Muon_eta\"]\nmass = \"first(pair_mass(Muon_pt, Muon_eta, Muon_phi, Muon_mass), -1)\"\n\n[totals]\n\n# The mass on a log scale, as the spectrum is drawn, worked out when it is read.\n[derived]\nlog_mass = \"log(mass)\"\n",
+      "verdict": "valid"
+    },
+    {
+      "names": {
+        "columns": [
+          "run",
+          "luminosityBlock",
+          "event",
+          "PV_npvs",
+          "MET_pt",
+          "MET_phi",
+          "Jet_pt",
+          "mu_pt",
+          "tau_pt",
+          "visible_mass",
+          "mt"
+        ],
+        "defines": [
+          "good_muon",
+          "good_tau",
+          "mu1_pt",
+          "mu1_eta",
+          "mu1_phi",
+          "mu1_charge",
+          "tau1_pt",
+          "tau1_eta",
+          "tau1_phi",
+          "tau1_charge"
+        ],
+        "derived": [
+          {
+            "expression": "sum(Jet_pt)",
+            "name": "ht"
+          }
+        ],
+        "keep": [
+          "trigger",
+          "a_good_muon",
+          "a_good_tau",
+          "opposite_charge"
+        ],
+        "stored": {},
+        "title": "H → ττ, muon and tau",
+        "totals": []
+      },
+      "rule": "the example higgs_tautau",
+      "text": "# A muon and a hadronic tau of opposite charge, the selection of the CMS Open Data H → ττ study,\n# with the pair's visible mass and the muon's transverse mass. Only branches every sample has are\n# used: the data have no GenPart.\nformat = \"rvr-recipe\"\nversion = 1\ntitle = \"H → ττ, muon and tau\"\n\n[define]\ngood_muon = \"Muon_tightId and Muon_pfRelIso04_all < 0.1 and Muon_pt > 17 and abs(Muon_eta) < 2.1\"\ngood_tau = \"Tau_idDecayMode and Tau_idIsoTight and Tau_idAntiEleTight and Tau_idAntiMuTight and Tau_pt > 20 and abs(Tau_eta) < 2.3\"\n# The leading good muon (mu1) and good tau (tau1).\nmu1_pt = \"first(Muon_pt[good_muon], 0)\"\nmu1_eta = \"first(Muon_eta[good_muon], 0)\"\nmu1_phi = \"first(Muon_phi[good_muon], 0)\"\nmu1_charge = \"first(Muon_charge[good_muon], 0)\"\ntau1_pt = \"first(Tau_pt[good_tau], 0)\"\ntau1_eta = \"first(Tau_eta[good_tau], 0)\"\ntau1_phi = \"first(Tau_phi[good_tau], 0)\"\ntau1_charge = \"first(Tau_charge[good_tau], 0)\"\n\n[keep]\ntrigger = \"HLT_IsoMu17_eta2p1_LooseIsoPFTau20\"\na_good_muon = \"count(good_muon) >= 1\"\na_good_tau = \"count(good_tau) >= 1\"\nopposite_charge = \"mu1_charge * tau1_charge < 0\"\n\n[columns]\nbranches = [\"run\", \"luminosityBlock\", \"event\", \"PV_npvs\", \"MET_pt\", \"MET_phi\", \"Jet_pt\"]\nmu_pt = \"mu1_pt\"\ntau_pt = \"tau1_pt\"\nvisible_mass = \"sqrt(2 * mu1_pt * tau1_pt * (cosh(mu1_eta - tau1_eta) - cos(delta_phi(mu1_phi, tau1_phi))))\"\nmt = \"sqrt(2 * mu1_pt * MET_pt * (1 - cos(delta_phi(mu1_phi, MET_phi))))\"\n\n[totals]\n\n# Worked out from the stored jets when it is read; the file keeps only the expression.\n[derived]\nht = \"sum(Jet_pt)\"\n",
+      "verdict": "valid"
+    },
+    {
+      "names": {
+        "columns": [
+          "B_FlightDistance",
+          "B_VertexChi2",
+          "B_mass",
+          "B_charge"
+        ],
+        "defines": [
+          "e1",
+          "e2",
+          "e3",
+          "px",
+          "py",
+          "pz"
+        ],
+        "derived": [
+          {
+            "expression": "abs(B_mass - 5279.3) < 50",
+            "name": "in_b_window"
+          }
+        ],
+        "keep": [
+          "no_muons",
+          "kaons",
+          "not_pions"
+        ],
+        "stored": {},
+        "title": "B± → K± K+ K−",
+        "totals": []
+      },
+      "rule": "the example lhcb_b_to_kkk",
+      "text": "# B± → K± K+ K−: three tracks that are kaons, not pions or muons, and the B's mass from their\n# momenta (MeV), each track given the kaon's mass. B_charge tells B+ from B−, for the CP asymmetry.\nformat = \"rvr-recipe\"\nversion = 1\ntitle = \"B± → K± K+ K−\"\n\n# Each track's energy if it is a kaon (493.677 MeV), and the three tracks' momentum together.\n[define]\ne1 = \"sqrt(H1_PX ** 2 + H1_PY ** 2 + H1_PZ ** 2 + 493.677 ** 2)\"\ne2 = \"sqrt(H2_PX ** 2 + H2_PY ** 2 + H2_PZ ** 2 + 493.677 ** 2)\"\ne3 = \"sqrt(H3_PX ** 2 + H3_PY ** 2 + H3_PZ ** 2 + 493.677 ** 2)\"\npx = \"H1_PX + H2_PX + H3_PX\"\npy = \"H1_PY + H2_PY + H3_PY\"\npz = \"H1_PZ + H2_PZ + H3_PZ\"\n\n[keep]\nno_muons = \"H1_isMuon == 0 and H2_isMuon == 0 and H3_isMuon == 0\"\nkaons = \"H1_ProbK > 0.5 and H2_ProbK > 0.5 and H3_ProbK > 0.5\"\nnot_pions = \"H1_ProbPi < 0.5 and H2_ProbPi < 0.5 and H3_ProbPi < 0.5\"\n\n[columns]\nbranches = [\"B_FlightDistance\", \"B_VertexChi2\"]\nB_mass = \"sqrt((e1 + e2 + e3) ** 2 - px ** 2 - py ** 2 - pz ** 2)\"\nB_charge = \"H1_Charge + H2_Charge + H3_Charge\"\n\n[totals]\n\n# Whether a candidate is within 50 MeV of the B mass, worked out when it is read.\n[derived]\nin_b_window = \"abs(B_mass - 5279.3) < 50\"\n",
+      "verdict": "valid"
+    },
+    {
+      "names": {
+        "columns": [
+          "run",
+          "event",
+          "MET_pt",
+          "MET_phi",
+          "npv",
+          "n_clean_jets",
+          "clean_jet_pt",
+          "leading_jet_pt",
+          "jet_eta_by_pt",
+          "max_mjj",
+          "dr_mu_tau",
+          "b_tagged",
+          "tau_decay_mode"
+        ],
+        "defines": [
+          "good_muon",
+          "good_tau",
+          "clean_jet",
+          "opposite"
+        ],
+        "derived": [
+          {
+            "expression": "MET_pt / max(leading_jet_pt, 1)",
+            "name": "met_over_leading_jet"
+          },
+          {
+            "expression": "clean_jet_pt / MET_pt",
+            "name": "clean_jet_pt_over_met"
+          },
+          {
+            "expression": "MET_pt * if(sample.production == 'vbf', 2, 1)",
+            "name": "vbf_scaled_met"
+          }
+        ],
+        "keep": [
+          "trigger",
+          "a_muon_and_a_tau",
+          "opposite_charge",
+          "two_jets_in_vbf"
+        ],
+        "stored": {
+          "n_clean_jets": "u1"
+        },
+        "title": "A tour of the recipe language",
+        "totals": []
+      },
+      "rule": "the example recipe_tour",
+      "text": "# Every table of a recipe, and most kinds of function, in one study. The recipe reference\n# (crates/rvr-recipe/README.md) explains each.\nformat = \"rvr-recipe\"\nversion = 1\ntitle = \"A tour of the recipe language\"\n\n# Names for expressions, used by the lines below them; a name may use the names above it.\n[define]\ngood_muon = \"Muon_tightId and Muon_pfRelIso04_all < 0.15 and Muon_pt > 20 and abs(Muon_eta) < 2.1\"\ngood_tau = \"Tau_idDecayMode and Tau_idIsoTight and Tau_idAntiMuTight and Tau_pt > 20 and abs(Tau_eta) < 2.3\"\n# Jets above 30 GeV, ΔR > 0.4 away from every good muon and good tau.\nclean_jet = \"Jet_pt > 30 and abs(Jet_eta) < 4.7 and dr_nearest(Jet_eta, Jet_phi, Muon_eta[good_muon], Muon_phi[good_muon]) > 0.4 and dr_nearest(Jet_eta, Jet_phi, Tau_eta[good_tau], Tau_phi[good_tau]) > 0.4\"\nopposite = \"first(Muon_charge[good_muon], 0) * first(Tau_charge[good_tau], 0) < 0\"\n\n# The cuts, in order. Each sample's metadata names its trigger's branch; the last cut applies to\n# the VBF sample alone, and the other passes it.\n[keep]\ntrigger = \"branch(sample.trigger)\"\na_muon_and_a_tau = \"count(good_muon) >= 1 and count(good_tau) >= 1\"\nopposite_charge = \"opposite\"\ntwo_jets_in_vbf = { if = \"sample.production == 'vbf'\", apply = \"count(clean_jet) >= 2\" }\n\n# Branches stored as they are, one under a new name, and columns computed while pressing: flat\n# and jagged, and one stored as a smaller type.\n[columns]\nbranches = [\"run\", \"event\", \"MET_pt\", \"MET_phi\"]\nnpv = \"PV_npvs\"\nn_clean_jets = { value = \"count(clean_jet)\", stored = \"u1\" }\nclean_jet_pt = \"Jet_pt[clean_jet]\"\nleading_jet_pt = \"nth(sorted(Jet_pt[clean_jet], 'descending'), 0, -1)\"\njet_eta_by_pt = \"take(Jet_eta[clean_jet], order(Jet_pt[clean_jet], 'descending'), -9)\"\nmax_mjj = \"greatest(pair_mass(Jet_pt[clean_jet], Jet_eta[clean_jet], Jet_phi[clean_jet], Jet_mass[clean_jet]), -1)\"\ndr_mu_tau = \"delta_r(first(Muon_eta[good_muon], 0), first(Muon_phi[good_muon], 0), first(Tau_eta[good_tau], 0), first(Tau_phi[good_tau], 0))\"\nb_tagged = \"count(Jet_btag[clean_jet] > 0.8)\"\ntau_decay_mode = \"first(Tau_decayMode[good_tau], -1)\"\n\n[totals]\n\n# Columns kept as their expressions over the stored columns, worked out when they are read: flat,\n# a list, and one that reads the sample's metadata.\n[derived]\nmet_over_leading_jet = \"MET_pt / max(leading_jet_pt, 1)\"\nclean_jet_pt_over_met = \"clean_jet_pt / MET_pt\"\nvbf_scaled_met = \"MET_pt * if(sample.production == 'vbf', 2, 1)\"\n",
+      "verdict": "valid"
+    },
+    {
+      "names": {
+        "columns": [
+          "nMuon",
+          "Muon_pt",
+          "mass",
+          "pt"
+        ],
+        "defines": [
+          "good_muon"
+        ],
+        "derived": [
+          {
+            "expression": "first(Muon_pt, -1)",
+            "name": "leading_muon_pt"
+          },
+          {
+            "expression": "if(sample.kind == 'data', 1.0, sample.xsec * 1000 * sample.lumi / sample.sumw)",
+            "name": "weight"
+          }
+        ],
+        "keep": [
+          "two_muons",
+          "opposite_charge"
+        ],
+        "stored": {},
+        "title": null,
+        "totals": [
+          {
+            "name": "sumw",
+            "tree": null
+          }
+        ]
+      },
+      "rule": "the example zmumu",
+      "text": "# Two muons of opposite charge, the pair's mass and pt, and a weight per event that scales each\n# simulated sample to the data's luminosity. The data file holds only muons, so nothing else is read.\nformat = \"rvr-recipe\"\nversion = 1\n\n[define]\ngood_muon = \"Muon_pt > 20 and abs(Muon_eta) < 2.4\"\n\n[keep]\ntwo_muons = \"count(good_muon) == 2\"\nopposite_charge = \"sum(Muon_charge[good_muon]) == 0\"\n\n[columns]\nbranches = [\"nMuon\", \"Muon_pt\"]\nmass = \"first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)\"\npt = \"first(pair_pt(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)\"\n\n# Every simulated event of these files weighs 1, so the sum of the weights is the number read.\n[totals]\nsumw = \"1\"\n\n# Worked out from what the file holds when it is read.\n[derived]\nleading_muon_pt = \"first(Muon_pt, -1)\"\nweight = \"if(sample.kind == 'data', 1.0, sample.xsec * 1000 * sample.lumi / sample.sumw)\"\n",
+      "verdict": "valid"
+    },
+    {
+      "names": {
+        "columns": [
+          "MET_pt",
+          "w"
+        ],
+        "defines": [
+          "good"
+        ],
+        "derived": [
+          {
+            "expression": "w / sample.sumw",
+            "name": "r"
+          }
+        ],
+        "keep": [
+          "hem"
+        ],
+        "stored": {
+          "w": "f4"
+        },
+        "title": "t",
+        "totals": [
+          {
+            "name": "sumw",
+            "tree": null
+          },
+          {
+            "name": "runs",
+            "tree": "Runs"
+          }
+        ]
+      },
+      "rule": "every table, totals over another tree, stored kinds, a cut for some samples",
+      "text": "format = \"rvr-recipe\"\nversion = 1\ntitle = \"t\"\n[define]\ngood = \"Jet_pt > 30\"\n[keep]\nhem = { if = \"sample.era == 3\", apply = \"count(good) >= 1\" }\n[columns]\nbranches = [\"MET_pt\"]\nw = { value = \"genWeight\", stored = \"f4\" }\n[totals]\nsumw = \"genWeight\"\nruns = { value = \"genEventSumw\", tree = \"Runs\" }\n[derived]\nr = \"w / sample.sumw\"\n",
+      "verdict": "valid"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: format required",
+      "rust_says": [
+        "A recipe starts with format = \"rvr-recipe\" and version = 1"
+      ],
+      "text": "version = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: format is rvr-recipe",
+      "rust_says": [
+        "A recipe starts with format = \"rvr-recipe\" and version = 1"
+      ],
+      "text": "format = \"rvr-recipes\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: version is 1",
+      "rust_says": [
+        "A recipe starts with format = \"rvr-recipe\" and version = 1"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 2\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: no other top key",
+      "rust_says": [
+        "A recipe has no key \"select\"; it takes format, version, title, define, keep, columns, totals, derived."
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\nselect = \"x\"\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: title is text",
+      "rust_says": [
+        "title must be text, as title = \"my study\""
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\ntitle = 3\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: every table written",
+      "rust_says": [
+        "A recipe has no [totals] table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty. Add the line [totals]."
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: [columns] stores a column",
+      "rust_says": [
+        "The recipe stores nothing: under [columns], list branches (branches = [\"MET_pt\"]) or name computed columns (ht = \"sum(Jet_pt)\")"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: a cut has apply",
+      "rust_says": [
+        "[keep] met needs apply = \"…\": the cut, for the samples its if is true for"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[keep]\nmet = { if = \"MET_pt > 0\" }\n\n[define]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: a cut has no other key",
+      "rust_says": [
+        "[keep] met has no key \"when\"; it takes if, apply."
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[keep]\nmet = { apply = \"MET_pt > 0\", when = \"x\" }\n\n[define]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: stored is a kind",
+      "rust_says": [
+        "[columns] x stored: \"f2\" is not a number kind: the kinds are b1, i1, i2, i4, i8, u1, u2, u4, u8, f4, f8. Did you mean: f4, f8, i2?"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nx = { value = \"MET_pt\", stored = \"f2\" }\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: a total's tree is nonempty",
+      "rust_says": [
+        "[totals] t tree must name a tree of each file, such as \"Runs\""
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[totals]\nt = { value = \"MET_pt\", tree = \"\" }\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: a plain name",
+      "rust_says": [
+        "[columns] two words: a column is named with one plain name, such as ht, and not sample, entry or file"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\n\"two words\" = \"MET_pt\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: no word of the language",
+      "rust_says": [
+        "[columns] and: a column is named with one plain name, such as ht, and not sample, entry or file"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nand = \"MET_pt\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: no column named entry",
+      "rust_says": [
+        "[columns] entry: a column is named with one plain name, such as ht, and not sample, entry or file"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nentry = \"MET_pt\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: no total named events_read",
+      "rust_says": [
+        "[totals] events_read: a total is named with one plain name, such as sumw, and not sample, entry, file, events_read, events_total, events_missing"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[totals]\nevents_read = \"MET_pt\"\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: no two columns alike",
+      "rust_says": [
+        "Two columns are named MET_pt: give one another name"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nbranches = [\"MET_pt\", \"MET_pt\"]\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-keys-exactly: a defined name uses those above it",
+      "rust_says": [
+        "[define] a uses b, which is defined below it: a defined name may use only the names defined above it"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[define]\na = \"b * 2\"\nb = \"MET_pt\"\n\n[keep]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE mistakes: syntax",
+      "rust_says": [
+        "[columns] x: Expected a value at the end (column 9)"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nx = \"MET_pt >\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE mistakes: a function's values",
+      "rust_says": [
+        "[columns] x: count takes 1 value, not 2"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nx = \"count(MET_pt, 3)\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE mistakes: a function that does not exist",
+      "rust_says": [
+        "[columns] x: There is no function named cuont. Did you mean: count? Every function, with an example, is in the recipe reference: https://gitlab.cern.ch/dgrove/rowver/-/blob/main/crates/rvr-recipe/README.md"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nx = \"cuont(MET_pt)\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE mistakes: a dot after a name",
+      "rust_says": [
+        "[columns] x: Only sample has a field after a dot, as in sample.era (the dot at column 4). Name a branch in full, such as Jet_pt, and keep some members of it with a mask, such as Jet_pt[good_jet]; a branch whose name holds a dot is written branch('Jet.pt')"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nx = \"Jet.pt\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE mistakes: not of a number, as far as the text tells",
+      "rust_says": [
+        "[keep] c: not needs a true-or-false value, not a number: to test a number, compare it, as x != 0"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[keep]\nc = \"not 3\"\n\n[define]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE mistakes: and of numbers, as far as the text tells",
+      "rust_says": [
+        "[columns] x: and's left side needs a true-or-false value, not a number: to test a number, compare it, as x != 0",
+        "[columns] x: and's right side needs a true-or-false value, not a number: to test a number, compare it, as x != 0"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nx = \"count(MET_pt > 1) and 2\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE operators: comparisons do not chain",
+      "rust_says": [
+        "[keep] c: Comparisons do not chain (the second at column 12): write a < b and b < c, not a < b < c"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[keep]\nc = \"1 < MET_pt < 2\"\n\n[define]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE how-deep: 100 levels at most",
+      "rust_says": [
+        "[columns] x: The expression is more than 100 levels deep at column 101 (a defined name as deep as its own expression): write it with fewer"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nx = \"((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((MET_pt))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "RECIPE the-parts-of-a-recipe: a derived column uses only stored columns and those above it",
+      "rust_says": [
+        "[derived] a uses b, but b is a derived column below it: a derived column uses only the columns the file stores, under [columns], and the derived columns above it"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[derived]\na = \"b * 2\"\nb = \"MET_pt\"\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[totals]\n",
+      "verdict": "refused"
+    }
+  ],
+  "expressions": [
+    "crates/rvr-recipe/tests/fixtures/recipe.json",
+    "crates/rvr-recipe/tests/fixtures/properties.json"
+  ]
+}

@@ -2,9 +2,11 @@
 read back, their types, and the Arrow, pandas and Parquet forms. Run from this crate's folder,
 after `maturin develop`: `python -m unittest discover tests`."""
 
+import json
 import os
 import pathlib
 import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -299,6 +301,96 @@ class Command(unittest.TestCase):
             said.seek(0)
             self.assertEqual(stopped.exception.code, 2)
             self.assertIn(b"is not UTF-8 text", said.read())
+
+CORPUS = pathlib.Path(__file__).resolve().parents[3] / "tests" / "conformance" / "rvr"
+
+
+def zstd():
+    """A zstd decompressor: 3.14's compression.zstd, the zstandard package, or the zstd command;
+    None when there is none."""
+    try:
+        from compression import zstd as module
+        return module.decompress
+    except ImportError:
+        pass
+    try:
+        import zstandard
+        return lambda data: zstandard.ZstdDecompressor().decompress(data, max_output_size=1 << 30)
+    except ImportError:
+        pass
+    command = shutil.which("zstd")
+    if command:
+        return lambda data: subprocess.run([command, "-d", "-c"], input=data, capture_output=True, check=True).stdout
+    return None
+
+
+def decoded(column):
+    """A column of the corpus's manifest as the numbers its values are: floats from their bits."""
+    kind = column["kind"]
+    if kind in ("f4", "f8"):
+        return np.array([int(v, 16) for v in column["values"]], dtype="u4" if kind == "f4" else "u8").view(kind)
+    return np.array(column["values"], dtype="?" if kind == "b1" else kind)
+
+
+class Conformance(unittest.TestCase):
+    """The conformance corpus (tests/conformance/rvr), read through the Python package."""
+
+    def check(self, lists):
+        """Every valid file of the corpus reads as its manifest says: its flat columns, or its list ones."""
+        manifest = json.loads((CORPUS / "manifest.json").read_text())
+        for entry in manifest["valid"]:
+            want = entry["contents"]
+            with self.subTest(entry["file"]):
+                f = rowver.open(str(CORPUS / entry["file"]))
+                self.assertEqual((f.rows, f.empty), (want["rows"], want["empty"]))
+                self.assertEqual(f.signed_by is not None, entry["signed"])
+                self.assertEqual(rowver.validate(str(CORPUS / entry["file"]))[0], want["rows"])
+                if want["empty"]:
+                    continue
+                self.assertEqual(f["sample"].tolist(), want["sample"])
+                self.assertEqual(f["entry"].tolist(), want["entry"])
+                for name, column in want["columns"].items():
+                    if ("offsets" in column) != lists:
+                        continue
+                    values = f[name]
+                    if lists:
+                        import awkward as ak
+                        self.assertEqual(ak.num(values).tolist(), np.diff(column["offsets"]).tolist(), name)
+                        values = ak.to_numpy(ak.flatten(values))
+                    got = np.asarray(values)
+                    self.assertEqual(got.dtype, decoded(column).dtype, name)
+                    # Bit for bit, NaN payloads and signed zeros included.
+                    self.assertEqual(got.tobytes(), decoded(column).tobytes(), name)
+
+    # SPEC 11.2, 11.3, 11.4, 11.7; FORMAT 12
+    def test_every_valid_file_of_the_corpus_reads_as_its_manifest_says(self):
+        self.check(lists=False)
+
+    # SPEC 11.4; FORMAT 12
+    @unittest.skipUnless(has("awkward"), "needs awkward")
+    def test_every_list_column_of_the_corpus_reads_as_its_manifest_says(self):
+        self.check(lists=True)
+
+    # FORMAT 12
+    @unittest.skipUnless(zstd(), "no zstd here: Python 3.14, the zstandard package, or the zstd command")
+    def test_every_case_of_the_corpus_has_its_verdict(self):
+        manifest = json.loads((CORPUS / "manifest.json").read_text())
+        packed = zstd()((CORPUS / "cases.zst").read_bytes())
+        with tempfile.TemporaryDirectory() as folder:
+            for n, case in enumerate(manifest["cases"]):
+                path = os.path.join(folder, f"{n}.rvr")
+                with open(path, "wb") as out:
+                    out.write(packed[case["at"]:case["at"] + case["size"]])
+                with self.subTest(case["rule"]):
+                    if case["verdict"] == "opening":
+                        self.assertRaises(rowver.Error, rowver.open, path)
+                    else:
+                        rowver.open(path)
+                        if case["verdict"] == "full":
+                            self.assertRaises(rowver.Error, rowver.validate, path)
+                        else:
+                            rowver.validate(path)
+
 
 if __name__ == "__main__":
     unittest.main()

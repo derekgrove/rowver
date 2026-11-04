@@ -1,0 +1,46 @@
+{
+  "about": "samples.lock texts, each valid or refused with the rule it breaks (FORMAT.md §6.3); see README.md",
+  "cases": [
+    {
+      "rule": "a random choice of 3 of 5, a branch rvr cannot read",
+      "text": "format = \"rvr-samples-lock\"\nversion = 1\nresolved = \"2026-11-04T16:06:01Z\"\nsamples_toml_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\n[[sample]]\nname = \"flat\"\nlabel = \"flat\"\nasked = [\"a.root\"]\ntree = \"analysis\"\nbranches = \"7161d524c0e231c0bf783668e5cf1f3cc901f8684b68d60040a7b6f34ec82461\"\nevents = 3\nchoose = \"random\"\nseed = 4\nevents_total = 5\nevents_read = 3\nmetadata = {}\n\n[[sample.file]]\nat = \"./a.root\"\nbytes = 39262\nadler32 = \"bbc43743\"\nuuid = \"31e851e4-b994-11f1-ba5c-1a45bb13c76a\"\nentries = 5\ntake = 3\n\n[[branches]]\nsha256 = \"7161d524c0e231c0bf783668e5cf1f3cc901f8684b68d60040a7b6f34ec82461\"\nlist = [\n  { name = \"a\", kind = \"none\", shape = \"flat\", why = \"a TObject\" },\n  { name = \"nJet\", kind = \"i4\", shape = \"flat\" },\n]\n",
+      "verdict": "valid"
+    },
+    {
+      "rule": "FORMAT §6.3 why missing on a branch rvr cannot read",
+      "rust_says": "samples.lock branches 1 branch 1: a branch rvr cannot read says why",
+      "text": "format = \"rvr-samples-lock\"\nversion = 1\nresolved = \"2026-11-04T16:06:01Z\"\nsamples_toml_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\n[[sample]]\nname = \"flat\"\nlabel = \"flat\"\nasked = [\"a.root\"]\ntree = \"analysis\"\nbranches = \"7c0349d3b3ef60b50ab8f4c8f073b61e1380a07e6557e8098237b0303d6f4af1\"\nevents = 3\nchoose = \"random\"\nseed = 4\nevents_total = 5\nevents_read = 3\nmetadata = {}\n\n[[sample.file]]\nat = \"./a.root\"\nbytes = 39262\nadler32 = \"bbc43743\"\nuuid = \"31e851e4-b994-11f1-ba5c-1a45bb13c76a\"\nentries = 5\ntake = 3\n\n[[branches]]\nsha256 = \"7c0349d3b3ef60b50ab8f4c8f073b61e1380a07e6557e8098237b0303d6f4af1\"\nlist = [\n  { name = \"a\", kind = \"none\", shape = \"flat\" },\n  { name = \"nJet\", kind = \"i4\", shape = \"flat\" },\n]\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "FORMAT §6.3 why on a branch rvr reads",
+      "rust_says": "samples.lock branches 1 branch 2 has no key \"why\"; it takes name, kind, shape.",
+      "text": "format = \"rvr-samples-lock\"\nversion = 1\nresolved = \"2026-11-04T16:06:01Z\"\nsamples_toml_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\n[[sample]]\nname = \"flat\"\nlabel = \"flat\"\nasked = [\"a.root\"]\ntree = \"analysis\"\nbranches = \"92bbf6ad0fc075cbe68050bbed819ccddbcd3c5e0ff8d8302162f2c9eb61c050\"\nevents = 3\nchoose = \"random\"\nseed = 4\nevents_total = 5\nevents_read = 3\nmetadata = {}\n\n[[sample.file]]\nat = \"./a.root\"\nbytes = 39262\nadler32 = \"bbc43743\"\nuuid = \"31e851e4-b994-11f1-ba5c-1a45bb13c76a\"\nentries = 5\ntake = 3\n\n[[branches]]\nsha256 = \"92bbf6ad0fc075cbe68050bbed819ccddbcd3c5e0ff8d8302162f2c9eb61c050\"\nlist = [\n  { name = \"a\", kind = \"none\", shape = \"flat\", why = \"a TObject\" },\n  { name = \"nJet\", kind = \"i4\", shape = \"flat\", why = \"x\" },\n]\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "FORMAT §6.3 a list no sample has",
+      "rust_says": "samples.lock has a branch list no sample has",
+      "text": "format = \"rvr-samples-lock\"\nversion = 1\nresolved = \"2026-11-04T16:06:01Z\"\nsamples_toml_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\n[[sample]]\nname = \"flat\"\nlabel = \"flat\"\nasked = [\"a.root\"]\ntree = \"analysis\"\nbranches = \"7161d524c0e231c0bf783668e5cf1f3cc901f8684b68d60040a7b6f34ec82461\"\nevents = 3\nchoose = \"random\"\nseed = 4\nevents_total = 5\nevents_read = 3\nmetadata = {}\n\n[[sample.file]]\nat = \"./a.root\"\nbytes = 39262\nadler32 = \"bbc43743\"\nuuid = \"31e851e4-b994-11f1-ba5c-1a45bb13c76a\"\nentries = 5\ntake = 3\n\n[[branches]]\nsha256 = \"7161d524c0e231c0bf783668e5cf1f3cc901f8684b68d60040a7b6f34ec82461\"\nlist = [\n  { name = \"a\", kind = \"none\", shape = \"flat\", why = \"a TObject\" },\n  { name = \"nJet\", kind = \"i4\", shape = \"flat\" },\n]\n\n[[branches]]\nsha256 = \"373df8771151e354715b7d6267af6d89e02fb8c4729017957e617f8e6df17660\"\nlist = [{ name = \"x\", kind = \"f4\", shape = \"flat\" }]\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "FORMAT §6.3 no take for a random choice",
+      "rust_says": "samples.lock sample 1 file 1: a file of a random choice has take",
+      "text": "format = \"rvr-samples-lock\"\nversion = 1\nresolved = \"2026-11-04T16:06:01Z\"\nsamples_toml_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\n[[sample]]\nname = \"flat\"\nlabel = \"flat\"\nasked = [\"a.root\"]\ntree = \"analysis\"\nbranches = \"7161d524c0e231c0bf783668e5cf1f3cc901f8684b68d60040a7b6f34ec82461\"\nevents = 3\nchoose = \"random\"\nseed = 4\nevents_total = 5\nevents_read = 3\nmetadata = {}\n\n[[sample.file]]\nat = \"./a.root\"\nbytes = 39262\nadler32 = \"bbc43743\"\nuuid = \"31e851e4-b994-11f1-ba5c-1a45bb13c76a\"\nentries = 5\n\n[[branches]]\nsha256 = \"7161d524c0e231c0bf783668e5cf1f3cc901f8684b68d60040a7b6f34ec82461\"\nlist = [\n  { name = \"a\", kind = \"none\", shape = \"flat\", why = \"a TObject\" },\n  { name = \"nJet\", kind = \"i4\", shape = \"flat\" },\n]\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "FORMAT §6.3 choose for a choice not random",
+      "rust_says": "samples.lock sample 1 has no seed\nsamples.lock sample 1: choose is \"random\", with a number of events and a seed\nsamples.lock sample 1 file 1 has no key \"stop\"; it takes at, bytes, uuid, entries, adler32, take.\nsamples.lock sample 1 file 1: a file of a random choice has take",
+      "text": "format = \"rvr-samples-lock\"\nversion = 1\nresolved = \"2026-11-04T16:06:01Z\"\nsamples_toml_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\n[[sample]]\nname = \"flat\"\nlabel = \"flat\"\nasked = [\"a.root\"]\ntree = \"analysis\"\nbranches = \"7161d524c0e231c0bf783668e5cf1f3cc901f8684b68d60040a7b6f34ec82461\"\nevents = 3\nchoose = \"first\"\nevents_total = 5\nevents_read = 3\nmetadata = {}\n\n[[sample.file]]\nat = \"./a.root\"\nbytes = 39262\nadler32 = \"bbc43743\"\nuuid = \"31e851e4-b994-11f1-ba5c-1a45bb13c76a\"\nentries = 5\nstop = 3\n\n[[branches]]\nsha256 = \"7161d524c0e231c0bf783668e5cf1f3cc901f8684b68d60040a7b6f34ec82461\"\nlist = [\n  { name = \"a\", kind = \"none\", shape = \"flat\", why = \"a TObject\" },\n  { name = \"nJet\", kind = \"i4\", shape = \"flat\" },\n]\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "FORMAT §6.3 no branch list at all",
+      "rust_says": "samples.lock has no branches",
+      "text": "format = \"rvr-samples-lock\"\nversion = 1\nresolved = \"2026-11-04T16:06:01Z\"\nsamples_toml_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\n[[sample]]\nname = \"flat\"\nlabel = \"flat\"\nasked = [\"a.root\"]\ntree = \"analysis\"\nbranches = \"7161d524c0e231c0bf783668e5cf1f3cc901f8684b68d60040a7b6f34ec82461\"\nevents = 3\nchoose = \"random\"\nseed = 4\nevents_total = 5\nevents_read = 3\nmetadata = {}\n\n[[sample.file]]\nat = \"./a.root\"\nbytes = 39262\nadler32 = \"bbc43743\"\nuuid = \"31e851e4-b994-11f1-ba5c-1a45bb13c76a\"\nentries = 5\ntake = 3\n\n",
+      "verdict": "refused"
+    }
+  ]
+}

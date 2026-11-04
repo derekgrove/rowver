@@ -41,7 +41,7 @@ fn show(name: &str, wide: usize, held: &Held, expression: Option<&str>) {
 }
 
 /// A column's value in one row written to `out`: a value, or a list `[a, b]`.
-fn push_row(held: &Held, row: usize, out: &mut String) {
+pub(crate) fn push_row(held: &Held, row: usize, out: &mut String) {
     let w = width(&held.kind).unwrap_or(1);
     let (from, to, listed) = match &held.offsets {
         None => (row, row + 1, false),

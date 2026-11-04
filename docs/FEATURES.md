@@ -537,6 +537,7 @@ holes exits 3, and a command whose output pipe closed early exits 141
 | `rvr dump` | What is inside? The full header, the three study texts, and every column with its kind, length and first values (a derived column worked out, with its expression), or any one of these parts; `--all` prints every value of every column. |
 | `rvr header` | The JSON header exactly as the file holds it, without reading any array. |
 | `rvr diff A B` | Where do two files differ? From the headers alone: rows, samples, labels, columns and derived columns, kinds, expressions, each (column, sample) pair whose contents changed, and sample-column values. |
+| `rvr diff A B --rows [--key COLUMN,…]` | Do two files hold the same events? Event by event, matched by file and entry or by key columns (`run,luminosityBlock,event` across two skims): the events only one holds, and the first value that differs, per sample. |
 | `rvr reproduce` | Does the file's own study, pressed again, give the same data (§4.5)? |
 | `rvr empty`, `rvr refill` | Give back a file's space and keep its study in its place; press its columns again, checked against its checksums (§4.5). |
 
