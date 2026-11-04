@@ -724,6 +724,7 @@ mod tests {
         [[sample]]\nname = \"a\"\nlabel = \"A\"\nfiles = \"./*.root\"\ntree = \"T\"\nevents = 7\n\
         metadata = { kind = \"signal\", xsec = 2.5, era = 3 }\n";
 
+    // SPEC 2.3; FORMAT 6.3
     #[test]
     fn a_lock_written_reads_back_the_same_and_agrees_with_its_samples_toml() {
         let lock = lock(TOML);
@@ -735,6 +736,7 @@ mod tests {
         assert!(agree(&TOML.replace("label = \"A\"", "label = \"B\""), &lock).is_err());
     }
 
+    // FORMAT 6.1, 6.3, 12
     #[test]
     fn each_file_of_a_random_choice_takes_its_share() {
         let mut lock = lock(TOML);
@@ -754,6 +756,7 @@ mod tests {
         assert!(Lock::read(&text.replacen(&format!("take = {}\n", counts[0]), "TAKE\n", 1).replacen(&format!("take = {}\n", counts[1]), &format!("take = {}\n", counts[0]), 1).replacen("TAKE\n", &format!("take = {}\n", counts[1]), 1)).is_ok(), "Lock::read checks only the sum");
     }
 
+    // SPEC 1.4, 1.5; FORMAT 6.3
     #[test]
     fn a_lock_off_its_rails_is_refused_with_every_problem() {
         let text = lock(TOML).write().unwrap();
@@ -788,6 +791,7 @@ mod tests {
         assert!(said(text.replace("at = \"./b.root\"", "at = \"./b.dat\"")).contains("./b.dat is not where"));
     }
 
+    // SPEC 7.1.1; FORMAT 6.1, 6.3
     #[test]
     fn what_a_press_reads_of_each_file() {
         let first = reads(&[100, 50, 80], Events::First(120));

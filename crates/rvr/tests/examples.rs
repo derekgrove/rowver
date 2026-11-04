@@ -40,6 +40,7 @@ fn rvr(dir: &Path, study: &Path, args: &[&str]) {
     );
 }
 
+// SPEC 4.1.5, 6.1.1
 #[test]
 fn every_example_study_reads() {
     for study in studies() {
@@ -57,6 +58,7 @@ fn every_example_study_reads() {
     }
 }
 
+// SPEC 1.2, 6.2.1
 #[test]
 #[ignore = "reads Open Data over the network"]
 fn every_example_study_presses() {

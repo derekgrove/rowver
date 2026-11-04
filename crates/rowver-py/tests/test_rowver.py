@@ -85,6 +85,7 @@ class Pressed(unittest.TestCase):
         cls.config.stop()
         shutil.rmtree(cls.dir.parent)
 
+    # SPEC 4.5.1, 7.8.1, 11.3, 11.7; FORMAT 5
     def test_the_file_says_what_it_holds(self):
         f = self.file
         self.assertEqual((f.rows, len(f), f.samples), (4, 4, ["flat"]))
@@ -100,6 +101,7 @@ class Pressed(unittest.TestCase):
         self.assertIsNone(f.signed_by)
         self.assertEqual(rowver.validate(self.path), (4, 5))
 
+    # SPEC 11.3, 11.4, 11.5; FORMAT 10; RECIPE choosing-members-of-a-list
     def test_derived_columns_are_worked_out_and_read_as_any_other(self):
         f = self.file
         self.assertEqual(f.derived, ["ht_per_jet", "hard_pt"])
@@ -117,6 +119,7 @@ class Pressed(unittest.TestCase):
         f.forget()
         self.assertEqual(f._held, {})
 
+    # SPEC 11.7; FORMAT 10, 12
     def test_validate_works_out_every_derived_column(self):
         # One hex digit of a derived record changed: every stored checksum still holds.
         data = bytearray(self.path.read_bytes())
@@ -128,6 +131,7 @@ class Pressed(unittest.TestCase):
             rowver.validate(changed)
         changed.unlink()
 
+    # SPEC 4.4.1, 11.4, 11.5; FORMAT 3, 4
     def test_flat_columns_are_numpy_arrays_of_their_kind(self):
         f = self.file
         np.testing.assert_array_equal(f["weight"], [1.0, 0.5, 2.25, 0.75])
@@ -138,12 +142,14 @@ class Pressed(unittest.TestCase):
         np.testing.assert_array_equal(offsets, [0, 3, 7, 10, 11])
         self.assertEqual(values.dtype, np.float32)
 
+    # SPEC 11.4
     def test_arrays_handed_out_cannot_change_what_is_read_later(self):
         weight = self.file["weight"]
         with self.assertRaises(ValueError):
             weight *= 2
         np.testing.assert_array_equal(self.file.read("weight")["weight"][0], [1.0, 0.5, 2.25, 0.75])
 
+    # SPEC 11.4, 11.6
     @unittest.skipUnless(has("awkward"), "needs awkward")
     def test_list_columns_are_awkward_arrays(self):
         pt = self.file["Jet_pt"]
@@ -153,6 +159,7 @@ class Pressed(unittest.TestCase):
         self.assertEqual((arrays["sample"].tolist(), arrays["entry"].tolist()), (["flat"] * 4, [0, 1, 2, 4]))
         self.assertEqual(self.file.arrays(["ht", "sample"]).fields, ["sample", "entry", "ht"])
 
+    # SPEC 11.6
     @unittest.skipUnless(has("pyarrow") and has("pandas"), "needs pyarrow and pandas")
     def test_arrow_pandas_and_parquet_hold_the_same(self):
         import pyarrow.parquet as pq
@@ -174,6 +181,7 @@ class Pressed(unittest.TestCase):
         self.file.to_parquet(out)
         self.assertTrue(pq.read_table(out).equals(table))
 
+    # SPEC 1.5, 11.2, 11.4; FORMAT 1
     def test_mistakes_are_said_plainly(self):
         with self.assertRaisesRegex(KeyError, "not a column of .*; it has weight"):
             self.file["MET"]
@@ -185,6 +193,7 @@ class Pressed(unittest.TestCase):
             rowver.open(self.dir)
         self.assertEqual(rowver.Error.__module__, "rowver")
 
+    # SPEC 11.2, 11.3, 11.5, 11.6, 11.7
     def test_the_names_it_offers_are_the_ones_it_documents(self):
         public = {n for n in dir(rowver) if not n.startswith("_")}
         self.assertEqual(public, {"Error", "File", "open", "validate"})
@@ -194,6 +203,7 @@ class Pressed(unittest.TestCase):
         self.assertEqual({n for n in dir(self.file) if not n.startswith("_")}, documented)
         self.assertIn("sample", self.file)
 
+    # SPEC 11.4
     def test_a_file_replaced_by_rename_after_it_was_opened_is_read_as_it_was(self):
         copy, other = self.dir / "renamed.rvr", self.dir / "other.rvr"
         shutil.copy(self.path, copy)
@@ -206,6 +216,7 @@ class Pressed(unittest.TestCase):
         finally:
             copy.unlink()
 
+    # SPEC 1.5, 11.4; FORMAT 12
     def test_a_file_emptied_after_it_was_opened_says_so(self):
         copy = self.dir / "cut.rvr"
         shutil.copy(self.path, copy)
@@ -218,9 +229,11 @@ class Pressed(unittest.TestCase):
         finally:
             copy.unlink()
 
+    # SPEC 11.3
     def test_a_complete_file_has_no_holes(self):
         self.assertEqual((self.file.complete, self.file.holes), (True, []))
 
+    # SPEC 8.9, 8.10, 11.3; FORMAT 1
     def test_an_empty_file_reads_its_header_and_says_how_to_fill_it(self):
         copy = self.dir / "copy.rvr"
         shutil.copy(self.path, copy)
@@ -241,6 +254,7 @@ class Pressed(unittest.TestCase):
 class Holed(unittest.TestCase):
     """A sample of two files, one deleted after the lock was written: a file with one hole."""
 
+    # SPEC 5.1.6, 7.3.1, 7.3.2, 7.3.3, 7.3.4, 11.3; FORMAT 5, 6.2
     def test_the_hole_says_which_entries_of_which_file_and_why(self):
         dir = pathlib.Path(tempfile.mkdtemp(prefix="rowver-py-")) / "holed"
         dir.mkdir()
@@ -266,6 +280,7 @@ class Holed(unittest.TestCase):
 class Command(unittest.TestCase):
     """The rvr command the package installs."""
 
+    # SPEC 5.1.3, 5.1.6, 11.1
     def test_an_argument_that_is_not_utf8_is_wrong_use(self):
         import sys
 

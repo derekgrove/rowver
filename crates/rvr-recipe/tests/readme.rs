@@ -145,6 +145,7 @@ fn shown(cell: &str) -> Value {
     }
 }
 
+// RECIPE functions, mistakes; SPEC 1.4
 #[test]
 fn every_function_is_known_and_in_the_readme() {
     let text = std::fs::read_to_string(format!("{}/README.md", env!("CARGO_MANIFEST_DIR"))).unwrap();
@@ -164,6 +165,7 @@ fn every_function_is_known_and_in_the_readme() {
     assert!(said.0.ends_with(&format!("? Every function, with an example, is in the recipe reference: {}", rvr_recipe::REFERENCE)), "{said:?}");
 }
 
+// RECIPE the-example-events, values, operators, choosing-members-of-a-list, functions, reducing-a-jagged-list-to-a-flat-value, positions-and-order, joining-lists, math-value-by-value, bits, angles-and-kinematics, pairs-within-a-list, text-branches-and-stored-types, defined-names, mistakes, the-keys-exactly, from-python-to-rvr, longer-ones, picking-the-jets-you-want, more-than-one-kind-of-particle, kinds-exactly, two-kinds-together, fixed-values-beside-a-column, numbers, conversions, what-differs-from-numpy
 #[test]
 fn every_readme_example_gives_the_result_it_shows() {
     let text = std::fs::read_to_string(format!("{}/README.md", env!("CARGO_MANIFEST_DIR"))).unwrap();
@@ -227,6 +229,7 @@ fn every_readme_example_gives_the_result_it_shows() {
     assert!(wrong.is_empty(), "{} of {checked} README examples are wrong:\n{}", wrong.len(), wrong.join("\n"));
 }
 
+// RECIPE kinds-exactly, two-kinds-together
 #[test]
 fn the_readme_promotion_table_is_how_kinds_combine() {
     let text = std::fs::read_to_string(format!("{}/README.md", env!("CARGO_MANIFEST_DIR"))).unwrap();

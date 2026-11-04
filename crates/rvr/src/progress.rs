@@ -282,6 +282,7 @@ impl Drop for Display {
 mod tests {
     use super::*;
 
+    // SPEC 7.7.2
     #[test]
     fn a_bar_is_full_only_when_its_sample_is_read_and_every_line_fits_80_columns() {
         let fit = widths(&[("DY", 100_000)], LINE);
@@ -302,6 +303,7 @@ mod tests {
         assert_eq!((elapsed(14.24), elapsed(134.0)), ("14.2 s".to_string(), "2 min 14 s".to_string()));
     }
 
+    // SPEC 7.7.2
     #[test]
     fn bars_fit_the_terminal_and_leave_out_what_the_press_does_not_read() {
         let samples: Vec<(String, u64)> = (0..13).map(|i| (format!("sample_{i}"), if i == 0 { 0 } else { 1_000 })).collect();

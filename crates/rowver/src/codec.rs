@@ -150,6 +150,7 @@ pub(crate) fn unpack(packed: Vec<u8>, w: usize, expected: usize, place: &str) ->
 mod tests {
     use super::*;
 
+    // FORMAT 7
     #[test]
     fn arrays_come_back_whole_and_a_wrong_length_is_refused() {
         let raw: Vec<u8> = (0..4000_u32)
@@ -171,6 +172,7 @@ mod tests {
         assert_eq!(unpack(pack(&zeros, 8), 8, zeros.len(), "x").unwrap(), zeros);
     }
 
+    // FORMAT 7
     #[test]
     fn a_frame_off_the_format_is_refused() {
         let raw: Vec<u8> = (0..300_u16).flat_map(u16::to_le_bytes).collect();
@@ -191,5 +193,19 @@ mod tests {
         let mut wide = good.clone();
         wide[5] = 18 << 3;
         assert!(said(wide).contains("window"));
+    }
+
+    // FORMAT 7
+    #[test]
+    fn a_frame_is_refused_before_decoding_when_its_values_would_take_more_than_it_can_give() {
+        let zeros = vec![0; 1 << 22];
+        let packed = pack(&zeros, 1);
+        let bound = most(packed.len());
+        assert_eq!(bound, packed.len() * 32_768 + 128 * 1024);
+        let past = unpack(packed.clone(), 1, bound + 1, "x").unwrap_err().to_string();
+        assert!(past.contains("too small to hold the values its record states"), "{past}");
+        // At the bound it is decoded, and refused only for what it decodes to.
+        let at = unpack(packed, 1, bound, "x").unwrap_err().to_string();
+        assert!(!at.contains("too small"), "{at}");
     }
 }

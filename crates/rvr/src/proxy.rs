@@ -138,6 +138,7 @@ fn init(hours: u32) -> Result<bool, String> {
 mod tests {
     use super::*;
 
+    // SPEC 10.4
     #[test]
     fn a_length_of_time_is_said_in_its_two_largest_units() {
         assert_eq!(left(3 * 86400 + 2 * 3600), "3 days 2 hours");

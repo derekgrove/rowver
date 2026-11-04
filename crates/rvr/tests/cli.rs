@@ -85,6 +85,7 @@ fn rvr(args: &[&str]) -> (i32, String) {
     )
 }
 
+// SPEC 5.1.6, 9.4
 #[test]
 fn diff_names_the_column_and_sample_that_changed() {
     let dir = Scratch::new("diff");
@@ -101,6 +102,7 @@ fn diff_names_the_column_and_sample_that_changed() {
     );
 }
 
+// SPEC 5.1.3, 5.1.5, 9.1, 9.2, 9.3
 #[test]
 fn validate_header_and_dump_read_a_pressed_file() {
     let dir = Scratch::new("read");
@@ -151,6 +153,7 @@ fn validate_header_and_dump_read_a_pressed_file() {
     assert!(said.starts_with(&format!("{file}: INVALID: ")), "{said}");
 }
 
+// SPEC 5.3.1, 5.3.2, 5.3.3, 6.1.1
 #[test]
 fn new_makes_a_study_that_expands_and_never_overwrites() {
     let dir = Scratch::new("new");
@@ -193,6 +196,7 @@ fn new_makes_a_study_that_expands_and_never_overwrites() {
     );
 }
 
+// SPEC 5.1.1, 5.1.3
 #[test]
 fn samples_alone_says_its_commands() {
     let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
@@ -223,6 +227,7 @@ fn said(args: &[&str]) -> (i32, String, String) {
     run(&args, &[], &[])
 }
 
+// SPEC 5.1.3, 9.2
 #[test]
 fn dump_all_prints_every_value_one_row_a_line() {
     let dir = Scratch::new("dump-all");
@@ -238,6 +243,7 @@ fn dump_all_prints_every_value_one_row_a_line() {
     assert!(code == 2 && out.is_empty() && err.contains("--files prints no column: give --all alone or with --columns"), "{err}");
 }
 
+// SPEC 5.1.5, 5.1.6, 9.1, 9.4
 #[test]
 fn diff_compares_labels_and_reading_failures_are_said_plainly() {
     let dir = Scratch::new("labels");
@@ -265,6 +271,7 @@ fn diff_compares_labels_and_reading_failures_are_said_plainly() {
     assert_eq!((code, out.as_str(), err), (2, "", format!("rvr diff: {missing} is not there\n")));
 }
 
+// SPEC 5.1.3
 #[cfg(unix)]
 #[test]
 fn an_argument_that_is_not_utf8_is_wrong_use() {
@@ -273,6 +280,7 @@ fn an_argument_that_is_not_utf8_is_wrong_use() {
     assert!(code == 2 && err.contains("the argument \"caf\u{fffd}.rvr\" is not UTF-8 text"), "{err}");
 }
 
+// SPEC 5.1.3, 10.2, 10.3
 #[test]
 fn keys_are_made_once_and_trusted_once_under_one_name() {
     let dir = Scratch::new("keys");
@@ -305,6 +313,7 @@ fn keys_are_made_once_and_trusted_once_under_one_name() {
     assert!(code == 1 && err.contains("one is 64 lowercase hexadecimal characters"), "{err}");
 }
 
+// SPEC 5.1.4, 10.4, 10.5
 #[test]
 fn proxy_says_what_is_wrong_with_a_proxy_and_a_key_without_the_network() {
     let dir = Scratch::new("proxy");

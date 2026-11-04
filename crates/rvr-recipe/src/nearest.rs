@@ -46,6 +46,7 @@ fn edits(a: &str, b: &str) -> usize {
 mod tests {
     use super::*;
 
+    // SPEC 1.4; RECIPE the-keys-exactly
     #[test]
     fn near_names_within_two_edits_or_a_tenth_of_the_length() {
         let names = ["choose", "tree", "trees", "files", "events"];

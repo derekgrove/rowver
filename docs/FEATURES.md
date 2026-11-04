@@ -275,8 +275,11 @@ expanded samples without asking any storage. [SPEC §3](SPEC.md#3-samplestoml) g
 
 It also records each sample's branch list, from its first file's tree, so that every check of
 the recipe against the branches is made from the lock alone. The 9 files of the 8-sample CMS Open
-Data H → ττ study resolve in 2.9 s over HTTPS (§12). If any sample fails, no lock is written, and
-each failure is reported with a suggestion where there is one. Resolve also lists any `.root` files in
+Data H → ττ study resolve in 2.9 s over HTTPS (§12). If any sample fails, or the recipe beside
+`samples.toml` does not fit what was found (a branch no sample has, a column of two kinds: the checks
+a press makes), no lock is written, the one already there is left as it was, and each failure is
+reported with a suggestion where there is one: a lock exists only for a study its recipe can be
+pressed from. Resolve also lists any `.root` files in
 the folders it read that no sample uses, as a check that none was left out. The lock is meant to
 be committed and reviewed like code ([SPEC §6](SPEC.md#6-resolving-rvr-samples-and-sampleslock)).
 

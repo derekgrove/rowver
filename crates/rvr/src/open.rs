@@ -298,6 +298,7 @@ pub(crate) fn connect(files: &[(usize, &File)], watch: &Arc<Watch>) -> (Option<S
 mod tests {
     use super::*;
 
+    // SPEC 7.2.3
     #[test]
     fn checksums_compare_as_numbers_and_only_when_both_are_known() {
         let file = |adler32: Option<&str>| File {

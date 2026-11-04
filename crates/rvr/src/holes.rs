@@ -120,6 +120,7 @@ pub fn fault_of(error: &hep_root::Error, seen: Option<&Seen>) -> Fault {
 mod tests {
     use super::*;
 
+    // SPEC 7.3.1, 7.4.2
     #[test]
     fn a_read_failure_is_named_by_what_it_is() {
         let compression = hep_root::Error::Compression { algorithm: "zlib".into(), message: "bad".into() };
@@ -139,6 +140,7 @@ mod tests {
         assert_eq!(fault_of(&deleted, None), Fault::Changed);
     }
 
+    // SPEC 7.3.1, 7.5.4; FORMAT 6.2
     #[test]
     fn every_kind_of_hole_is_one_the_reader_knows() {
         use Fault::*;

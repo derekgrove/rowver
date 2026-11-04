@@ -7,7 +7,7 @@ use crate::journal::Staged;
 use crate::open::{connect, Reach};
 use crate::plan::{Base, Input, Plan};
 use rowver::rvr::grouped as count;
-use crate::samples::remote::{Watch, AGAIN, QUIET};
+use crate::samples::remote::{second, Watch, AGAIN, QUIET};
 use crate::samples::some;
 use crate::take::{chosen_of, missed, ranges, sentence, take, Shared, Taken};
 use rowver::rvr::derived::fields;
@@ -28,7 +28,7 @@ pub fn press(plan: Plan) -> Result<usize, String> {
     let mut picked = plan.carries.then(|| crate::journal::pick_up(&staged, &plan.identity)).flatten();
     let resumed = picked.as_mut().map(|p| std::mem::take(&mut p.taken)).unwrap_or_default();
     let picked_up = !resumed.is_empty();
-    let watch = Arc::new(Watch::press(QUIET, AGAIN));
+    let watch = Arc::new(Watch::press(second() * QUIET, second() * AGAIN));
     let files: Vec<(usize, &File)> = plan.reads().iter().enumerate().filter(|(at, _)| !resumed.contains_key(at)).map(|(_, i)| (i.sample, &i.file)).collect();
     let (storage, offline) = connect(&files, &watch);
     let (spool, journal) = crate::journal::stage(&plan.target, &staged, &plan.identity, picked)?;

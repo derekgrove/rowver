@@ -413,6 +413,7 @@ impl Journal {
 mod tests {
     use super::*;
 
+    // SPEC 7.5.2, 7.5.3, 7.5.5
     #[test]
     fn only_the_lines_a_checkpoint_covers_are_picked_up() {
         let dir = std::env::temp_dir().join(format!("rvr-journal-{}", std::process::id()));

@@ -155,12 +155,22 @@ pub const ASKING: &[u64] = &[5, 15, 30];
 /// What a read answers when it stops waiting because another input failed.
 pub const STOPPED: &str = "Another input failed";
 
-/// How long a press waits with no answer from any storage before it asks about the network.
-pub const QUIET: Duration = Duration::from_secs(120);
-/// How long after a first probe that found no door the network is asked again.
-pub const AGAIN: Duration = Duration::from_secs(15);
-/// How long the doors asked are given to take a connection.
-const REACH: Duration = Duration::from_secs(5);
+/// The seconds a press waits with no answer from any storage before it asks about the network.
+pub const QUIET: u32 = 120;
+/// The seconds after a first probe that found no door before the network is asked again.
+pub const AGAIN: u32 = 15;
+/// The seconds the doors asked are given to take a connection.
+const REACH: u32 = 5;
+
+/// A second of waiting; in a debug build, `RVR_SECOND_MS` milliseconds when set, for the tests.
+pub fn second() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Some(ms) = std::env::var("RVR_SECOND_MS").ok().and_then(|ms| ms.parse().ok()) {
+        return Duration::from_millis(ms);
+    }
+    Duration::from_secs(1)
+}
+
 /// What the reads of one press share while they wait: `stop` ends every wait.
 #[derive(Default)]
 pub struct Watch {
@@ -306,7 +316,7 @@ impl Watch {
             let addresses = asked.iter().flat_map(|(_, (_, addresses))| addresses.iter().flatten().copied()).collect();
             (names, addresses, one_site)
         };
-        let found = reachable(&names, &addresses, REACH);
+        let found = reachable(&names, &addresses, second() * REACH);
         let mut last = heard.last.lock().unwrap_or_else(|e| e.into_inner());
         // A door that connects, or an answer while it was asked, says the network works.
         if found || heard.answers.load(Ordering::Relaxed) > answers {
@@ -450,7 +460,7 @@ pub fn patiently<T, E>(
             if watch.stop.load(Ordering::Acquire) || watch.lost() {
                 return Err(error);
             }
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            std::thread::sleep(second());
         }
     }
 }
@@ -496,7 +506,8 @@ pub fn read_again<T>(
 /// HTTPS to storage doors with the grid proxy, when there is one; folder listings are kept.
 pub struct Storage {
     agent: ureq::Agent,
-    listed: Mutex<HashMap<String, Result<Vec<Entry>, String>>>,
+    /// Each folder's listing, made by the first read to ask for it while the others wait.
+    listed: super::Once<String, Result<Vec<Entry>, String>>,
     pub proxy: Option<String>,
     /// How long a listing or digest that failed waits before it is asked again (`ASKING`).
     pub waits: &'static [u64],
@@ -517,7 +528,7 @@ impl Storage {
             grid_trust::agent(grid_trust::roots(ca).0, loaded).map_err(|e| e.to_string())?;
         Ok(Storage {
             agent,
-            listed: Mutex::new(HashMap::new()),
+            listed: Default::default(),
             proxy: proxy.map(str::to_owned),
             waits: ASKING,
             watch: Default::default(),
@@ -526,15 +537,7 @@ impl Storage {
 
     /// The files of a storage folder (not its folders), listed once and then remembered.
     pub fn list(&self, folder: &str) -> Result<Vec<Entry>, String> {
-        if let Some(done) = self.listed.lock().unwrap().get(folder) {
-            return done.clone();
-        }
-        let result = self.list_now(folder);
-        self.listed
-            .lock()
-            .unwrap()
-            .insert(folder.to_string(), result.clone());
-        result
+        self.listed.get(folder.to_owned(), || self.list_now(folder))
     }
 
     fn list_now(&self, folder: &str) -> Result<Vec<Entry>, String> {
@@ -887,7 +890,10 @@ impl HttpsFile {
             Err(ureq::Error::Status(400 | 416, _)) => return Ok(None),
             Err(e) => return Err(self.failed(&e)),
         };
-        *self.url.lock().unwrap() = to;
+        // Only a server that answered with bytes is kept: a fifth redirect is not one.
+        if reply.status() == 206 {
+            *self.url.lock().unwrap() = to;
+        }
         let boundary = reply
             .header("Content-Type")
             .and_then(super::multipart::boundary)
@@ -961,9 +967,9 @@ impl ByteSource for HttpsFile {
         }
         let range = format!("bytes={offset}-{}", offset + buf.len() as u64 - 1);
         let (to, reply) = self.ask(&range, &range, buf.len() as u64);
-        *self.url.lock().unwrap() = to;
         match reply {
             Ok(reply) if reply.status() == 206 => {
+                *self.url.lock().unwrap() = to;
                 use std::io::Read;
                 reply
                     .into_reader()
@@ -1029,10 +1035,82 @@ impl ByteSource for HttpsFile {
     }
 }
 
+/// The tests' HTTPS storage (tests/storage), for the tests below.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../tests/storage/server.rs"]
+mod server;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use super::server;
+
+    /// A file of `bytes` on the test storage, as a press reads it.
+    fn served(bytes: usize) -> (server::Server, Storage) {
+        let server = server::Server::start();
+        server.put("/f.root", vec![7; bytes]);
+        let storage = Storage::new(None, Some(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tls/authority"))).unwrap();
+        (server, storage)
+    }
+
+    // SPEC 7.2.5
+    #[test]
+    fn many_ranges_are_asked_256_a_request_six_at_once() {
+        let (server, storage) = served(40 << 20);
+        let file = HttpsFile::reading(&storage, "f.root", &server.url("/f.root"), 40 << 20);
+        // Every answer held until six requests are in: a seventh at once would show.
+        server.script(|_| server::Answer::Together(6, Box::new(server::Answer::Late(Duration::from_millis(50), Box::new(server::Answer::Serve)))));
+        let ranges: Vec<(u64, usize)> = (0..2000).map(|i| (i * 20_000, 100)).collect();
+        let read = file.read_ranges(&ranges).unwrap();
+        assert!(read.iter().all(|r| r.len() == 100 && r.iter().all(|b| *b == 7)));
+        let mut asked: Vec<usize> = server.taken().iter().map(server::Request::ranges).collect();
+        asked.sort_unstable();
+        assert_eq!(asked, [208, 256, 256, 256, 256, 256, 256, 256]);
+        assert_eq!(server.most_at_once(), 6);
+    }
+
+    // SPEC 7.2.5
+    #[test]
+    fn a_storage_that_refuses_several_ranges_is_asked_one_joined_range_a_request_from_then_on() {
+        let (server, storage) = served(40 << 20);
+        server.multipart(false);
+        let file = HttpsFile::reading(&storage, "f.root", &server.url("/f.root"), 40 << 20);
+        let ranges: Vec<(u64, usize)> = (0..2000).map(|i| (i * 20_000, 100)).collect();
+        assert_eq!(file.read_ranges(&ranges).unwrap().len(), 2000);
+        let asked = server.taken();
+        let after: Vec<_> = asked.iter().filter(|r| r.ranges() == 1).collect();
+        // Joined across gaps of up to 512 KiB, each at most 32 MiB: two, one gap of 19,900 bytes between.
+        let spans: Vec<u64> = after.iter().map(|r| {
+            let (a, b) = r.range.as_deref().unwrap().split_once('-').unwrap();
+            b.parse::<u64>().unwrap() - a.parse::<u64>().unwrap() + 1
+        }).collect();
+        assert_eq!(spans.len(), 2, "{asked:?}");
+        assert!(spans.iter().all(|s| *s <= 32 << 20) && spans.iter().sum::<u64>() == 1999 * 20_000 + 100 - 19_900, "{spans:?}");
+        // Later reads ask one range a request, without trying several again.
+        let far = [(0, 10), (1 << 20, 10)];
+        assert_eq!(file.read_ranges(&far).unwrap().len(), 2);
+        assert!(server.taken().iter().all(|r| r.ranges() == 1));
+    }
+
+    // SPEC 7.2.5
+    #[test]
+    fn one_part_answering_every_range_is_taken_unless_it_holds_far_more() {
+        let (server, storage) = served(40 << 20);
+        server.script(|_| server::Answer::OnePart);
+        let file = HttpsFile::reading(&storage, "f.root", &server.url("/f.root"), 40 << 20);
+        let near = [(0, 100), (300_000, 100)];
+        assert_eq!(file.read_ranges(&near).unwrap()[1], vec![7; 100]);
+        assert_eq!(server.taken().len(), 1, "taken as it is");
+        // 30 MiB for 200 bytes is more than twice them and 1 MiB: asked one at a time.
+        let far = [(0, 100), (30 << 20, 100)];
+        assert_eq!(file.read_ranges(&far).unwrap()[1], vec![7; 100]);
+        let asked: Vec<usize> = server.taken().iter().map(server::Request::ranges).collect();
+        assert_eq!(asked, [2, 1, 1]);
+    }
+
+    // SPEC 6.2.3
     #[test]
     fn listing_keeps_files_by_resourcetype() {
         let xml = r#"<D:multistatus xmlns:D="DAV:">
@@ -1064,6 +1142,7 @@ mod tests {
         }
     }
 
+    // SPEC 7.4.1, 7.4.4
     #[test]
     fn a_read_refused_by_a_busy_storage_is_asked_again_until_the_waits_run_out() {
         let shown = "https://door.example/f.root";
@@ -1100,6 +1179,7 @@ mod tests {
         );
     }
 
+    // SPEC 7.4.1, 7.4.3
     #[test]
     fn a_refusal_is_asked_again_only_where_it_may_pass() {
         let refused = |code| ureq::Error::Status(code, ureq::Response::new(code, "", "").unwrap());
@@ -1116,6 +1196,7 @@ mod tests {
         assert!(passing(&unaskable, true).is_none(), "{unaskable}");
     }
 
+    // SPEC 7.7.4
     #[test]
     fn a_traced_request_says_what_answered_it() {
         let ok = ureq::Response::new(206, "Partial Content", "");
@@ -1126,6 +1207,7 @@ mod tests {
         assert!(traced("bytes=0-9", 10, "f.root", &failed).starts_with("  GET bytes=0-9 (10 bytes) of f.root: failed: "));
     }
 
+    // SPEC 7.4.1, 7.4.5
     #[test]
     fn the_network_is_gone_only_when_no_host_that_answered_can_be_reached() {
         assert_eq!(host_port("https://eos.example:9000/store/f.root").as_deref(), Some("eos.example:9000"));
@@ -1208,12 +1290,14 @@ mod tests {
         }
     }
 
+    // SPEC 6.2.6, 7.4.1
     #[test]
     fn waits_are_said_in_seconds_or_minutes() {
         assert_eq!(waited(ASKING), "4 tries over 50 s");
         assert_eq!(waited(READING), "8 tries over 13 minutes");
     }
 
+    // SPEC 7.2.4
     #[test]
     fn redirects_are_read_against_the_url_that_sent_them() {
         let base = "https://door.example:1094/eos/a/file.root?x=1";

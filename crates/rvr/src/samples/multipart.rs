@@ -113,6 +113,7 @@ mod tests {
     }
 
     /// Parts are read with their places, including bytes that look like a boundary or a line.
+    // SPEC 7.2.5
     #[test]
     fn parts_are_read_with_their_places() {
         assert_eq!(
@@ -144,6 +145,7 @@ mod tests {
     }
 
     /// An answer that is cut short, misplaced, or far too large is refused.
+    // SPEC 7.2.5
     #[test]
     fn broken_answers_are_refused() {
         let sent = answer(&[(10, b"abcdef")], true);

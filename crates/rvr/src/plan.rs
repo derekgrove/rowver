@@ -247,6 +247,12 @@ pub fn checked(texts: &Texts, choose: &Choose) -> Result<Checked, String> {
             None
         }
     };
+    agreed(texts, samples, recipe, lock, said, choose)
+}
+
+/// The agreement check (docs/SPEC.md §2.3) on what the validators made of `texts` (`samples`
+/// whether samples.toml passed, `said` what they refused), or every problem found.
+pub fn agreed(texts: &Texts, samples: bool, recipe: Option<Recipe>, lock: Option<Lock>, mut said: Vec<String>, choose: &Choose) -> Result<Checked, String> {
     let mut planned = None;
     if let Some(lock) = lock {
         if samples {
@@ -510,6 +516,7 @@ fn compared(lock: &Lock, reader: &Recipe, columns: &[&Expression]) -> Result<Com
 
 #[cfg(test)]
 mod tests {
+    // SPEC 2.3; FORMAT 3
     #[test]
     fn kept_entries_are_among_the_chosen_and_out_of_every_hole() {
         let among = super::among;
@@ -521,6 +528,7 @@ mod tests {
         assert!(!among(&[1, 4], 10, Some(&[1, 3, 5]), &[]), "not chosen");
     }
 
+    // SPEC 2.4, 3.8.1
     #[test]
     fn the_plan_reads_a_storage_file_from_its_doors_https_url() {
         use rowver::study::lock::File;

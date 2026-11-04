@@ -35,6 +35,23 @@ fn size(bytes: u64) -> String {
     }
 }
 
+/// Values made once a run, each by the first to ask for it while the others wait (a folder's listing).
+pub(crate) struct Once<K, V>(std::sync::Mutex<std::collections::HashMap<K, std::sync::Arc<std::sync::OnceLock<V>>>>);
+
+impl<K, V> Default for Once<K, V> {
+    fn default() -> Self {
+        Once(Default::default())
+    }
+}
+
+impl<K: Eq + std::hash::Hash, V: Clone> Once<K, V> {
+    /// The value for `key`, made by `make` when no one has made it yet.
+    pub fn get(&self, key: K, make: impl FnOnce() -> V) -> V {
+        let slot = self.0.lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_default().clone();
+        slot.get_or_init(make).clone()
+    }
+}
+
 /// The grid proxy to present, and what to say of it.
 pub(crate) struct Proxy {
     pub path: Option<String>,
@@ -192,8 +209,66 @@ fn expand(path: &Path, json: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// The recipe.toml beside samples.toml at `path`, as text and as its validator reads it; at a
+/// terminal, the tables it leaves out are offered first. resolve writes no lock a recipe cannot be
+/// pressed from.
+fn recipe_beside(path: &Path) -> Result<(String, rvr_recipe::Recipe), String> {
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let text = crate::texts::study_file(dir, "recipe.toml")?;
+    match crate::texts::read_recipe(&text) {
+        Ok(recipe) => Ok((text, recipe)),
+        Err(_) if crate::tables::offer(dir, &text, "resolve", "go on resolving")? => {
+            let text = crate::texts::study_file(dir, "recipe.toml")?;
+            crate::texts::read_recipe(&text).map(|recipe| (text, recipe))
+        }
+        Err(said) => Err(said),
+    }
+}
+
+/// A sample as its first file makes it, and its branch list.
+type First = (lock::Sample, Branches);
+
+/// The recipe checked against each sample as its first file makes it, once every sample has one
+/// (or failed first), so that a recipe that does not fit stops resolve before every other file is asked.
+struct Early<'a> {
+    recipe: &'a rvr_recipe::Recipe,
+    /// Each sample's report: none yet, or its first (`None` when it failed before one).
+    firsts: std::sync::Mutex<Vec<Option<Option<First>>>>,
+    refused: std::sync::OnceLock<String>,
+}
+
+impl Early<'_> {
+    /// Sample `i` as its first file makes it, or `None` when it failed before; once a sample.
+    fn tell(&self, ctx: &Context, i: usize, first: Option<First>) {
+        let mut held = self.firsts.lock().unwrap_or_else(|e| e.into_inner());
+        if held[i].is_some() {
+            return;
+        }
+        held[i] = Some(first);
+        if held.iter().any(Option::is_none) {
+            return;
+        }
+        let (samples, branches): (Vec<lock::Sample>, Vec<Branches>) = held.iter().flatten().flatten().cloned().unzip();
+        let asked: Vec<Events> = samples.iter().map(|s| s.events).collect();
+        let lock = Lock { resolved: String::new(), samples_toml_sha256: String::new(), samples, branches };
+        if let Err(said) = crate::agree::recipe(self.recipe, &lock, &asked) {
+            let _ = self.refused.set(said.join("\n"));
+            ctx.stop();
+        }
+    }
+}
+
+/// What resolve says when the recipe does not fit the samples (`said`, one problem a line).
+fn unfit(said: &str) -> String {
+    for line in said.lines() {
+        println!("  FAIL  {line}");
+    }
+    "the recipe does not fit the samples as the lines marked FAIL say, so samples.lock was not written (a press would refuse them): fix them, then run resolve again.".into()
+}
+
 fn resolve_all(path: &Path) -> Result<(), String> {
     let (text, made) = read_samples(path, true)?;
+    let (recipe_text, recipe) = recipe_beside(path)?;
     let proxy = proxy();
     let remote = made.iter().any(|s| s.files.iter().any(|f| f.contains("://")));
     if let Some(short) = proxy.short.as_ref().filter(|_| remote) {
@@ -205,15 +280,19 @@ fn resolve_all(path: &Path) -> Result<(), String> {
     let next = std::sync::atomic::AtomicUsize::new(0);
     type Resolved = Result<(lock::Sample, Branches), String>;
     let results: Vec<std::sync::Mutex<Option<Resolved>>> = made.iter().map(|_| Default::default()).collect();
+    let early = Early { recipe: &recipe, firsts: std::sync::Mutex::new(vec![None; made.len()]), refused: Default::default() };
     std::thread::scope(|s| {
         for _ in 0..12 {
             s.spawn(|| loop {
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let Some(sample) = made.get(i) else { break };
-                *results[i].lock().unwrap() = Some(resolve::resolve(&ctx, sample));
+                let resolved = resolve::resolve(&ctx, sample, &|first, list| early.tell(&ctx, i, Some((first, list.clone()))));
+                early.tell(&ctx, i, None);
+                *results[i].lock().unwrap() = Some(resolved);
             });
         }
     });
+    let refused = early.refused.get().cloned();
     let mut locked = Vec::new();
     let mut lists: Vec<Branches> = Vec::new();
     let mut failed = 0;
@@ -228,6 +307,8 @@ fn resolve_all(path: &Path) -> Result<(), String> {
                 }
                 locked.push(l);
             }
+            // A sample stopped because the recipe does not fit says nothing of its own.
+            Err(why) if refused.is_some() && why.ends_with(remote::STOPPED) => {}
             Err(why) => {
                 println!("  FAIL  {}: {why}", sample.name);
                 failed += 1;
@@ -242,6 +323,9 @@ fn resolve_all(path: &Path) -> Result<(), String> {
         size(distinct.values().sum()),
         started.elapsed().as_secs_f64()
     );
+    if let Some(said) = refused {
+        return Err(unfit(&said));
+    }
     unread(&ctx, &distinct);
     if failed > 0 {
         return Err(format!("{failed} of {} samples could not be resolved; samples.lock was not written. Fix the lines marked FAIL and run resolve again.", made.len()));
@@ -254,7 +338,13 @@ fn resolve_all(path: &Path) -> Result<(), String> {
     };
     let body = lock.write()?;
     // What resolve writes is what every reader checks: a lock that does not read back is a bug.
-    Lock::read(&body).map_err(|p| format!("the lock resolve made does not check out (a bug in rvr: please report it): {p}"))?;
+    let read = Lock::read(&body).map_err(|p| format!("the lock resolve made does not check out (a bug in rvr: please report it): {p}"))?;
+    // The agreement check a press makes, but for its options and the file it builds on.
+    let texts = crate::texts::Texts { recipe: recipe_text, samples: text, lock: body.clone() };
+    let choose = crate::plan::Choose::Options(Choice::default());
+    if let Err(said) = crate::plan::agreed(&texts, true, Some(recipe), Some(read), Vec::new(), &choose) {
+        return Err(unfit(&said));
+    }
     let out = path.with_file_name("samples.lock");
     crate::tables::put(&out, &body).map_err(|e| format!("{} cannot be written ({e}), so it is the one it was: make it and its folder writable, then resolve again.", out.display()))?;
     println!("Wrote {} ({}).", out.display(), size(body.len() as u64));
@@ -487,6 +577,7 @@ pub const USAGE: &str = "usage:
 mod tests {
     use super::*;
 
+    // SPEC 1.4, 3.1.4
     #[test]
     fn what_samples_toml_leaves_out_is_written_in_its_place() {
         let missing = [samples::FORMAT, samples::VERSION, samples::TABLES[0], samples::TABLES[1]];

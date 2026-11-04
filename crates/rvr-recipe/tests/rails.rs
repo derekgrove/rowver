@@ -25,6 +25,7 @@ fn flat(kind: Kind, values: Vec<i64>) -> Array {
     Array::Event(Values::whole(kind, values))
 }
 
+// RECIPE the-keys-exactly, mistakes; SPEC 1.4, 1.5, 4.1.1, 4.1.2, 4.1.3, 4.1.4, 4.1.5
 #[test]
 fn a_recipe_with_many_problems_is_refused_with_all_of_them() {
     let said = refused("titel = \"x\"\n[define]\ngood = \"cnt(Jet_pt > 30)\"\n[keep]\n\"two jets\" = \"count(good) >= 2\"\nmet = { if = \"sample.era == 3\", aply = \"MET_pt > 30\" }\n[columns]\nht = { value = \"sum(Jet_pt, 1)\", stored = \"f2\" }\n[totals]\nsumw = { value = \"genWeight\", trees = \"Runs\" }\n[derived]\nr = \"ht / nothing\"\n");
@@ -56,6 +57,7 @@ fn a_recipe_with_many_problems_is_refused_with_all_of_them() {
     assert!(both.0.contains('\n') && !both.line().contains('\n') && both.line().contains("\"titel\"; it takes") && both.line().contains("; A recipe has no key \"x\""), "{}", both.line());
 }
 
+// RECIPE mistakes, functions-exactly, defined-names, values, operators, text-branches-and-stored-types; SPEC 1.5, 4.1.5
 #[test]
 fn functions_and_their_values_are_checked_as_the_recipe_is_read() {
     // The name and number of values of each call, inside out: an argument's own mistake hides none.
@@ -82,6 +84,7 @@ fn functions_and_their_values_are_checked_as_the_recipe_is_read() {
     }
 }
 
+// RECIPE operators, two-kinds-together, functions-exactly, choosing-members-of-a-list, the-parts-of-a-recipe, mistakes; SPEC 4.1.5
 #[test]
 fn truth_values_stand_wherever_one_is_needed() {
     // Refused as the recipe is read where the text tells its kind.
@@ -114,6 +117,7 @@ fn truth_values_stand_wherever_one_is_needed() {
     assert_eq!(scope.mask(&parse("not (nJet > 1)").unwrap(), 2).unwrap(), [true, false]);
 }
 
+// RECIPE values, cuts-for-some-samples-only, functions-exactly; SPEC 4.3.2
 #[test]
 fn a_comparison_with_a_missing_field_is_false_and_arithmetic_with_one_an_error() {
     let jets = Array::object(&[2, 0], Values::float(Kind::F4, vec![40.0, 20.0])).unwrap();
@@ -128,6 +132,7 @@ fn a_comparison_with_a_missing_field_is_false_and_arithmetic_with_one_an_error()
     assert!(run(&columns, &[], "not sample.vbf").unwrap_err().0.starts_with("sample.vbf is used as a true-or-false value"));
 }
 
+// RECIPE kinds-exactly, two-kinds-together
 #[test]
 fn whole_numbers_compare_exactly() {
     let big = 1_i64 << 53;
@@ -141,6 +146,7 @@ fn whole_numbers_compare_exactly() {
     assert_eq!(run(&columns, &[], "i + u").unwrap(), Array::Event(Values::float(Kind::F8, vec![(big + 1) as f64 + big as f64, u64::MAX as f64 - 1.0, 2.0 * i64::MAX as f64])));
 }
 
+// RECIPE conversions, values-the-recipe-cannot-take, what-differs-from-numpy; SPEC 2.6, 4.4.2
 #[test]
 fn conversions_truncate_round_once_and_refuse_what_does_not_fit() {
     let floats = |values: Vec<f64>| Values::float(Kind::F8, values);
@@ -175,6 +181,7 @@ fn conversions_truncate_round_once_and_refuse_what_does_not_fit() {
     assert_eq!(lists.convert(Kind::I4).unwrap_err().1, Some(2));
 }
 
+// RECIPE values-the-recipe-cannot-take, choosing-members-of-a-list, pairs-within-a-list, numbers, functions-exactly; SPEC 2.6
 #[test]
 fn a_value_the_expression_cannot_take_is_a_data_error_of_its_event() {
     let jets = Array::object(&[1, 2, 3], Values::float(Kind::F4, vec![1.0; 6])).unwrap();
@@ -197,6 +204,7 @@ fn a_value_the_expression_cannot_take_is_a_data_error_of_its_event() {
     assert_eq!(run(&[("q", charges)], &[], "2 ** q").unwrap_err().1, Some(2));
 }
 
+// RECIPE how-deep; SPEC 4.1.5
 #[test]
 fn every_recursive_construct_counts_toward_one_depth_limit() {
     let deepest = |open: &str, close: &str, levels: usize| format!("{}x{}", open.repeat(levels - 1), close.repeat(levels - 1));
@@ -232,6 +240,7 @@ fn every_recursive_construct_counts_toward_one_depth_limit() {
     assert!(read.expression(&format!("{}a", "-".repeat(41))).is_err());
 }
 
+// RECIPE signed-zeros, numbers, operators, functions-exactly
 #[test]
 fn signed_zeros_are_numpys() {
     let x = Array::Event(Values::float(Kind::F8, vec![-4.0, 4.0, -0.0, 0.0]));
@@ -249,6 +258,7 @@ fn signed_zeros_are_numpys() {
     assert_eq!(bits("-x"), [false, true, false, true]);
 }
 
+// RECIPE functions-exactly, pairs-within-a-list; FORMAT 10
 #[test]
 fn events_whose_pairs_are_too_many_together_are_worked_out_in_runs_of_fewer() {
     // 1,028 events of 362 members each, every one under the limit, make 67,170,548 pairs together,
@@ -275,6 +285,7 @@ fn events_whose_pairs_are_too_many_together_are_worked_out_in_runs_of_fewer() {
     assert_eq!(whole, flat(Kind::I8, want));
 }
 
+// RECIPE functions-exactly
 #[test]
 fn runs_are_joined_whatever_their_lists_begin_at() {
     // A run whose lists begin past the start of its values, and hold fewer than all of them.
@@ -292,6 +303,7 @@ fn four() -> Held {
     Held(BTreeMap::from([("x".to_owned(), x), ("l".to_owned(), l)]))
 }
 
+// SPEC 4.2.2
 #[test]
 fn picked_rows_are_the_rows_at_their_positions_and_every_row_is_the_columns_themselves() {
     let held = four();
@@ -303,6 +315,7 @@ fn picked_rows_are_the_rows_at_their_positions_and_every_row_is_the_columns_them
     assert_eq!(every.column("l").unwrap(), four().column("l").unwrap());
 }
 
+// RECIPE defined-names, mistakes
 #[test]
 fn a_missing_column_and_a_defined_name_a_column_has_are_told_by_kind_not_words() {
     let defines = BTreeMap::from([("x".to_owned(), parse("1").unwrap())]);
@@ -317,6 +330,7 @@ fn a_missing_column_and_a_defined_name_a_column_has_are_told_by_kind_not_words()
     assert_eq!(missing.of_event(Some(3)).missing(), Some("y"));
 }
 
+// RECIPE defined-names
 #[test]
 fn a_defined_name_worked_out_in_one_scope_is_known_to_another() {
     let defines = BTreeMap::from([("big".to_owned(), parse("x > 1").unwrap())]);
@@ -332,6 +346,7 @@ fn a_defined_name_worked_out_in_one_scope_is_known_to_another() {
     assert_eq!(columns.evaluate(&parse("big").unwrap()).unwrap(), Array::Event(Values::whole(Kind::B1, vec![1, 1, 1, 1])));
 }
 
+// RECIPE conversions
 #[test]
 fn a_promotion_that_does_not_fit_is_refused_not_a_panic() {
     assert!(Values::float(Kind::F8, vec![f64::NAN]).convert(Kind::I4).is_err());
@@ -339,6 +354,7 @@ fn a_promotion_that_does_not_fit_is_refused_not_a_panic() {
     assert_eq!(Values::whole(Kind::B1, vec![1]).convert(Kind::I8).unwrap(), Values::whole(Kind::I8, vec![1]));
 }
 
+// RECIPE operators, values, mistakes; SPEC 1.5, 4.1.5
 #[test]
 fn a_slip_of_syntax_says_what_to_write() {
     let said = |text: &str| parse(text).unwrap_err().0;

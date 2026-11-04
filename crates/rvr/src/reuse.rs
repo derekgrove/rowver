@@ -267,6 +267,7 @@ n_hard = "count(hard_jet)"
         cuts(&Recipe::read(old).unwrap()) == cuts(&Recipe::read(new).unwrap())
     }
 
+    // SPEC 8.2, 8.5
     #[test]
     fn a_column_or_a_cut_is_the_same_only_with_everything_it_reaches() {
         let added = BASE.replace("[columns]", "[columns]\nht = \"sum(Jet_pt[good_jet])\"");

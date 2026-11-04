@@ -824,7 +824,11 @@ is dropped or renamed only with it, or after it.
 
 Any other top-level key belongs to a tool: one object per tool, named for it (one or more ASCII
 letters, digits, `_`, `-` and `.`), holding whatever JSON the tool likes, within
-§1's rules. `rvr press` never adds one. Any program that saves a `.rvr` file writes back
+§1's rules. A key that is a slip of one of the format's own (`rowver`, `data`, `made`, `derived`,
+`signature`) is refused as a misspelling, naming the key it is near: compared ignoring case, at most
+one edit (a character inserted, deleted or replaced) from `data` or `made`, or at most two from
+`rowver`, `derived` or `signature` (so `Data`, `mde` and `signatur` are refused, `dash` and `view`
+are tool keys). `rvr press` never adds one. Any program that saves a `.rvr` file writes back
 every tool key it found: `rvr press` those of the file it replaces at its target, when that file
 opens. Tool keys are outside every checksum and the signature, so a tool can
 change its own key without breaking either.

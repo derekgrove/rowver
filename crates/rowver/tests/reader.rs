@@ -9,20 +9,13 @@ use rowver::rvr::{validate_file, Reader};
 use rowver::write::Values;
 use serde_json::{json, Value};
 
-fn names(header: &Value) -> Vec<String> {
-    header["data"]["cols"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["name"].as_str().unwrap().to_owned())
-        .collect()
-}
-
+// SPEC 1.7; FORMAT 14
 #[test]
 fn the_format_version_is_the_crate_major_version() {
     assert_eq!(rowver::VERSION.to_string(), env!("CARGO_PKG_VERSION_MAJOR"));
 }
 
+// FORMAT 3, 4, 7
 #[test]
 fn reader_gives_the_columns_the_fixture_holds() {
     let path = written(&golden(), "fixture");
@@ -41,18 +34,39 @@ fn reader_gives_the_columns_the_fixture_holds() {
     assert_eq!(reader.sample().unwrap(), [0, 0, 0, 1, 1]);
 }
 
+// FORMAT 3, 7
 #[test]
 fn a_header_declaring_more_rows_than_its_arrays_hold_is_refused_not_allocated() {
     let (mut header, arrays) = split(&golden());
-    header["data"]["rows"] = (1_u64 << 40).into();
-    let bytes = to_bytes(&header, &[arrays]);
-    let path = written(&bytes, "rows");
-    // Opening may refuse the header; reading a column must refuse it rather than ask for 8 TB.
-    if let Ok(reader) = Reader::open(&path) {
-        assert!(reader.sample().is_err());
-        for name in names(&header) {
-            assert!(reader.column(&name).is_err(), "{name}");
-        }
+    // Rows that do not add up are refused on opening.
+    let mut short = header.clone();
+    short["data"]["rows"] = (1_u64 << 40).into();
+    let Err(said) = Reader::open(written(&to_bytes(&short, std::slice::from_ref(&arrays)), "rows")) else { panic!("opened") };
+    assert!(said.to_string().contains("rows"), "{said}");
+    // 2^39 rows of sample B, every count agreeing: the header opens, and each array, whose
+    // frame could not give that many values, is refused before anything is allocated for them.
+    let huge: u64 = 1 << 39;
+    let rows = header["data"]["rows"].as_u64().unwrap() - header["data"]["samples"][1]["rows"].as_u64().unwrap() + huge;
+    header["data"]["rows"] = rows.into();
+    header["data"]["samples"][1]["rows"] = huge.into();
+    for file in header["data"]["files"].as_array_mut().unwrap().iter_mut().filter(|f| f["sample"] == "B") {
+        file["rows"] = huge.into();
+    }
+    let b = &mut header["made"]["files"]["B"];
+    b["events"] = json!({"choose": "all"});
+    for file in b["files"].as_object_mut().unwrap().values_mut() {
+        file["entries"] = huge.into();
+        file.as_object_mut().unwrap().remove("take");
+    }
+    b["metadata"]["events_total"] = huge.into();
+    b["metadata"]["events_read"] = huge.into();
+    let header = sealed(header);
+    let reader = Reader::open(written(&to_bytes(&header, &[arrays]), "huge")).unwrap_or_else(|e| panic!("{e}"));
+    let refused = |e: rowver::Error| assert!(e.to_string().contains("too small to hold the values its record states"), "{e}");
+    refused(reader.sample().unwrap_err());
+    for column in header["data"]["cols"].as_array().unwrap() {
+        let Err(e) = reader.column(column["name"].as_str().unwrap()) else { panic!("{column} read") };
+        refused(e);
     }
 }
 
@@ -66,6 +80,7 @@ fn opens(header: &Value) -> Result<(), String> {
     opened.map_err(|e| e.to_string())
 }
 
+// SPEC 1.5; FORMAT 1, 13, 14
 #[test]
 fn another_version_is_refused_with_what_to_do() {
     let (mut header, _) = rebuilt(10.);
@@ -77,6 +92,7 @@ fn another_version_is_refused_with_what_to_do() {
     );
 }
 
+// SPEC 9.2; FORMAT 6, 8
 #[test]
 fn a_made_without_its_study_is_refused_but_can_be_inspected() {
     let (header, arrays) = rebuilt(10.);
@@ -98,6 +114,7 @@ fn a_made_without_its_study_is_refused_but_can_be_inspected() {
     assert!(checked.is_err() && reader.column("MET").unwrap().is_some());
 }
 
+// FORMAT 3, 6.1, 12
 #[test]
 fn the_event_choice_is_made_again_and_checked() {
     let (header, _) = rebuilt(10.);
@@ -116,6 +133,7 @@ fn the_event_choice_is_made_again_and_checked() {
     assert!(opens(&sealed(fewer)).is_err());
 }
 
+// FORMAT 1, 6
 #[test]
 fn a_file_record_holds_nothing_but_its_fields() {
     let (header, _) = rebuilt(10.);
@@ -125,6 +143,7 @@ fn a_file_record_holds_nothing_but_its_fields() {
     assert!(opens(&sealed(served)).unwrap_err().contains("served"));
 }
 
+// FORMAT 8, 9, 11
 #[test]
 fn a_signed_header_that_changed_is_refused() {
     let (mut header, _) = rebuilt(10.);
@@ -153,6 +172,7 @@ fn holed(holes: &[(&str, &str, Value)], counts: [(u64, u64); 2]) -> Value {
     sealed(header)
 }
 
+// FORMAT 5, 6, 6.2
 #[test]
 fn holes_are_ranges_no_row_lies_in_and_the_counts_hold() {
     let hole = |first: u64, last: u64, kind: &str| json!({"entries": [first, last], "kind": kind, "why": "basket 2 does not decompress"});
@@ -195,6 +215,7 @@ fn holes_are_ranges_no_row_lies_in_and_the_counts_hold() {
 /// A sample's totals are its files' totals, finite doubles, summed in their order into its
 /// metadata, and every file the press read holds each total the recipe asks for; anything else is
 /// refused.
+// SPEC 4.5.3; FORMAT 5, 6
 #[test]
 fn a_samples_totals_are_its_files_totals_summed() {
     let totaled = |total: Value, said: Value, asked: &str| {
@@ -228,6 +249,7 @@ fn a_samples_totals_are_its_files_totals_summed() {
     assert!(less.contains(".totals holds [\"sumw\"]"), "{less}");
 }
 
+// SPEC 1.5
 #[test]
 fn a_failed_read_is_said_in_plain_words() {
     let path = written(&golden(), "plain");
@@ -243,6 +265,7 @@ fn a_failed_read_is_said_in_plain_words() {
     assert!(said.ends_with("is a folder, not a file: name a file in it"), "{said}");
 }
 
+// FORMAT 1
 #[cfg(unix)]
 #[test]
 fn the_header_text_is_the_file_opened_even_with_another_renamed_over_it() {
@@ -254,3 +277,4 @@ fn the_header_text_is_the_file_opened_even_with_another_renamed_over_it() {
     let start = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
     assert_eq!(reader.header_text().unwrap(), &bytes[12..start]);
 }
+

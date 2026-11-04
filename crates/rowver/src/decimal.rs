@@ -117,6 +117,7 @@ pub(crate) fn nice(low: Decimal, high: Decimal, whole: bool) -> [Decimal; 2] {
 mod tests {
     use super::*;
 
+    // FORMAT 4
     #[test]
     fn nice_rounds_each_end_outward_to_two_digits_in_decimal() {
         let floats = |lo: f64, hi: f64| nice(Decimal::of(lo), Decimal::of(hi), false).map(Decimal::to_f64);
@@ -142,6 +143,7 @@ mod tests {
         assert_eq!(wholes(i64::MIN.into(), i64::MAX.into()), [-9_300_000_000_000_000_000, 9_300_000_000_000_000_000]);
     }
 
+    // FORMAT 4
     #[test]
     fn a_json_number_is_the_value_it_writes() {
         let whole = |text: &str| Decimal::parse(text).and_then(Decimal::to_whole);

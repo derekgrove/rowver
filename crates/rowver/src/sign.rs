@@ -95,6 +95,7 @@ pub fn bytes<const N: usize>(text: &str) -> Result<[u8; N]> {
 mod tests {
     use super::*;
 
+    // FORMAT 9, 11
     #[test]
     fn a_signature_holds_until_the_header_changes() {
         let mut header =

@@ -184,6 +184,7 @@ mod tests {
         usage: "",
     };
 
+    // SPEC 5.1.2, 5.1.3, 5.1.4, 7.1.2
     #[test]
     fn flags_are_read_one_way_and_wrong_use_is_said() {
         let read = |args: &[&str]| super::read(&PRESS, args);

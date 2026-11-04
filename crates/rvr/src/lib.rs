@@ -394,6 +394,7 @@ fn said(file: &str, verdict: &Result<(usize, usize, String), String>) -> bool {
 #[cfg(test)]
 mod tests {
     /// Every command and each of its flags is in its own usage and in what rvr --help prints.
+    // SPEC 5.1.3
     #[test]
     fn every_command_and_flag_is_in_both_usages() {
         let help = format!("{}\n\n{}", super::USAGE, super::samples::USAGE);
@@ -407,6 +408,7 @@ mod tests {
     }
 
     /// A short flag is in its command's usage, and in rvr's, beside its long one.
+    // SPEC 5.1.2
     #[test]
     fn every_short_flag_is_in_the_usage_beside_its_long_one() {
         for command in super::COMMANDS {

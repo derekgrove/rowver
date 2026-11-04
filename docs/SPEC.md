@@ -485,8 +485,10 @@ files (`*.rvr.derive`, `*.rvr.refill`, `*.rvr.refilled`, and `*.rvr-new`: those 
 
 ### 5.4 `rvr branches`
 
-**5.4.1** Lists every branch of the first file of the study's first sample (or of `--sample NAME`),
-from the sample's branch list in the lock: no file is opened.
+**5.4.1** Lists every branch of the first file of the study's first sample (or of `--sample NAME`):
+from the sample's branch list in the lock when the study has one (no file is opened), else from
+that file itself, found through `samples.toml` (only that sample's first file is found and opened,
+and nothing is written), so that a study's branches can be listed before its recipe is written.
 
 **5.4.2** One line per branch, ordered by name ignoring case: its name as a recipe writes it, its
 type, and its shape (`flat`, `jagged`, `N per event`, or `jagged, N per element`). Branches rvr cannot read follow under
@@ -517,8 +519,14 @@ No storage is asked.
 
 ### 6.2 `rvr samples resolve FILE`
 
-**6.2.1** Runs the samples validator (offering, at a terminal, what §3.1 lets it offer), then finds
-every file of every sample and writes `samples.lock` beside `FILE`.
+**6.2.1** Runs the samples validator (offering, at a terminal, what §3.1 lets it offer) and the
+recipe validator on the `recipe.toml` beside `FILE` (offering what §4.1.6 lets it offer; a study
+with no `recipe.toml` is refused: `rvr new` writes one), then finds every file of every sample,
+runs the agreement check (§2.3) on the samples, the recipe and the lock it would write (every part
+of it but the options and the earlier file, which belong to a press; each sample's event choice is
+the one `samples.toml` gives, as the study as written must press with no options), and writes
+`samples.lock` beside `FILE` only when every check passes. A lock exists only when the study's recipe can be
+pressed from it: what is left to fail is the data streaming in (§2.6).
 
 **6.2.2** For each file it records the identity a press checks before reading it: its size in bytes,
 its adler32 (when its storage gives one), its ROOT UUID and its tree's entries. For each sample it
@@ -541,7 +549,8 @@ once is not listed again in that run.
 **6.2.6** A listing or `HEAD` that fails as a busy storage fails (§7.4) is asked again after 5, 15
 and 30 seconds.
 
-**6.2.7** All or nothing: when any sample fails, no lock is written, and each failure is a line
+**6.2.7** All or nothing: when any sample fails, or the agreement check refuses, no lock is written
+(an existing one is left as it was), and each failure is a line
 `  FAIL  NAME: why`, with the fix: the nearest names in the folder for a name that matches nothing,
 the trees a file has for a tree it lacks.
 

@@ -123,6 +123,7 @@ fn each_file(entries: &[u64], n: u64, seed: u64, mut each: impl FnMut(usize, u64
 mod tests {
     use super::*;
 
+    // SPEC 7.1.1; FORMAT 6.1
     #[test]
     fn a_choice_is_exactly_n_ascending_and_the_same_for_the_same_seed() {
         let mut seen = Vec::new();

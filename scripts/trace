@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Every rule of docs/SPEC.md, docs/FORMAT.md and the recipe README that no test names, and every
+test that names none. A test names the rules it shows in comment lines just above it:
+`// SPEC 7.4.1, 7.4.2; FORMAT 6.2; RECIPE operators` (`#` in Python). Prints nothing when all is
+traced; exits 1 otherwise."""
+
+import pathlib, re, sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def slug(heading):
+    """GitHub's anchor for a heading."""
+    text = re.sub(r"[^\w\- ]", "", heading.strip().lower())
+    return text.replace(" ", "-")
+
+
+def rules():
+    """Every rule, by document: SPEC's numbered statements, FORMAT's sections and its running
+    example, the README's sections."""
+    spec = (ROOT / "docs/SPEC.md").read_text()
+    form = (ROOT / "docs/FORMAT.md").read_text()
+    recipe = (ROOT / "crates/rvr-recipe/README.md").read_text()
+    return {
+        "SPEC": re.findall(r"^\*\*(\d+(?:\.\d+)+)\b", spec, re.M),
+        "FORMAT": ["example"] + re.findall(r"^##+ (\d+(?:\.\d+)?)\.? ", form, re.M),
+        "RECIPE": [slug(h) for h in re.findall(r"^##+ (.+)$", recipe, re.M)],
+    }
+
+
+def sources():
+    """Every file that holds tests, with the line test code starts on."""
+    for path in sorted(ROOT.glob("crates/*/tests/**/*.rs")) + [ROOT / "crates/rvr/build.rs"]:
+        yield path, 0
+    for path in sorted(ROOT.glob("crates/*/src/**/*.rs")):
+        lines = path.read_text().split("\n")
+        start = next((i for i, l in enumerate(lines) if l.strip() == "#[cfg(test)]"), None)
+        if start is not None:
+            yield path, start
+    for path in sorted(ROOT.glob("crates/rowver-py/tests/*.py")):
+        yield path, 0
+
+
+TAG = re.compile(r"^\s*(?://|#)\s*((?:SPEC|FORMAT|RECIPE) .*)$")
+TEST = re.compile(r"^\s*(?:(?:pub )?(?:async )?fn (\w+)|def (test\w*))\s*\(")
+
+
+def tests():
+    """Every test, with the rules it names: (where, name, [(document, rule)])."""
+    for path, start in sources():
+        lines = path.read_text().split("\n")
+        python = path.suffix == ".py"
+        for i in range(start, len(lines)):
+            match = TEST.match(lines[i])
+            if not match:
+                continue
+            j, marked, tags = i - 1, python, []
+            while j >= 0 and re.match(r"^\s*(//|#|@)", lines[j]):
+                marked |= "#[test]" in lines[j]
+                tag = TAG.match(lines[j])
+                if tag:
+                    for part in tag.group(1).split(";"):
+                        doc, _, ids = part.strip().partition(" ")
+                        tags += [(doc, rule.strip()) for rule in ids.split(",") if rule.strip()]
+                j -= 1
+            if marked:
+                yield f"{path.relative_to(ROOT)}:{i + 1}", match.group(1) or match.group(2), tags
+
+
+def main():
+    known = rules()
+    named, said = set(), []
+    for where, name, tags in tests():
+        if not tags:
+            said.append(f"test {name} ({where}) names no rule")
+        for doc, rule in tags:
+            if rule not in known.get(doc, []):
+                said.append(f"test {name} ({where}) names {doc} {rule}, which is no rule")
+            named.add((doc, rule))
+    for doc, ids in known.items():
+        said += [f"{doc} {rule}: no test" for rule in ids if (doc, rule) not in named]
+    print("\n".join(said), end="\n" if said else "")
+    return 1 if said else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -231,6 +231,7 @@ mod tests {
         }
     }
 
+    // SPEC 7.2.5, 7.2.6
     #[test]
     fn held_ranges_answer_reads_and_only_the_rest_is_fetched() {
         let bytes: Vec<u8> = (0..=255).cycle().take(200_000).collect();
@@ -265,6 +266,7 @@ mod tests {
         assert_eq!(log.lock().unwrap().len(), 1);
     }
 
+    // SPEC 7.2.6
     #[test]
     fn gaps_are_what_no_held_range_covers() {
         let held = vec![(10, vec![0; 10]), (30, vec![0; 10])];

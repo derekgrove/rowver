@@ -43,7 +43,7 @@ pub struct Texts {
 }
 
 /// One of a study's files, as text; one missing says what to do.
-fn study_file(dir: &Path, file: &str) -> Result<String, String> {
+pub(crate) fn study_file(dir: &Path, file: &str) -> Result<String, String> {
     std::fs::read_to_string(dir.join(file)).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound if file == "samples.lock" => format!(
             "{} has no samples.lock: run rvr samples resolve samples.toml there first.",

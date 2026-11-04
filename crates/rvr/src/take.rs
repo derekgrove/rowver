@@ -573,6 +573,7 @@ pub(crate) fn take(shared: &Shared, sample: &BTreeMap<String, Constant>, input: 
 mod tests {
     use super::*;
 
+    // SPEC 4.2.1
     #[test]
     fn runs_are_every_chunk_or_the_chosen_entries_cut_at_gaps() {
         assert_eq!(runs(0, 120_000, None, GAP), [(0, 50_000), (50_000, 100_000), (100_000, 120_000)]);

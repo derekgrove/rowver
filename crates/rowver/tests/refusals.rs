@@ -305,6 +305,7 @@ fn met_as(lock: &mut Lock, kind: &str) {
 
 const ZEROS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
+// FORMAT 1, 10, 12
 #[test]
 fn the_fixture_itself_is_valid() {
     assert_eq!(checked(&common::golden()), (Ok(()), Ok(())));
@@ -314,6 +315,7 @@ fn the_fixture_itself_is_valid() {
     assert_eq!(checked(&to_bytes(&rebuilt(10.).0, &[])), (Ok(()), Ok(())));
 }
 
+// FORMAT 1, 4, 7, 8, 9, 11
 #[test]
 fn what_the_format_allows_is_valid() {
     let allowed: Vec<(&str, Change)> = vec![
@@ -342,6 +344,7 @@ fn what_the_format_allows_is_valid() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+// FORMAT 1, 2, 3, 4, 5, 6, 6.1, 6.2, 7, 8, 9, 10, 11, 12
 #[test]
 fn a_reader_refuses_on_opening_each_rule_it_checks_there() {
     let rows: Vec<Row> = vec![
@@ -503,6 +506,7 @@ fn a_reader_refuses_on_opening_each_rule_it_checks_there() {
     refused(rows, true);
 }
 
+// SPEC 2.3, 3.1.3, 3.5.10, 4.1.6, 4.4.1, 4.6.2; FORMAT 3, 4, 5, 6, 6.1, 6.2, 6.3, 7, 8, 10, 12
 #[test]
 fn full_validation_refuses_each_rule_it_alone_checks() {
     let rows: Vec<Row> = vec![
@@ -648,6 +652,7 @@ fn full_validation_refuses_each_rule_it_alone_checks() {
     refused(rows, false);
 }
 
+// FORMAT 3, 6, 6.1
 #[test]
 fn a_file_of_no_entries_is_listed_and_read_and_one_never_reached_is_not() {
     // ./fixture-empty.root with no entries: the first 25 read 10, 0 and 10 entries.
@@ -686,6 +691,7 @@ fn a_file_of_no_entries_is_listed_and_read_and_one_never_reached_is_not() {
     assert!(said.contains("data.files lists of sample A [\"./fixture-a.root\", \"./fixture-a2.root\"]"), "{said}");
 }
 
+// FORMAT 1, 3, 10, 12
 #[test]
 fn a_file_that_validates_whole_validates_emptied() {
     // B keeps none of its rows, and has no xsec, which a derived column reads.
@@ -708,6 +714,7 @@ fn a_file_that_validates_whole_validates_emptied() {
     assert_eq!(checked(&to_bytes(&header, &[])), (Ok(()), Ok(())));
 }
 
+// SPEC 1.5; FORMAT 1
 #[test]
 fn reading_a_column_of_an_empty_file_says_it_is_empty() {
     let path = written(&to_bytes(&rebuilt(10.).0, &[]), "empty");
@@ -717,6 +724,7 @@ fn reading_a_column_of_an_empty_file_says_it_is_empty() {
     }
 }
 
+// FORMAT 7, 8, 12
 #[test]
 fn reading_a_column_checks_its_frame_length_and_sha256() {
     let (mut header, mut arrays) = rebuilt(10.);
@@ -739,6 +747,7 @@ fn reading_a_column_checks_its_frame_length_and_sha256() {
     assert!(Reader::open(&path).unwrap().column("MET").unwrap_err().to_string().contains("not the sha256 its record states"));
 }
 
+// FORMAT 6, 6.1, 6.3
 #[test]
 fn a_two_file_random_sample_whose_takes_are_the_choices_shares_is_valid() {
     for same in [true, false] {

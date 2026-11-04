@@ -21,6 +21,21 @@ fn pressed(dir: &Path, flags: &[&str]) -> Value {
     serde_json::from_str(&header).unwrap()
 }
 
+/// Resolve with `good` as the recipe, after checking that resolve refuses the study's own (which
+/// it then puts back): the lock a press reads after its recipe changed.
+fn resolved_before(dir: &Path, good: &str) {
+    let own = std::fs::read_to_string(dir.join("recipe.toml")).unwrap();
+    let (code, said) = rvr(dir, &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains("samples.lock was not written"), "resolve refuses what a press would: {said}");
+    std::fs::write(dir.join("recipe.toml"), good).unwrap();
+    let (code, said) = rvr(dir, &["samples", "resolve", "samples.toml"]);
+    assert_eq!(code, 0, "{said}");
+    std::fs::write(dir.join("recipe.toml"), own).unwrap();
+}
+
+/// A recipe that stores the constant 1, which fits any sample.
+const ANY: &str = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\none = \"1\"\n\n[totals]\n\n[derived]\n";
+
 /// The first values of each column, as `rvr dump --columns` prints them.
 fn columns(dir: &Path) -> String {
     let name = dir.file_name().unwrap().to_str().unwrap();
@@ -44,6 +59,7 @@ tree = "analysis"
 metadata = { kind = "test" }
 "#;
 
+// SPEC 1.1, 2.5, 2.7, 3.5.3, 4.3.1, 4.4.1, 4.4.2, 7.1.2, 7.8.1, 12.1; FORMAT 3, 5, 6, 6.1
 #[test]
 fn press_keeps_copies_and_computes() {
     let recipe = r#"format = "rvr-recipe"
@@ -125,6 +141,7 @@ ht = "sum(Jet_pt)"
     assert_eq!(names, ["kind", "events_read", "events_total"]);
 }
 
+// SPEC 7.1.1, 7.1.2, 9.1; FORMAT 3, 6.1
 #[test]
 fn events_reads_the_first_entries_and_records_where_it_stopped() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
@@ -159,6 +176,7 @@ fn events_reads_the_first_entries_and_records_where_it_stopped() {
     );
 }
 
+// SPEC 7.1.1, 7.1.2, 9.6; FORMAT 6.1
 #[test]
 fn a_random_choice_is_recorded_checked_and_reproduced() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
@@ -210,6 +228,7 @@ fn a_random_choice_is_recorded_checked_and_reproduced() {
     assert_eq!(std::fs::read_to_string(mine.join("samples.toml")).unwrap(), "mine");
 }
 
+// SPEC 7.8.2, 9.1, 10.2, 10.3; FORMAT 9
 #[test]
 fn a_file_is_signed_once_there_is_a_key() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
@@ -235,6 +254,7 @@ fn a_file_is_signed_once_there_is_a_key() {
     assert!(said.ends_with("signed by Tester (trusted)\n"), "{said}");
 }
 
+// SPEC 1.2, 3.5.5, 4.3.1, 4.4.1
 #[test]
 fn std_vectors_in_a_folder_are_pressed() {
     let samples = FLAT
@@ -252,6 +272,7 @@ fn std_vectors_in_a_folder_are_pressed() {
     assert!(dump.contains("[1002, 1003]"), "{dump}");
 }
 
+// SPEC 1.4, 2.3, 4.1.1, 5.1.3, 5.1.4, 5.1.6, 7.1.2, 7.2.3, 7.3.1, 7.3.4
 #[test]
 fn presses_that_cannot_be_trusted_are_refused() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
@@ -308,6 +329,7 @@ fn presses_that_cannot_be_trusted_are_refused() {
     );
 }
 
+// SPEC 7.8.1; FORMAT 3; RECIPE text-branches-and-stored-types
 #[test]
 fn a_sample_of_empty_trees_is_written_with_no_rows() {
     // The two trees share no branch names, so each sample names its own through its metadata.
@@ -357,6 +379,7 @@ metadata = { flat = "x", listed = "list" }
     );
 }
 
+// SPEC 4.5.1, 7.3.3; FORMAT 6
 #[test]
 fn a_file_of_no_entries_that_cannot_be_read_for_its_totals_stops_the_press() {
     let samples = r#"format = "rvr-samples"
@@ -397,6 +420,7 @@ metadata = { flat = "x" }
     assert!(code == 1 && said.contains("It has changed since samples.lock was written") && said.contains("run rvr samples resolve samples.toml") && said.contains(needed), "{said}");
 }
 
+// SPEC 1.5, 2.3, 4.4.2, 4.4.3
 #[test]
 fn samples_whose_branch_lists_give_a_column_two_kinds_are_refused_before_any_file_is_read() {
     // The empty sample's tree has no entries, so no read would ever compare its kind.
@@ -423,7 +447,7 @@ metadata = { flat = "x" }
 "#;
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nvalue = \"branch(sample.flat)\"\n\n[totals]\n\n[derived]\n";
     let dir = study("kinds", samples, recipe);
-    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    resolved_before(&dir, ANY);
     let (code, said) = rvr(&dir, &["press"]);
     assert!(code == 1 && said.contains("[columns] value is f8 in sample full and f4 in sample empty") && said.contains("stored = \"f8\"") && !said.contains("Pressing"), "{said}");
     assert!(!dir.join("kinds.rvr").exists());
@@ -432,6 +456,7 @@ metadata = { flat = "x" }
     assert_eq!(pressed(&dir, &[])["data"]["cols"][0]["kind"], "f8");
 }
 
+// SPEC 2.3, 2.6, 4.6.1, 4.6.2, 7.7.3, 8.3, 8.8, 9.1, 9.2, 9.5; FORMAT 10, 12
 #[test]
 fn derived_columns_are_kept_as_expressions_and_changed_by_rvr_derive() {
     let recipe = r#"format = "rvr-recipe"
@@ -570,6 +595,7 @@ per_jet = "ht / nJet"
     std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
 }
 
+// SPEC 4.2.2, 7.7.1, 7.7.3, 8.1, 8.2, 8.3, 8.5, 9.4, 9.5
 #[test]
 fn a_column_added_to_the_recipe_is_read_alone_and_the_file_is_a_full_press() {
     let recipe = r#"format = "rvr-recipe"
@@ -688,6 +714,7 @@ fn samples_of(names: &[&str]) -> String {
     text
 }
 
+// SPEC 3.8.2, 7.7.1, 7.7.2, 7.7.3, 8.4, 8.5, 9.4, 9.5
 #[test]
 fn a_sample_added_is_read_alone_and_the_file_is_a_full_press() {
     let recipe = r#"format = "rvr-recipe"
@@ -758,6 +785,7 @@ double = "weight * 2"
     same_as_full(&dir, &["--events", "3", "--random", "--seed", "7"]);
 }
 
+// SPEC 2.2, 2.3, 2.8, 5.1.6, 7.1.2, 8.5, 9.5
 #[test]
 fn status_says_whether_the_file_is_current_and_what_press_would_read() {
     let recipe = r#"format = "rvr-recipe"
@@ -879,6 +907,7 @@ fn damage(path: &Path, branch: &str) {
     std::fs::write(path, &bytes).unwrap();
 }
 
+// SPEC 2.6, 4.6.3, 4.6.4, 7.8.2, 8.3
 #[test]
 fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_columns() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[totals]\n\n[derived]\nr = \"if(sample.file == './flat_b.root', stored(weight * 1000, 'u1'), stored(weight, 'u1'))\"\n";
@@ -912,17 +941,19 @@ fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_co
     assert!(code != 0 && said.contains("this one is written otherwise (inline"), "{said}");
 }
 
+// SPEC 2.3
 #[test]
 fn a_derived_column_of_another_kind_in_another_sample_is_refused_before_reading() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[totals]\n\n[derived]\nscaled = \"sample.w * nJet\"\n";
     let dir = twice("kinds", recipe);
     let samples = "format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n[[sample]]\nname = \"a\"\nlabel = \"A\"\nfiles = \"flat_a.root\"\nmetadata = { w = 1 }\n\n[[sample]]\nname = \"b\"\nlabel = \"B\"\nfiles = \"flat_b.root\"\nmetadata = { w = 0.5 }\n";
     std::fs::write(dir.join("samples.toml"), samples).unwrap();
-    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    resolved_before(&dir, ANY);
     let (code, said) = rvr(&dir, &["press"]);
     assert!(code == 1 && said.contains("[derived] scaled is i4 in sample a and f8 in sample b, and a derived column has one kind in every sample") && !said.contains("Pressing"), "{said}");
 }
 
+// SPEC 2.6, 5.1.6, 7.3.1, 7.3.2, 7.3.4, 7.7.1, 7.7.3, 7.8.1, 8.1, 8.2, 8.7, 9.1, 9.5; FORMAT 6.2
 #[test]
 fn a_damaged_basket_is_a_hole_named_with_its_file_tree_and_entries() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
@@ -995,6 +1026,7 @@ fn a_damaged_basket_is_a_hole_named_with_its_file_tree_and_entries() {
     assert!(said.contains("has no holes: there is nothing to fill"), "{said}");
 }
 
+// SPEC 2.6, 5.1.2, 7.2.3, 7.3.1, 7.3.3, 7.3.4, 7.7.1, 8.7, 9.1; FORMAT 6.2
 #[test]
 fn a_file_gone_or_changed_since_the_lock_is_a_hole_of_its_own() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
@@ -1026,6 +1058,7 @@ fn a_file_gone_or_changed_since_the_lock_is_a_hole_of_its_own() {
     assert_eq!(std::fs::read(dir.join(&name)).unwrap(), before);
 }
 
+// SPEC 7.2.3, 7.3.1; RECIPE text-branches-and-stored-types
 #[test]
 fn a_file_without_a_branch_the_recipe_reads_through_sample_metadata_is_a_hole() {
     let samples = FLAT
@@ -1042,6 +1075,7 @@ fn a_file_without_a_branch_the_recipe_reads_through_sample_metadata_is_a_hole() 
     assert!(!said.contains("run missing"), "{said}");
 }
 
+// SPEC 7.7.1, 8.2, 8.7
 #[test]
 fn a_fill_takes_the_choice_it_was_pressed_with_and_the_file_put_back() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
@@ -1076,6 +1110,7 @@ fn a_fill_takes_the_choice_it_was_pressed_with_and_the_file_put_back() {
     assert_ne!(uuid("./flat_b.root"), uuid("./flat_a.root"), "flat_b is another ROOT file now");
 }
 
+// SPEC 7.5.4, 7.7.1, 7.7.2, 8.4, 9.4
 #[test]
 fn samples_added_keep_the_holes_of_the_others_and_are_picked_up_when_stopped() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"Jet_pt\"]\n\n[totals]\n\n[derived]\n";
@@ -1129,6 +1164,7 @@ fn data_sha256(dir: &Path) -> Value {
     header["data"]["sha256"].clone()
 }
 
+// SPEC 7.5.1, 7.5.2, 7.5.3, 7.5.4, 7.5.5, 7.5.7, 7.7.2, 9.5
 #[test]
 fn a_press_stopped_part_way_is_picked_up_where_it_stopped() {
     // RVR_STOP_AFTER stops a debug build only.
@@ -1210,6 +1246,7 @@ fn a_press_stopped_part_way_is_picked_up_where_it_stopped() {
     assert!(!staged.exists());
 }
 
+// SPEC 2.6, 7.3.3, 7.5.1, 7.5.4
 #[test]
 fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
     let samples = "format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\n\n[eras]\n\n[[sample]]\nname = \"flat\"\nlabel = \"Flat\"\nfiles = [\"a/flat.root\", \"b/flat.root\"]\ntree = \"analysis\"\n";
@@ -1244,6 +1281,7 @@ fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
     assert!(rvr(&dir, &["validate", &name, "--complete"]).1.contains("read all 10 entries"));
 }
 
+// SPEC 3.3.2, 3.7.3; FORMAT 5; RECIPE values
 #[test]
 fn a_flag_some_samples_lack_is_compared_or_given_to_all_in_defaults() {
     let samples = |defaults: &str| format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n{defaults}\n[eras]\n\n[[sample]]\nname = \"data\"\nfiles = \"data.root\"\nmetadata = {{ isData = true }}\n\n[[sample]]\nname = \"mc\"\nfiles = \"mc.root\"\nmetadata = {{ xsec = 88.29 }}\n");
@@ -1252,7 +1290,7 @@ fn a_flag_some_samples_lack_is_compared_or_given_to_all_in_defaults() {
     for name in ["data.root", "mc.root"] {
         std::fs::copy(dir.join("uproot_flat.root"), dir.join(name)).unwrap();
     }
-    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    resolved_before(&dir, &recipe("sample.isData == true"));
     // A flag on the data sample alone is missing for mc: a condition it cannot be.
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
@@ -1271,11 +1309,12 @@ fn a_flag_some_samples_lack_is_compared_or_given_to_all_in_defaults() {
     assert!(dump.contains("isData         b1 by sample[2]  data: true, mc: false"), "{dump}");
 }
 
+// SPEC 1.4, 1.5, 2.3, 4.1.6, 5.5.2; RECIPE defined-names, mistakes
 #[test]
 fn a_mistake_in_the_recipe_stops_the_press_with_no_file_and_no_holes() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nht = \"sum(Jet_ptt)\"\n\n[totals]\n\n[derived]\n";
     let dir = twice("mistake", recipe);
-    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    resolved_before(&dir, ANY);
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("There is no column named Jet_ptt. Did you mean: Jet_pt"), "{said}");
@@ -1317,6 +1356,7 @@ fn a_mistake_in_the_recipe_stops_the_press_with_no_file_and_no_holes() {
     assert!(code == 1 && said.contains("recipe.toml: A recipe has no [define], [keep], [totals] or [derived] table") && said.contains("Add [define], [keep], [totals] and [derived], each on a line of its own."), "{said}");
 }
 
+// SPEC 7.3.1, 7.3.2, 7.3.4, 7.7.3, 9.1; FORMAT 6.2
 #[test]
 fn a_press_whose_every_entry_is_in_a_hole_writes_the_file_and_its_holes() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
@@ -1332,6 +1372,7 @@ fn a_press_whose_every_entry_is_in_a_hole_writes_the_file_and_its_holes() {
     assert!(code == 0 && said.contains("0 rows, 1 columns, read 0 of 5 entries, 1 hole (damaged)"), "{said}");
 }
 
+// SPEC 1.4, 5.1.3, 5.5.1, 5.5.2, 5.5.3; RECIPE defined-names, mistakes
 #[test]
 fn try_shows_what_an_expression_gives_on_the_first_events() {
     let recipe = r#"format = "rvr-recipe"
@@ -1388,6 +1429,7 @@ branches = ["nJet"]
     assert!(said.contains("There is no column named flat"), "{said}");
 }
 
+// SPEC 1.4, 5.4.1, 5.4.2
 #[test]
 fn branches_lists_every_branch_with_its_kind_and_shape_from_the_lock() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[totals]\n\n[derived]\n";
@@ -1412,7 +1454,7 @@ fn branches_lists_every_branch_with_its_kind_and_shape_from_the_lock() {
     // A file with branches rvr cannot read lists them apart, with why.
     let samples = "format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\n\n[eras]\n\n[[sample]]\nname = \"other\"\nfiles = \"stl_vectors.root\"\ntree = \"ntuple/Events\"\n";
     std::fs::write(dir.join("samples.toml"), samples).unwrap();
-    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    resolved_before(&dir, ANY);
     let (code, said) = rvr(&dir, &["branches"]);
     assert_eq!(code, 0, "{said}");
     assert!(said.contains("\nNot readable by rvr:\n"), "{said}");
@@ -1430,6 +1472,7 @@ fn branches_lists_every_branch_with_its_kind_and_shape_from_the_lock() {
     assert!(code == 0 && said.contains("Jet_pt"), "{said}");
 }
 
+// SPEC 3.5.7, 3.5.10; FORMAT 6, 6.3
 #[test]
 fn the_lock_writes_each_number_as_a_number() {
     let samples = FLAT.replace("metadata = { kind = \"test\" }\n", "events = 4\nmetadata = { kind = \"test\", xsec = 2.5, era = 3, scale = 3.0 }\n");
@@ -1449,6 +1492,7 @@ fn the_lock_writes_each_number_as_a_number() {
     assert!(code != 0 && said.contains("xsec: NaN is not a finite number"), "{said}");
 }
 
+// SPEC 5.1.2, 5.1.3, 5.1.7, 8.1, 8.5, 8.9, 8.10, 9.1, 9.2, 9.5; FORMAT 1
 #[test]
 fn an_emptied_file_keeps_its_header_and_is_refilled_byte_for_byte() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\njets = \"nJet >= 1\"\n\n[columns]\nbranches = [\"weight\", \"nJet\", \"Jet_pt\"]\nht = \"sum(Jet_pt)\"\n\n[totals]\n\n[derived]\nper_jet = \"ht / nJet\"\n";
@@ -1510,6 +1554,7 @@ fn an_emptied_file_keeps_its_header_and_is_refilled_byte_for_byte() {
     assert!(code == 1 && said.contains("has 1 hole: a refill reads what its press read"), "{said}");
 }
 
+// SPEC 4.5.1, 4.5.2, 4.5.3, 4.6.2, 7.8.1, 8.2, 8.5, 9.5; FORMAT 5, 6
 #[test]
 fn totals_sum_every_event_read_before_the_cuts_and_a_derived_column_uses_them() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\njets = \"nJet >= 1\"\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\nsumw = \"weight\"\nn = \"1\"\nx = { value = \"x\", tree = \"other\" }\n\n[derived]\nw = \"weight / sample.sumw\"\n";
@@ -1554,6 +1599,7 @@ fn totals_sum_every_event_read_before_the_cuts_and_a_derived_column_uses_them() 
     assert!(code == 1 && said.contains("[totals] x names the tree analysis, the one flat reads its events from"), "{said}");
 }
 
+// SPEC 2.3, 2.6, 4.5.3, 4.5.4, 8.4, 8.5
 #[test]
 fn totals_hold_when_a_sample_is_added_and_name_their_mistakes() {
     let one = "format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n[[sample]]\nname = \"a\"\nfiles = \"flat_a.root\"\nmetadata = { norm = 2 }\n";
@@ -1585,6 +1631,7 @@ fn totals_hold_when_a_sample_is_added_and_name_their_mistakes() {
     assert!(code == 1 && said.contains("[totals] norm has the name of a key of samples.toml"), "{said}");
 }
 
+// SPEC 1.4, 3.1.4, 3.5.1, 3.8.1, 3.8.3, 3.8.4, 6.2.1, 6.2.2, 6.2.9; FORMAT 6.3
 #[test]
 fn resolve_reads_samples_toml_on_rails_and_pins_files_wherever_it_runs() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[totals]\n\n[derived]\n";
@@ -1632,6 +1679,7 @@ fn resolve_reads_samples_toml_on_rails_and_pins_files_wherever_it_runs() {
     assert!(code == 1 && said.contains("has no key \"kind\"") && said.contains("metadata = { kind = … }"), "{said}");
 }
 
+// SPEC 3.8.1; FORMAT 6.3
 #[test]
 fn a_file_under_the_home_folder_is_pinned_and_read_as_samples_toml_writes_it() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[totals]\n\n[derived]\n";
@@ -1647,6 +1695,7 @@ fn a_file_under_the_home_folder_is_pinned_and_read_as_samples_toml_writes_it() {
     assert_eq!(code, 0, "{said}");
 }
 
+// SPEC 2.6, 4.4.2, 4.5.2, 4.5.4; RECIPE values-the-recipe-cannot-take
 #[test]
 fn a_value_the_recipe_cannot_take_stops_the_press_naming_its_file_entry_column_and_value() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\nn = { value = \"nJet * 100\", stored = \"u1\" }\n\n[totals]\n\n[derived]\n";
@@ -1671,6 +1720,7 @@ fn a_value_the_recipe_cannot_take_stops_the_press_naming_its_file_entry_column_a
     assert_eq!(made["made"]["files"]["flat"]["metadata"]["sum_x"], 3.0, "{made}");
 }
 
+// SPEC 1.5, 4.1.5, 8.8
 #[test]
 fn derive_says_every_problem_of_the_recipe_a_file_carries_in_one_sentence() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[totals]\n\n[derived]\n";
@@ -1698,6 +1748,7 @@ fn with_tool_key(dir: &Path, name: &str, tool: &Value) {
     std::fs::rename(dir.join("with.rvr"), &path).unwrap();
 }
 
+// SPEC 2.4; FORMAT 11
 #[test]
 fn every_writer_keeps_the_tool_keys_of_the_file_it_replaces() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[totals]\n\n[derived]\n";
@@ -1738,6 +1789,7 @@ fn every_writer_keeps_the_tool_keys_of_the_file_it_replaces() {
     assert_eq!(held(), Value::Null);
 }
 
+// SPEC 7.1.2, 9.5; FORMAT 6.1
 #[test]
 fn status_counts_the_files_the_file_read_of_each_sample() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";

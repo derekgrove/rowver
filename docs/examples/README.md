@@ -170,8 +170,9 @@ know Awkward, its [last section](../../crates/rvr-recipe/README.md#from-python-t
 selections side by side with how you write them in a recipe. To try an expression on real events
 before you press, use [`rvr try`](#trying-an-expression).
 
-In the folder, `rvr samples resolve` finds every file of every sample (it reads no events) and
-writes `samples.lock`. `rvr press` reads the events and writes `zmumu.rvr`, named after the folder.
+In the folder, `rvr samples resolve` finds every file of every sample (it reads no events), checks
+the recipe against what it found as a press would, and writes `samples.lock` (none when the recipe
+does not fit). `rvr press` reads the events and writes `zmumu.rvr`, named after the folder.
 `rvr validate` checks it.
 
 ```text

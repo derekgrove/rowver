@@ -33,6 +33,7 @@ fn twice(name: &str, recipe: &str) -> Study {
     dir
 }
 
+// SPEC 1.5, 2.2, 2.3, 3.1.2, 4.1.1, 7.1.2
 #[test]
 fn a_study_whose_problems_span_its_inputs_is_refused_with_every_one_at_once() {
     let dir = study("every", FLAT, &recipe("", "branches = [\"nJet\"]"));
@@ -54,6 +55,7 @@ fn a_study_whose_problems_span_its_inputs_is_refused_with_every_one_at_once() {
     assert!(said.lines().count() >= 4 && !said.contains("Pressing"), "one a line: {said}");
 }
 
+// SPEC 2.6, 4.2.2, 4.2.3, 4.4.2, 7.5.3, 7.5.4, 7.5.5, 7.5.7, 8.9
 #[test]
 fn a_data_error_stops_the_press_only_in_a_chosen_and_kept_event_and_keeps_what_was_read() {
     // nJet is 3, 4, 3, 0, 1: x is infinite at entry 3 alone, which the cut takes away.
@@ -90,6 +92,7 @@ fn a_data_error_stops_the_press_only_in_a_chosen_and_kept_event_and_keeps_what_w
     assert!(code == 0 && said.contains("Starting over") && !dir.join(format!("{}.partial", target(&dir))).exists(), "{said}");
 }
 
+// SPEC 2.6, 4.5.2
 #[test]
 fn a_file_without_the_tree_or_branch_a_total_sums_stops_the_press() {
     let vectors = FLAT.replace("uproot_flat.root", "stl_vectors.root").replace("tree = \"analysis\"", "tree = \"ntuple/Events\"");
@@ -104,12 +107,18 @@ fn a_file_without_the_tree_or_branch_a_total_sums_stops_the_press() {
     assert!(code == 1 && said.contains("uproot_flat.root: [totals] sum: its tree \"other\" has no branch y") && !said.contains("hole"), "{said}");
 }
 
+// SPEC 2.3, 2.6, 4.5.4
 #[test]
 fn a_total_that_is_a_list_is_refused_before_reading_or_stops_as_a_data_error_over_another_tree() {
     // Over the events' tree, its kind is known from the lock: refused before anything is read.
     let list = recipe("", "branches = [\"nJet\"]").replace("[totals]\n", "[totals]\nw = \"Jet_pt\"\n");
     let dir = study("total-list", FLAT, &list);
+    // resolve refuses it as press does, and writes no lock; resolved with the column alone, press refuses it too.
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains("[totals] w: a total sums one number per event") && !dir.join("samples.lock").exists(), "{said}");
+    std::fs::write(dir.join("recipe.toml"), recipe("", "branches = [\"nJet\"]")).unwrap();
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    std::fs::write(dir.join("recipe.toml"), &list).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert!(code == 1 && said.contains("[totals] w: a total sums one number per event, and this gives a list for each: sum the list, as w = \"sum(Jet_pt)\"") && !said.contains("Pressing"), "{said}");
     // Over another tree, it is first typed as each file is read: a data error naming the tree.
@@ -118,6 +127,7 @@ fn a_total_that_is_a_list_is_refused_before_reading_or_stops_as_a_data_error_ove
     assert!(code == 1 && said.contains("uproot_flat.root: tree \"other\": [totals] w: ") && said.contains("mend it to one number per entry of that tree") && !said.contains("bug"), "{said}");
 }
 
+// SPEC 2.4, 3.8.1
 #[test]
 fn a_storage_host_with_no_door_is_refused_before_reading() {
     let dir = study("no-door", FLAT, &recipe("", "branches = [\"nJet\"]"));
@@ -129,6 +139,7 @@ fn a_storage_host_with_no_door_is_refused_before_reading() {
     assert!(code == 1 && said.contains(&format!("samples.lock names {url}: nodoor.example.org has no WebDAV door in the WLCG registry")) && !said.contains("Pressing"), "{said}");
 }
 
+// SPEC 1.4, 5.1.1, 5.1.2, 5.1.3, 5.1.4, 5.1.6, 6.4.2
 #[test]
 fn every_command_reads_its_options_one_way_and_refuses_wrong_use_with_2() {
     let dir = study("options", FLAT, &recipe("", "branches = [\"nJet\"]"));
@@ -193,6 +204,7 @@ fn every_command_reads_its_options_one_way_and_refuses_wrong_use_with_2() {
     assert!(code == 1 && said.contains("has no samples.toml: write one") && !said.contains("has a samples.lock"), "{said}");
 }
 
+// SPEC 5.1.6
 #[test]
 fn a_closed_output_pipe_ends_the_command_with_141() {
     let (reader, writer) = std::io::pipe().unwrap();
@@ -201,6 +213,7 @@ fn a_closed_output_pipe_ends_the_command_with_141() {
     assert_eq!(status.code(), Some(141));
 }
 
+// SPEC 5.3.1, 10.1, 10.2
 #[test]
 fn new_names_the_study_after_its_folder_and_an_empty_config_variable_is_not_set() {
     let dir = study("named", FLAT, "");
@@ -216,6 +229,7 @@ fn new_names_the_study_after_its_folder_and_an_empty_config_variable_is_not_set(
     assert!(dir.join(".config/rvr/key").is_file() && !at.join("key").exists());
 }
 
+// SPEC 8.8, 9.3, 9.4
 #[test]
 fn header_prints_its_bytes_and_diff_and_derive_say_what_they_find() {
     let dir = study("inspect", FLAT, &recipe("", "branches = [\"nJet\"]"));
@@ -248,6 +262,7 @@ fn header_prints_its_bytes_and_diff_and_derive_say_what_they_find() {
     assert!(code == 0 && said.contains("which replaces the signature of key ") && said.contains("which you do not trust"), "{said}");
 }
 
+// SPEC 2.2; FORMAT 6.1
 #[test]
 fn a_lock_whose_random_takes_are_not_the_choices_shares_is_refused() {
     let samples = TWICE.replace("tree = \"analysis\"\n", "tree = \"analysis\"\nevents = 3\nchoose = \"random\"\nseed = 7\n");
@@ -266,10 +281,12 @@ fn a_lock_whose_random_takes_are_not_the_choices_shares_is_refused() {
     assert!(code == 1 && said.contains("samples.lock does not check out: sample flat's file ./flat_a.root has take"), "{said}");
 }
 
+// SPEC 1.5, 2.3, 3.8.1
 #[test]
 fn a_storage_host_with_no_door_hides_no_problem_of_the_recipe() {
-    let dir = study("doorless", FLAT, &recipe("", "branches = [\"nJett\"]"));
+    let dir = study("doorless", FLAT, &recipe("", "branches = [\"nJet\"]"));
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    std::fs::write(dir.join("recipe.toml"), recipe("", "branches = [\"nJett\"]")).unwrap();
     let lock = std::fs::read_to_string(dir.join("samples.lock")).unwrap();
     let far = lock.replace("./uproot_flat.root", "root://no-door.invalid//d/uproot_flat.root").replace("[\"uproot_flat.root\"]", "[\"root://no-door.invalid//d/uproot_flat.root\"]");
     std::fs::write(dir.join("samples.lock"), far).unwrap();

@@ -48,11 +48,11 @@ pub fn rvr(dir: &Path, args: &[&str]) -> (i32, String) {
 
 /// Run rvr in `dir` with `home` as the home folder.
 pub fn rvr_at_home(dir: &Path, home: &Path, args: &[&str]) -> (i32, String) {
-    rvr_with(dir, &[("HOME", home)], args)
+    rvr_with(dir, &[("HOME", home.to_str().unwrap())], args)
 }
 
 /// Run rvr in `dir` with these variables set.
-fn rvr_with(dir: &Path, set: &[(&str, &Path)], args: &[&str]) -> (i32, String) {
+pub fn rvr_with(dir: &Path, set: &[(&str, &str)], args: &[&str]) -> (i32, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
     command.args(args).current_dir(dir).env("RVR_CONFIG", dir.join(".rvr-config"));
     for (name, value) in set {

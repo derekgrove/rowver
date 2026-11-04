@@ -1258,12 +1258,14 @@ fn tiny() -> (Value, Vec<u8>) {
     )
 }
 
+// FORMAT example, 1, 2, 7
 #[test]
 fn the_running_example_tiny_rvr_is_valid() {
     let (header, arrays) = tiny();
     assert_valid("tiny", &file(&header, &arrays));
 }
 
+// FORMAT example, 4, 5, 8, 10
 #[test]
 fn my_checksums_agree_with_the_ones_format_md_quotes_for_tiny_rvr() {
     let (h, _) = tiny();
@@ -1302,6 +1304,7 @@ fn my_checksums_agree_with_the_ones_format_md_quotes_for_tiny_rvr() {
     assert_eq!(mean["lim"], json!([33.901041666666664, 120.5]));
 }
 
+// FORMAT 8
 #[test]
 fn canonical_json_follows_the_table_of_section_8() {
     for (written, canonical) in [
@@ -1332,6 +1335,7 @@ fn recipe(keep: &str, columns: &str, totals: &str, derived: &str) -> String {
     )
 }
 
+// FORMAT 4, 6
 #[test]
 fn a_file_with_a_column_of_every_flat_kind_is_valid() {
     let kinds = [
@@ -1465,6 +1469,7 @@ fn two_samples(keep: fn(Row) -> bool) -> (Value, Vec<u8>) {
     s.header(&cols, &derived)
 }
 
+// FORMAT 3, 6, 8, 10
 #[test]
 fn two_samples_one_with_no_rows_is_valid() {
     let (header, arrays) = two_samples(|r| x_of(r) > 0.0);
@@ -1472,6 +1477,7 @@ fn two_samples_one_with_no_rows_is_valid() {
     assert_valid("two", &file(&header, &arrays));
 }
 
+// FORMAT 3, 4, 8
 #[test]
 fn a_file_with_no_rows_at_all_is_valid() {
     let (header, arrays) = two_samples(|_| false);
@@ -1479,6 +1485,7 @@ fn a_file_with_no_rows_at_all_is_valid() {
     assert_valid("norows", &file(&header, &arrays));
 }
 
+// SPEC 3.3.2, 3.7.3; FORMAT 5
 #[test]
 fn sample_columns_of_every_kind_are_valid() {
     let samples_toml = r#"format = "rvr-samples"
@@ -1548,6 +1555,7 @@ metadata = { era = 2, xsec = 0.386, tags = [], info = {}, nevents = 250, weight_
     assert_valid("metadata", &file(&header, &arrays));
 }
 
+// FORMAT 3, 6.1, 6.3
 #[test]
 fn a_first_n_choice_over_several_files_is_valid() {
     let samples_toml = format!(
@@ -1598,6 +1606,7 @@ fn random_study(press: Option<Choice>) -> (Value, Vec<u8>) {
     s.header(&[flat("x", vals(x))], &[])
 }
 
+// SPEC 3.5.9; FORMAT 6.1, 6.3
 #[test]
 fn a_random_choice_is_valid() {
     let (header, arrays) = random_study(None);
@@ -1611,12 +1620,14 @@ fn a_random_choice_is_valid() {
     assert_valid("random", &file(&header, &arrays));
 }
 
+// FORMAT 1, 6.1, 8
 #[test]
 fn a_random_choice_from_the_largest_seed_is_valid() {
     let (header, arrays) = random_study(Some(Choice::Random(4, u64::MAX)));
     assert_valid("seed", &file(&header, &arrays));
 }
 
+// FORMAT 6, 6.1
 #[test]
 fn a_press_that_changed_the_event_choice_is_valid() {
     let samples_toml = format!(
@@ -1694,6 +1705,7 @@ files = "./d1.root"
     s.header(&[flat("x", vals(x))], &[])
 }
 
+// FORMAT 5, 6.2
 #[test]
 fn a_file_with_holes_is_valid() {
     let (header, arrays) =
@@ -1712,6 +1724,7 @@ fn a_file_with_holes_is_valid() {
     assert_valid("holes", &file(&header, &arrays));
 }
 
+// FORMAT 8
 #[test]
 fn texts_that_need_escapes_in_canonical_json_are_valid() {
     let (header, arrays) = holes_study("a \"quoted\" \\ path, a tab\there, an escape \u{1b}[0m and \u{1}\u{7f} ü ∑ 🙂");
@@ -1728,6 +1741,7 @@ fn genweight(r: Row) -> f64 {
     GENWEIGHT[if r.sample == 0 { r.file } else { 2 + r.file }][r.entry as usize]
 }
 
+// SPEC 4.5.1, 4.5.3, 4.6.2; FORMAT 5, 6, 10
 #[test]
 fn a_file_with_totals_is_valid() {
     let samples_toml = format!(
@@ -1774,6 +1788,7 @@ fn a_file_with_totals_is_valid() {
     assert_valid("totals", &file(&header, &arrays));
 }
 
+// SPEC 2.3, 4.5.2; FORMAT 6
 #[test]
 fn a_total_over_another_tree_is_valid() {
     let samples_toml = format!("{NO_DEFAULTS}\n[[sample]]\nname = \"a\"\nfiles = \"./a1.root\"\ntree = \"Events\"\n");
@@ -1796,6 +1811,7 @@ fn a_total_over_another_tree_is_valid() {
     assert_valid("runs", &file(&header, &arrays));
 }
 
+// FORMAT 9, 11
 #[test]
 fn a_signed_file_is_valid() {
     let (mut header, arrays) = tiny();
@@ -1804,6 +1820,7 @@ fn a_signed_file_is_valid() {
     assert_valid("signed", &file(&header, &arrays));
 }
 
+// FORMAT 1, 11
 #[test]
 fn a_file_with_tool_keys_is_valid() {
     let (mut header, arrays) = tiny();
@@ -1820,6 +1837,7 @@ fn one_file(name: &str, branches: Vec<Value>, entries: u64) -> Study {
     study(name, &samples_toml, &recipe, branches, vec![sample("a", "Events", &[("./a.root", entries)])])
 }
 
+// FORMAT 1, 12
 #[test]
 fn an_empty_file_is_valid() {
     let s = one_file("empty", vec![br("x", "i2", "flat")], 3);
@@ -1827,12 +1845,14 @@ fn an_empty_file_is_valid() {
     assert_valid("empty", &file(&header, &[]));
 }
 
+// FORMAT 1, 10, 12
 #[test]
 fn an_empty_file_with_derived_columns_is_valid() {
     let (header, _) = tiny();
     assert_valid("empty-derived", &file(&header, &[]));
 }
 
+// FORMAT 1
 #[test]
 fn a_header_with_whitespace_between_its_tokens_is_valid() {
     let (header, arrays) = tiny();
@@ -1849,6 +1869,7 @@ fn a_header_with_whitespace_between_its_tokens_is_valid() {
     );
 }
 
+// FORMAT 4
 #[test]
 fn a_stored_column_with_facts_in_another_json_spelling_is_valid() {
     let (mut header, arrays) = tiny();
@@ -1857,6 +1878,7 @@ fn a_stored_column_with_facts_in_another_json_spelling_is_valid() {
     assert_valid("spelling", &file(&header, &arrays));
 }
 
+// FORMAT 4, 10
 #[test]
 fn a_derived_column_with_facts_in_another_json_spelling_is_valid() {
     let (mut header, arrays) = tiny();
@@ -1864,6 +1886,7 @@ fn a_derived_column_with_facts_in_another_json_spelling_is_valid() {
     assert_valid("derived-spelling", &file(&header, &arrays));
 }
 
+// SPEC 2.3, 3.2.2, 3.2.3, 3.4.2, 3.5.5, 3.5.6, 3.6.1, 3.6.3, 3.7.1, 3.7.2, 3.7.3; FORMAT 6.3
 #[test]
 fn a_study_with_places_eras_and_trees_is_valid() {
     let samples_toml = r#"format = "rvr-samples"
@@ -1932,6 +1955,7 @@ fn one_column_study(name: &str, kind: &'static str, col: Vals) -> (Value, Vec<u8
     s.header(&[flat("x", col)], &[])
 }
 
+// FORMAT 4
 #[test]
 fn the_nice_examples_of_section_4_are_valid() {
     let cases: Vec<(&'static str, Vals, Value)> = vec![
@@ -1949,6 +1973,7 @@ fn the_nice_examples_of_section_4_are_valid() {
     }
 }
 
+// SPEC 2.6; FORMAT 4
 #[test]
 fn a_flat_float_column_with_nan_and_infinities_is_valid() {
     let cases = [
@@ -1970,6 +1995,7 @@ fn a_flat_float_column_with_nan_and_infinities_is_valid() {
     assert!(refused.is_empty(), "{refused:#?}");
 }
 
+// SPEC 2.6; FORMAT 4
 #[test]
 fn a_jagged_float_column_with_nan_and_infinities_is_valid() {
     let s = one_file("nanj", vec![br("pts", "f4", "jagged")], 2);
@@ -1977,6 +2003,7 @@ fn a_jagged_float_column_with_nan_and_infinities_is_valid() {
     assert_valid("nanj", &file(&header, &arrays));
 }
 
+// FORMAT 7, 8, 12
 #[test]
 fn a_changed_array_byte_is_refused_so_these_checks_mean_something() {
     let (header, arrays) = tiny();
@@ -1986,6 +2013,7 @@ fn a_changed_array_byte_is_refused_so_these_checks_mean_something() {
     assert!(validate("refused", &bytes).is_err());
 }
 
+// FORMAT 4
 #[test]
 fn a_b1_column_of_one_value_is_valid() {
     let (header, arrays) = one_column_study("b1", "b1", vals([true, true, true]));
@@ -1994,6 +2022,7 @@ fn a_b1_column_of_one_value_is_valid() {
     assert_valid("b1", &file(&header, &arrays));
 }
 
+// FORMAT 4
 #[test]
 fn whole_number_facts_beyond_64_bits_are_valid() {
     let (header, arrays) = one_column_study("u8", "u8", vals([0, u64::MAX]));
@@ -2004,12 +2033,14 @@ fn whole_number_facts_beyond_64_bits_are_valid() {
     assert_valid("i8", &file(&header, &arrays));
 }
 
+// FORMAT 4
 #[test]
 fn a_float_column_holding_the_largest_double_is_valid() {
     let (header, arrays) = one_column_study("max", "f8", vals([0.0, f64::MAX]));
     assert_valid("max", &file(&header, &arrays));
 }
 
+// FORMAT 6.3
 #[test]
 fn a_lock_with_every_branch_shape_is_valid() {
     let unreadable = json!({"name": "clones", "kind": "none", "shape": "flat", "why": "a TClonesArray, which rvr cannot read"});
@@ -2025,6 +2056,7 @@ fn a_lock_with_every_branch_shape_is_valid() {
     assert_valid("shapes", &file(&header, &arrays));
 }
 
+// FORMAT 6.1
 #[test]
 fn a_sample_of_two_to_the_forty_entries_is_valid() {
     let samples_toml =

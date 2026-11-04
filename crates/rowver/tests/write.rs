@@ -19,6 +19,7 @@ fn without_spans(value: &mut Value) {
     }
 }
 
+// FORMAT 8, 12
 #[test]
 fn the_writer_makes_the_committed_fixture() {
     let (header, arrays) = rebuilt(10.);
@@ -41,6 +42,7 @@ fn one(columns: Vec<(String, Values)>) -> rowver::Result<(Value, Vec<Vec<u8>>)> 
     pack(vec![Piece { name: "A".into(), label: "A".into(), columns, entry: vec![0, 1] }], Vec::new())
 }
 
+// FORMAT 3, 4
 #[test]
 fn the_writer_refuses_what_the_format_refuses() {
     let flat = |values| vec![("x".to_owned(), Values::Flat(values))];
@@ -82,6 +84,7 @@ fn the_writer_refuses_what_the_format_refuses() {
     assert!(rowver::write::stream(rows, Vec::new(), 1, &beside).is_err());
 }
 
+// SPEC 2.6; FORMAT 4
 #[test]
 fn a_jagged_column_may_hold_values_that_are_not_finite() {
     for muon in [f32::NAN, f32::INFINITY] {
@@ -92,6 +95,7 @@ fn a_jagged_column_may_hold_values_that_are_not_finite() {
     }
 }
 
+// FORMAT 4
 #[test]
 fn nice_is_lim_rounded_outward_to_two_digits_in_exact_decimal() {
     let nice = |values| one(vec![("x".into(), Values::Flat(values))]).unwrap().0["cols"][0]["nice"].to_string();
@@ -109,6 +113,7 @@ fn nice_is_lim_rounded_outward_to_two_digits_in_exact_decimal() {
     assert_eq!(nice(array(&[f64::NAN, f64::INFINITY])), "[0.0,1.0]");
 }
 
+// FORMAT 10, 12
 #[test]
 fn a_derived_column_is_a_record_with_no_array_that_the_header_check_takes() {
     let bytes = golden();
@@ -155,6 +160,7 @@ fn a_derived_column_is_a_record_with_no_array_that_the_header_check_takes() {
     assert!(refused(&|r| r["expression"] = " ".into()).contains("expression is blank"));
 }
 
+// FORMAT 1, 10, 12
 #[test]
 fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
     let bytes = golden();
@@ -246,6 +252,7 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
     assert!(refused.contains("cannot be read") && refused.contains("newer than this one"), "{refused}");
 }
 
+// SPEC 4.6.1, 7.2.2, 7.6.1, 8.2; FORMAT 7
 #[test]
 fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
     use rowver::write::{stream, write_laid, Rows, Source, Spool};
@@ -384,6 +391,7 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+// SPEC 1.5, 8.10
 #[test]
 fn a_failed_refill_or_rewrite_names_the_file_it_is_about() {
     let (header, arrays) = rebuilt(10.);
@@ -400,6 +408,7 @@ fn a_failed_refill_or_rewrite_names_the_file_it_is_about() {
     let _ = std::fs::remove_file(&to);
 }
 
+// SPEC 1.5, 8.2
 #[test]
 fn a_column_copied_from_a_file_cut_short_since_names_that_file() {
     use rowver::write::{array, stream, Rows, Source};

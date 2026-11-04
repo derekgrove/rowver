@@ -92,6 +92,7 @@ fn fixture() -> Value {
 }
 
 /// Evaluate every recorded expression and compare kind, shape, and values.
+// RECIPE values, operators, choosing-members-of-a-list, reducing-a-jagged-list-to-a-flat-value, positions-and-order, joining-lists, math-value-by-value, bits, angles-and-kinematics, pairs-within-a-list, text-branches-and-stored-types, defined-names, kinds-exactly, two-kinds-together, fixed-values-beside-a-column, numbers, conversions, functions-exactly
 #[test]
 fn expressions_give_what_numpy_and_awkward_give() {
     let fixture = fixture();
@@ -184,6 +185,7 @@ fn shown(values: &Values) -> Vec<String> {
 }
 
 /// Refuse expressions that cannot be read or do not make sense, saying why.
+// RECIPE mistakes, how-deep, values, operators, fixed-values-beside-a-column; SPEC 1.5
 #[test]
 fn mistakes_are_refused_with_a_reason() {
     let held = Held(BTreeMap::new());
@@ -218,6 +220,7 @@ fn mistakes_are_refused_with_a_reason() {
 }
 
 /// What the fixture does not hold: loops, lazy sample conditions, NaN, and 64-bit identities.
+// RECIPE the-keys-exactly, operators, functions-exactly, two-kinds-together, fixed-values-beside-a-column, what-differs-from-numpy, conversions, values-the-recipe-cannot-take, choosing-members-of-a-list, joining-lists; SPEC 2.6
 #[test]
 fn edge_cases_follow_the_documented_rules() {
     let big = Values::whole(Kind::U8, vec![u64::MAX as i64, 3, (1_u64 << 63) as i64]);
@@ -300,6 +303,7 @@ fn edge_cases_follow_the_documented_rules() {
     assert!(run("floor(Jet_pt > 30)").is_ok(), "floor keeps true-or-false values, as NumPy");
 }
 
+// RECIPE math-value-by-value, functions-exactly, fixed-values-beside-a-column, what-differs-from-numpy; FORMAT 10
 #[test]
 fn float_functions_give_the_same_bits_on_every_platform() {
     // The libm crate's results; macOS's own cos and exp give each a last bit one lower.
@@ -324,6 +328,7 @@ fn float_functions_give_the_same_bits_on_every_platform() {
 
 /// A bare name is a defined name or a column; any other is refused as an unknown column,
 /// wherever it stands, and a collection's prefix alone is no name.
+// RECIPE the-example-events, values, more-than-one-kind-of-particle, mistakes
 #[test]
 fn a_name_that_is_no_column_and_not_defined_is_refused_as_unknown() {
     let jets = Array::object(&[1, 0], Values::float(Kind::F4, vec![40.0])).unwrap();
@@ -345,6 +350,7 @@ fn a_name_that_is_no_column_and_not_defined_is_refused_as_unknown() {
 }
 
 /// Particle coordinates must describe the same members of every event, even when totals match.
+// RECIPE functions-exactly, values-the-recipe-cannot-take, angles-and-kinematics
 #[test]
 fn kinematics_refuse_coordinates_from_different_event_lists() {
     let lists = |counts: &[usize], values: Vec<f64>| {
@@ -396,6 +402,7 @@ fn kinematics_refuse_coordinates_from_different_event_lists() {
 
 /// What the fixture's columns cannot show of the list operations: where NaN is placed, and
 /// what is refused. The expected positions are what awkward 2.12.0 gave for these lists.
+// RECIPE functions-exactly, positions-and-order, reducing-a-jagged-list-to-a-flat-value, bits, angles-and-kinematics, pairs-within-a-list, fixed-values-beside-a-column
 #[test]
 fn list_operations_place_nan_as_awkward_does_and_refuse_mistakes() {
     let nan = f64::NAN;
@@ -491,6 +498,7 @@ impl Columns for Counted {
 
 /// `[define]` names expressions, each used by the lines below it, whatever a file calls its
 /// branches; a defined name is worked out once however often it is used.
+// RECIPE defined-names, the-keys-exactly, the-parts-of-a-recipe, mistakes, text-branches-and-stored-types; SPEC 1.4, 4.1.1, 4.1.2, 4.1.3, 4.1.4, 4.1.6, 4.6.2; FORMAT 10
 #[test]
 fn defined_names_are_expressions_used_below_them() {
     let text = r#"
@@ -628,6 +636,7 @@ n_negative = "count(negative)"
 }
 
 /// Integer list reductions keep adjacent 64-bit values distinct without passing through floats.
+// RECIPE reducing-a-jagged-list-to-a-flat-value, functions-exactly, fixed-values-beside-a-column
 #[test]
 fn extrema_preserve_large_integer_ordering() {
     let boundary = 1_i64 << 53;
@@ -700,6 +709,7 @@ fn extrema_preserve_large_integer_ordering() {
 }
 
 /// Casting finite floats within the u64 range must not saturate at the signed i64 limit.
+// RECIPE conversions, values-the-recipe-cannot-take, text-branches-and-stored-types; SPEC 2.6, 4.4.2
 #[test]
 fn stored_float_to_u64_preserves_values_above_signed_range() {
     let values = vec![
@@ -743,6 +753,7 @@ fn stored_float_to_u64_preserves_values_above_signed_range() {
 }
 
 /// A missing or nonfinite particle coordinate must not become a plausible zero mass.
+// RECIPE angles-and-kinematics, functions-exactly, values-the-recipe-cannot-take
 #[test]
 fn mass_preserves_nan_instead_of_clipping_it_to_zero() {
     let lists = |values| Array::object(&[1, 1, 0, 2], Values::float(Kind::F8, values)).unwrap();
@@ -770,6 +781,7 @@ fn mass_preserves_nan_instead_of_clipping_it_to_zero() {
 
 /// `[totals]` sums an expression over every event read, before the cuts, or over another tree of
 /// each file; only a derived column may use one, as `sample.NAME`.
+// RECIPE the-keys-exactly, the-parts-of-a-recipe; SPEC 4.1.2, 4.1.3, 4.6.2
 #[test]
 fn totals_are_sums_only_derived_columns_use() {
     let text = complete("[columns]\nbranches = [\"w\"]\n[totals]\nsumw = \"genWeight\"\nruns = { value = \"genEventSumw\", tree = \"Runs\" }\n[derived]\nweight = \"w / sample.sumw\"\n");

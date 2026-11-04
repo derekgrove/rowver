@@ -217,15 +217,18 @@ sample "my sample": a name holds only ASCII letters, digits, _ and -, since tool
 
 ### `rvr samples resolve samples.toml`
 
-Finds every file of every sample and writes `samples.lock` beside `samples.toml`: for each file its
+Reads `samples.toml` and the `recipe.toml` beside it, finds every file of every sample, checks the
+recipe against what it found as a press would, and writes `samples.lock` beside `samples.toml`
+only when it fits: for each file its
 size, adler32 (when its storage gives one), ROOT UUID and entries, and for each sample the branch
 list of its first file, which a press checks every file against. No event is read. A file on this
 computer is read whole, for its adler32; a file on storage is asked of its HTTPS door (a listing per
 folder, a `HEAD` per file, and the bytes that open it). What it asks, exactly, is
 [SPEC §6.2](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#62-rvr-samples-resolve-file).
 
-It is all or nothing: when a sample fails, no lock is written, and each failure is a line marked
-`FAIL`, with the fix:
+It is all or nothing: when a sample fails, or the recipe does not fit the samples (a branch no
+sample has, a defined name that is a branch's, a column of two kinds), no lock is written and the
+lock already there stays as it was. Each failure is a line marked `FAIL`, with the fix:
 
 ```text
 $ rvr samples resolve samples.toml
@@ -234,6 +237,19 @@ $ rvr samples resolve samples.toml
 0 samples, 0 distinct files, 0.0 MB in 0.0 s.
 rvr samples resolve: 1 of 1 samples could not be resolved; samples.lock was not written. Fix the lines marked FAIL and run resolve again.
 ```
+
+```text
+$ rvr samples resolve samples.toml
+  ok    flat                                       1 file      0.0 MB   all 5 events
+
+1 sample, 1 distinct file, 0.0 MB in 0.0 s.
+  FAIL  [columns] Jet_ptt: There is no column named Jet_ptt. Did you mean: Jet_pt, Jet_eta? (sample flat, over the branches samples.lock lists for it)
+rvr samples resolve: the recipe does not fit the samples as the lines marked FAIL say, so samples.lock was not written (a press would refuse them): fix them, then run resolve again.
+```
+
+A study with no `recipe.toml` is refused (`rvr new` writes one); a recipe that leaves out a table is
+offered it at a terminal, as `rvr press` offers it. A lock exists only when the study's recipe can be
+pressed from it; a press checks again, as the recipe may change after resolve.
 
 Under the totals it lists the `.root` files in the folders it read that no sample reads: not an
 error, a check that none was forgotten. A `samples.toml` that leaves out `format`, `version`,

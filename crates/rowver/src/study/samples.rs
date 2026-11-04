@@ -558,6 +558,7 @@ mod tests {
         read(text).unwrap_err().to_string()
     }
 
+    // SPEC 3.2.2, 3.2.3, 3.4.2, 3.5.5, 3.5.6, 3.5.7, 3.6.1, 3.6.3, 3.6.4, 3.7.1, 3.7.2, 3.7.3
     #[test]
     fn eras_and_trees_make_samples_named_and_labelled_by_rule() {
         let text = format!(
@@ -592,6 +593,7 @@ mod tests {
         assert_eq!(undefined.lines().count(), 1, "{undefined}");
     }
 
+    // SPEC 1.4, 1.5, 3.1.3, 3.1.4, 3.2.1, 3.3.1, 3.3.2, 3.5.1, 3.5.2, 3.5.4, 3.5.5, 3.5.7, 3.5.8, 3.5.9, 3.5.10, 3.6.4, 3.7.2, 3.7.4, 3.8.1, 3.8.2, 3.8.5
     #[test]
     fn every_problem_is_said_and_what_is_left_out_is_offered() {
         let said = read("[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\nkind = \"mc\"\nchoice = \"random\"\n").unwrap_err();

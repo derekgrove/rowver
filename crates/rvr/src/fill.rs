@@ -364,6 +364,7 @@ mod tests {
     use crate::plan::Input;
     use rowver::study::lock::File;
 
+    // SPEC 8.7; FORMAT 6
     #[test]
     fn a_fill_keeps_the_rows_around_each_hole_it_reads() {
         let pin = |at: &str| File { at: at.into(), bytes: 10, adler32: None, uuid: String::new(), entries: 10, stop: None, take: None };

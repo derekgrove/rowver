@@ -191,6 +191,7 @@ pub fn listed(tables: &[&str], word: &str) -> String {
 mod tests {
     use super::*;
 
+    // SPEC 3.1.4, 4.1.6
     #[test]
     fn missing_tables_are_written_where_they_belong() {
         // Before the next table and the comment just above it.
@@ -224,6 +225,7 @@ mod tests {
         assert_eq!(written(source, &source.parse().unwrap(), &["totals"], &TABLES, "recipe.toml").unwrap(), whole);
     }
 
+    // SPEC 4.1.6
     #[test]
     fn a_place_that_would_change_the_recipe_is_refused() {
         // A line inside a string that reads as the next table's header.
@@ -232,6 +234,7 @@ mod tests {
         assert_eq!(refused, "[totals] could not be written into recipe.toml in its place, so it is as it was: add it by hand.");
     }
 
+    // SPEC 4.1.6, 5.1.7
     #[test]
     fn the_offer_asks_alike_whatever_is_missing() {
         assert_eq!(asked(&["keep"], "[keep]", "continue pressing"), "recipe.toml has no [keep] table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty.\nAdd [keep] to recipe.toml, empty and in its place, then continue pressing? [y/N] ");

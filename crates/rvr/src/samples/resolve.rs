@@ -3,14 +3,14 @@
 //! branch list, from its first file; no event read. The lock itself is rowver's
 //! (`rowver::study::lock`).
 
-use super::remote::{HttpsFile, Storage};
+use super::remote::{HttpsFile, Storage, STOPPED};
 use hep_root::columns::{inventory, Kind, Shape};
 use rowver::study::lock::{self, Branch, Branches, File};
 use rvr_recipe::meant;
 pub use rowver::study::{join, matches, split};
 use rowver::study::samples::Sample;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 fn pattern(text: &str) -> bool {
     text.contains(['*', '?'])
@@ -211,11 +211,10 @@ pub struct Context {
     /// Why storage is unavailable, said once to the user if a sample needs it.
     pub offline: String,
     /// Each local folder's file names (or why it cannot be read), listed once a run.
-    folders: std::sync::Mutex<std::collections::HashMap<PathBuf, Listing>>,
+    folders: super::Once<PathBuf, Result<Arc<[String]>, String>>,
+    /// Set when the run is to end: no further file is asked.
+    stop: std::sync::atomic::AtomicBool,
 }
-
-/// One folder's listing, made by the first thread to ask for it while the others wait.
-type Listing = Arc<OnceLock<Result<Arc<[String]>, String>>>;
 
 
 impl Context {
@@ -235,13 +234,29 @@ impl Context {
             storage: storage.ok(),
             offline,
             folders: Default::default(),
+            stop: Default::default(),
+        }
+    }
+
+    /// End the run: no further file is asked, and a storage stops waiting.
+    pub fn stop(&self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(storage) = &self.storage {
+            storage.watch.stop.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    /// Whether the run goes on, or the refusal that ends it.
+    fn going(&self) -> Result<(), String> {
+        match self.stop.load(std::sync::atomic::Ordering::Acquire) {
+            true => Err(STOPPED.into()),
+            false => Ok(()),
         }
     }
 
     /// The regular files of a local folder, and links to them, sorted by name; listed once a run.
     pub fn listed(&self, dir: &Path) -> Result<Arc<[String]>, String> {
-        let slot = self.folders.lock().unwrap_or_else(|e| e.into_inner()).entry(dir.to_path_buf()).or_default().clone();
-        slot.get_or_init(|| {
+        self.folders.get(dir.to_path_buf(), || {
             let mut names = Vec::new();
             // An entry that cannot be read is left out, as one that is not a file is.
             for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
@@ -254,7 +269,6 @@ impl Context {
             names.sort();
             Ok(names.into())
         })
-        .clone()
     }
 
     /// Which file a path or URL of the lock is: a local path with links followed, or a storage file's door and path.
@@ -276,9 +290,9 @@ impl Context {
     }
 }
 
-/// The files one path, URL or pattern of `files` matches, each pinned; the first with its branch
-/// list when `listed`.
-fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool) -> Result<Vec<(File, Option<Branches>)>, String> {
+/// Each file one path, URL or pattern of `files` matches, pinned and given to `each` in turn; the
+/// first with its branch list when `listed`. A run stopped ends before the next file.
+fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool, each: &mut dyn FnMut(File, Option<Branches>) -> Result<(), String>) -> Result<(), String> {
     let (folder, name) = split(asked);
     let join = |n: &str| join(folder, n);
     if pattern(folder) {
@@ -297,10 +311,8 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool) -> Result<Vec<
             let near = meant(name, entries.iter().map(|e| e.name.as_str()));
             return Err(format!("{asked} matched no file ({} files in that folder).{near}", entries.len()));
         }
-        found
-            .iter()
-            .enumerate()
-            .map(|(i, e)| {
+        for (i, e) in found.iter().enumerate() {
+                ctx.going()?;
                 let at = join(&e.name);
                 let (said, adler32) = storage.digest(&at).map_err(|failed| failed.why)?;
                 // The listing's size, else the HEAD's: a lock pins every file's size.
@@ -309,9 +321,10 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool) -> Result<Vec<
                     size => size,
                 };
                 let identity = root_identity(HttpsFile::new(storage, &at, bytes)?, &at, tree, listed && i == 0)?;
-                Ok(pinned(at, bytes, adler32, identity))
-            })
-            .collect()
+                let (file, list) = pinned(at, bytes, adler32, identity);
+                each(file, list)?;
+        }
+        Ok(())
     } else {
         let dir = local(folder, &ctx.base);
         let names = ctx.listed(&dir).map_err(|e| format!("{asked}: the folder {folder} cannot be read: {e}"))?;
@@ -321,10 +334,8 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool) -> Result<Vec<
             let shown = if folder == "." { "the study folder" } else { folder };
             return Err(format!("{asked} matched no file in {shown}.{near}"));
         }
-        found
-            .into_iter()
-            .enumerate()
-            .map(|(i, n)| {
+        for (i, n) in found.into_iter().enumerate() {
+                ctx.going()?;
                 let path = dir.join(n);
                 let meta = std::fs::metadata(&path).map_err(|e| format!("{n}: {e}"))?;
                 // The folder as samples.toml writes it, so the lock reads from any folder.
@@ -332,33 +343,16 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool) -> Result<Vec<
                 let opened = hep_root::LocalFile::open(&path).map_err(|e| format!("{at}: {e}"))?;
                 let identity = root_identity(opened, &at, tree, listed && i == 0)?;
                 let adler32 = adler32_file(&path).map_err(|e| format!("{at}: {e}"))?;
-                Ok(pinned(at, meta.len(), Some(adler32), identity))
-            })
-            .collect()
+                let (file, list) = pinned(at, meta.len(), Some(adler32), identity);
+                each(file, list)?;
+        }
+        Ok(())
     }
 }
 
-/// One sample resolved: every file pinned with what its choice reads, `{file}` filled, and its branch list.
-pub fn resolve(ctx: &Context, sample: &Sample) -> Result<(lock::Sample, Branches), String> {
-    let mut files: Vec<File> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut list = None;
-    for text in &sample.files {
-        for (file, found) in files_of(ctx, text, &sample.tree, list.is_none())? {
-            if !seen.insert(ctx.which(&file.at)) {
-                return Err(format!("{} is reached twice, by two of files or by a pattern and a name: name each file once", file.at));
-            }
-            list = list.or(found);
-            files.push(file);
-        }
-    }
-    let list = list.ok_or("it has no files")?;
-    if files.iter().try_fold(0u64, |sum, f| sum.checked_add(f.entries)).is_none_or(|t| t > lock::MOST_ENTRIES) {
-        return Err("its files hold more than 2^40 entries in all, more than a .rvr file may: split them among samples of fewer files".into());
-    }
-    if list.list.iter().any(|b| b.name.is_empty()) {
-        return Err(format!("its tree {} has a branch with no name, which samples.lock cannot record: write the files again with every branch named", sample.tree));
-    }
+/// A sample as the lock records it, of these files and their sample's branch list, its choice
+/// not yet worked out over them (`planned` does that).
+fn locked(sample: &Sample, files: Vec<File>, list: &Branches) -> Result<lock::Sample, String> {
     let ats: Vec<&str> = files.iter().map(|f| f.at.as_str()).collect();
     let metadata = rowver::study::samples::file_filled(&sample.metadata, &ats)
         .ok_or_else(|| format!("its metadata uses {{file}}, which names a sample's one file, but it has {} files: give each file a sample of its own, or leave {{file}} out", files.len()))?;
@@ -374,13 +368,45 @@ pub fn resolve(ctx: &Context, sample: &Sample) -> Result<(lock::Sample, Branches
         metadata,
         files,
     };
-    Ok((locked.planned(sample.events), list))
+    Ok(locked)
+}
+
+/// Every file of `sample`, pinned with what its choice reads, and its branch list; `first` is given
+/// the sample as its first file alone makes it (its choice not worked out), as soon as that file's
+/// branch list is read. A run stopped (`ctx.stop`)
+/// ends before the next file.
+pub fn resolve(ctx: &Context, sample: &Sample, first: &dyn Fn(lock::Sample, &Branches)) -> Result<(lock::Sample, Branches), String> {
+    let mut files: Vec<File> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut list: Option<Branches> = None;
+    for text in &sample.files {
+        files_of(ctx, text, &sample.tree, list.is_none(), &mut |file, found| {
+            if !seen.insert(ctx.which(&file.at)) {
+                return Err(format!("{} is reached twice, by two of files or by a pattern and a name: name each file once", file.at));
+            }
+            if let Some(found) = found.filter(|_| list.is_none()) {
+                first(locked(sample, vec![file.clone()], &found)?, &found);
+                list = Some(found);
+            }
+            files.push(file);
+            Ok(())
+        })?;
+    }
+    let list = list.ok_or("it has no files")?;
+    if files.iter().try_fold(0u64, |sum, f| sum.checked_add(f.entries)).is_none_or(|t| t > lock::MOST_ENTRIES) {
+        return Err("its files hold more than 2^40 entries in all, more than a .rvr file may: split them among samples of fewer files".into());
+    }
+    if list.list.iter().any(|b| b.name.is_empty()) {
+        return Err(format!("its tree {} has a branch with no name, which samples.lock cannot record: write the files again with every branch named", sample.tree));
+    }
+    Ok((locked(sample, files, &list)?.planned(sample.events), list))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // SPEC 7.2.3
     #[test]
     fn two_branch_lists_differ_by_name_kind_and_shape() {
         let branch = |name: &str, kind: &str, shape| Branch { name: name.into(), kind: kind.into(), shape, why: None };
@@ -392,6 +418,7 @@ mod tests {
         assert_eq!(differ([unread("old words")].iter(), [unread("new words")].iter()), "", "why is not compared");
     }
 
+    // SPEC 3.8.1
     #[test]
     fn a_local_path_is_under_home_absolute_or_the_study_s() {
         let home = std::env::var("HOME").unwrap();
@@ -401,6 +428,7 @@ mod tests {
         assert_eq!((split("/x.root"), split("x.root"), split("~/x.root")), (("/", "x.root"), (".", "x.root"), ("~", "x.root")));
     }
 
+    // SPEC 6.2.2, 6.2.3
     #[test]
     fn adler32_of_known_text() {
         let path = std::env::temp_dir().join(format!("rvr-samples-adler-{}", std::process::id()));
@@ -409,6 +437,7 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    // SPEC 6.2.2
     #[test]
     fn adler32_lanes_agree_with_the_plain_sum() {
         let plain = |sum: u32, data: &[u8]| {

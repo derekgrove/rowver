@@ -317,6 +317,7 @@ mod tests {
         (bytes, counts)
     }
 
+    // SPEC 7.2.2, 7.6.1
     #[test]
     fn pieces_come_back_in_their_order() {
         let dir = std::env::temp_dir().join(format!("rowver-spool-{}", std::process::id()));
@@ -355,6 +356,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    // SPEC 7.5.3, 7.5.4
     #[test]
     fn a_spool_reopened_holds_the_pieces_it_is_given_and_no_others() {
         let dir = std::env::temp_dir().join(format!("rowver-reopen-{}", std::process::id()));

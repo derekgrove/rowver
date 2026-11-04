@@ -972,6 +972,7 @@ dependencies = [
  "grid-trust",
  "hep-root",
  "rowver",
+ "rustls",
  "rvr-recipe",
  "serde_json",
  "toml",

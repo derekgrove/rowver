@@ -138,6 +138,7 @@ impl Error {
 mod tests {
     use super::*;
 
+    // RECIPE functions-exactly
     #[test]
     fn a_crowded_run_is_worked_on_in_halves_in_order_and_a_mistake_ends_it() {
         // Runs of more than 3 rows are too crowded; every other run gives its rows.
@@ -177,6 +178,7 @@ mod tests {
         }
     }
 
+    // RECIPE functions-exactly
     #[test]
     fn a_failure_over_runs_names_the_rows_of_the_part_it_lies_in() {
         // Too crowded past 4 rows; the part from row 6 fails with no event of its own.

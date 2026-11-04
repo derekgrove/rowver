@@ -135,6 +135,7 @@ pub(crate) fn hex(text: &str, count: usize) -> bool {
 mod tests {
     use super::*;
 
+    // FORMAT 6, 6.3
     #[test]
     fn times_and_hex() {
         assert!(utc("2026-02-28T23:59:59Z") && utc("2024-02-29T00:00:00Z"));
@@ -146,6 +147,7 @@ mod tests {
         assert_eq!(p("../x.root"), std::path::PathBuf::from("../x.root"));
     }
 
+    // SPEC 3.8.2; FORMAT 6.3
     #[test]
     fn patterns_and_paths_parted_and_joined_back_as_written() {
         assert!(matches("Run2012*_TauPlusX.root", "Run2012B_TauPlusX.root") && matches("*.root", "a.root"));
