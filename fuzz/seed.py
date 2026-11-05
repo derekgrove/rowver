@@ -1,11 +1,15 @@
 """Make the fuzz targets' seeds, fuzz/seeds/TARGET/, from every fixture, example and refusal case.
 
-    mamba run -n rowver python fuzz/seed.py
+    mamba run -n rowver python fuzz/seed.py [--only TARGET,...] [FILE.rvr...]
+
+The rehashed target's seeds are the corpus's valid files unpacked (fuzz/src/rehash.rs), and each
+FILE.rvr given: tiny.rvr, which docs/FORMAT.md's opening says how to press, is one.
 
 The seeds are made again from what the repository holds (the conformance corpus, the examples, the
 tests' argument lists), so a change of the format changes them: run it again after one.
 """
 
+import functools
 import hashlib
 import json
 import pathlib
@@ -13,6 +17,7 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
 import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -30,10 +35,16 @@ def unzstd(data):
     except ImportError:
         pass
     try:
+        import io
         import zstandard
-        return zstandard.ZstdDecompressor().decompress(data)
+        # Read as a stream: rowver's frames declare no content size, which decompress() needs.
+        return zstandard.ZstdDecompressor().stream_reader(io.BytesIO(data)).read()
     except ImportError:
+        pass
+    try:
         return subprocess.run(["zstd", "-d", "-c"], input=data, capture_output=True, check=True).stdout
+    except FileNotFoundError:
+        sys.exit("fuzz/seed.py: decompressing the corpus needs Python's compression.zstd (3.14) or zstandard, or the zstd command: install one")
 
 
 def header(data):
@@ -45,14 +56,53 @@ def header(data):
         return None
 
 
+@functools.cache
+def valid():
+    """Every valid file of the conformance corpus."""
+    return [p.read_bytes() for p in sorted((ROOT / "tests" / "conformance" / "rvr" / "valid").glob("*.rvr"))]
+
+
 def rvr_files():
     """Every valid file of the corpus, and every case of cases.zst."""
     part = ROOT / "tests" / "conformance" / "rvr"
-    files = [p.read_bytes() for p in sorted((part / "valid").glob("*.rvr"))]
+    files = list(valid())
     cases = unzstd((part / "cases.zst").read_bytes())
     for case in json.loads((part / "manifest.json").read_text())["cases"]:
         files.append(cases[case["at"]:case["at"] + case["size"]])
     return files
+
+
+WIDTH = {"f8": 8, "i8": 8, "u8": 8, "f4": 4, "i4": 4, "u4": 4, "i2": 2, "u2": 2}
+
+
+def unpacked(data):
+    """A valid .rvr file as the rehashed target takes it: a control byte (its lanes padded, counts
+    and facts made again; an empty file let go), its header's length and text, then every chunk's
+    byte lanes raw, each after its length (4 bytes, little-endian)."""
+    start = 12 + struct.unpack("<I", data[8:12])[0]
+    data_section = json.loads(data[12:start])["data"]
+    every = data_section.get("chunk_rows", 65536)
+    chunks = sum(-(-sample["rows"] // every) for sample in data_section["samples"])
+    records = [(data_section["sample"], "i4"), (data_section["entry"], "i8")]
+    for column in data_section["cols"]:
+        if column["kind"] == "jagged":
+            records += [(column["offsets"], "i8"), (column["content"], column["content"]["kind"])]
+        else:
+            records.append((column, column["kind"]))
+    empty = len(data) == start
+    out = bytes([15 if empty else 7]) + data[8:start]
+    for record, kind in [] if empty else records:
+        w = WIDTH.get(kind, 1)
+        array = data[start + record["at"]:start + record["at"] + record["size"]]
+        table, at = array[len(array) - chunks * (8 * w + 32):], 0
+        for k in range(chunks):
+            entry = table[k * (8 * w + 32):]
+            for lane in range(w):
+                n = struct.unpack("<Q", entry[8 * lane:8 * lane + 8])[0]
+                raw = unzstd(array[at:at + n])
+                at += n
+                out += struct.pack("<I", len(raw)) + raw
+    return out
 
 
 def texts(kind, files):
@@ -184,13 +234,65 @@ def write(target, seeds):
     print(f"{target}: {len(kept)} seeds")
 
 
-files = rvr_files()
-recipes = texts("recipe", files)
-write("open", files)
-write("validate", files)
-write("lock", texts("lock", files))
-write("samples", texts("samples", files))
-write("recipe", recipes)
-write("expression", expressions(recipes))
-write("multipart", answers())
-write("words", argument_lists())
+@functools.cache
+def files():
+    """Every valid file and case of the conformance corpus, read once when a target needs it."""
+    return rvr_files()
+
+
+@functools.cache
+def recipes():
+    return texts("recipe", files())
+
+
+def options(args):
+    """The targets asked for (every one when not --only), and the FILE.rvr given, refused in plain words."""
+    only, extra, rest = None, [], list(args)
+    while rest:
+        arg = rest.pop(0)
+        if arg == "--only":
+            if not rest:
+                sys.exit(f"fuzz/seed.py: --only takes the targets to make, apart by commas: {', '.join(MADE)}")
+            only = rest.pop(0).split(",")
+            unknown = [t for t in only if t not in MADE]
+            if unknown:
+                sys.exit(f"fuzz/seed.py: {', '.join(unknown)} is no target; the targets are {', '.join(MADE)}")
+        elif arg.endswith(".rvr"):
+            extra.append(arg)
+        else:
+            sys.exit(f"fuzz/seed.py: {arg!r} is neither --only TARGET,... nor a FILE.rvr to add to the rehashed seeds")
+    if extra and only is not None and "rehashed" not in only:
+        sys.exit(f"fuzz/seed.py: {', '.join(extra)} would be rehashed seeds, and --only {','.join(only)} leaves rehashed out: add rehashed to it")
+    return only, [given(path) for path in extra]
+
+
+def given(path):
+    """A FILE.rvr given, unpacked as a rehashed seed; refused in plain words when it cannot be one."""
+    try:
+        data = pathlib.Path(path).read_bytes()
+    except OSError as e:
+        sys.exit(f"fuzz/seed.py: {path} cannot be read ({e.strerror}): give a .rvr file that is there")
+    try:
+        seed = unpacked(data)
+    except Exception as e:  # what the zstd libraries and the command raise, besides the reading's own
+        sys.exit(f"fuzz/seed.py: {path} is not a .rvr file whose arrays read ({type(e).__name__}: {e}): give a valid file")
+    if len(seed) > MOST:
+        sys.exit(f"fuzz/seed.py: {path} unpacked is {len(seed):,} bytes, over the {MOST:,} a seed may be: give a smaller file")
+    return seed
+
+
+MADE = {
+    "open": files,
+    "validate": files,
+    "rehashed": lambda: [unpacked(data) for data in valid()] + EXTRA,
+    "lock": lambda: texts("lock", files()),
+    "samples": lambda: texts("samples", files()),
+    "recipe": recipes,
+    "expression": lambda: expressions(recipes()),
+    "multipart": answers,
+    "words": argument_lists,
+}
+ONLY, EXTRA = options(sys.argv[1:])
+for target, seeds in MADE.items():
+    if ONLY is None or target in ONLY:
+        write(target, seeds())

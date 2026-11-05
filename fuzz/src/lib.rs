@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-/// A fuzz input written to a file of the temporary folder (`TMPDIR`), removed when dropped.
+pub mod rehash;
+
+/// A fuzz input written to a file of `FUZZ_INPUTS` (else the temporary folder), removed when dropped.
 pub struct Input(PathBuf);
 
 impl Input {
@@ -18,10 +20,12 @@ impl Drop for Input {
     }
 }
 
-/// `data` written to this process's one file in the temporary folder.
+/// `data` written to this process's one file in `FUZZ_INPUTS`, a folder for the inputs alone (a RAM
+/// disk spares the disk), else the temporary folder.
 pub fn file(data: &[u8]) -> Input {
-    let path = std::env::temp_dir().join(format!("rowver-fuzz-{}.rvr", std::process::id()));
-    std::fs::write(&path, data).expect("the temporary folder takes the fuzz input");
+    let folder = std::env::var_os("FUZZ_INPUTS").map_or_else(std::env::temp_dir, PathBuf::from);
+    let path = folder.join(format!("rowver-fuzz-{}.rvr", std::process::id()));
+    std::fs::write(&path, data).expect("the inputs' folder takes the fuzz input");
     Input(path)
 }
 

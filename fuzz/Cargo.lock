@@ -790,8 +790,11 @@ version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
  "rowver",
+ "ruzstd",
  "rvr",
  "rvr-recipe",
+ "serde_json",
+ "sha2 0.11.1",
 ]
 
 [[package]]
