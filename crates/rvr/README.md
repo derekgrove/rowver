@@ -431,11 +431,11 @@ the press says so and exits 1. The rules are
 alone.
 
 Which columns to store and which to derive is a choice of space against time. On 2.1 M rows (300
-copies of the TChiWZ skim, Apple M5, 2026-11-03), seven typical computed columns (a sum, a count,
+copies of the TChiWZ skim, Apple M5, 2026-11-04), seven typical computed columns (a sum, a count,
 the leading lepton's pt, a ratio, a transverse mass, the largest jet-pair mass, jets cleaned of
 leptons) take 70 bytes per row stored, uncompressed, 35% more than the ten columns they use;
-derived, they add 0.6 s to the press (4.0 s against 3.4 s), and a Python run that works all seven
-out takes 1.0 s, where one that reads them stored takes 0.10 s and one that only opens the file
+derived, they add 0.4 s to the press (4.2 s against 3.8 s), and a Python run that works all seven
+out takes 1.1 s, where one that reads them stored takes 0.08 s and one that only opens the file
 0.05 s. A simple one, `sum(PT_jet)`, takes 0.11 s.
 
 #### While it reads
@@ -557,11 +557,11 @@ Wrote higgs_tautau.rvr (22,325 rows, 11 columns, 2.4 MB) in 19.4 s.
 The file picked up is the one an uninterrupted press writes (`rvr diff` finds no difference).
 Keeping the journal costs at most 1%: on the TChiWZ skim, 0.185 s against 0.188 s without it (30
 files, default workers), 2.057 s with and without it (90 files, `--workers 1`), and 3.554 s against
-3.524 s for the 39.3 MB file of 2.1 M rows, synced before it is put in place; Apple M5, 2026-11-03.
+3.524 s for the file of 2.1 M rows, synced before it is put in place; Apple M5, 2026-11-03.
 
 What a press holds in memory does not grow with the events it keeps: each file's kept values go to
 a spool as they are read, and each column is packed from it a piece at a time, so a press needs free
-disk for the spool beside the file it writes: 461 MB beside the 39.3 MB file of 2.1 M rows, whose
+disk for the spool beside the file it writes: 470 MB beside the 51.2 MB file of 2.1 M rows, whose
 300 copies of one file compress far better whole than a piece at a time ([SPEC §7.6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#76-what-a-press-holds)).
 Pressing 12 million rows of 31 columns from 1,698 files (4 workers) peaks at 0.14 GB of memory, and
 3 million rows from 425 files at 0.10 GB (Apple M5, 2026-11-03).
@@ -828,7 +828,7 @@ refused, naming them.
 
 `rvr empty` gives back a file's space and keeps it in its place: it lets the arrays go and keeps the
 header byte for byte, with the study it was pressed from, every checksum and its signature. On the
-2.1 M-row bench, a 39.3 MB file keeps its 122.5 kB header. `rvr validate`, `rvr dump`, `rvr diff` and
+2.1 M-row bench, a 51.2 MB file keeps its 122.6 kB header. `rvr validate`, `rvr dump`, `rvr diff` and
 the Python package read an empty file's header as ever and say it is empty. A refill reads the
 inputs again, so `rvr empty` first checks that each one the lock names is as the lock recorded it,
 and refuses a file made by another rvr version; `--anyway` empties it all the same. A file with
