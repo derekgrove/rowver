@@ -1751,6 +1751,23 @@ fn derive_says_every_problem_of_the_recipe_a_file_carries_in_one_sentence() {
     assert!(line.contains("([keep] a: There is no function named cnt") && line.contains("; [keep] b: count takes 1 value, not 2)"), "{said}");
 }
 
+// SPEC 8.8
+#[test]
+fn derive_changes_a_derived_table_only_when_each_column_is_a_line_of_its_own() {
+    // twice is written over two lines, as TOML allows: every change is refused alike, the file as it was.
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[totals]\n\n[derived]\ntwice = \"\"\"\nnJet * 2\"\"\"\n";
+    let dir = study("two-lines", FLAT, recipe);
+    let header = pressed(&dir, &[]);
+    assert_eq!(header["derived"]["columns"][0]["expression"], "nJet * 2");
+    let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let before = std::fs::read(dir.join(&file)).unwrap();
+    for change in [&["--drop", "twice"][..], &["--rename", "twice", "double"], &["half = nJet / 2"]] {
+        let (code, said) = rvr(&dir, &[&["derive", &file][..], change].concat());
+        assert!(code == 1 && said.contains("twice is a string written over more than one line") && said.contains("a line per column"), "{change:?}: {said}");
+        assert_eq!(std::fs::read(dir.join(&file)).unwrap(), before, "{change:?}");
+    }
+}
+
 /// The file `name` in `dir` written again with a tool key added.
 fn with_tool_key(dir: &Path, name: &str, tool: &Value) {
     let path = dir.join(name);

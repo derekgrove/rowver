@@ -455,6 +455,12 @@ fn allowed() -> Vec<(&'static str, Change)> {
             h["made"]["files"]["A"]["metadata"]["events_missing"] = 4.into();
             h["made"]["files"]["B"]["metadata"]["events_missing"] = serde_json::from_str("-0").unwrap();
         })),
+        ("§5 a sample column's numbers compared as numbers: in an f8 one, as the doubles they read as", Raw(|h| {
+            let cols = h["data"]["sample_cols"].as_array_mut().unwrap();
+            let seed = cols.iter_mut().find(|c| c["name"] == "seed_like").unwrap();
+            assert_eq!(seed["kind"], "f8");
+            seed["values"][1] = json!(9.223372036854776e18);
+        })),
         ("§4 whole facts in another spelling", Header(|h| h["data"]["cols"][0]["lim"] = json!([0.0, 3e0]))),
         ("§4 -0.0 is 0.0", Header(|h| h["data"]["cols"][1]["lim"][0] = json!(-0.0))),
         ("§4 a flat float column of NaN and infinities", Arrays(|h, a| {
@@ -492,6 +498,8 @@ fn opening() -> Vec<Row> {
     vec![
         // §1 The file and the header's JSON
         ("§1", "the magic", Bytes(|b| b[0] ^= 1), "it is not an .rvr file"),
+        ("§5 §6", "a metadata whole number at most 2^63 − 1", Header(|h| h["made"]["files"]["A"]["metadata"]["big"] = serde_json::from_str("9223372036854775808").unwrap()), "made.files[\"A\"].metadata.big is 9223372036854775808, and a whole number of metadata is from −2^63 to 2^63 − 1"),
+        ("§5 §6", "a metadata whole number at least −2^63", Header(|h| h["made"]["files"]["B"]["metadata"]["small"] = json!([serde_json::from_str::<Value>("-9223372036854775809").unwrap()])), "made.files[\"B\"].metadata.small[0] is -9223372036854775809, and a whole number of metadata is from −2^63 to 2^63 − 1"),
         // §3 and §6: what the header alone shows of the files read and the totals
         ("§3 R17", "the lock's files, leaving out only those never reached", Header(|h| {
             h["data"]["files"].as_array_mut().unwrap().insert(3, json!({"sample": "A", "path": "./fixture-a3.root", "rows": 0}));
@@ -665,7 +673,20 @@ fn opening() -> Vec<Row> {
         ("§9 R11", "checked strictly: a key of small order refused", Signed(|h| {
             h["signature"]["key"] = format!("01{}", "0".repeat(62)).into();
             h["signature"]["ed25519"] = format!("01{}", "0".repeat(126)).into();
-        }), "checked strictly as RFC 8032 says"),
+        }), "signature.key is an ed25519 public key of small order"),
+        ("§9", "the key a canonical encoding, its y below p", Signed(|h| h["signature"]["key"] = format!("ee{}7f", "f".repeat(60)).into()), "signature.key is not the canonical encoding of an ed25519 public key (its y is p or more)"),
+        ("§9", "R a canonical encoding, its y below p", Signed(|h| {
+            let s = h["signature"]["ed25519"].as_str().unwrap()[64..].to_owned();
+            h["signature"]["ed25519"] = format!("ee{}7f{s}", "f".repeat(60)).into();
+        }), "signature.ed25519's R is not a canonical encoding (its y is p or more)"),
+        ("§9", "R not of small order", Signed(|h| {
+            let s = h["signature"]["ed25519"].as_str().unwrap()[64..].to_owned();
+            h["signature"]["ed25519"] = format!("01{}{s}", "0".repeat(62)).into();
+        }), "signature.ed25519 does not hold for signature.key"),
+        ("§9", "S below L", Signed(|h| {
+            let r = h["signature"]["ed25519"].as_str().unwrap()[..64].to_owned();
+            h["signature"]["ed25519"] = format!("{r}edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010").into();
+        }), "signature.ed25519's S is not below L"),
         // §10 Derived columns
         ("§10 R10", "derived present only with a derived column", Header(|h| h["derived"] = json!({"columns": []})), "derived.columns is empty"),
         ("§10", "derived is exactly columns", Derived(|h| h["derived"]["x"] = 1.into()), "derived has a field \"x\""),
@@ -955,6 +976,23 @@ fn a_slice_of_a_derived_column_is_checked_against_its_record() {
         assert!(said.contains("derived.columns[\"twice\"], worked out here, is not what the file records of it"), "{said}");
     }
     assert_eq!(reader.slice("muons", 1, 3).unwrap().unwrap().offsets.map(|o| o.len()), Some(3));
+}
+
+// SPEC 11.8; FORMAT 10
+#[test]
+fn a_derived_column_reads_only_the_columns_it_uses() {
+    // Muon_pt's content damaged: muons, which reads it, is refused; twice, which reads MET alone, reads.
+    let (mut header, mut arrays) = derived();
+    edit(&header, &mut arrays, 5, 4, |c| c[0].0[0] = [c[0].0[0].clone(), c[0].0[0].clone()].concat());
+    relaid(&mut header, &arrays);
+    let path = written(&to_bytes(&sealed(header), &arrays), "derived-damaged");
+    let reader = Reader::open(&path).unwrap();
+    assert!(reader.column("muons").unwrap_err().to_string().contains("it is exactly one frame"));
+    assert!(reader.column("twice").unwrap().is_some() && reader.slice("twice", 1, 3).unwrap().is_some());
+    // Asked together, the refusal is Muon_pt's; twice alone reads whole.
+    let both = rowver::rvr::derived::columns(&reader, &["twice".into(), "muons".into()]).unwrap_err().to_string();
+    assert!(both.contains("it is exactly one frame"), "{both}");
+    assert_eq!(rowver::rvr::derived::columns(&reader, &["twice".into()]).unwrap().len(), 1);
 }
 
 // FORMAT 7, 8, 12

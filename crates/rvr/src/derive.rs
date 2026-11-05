@@ -167,6 +167,43 @@ fn table(lines: &[&str]) -> Option<(usize, usize)> {
     Some((heading, end))
 }
 
+/// The first line of the `[derived]` table at `table` that is not a derived column on a line of its
+/// own, `NAME = "EXPRESSION"`: what it is instead.
+fn spread(lines: &[&str], table: (usize, usize)) -> Option<String> {
+    (table.0 + 1..table.1).map(|at| lines[at]).filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#')).find_map(|line| {
+        let (key, value) = line.split_once('=').map_or((None, ""), |(key, value)| (Some(key.trim()), value.trim_start()));
+        // Only the line whose value opens a string of several lines names its key: one inside it never does.
+        let opens = value.starts_with("\"\"\"") || value.starts_with("'''");
+        match (line.parse::<toml::Table>(), key) {
+            (Ok(read), _) if read.len() == 1 && read.values().all(toml::Value::is_str) => None,
+            (Ok(read), Some(key)) if read.values().any(toml::Value::is_table) => match dotted(key) {
+                true => Some(format!("{key} is a dotted key")),
+                false => Some(format!("{key} is a table, not text")),
+            },
+            (Ok(_), Some(key)) => Some(format!("{key}'s value is not text")),
+            (Err(_), Some(key)) if opens => Some(format!("{key} is a string written over more than one line")),
+            _ => Some(format!("the line {:?} is not NAME = \"EXPRESSION\" (an entry over more than one line goes on so)", line.trim())),
+        }
+    })
+}
+
+/// Whether a key as written is dotted: a `.` outside its quotes.
+fn dotted(key: &str) -> bool {
+    let mut quote = None;
+    key.chars().any(|c| match (quote, c) {
+        (None, '"' | '\'') => {
+            quote = Some(c);
+            false
+        }
+        (Some(q), c) if c == q => {
+            quote = None;
+            false
+        }
+        (None, '.') => true,
+        _ => false,
+    })
+}
+
 /// A change to a recipe's lines, given where its `[derived]` table lies.
 type Change<'a> = dyn Fn(&mut Vec<String>, (usize, usize)) -> Result<(), String> + 'a;
 
@@ -188,6 +225,9 @@ fn edited(text: &str, change: &Change, expected: &[(String, String)]) -> Result<
             (owned.len() - 1, owned.len())
         }
     };
+    if let Some(what) = spread(&lines, table) {
+        return Err(format!("rvr derive changes the [derived] table of the recipe a file carries a line at a time, and {what}: write each derived column on a line of its own in recipe.toml (a line per column, NAME = \"EXPRESSION\"), and press again"));
+    }
     change(&mut owned, table)?;
     let mut text = owned.join("\n");
     text.push('\n');
@@ -310,4 +350,22 @@ fn run(path: &Path, change: Asked) -> Result<(), String> {
     );
     println!("Its study's recipe.toml is as it was: make the same change under [derived] there to keep it when the study is pressed again.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    // SPEC 8.8
+    #[test]
+    fn a_derived_line_that_is_not_one_column_is_said_for_what_it_is() {
+        let said = |line: &str| super::spread(&["[derived]", line], (0, 2));
+        assert_eq!(said("twice = \"nJet * 2\""), None);
+        assert_eq!(said("twice = \"\"\""), Some("twice is a string written over more than one line".into()));
+        assert_eq!(said("a.b = \"x\""), Some("a.b is a dotted key".into()));
+        assert_eq!(said("twice = { e = \"x\" }"), Some("twice is a table, not text".into()));
+        assert_eq!(said("\"a.b\" = { e = \"x\" }"), Some("\"a.b\" is a table, not text".into()));
+        assert_eq!(said("x = 2"), Some("x's value is not text".into()));
+        assert!(said("nJet * 2\"\"\"").is_some_and(|what| what.starts_with("the line \"nJet * 2")), "{:?}", said("nJet * 2\"\"\""));
+        // A line inside a string of several lines, even one holding ==, is no column.
+        assert!(said("nJet == 2\"\"\"").is_some_and(|what| what.starts_with("the line \"nJet == 2")), "{:?}", said("nJet == 2\"\"\""));
+    }
 }

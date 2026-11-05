@@ -162,6 +162,7 @@ fn past(what: &str) -> crate::Error {
 fn metadata_value(value: &Value, place: &str) -> Result<()> {
     match value {
         Value::Null => Err(invalid(format!("{place} is null, and metadata holds text, whole numbers, finite floats, true and false, and lists and objects of those (docs/FORMAT.md §6): {MEND}"))),
+        Value::Number(n) if crate::json::whole(n) && n.as_i64().is_none() => Err(invalid(format!("{place} is {n}, and a whole number of metadata is from −2^63 to 2^63 − 1, as TOML's are (docs/FORMAT.md §5, §6): {MEND}"))),
         Value::Number(n) if !crate::json::whole(n) && !n.as_f64().is_some_and(f64::is_finite) => Err(invalid(format!("{place} is {n}, not a finite float (docs/FORMAT.md §6): {MEND}"))),
         Value::Array(values) => values.iter().enumerate().try_for_each(|(i, v)| metadata_value(v, &format!("{place}[{i}]"))),
         Value::Object(values) => values.iter().try_for_each(|(k, v)| metadata_value(v, &format!("{place}.{k}"))),

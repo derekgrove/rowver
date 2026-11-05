@@ -122,27 +122,80 @@ fn absolute(base: &str, location: &str) -> String {
     format!("{}{dir}/{location}", &base[..authority_end])
 }
 
-/// `send` asked of `url`, following up to four redirects; the URL that answered, and its answer.
-/// The grid agent follows none itself (a 3xx comes back as `Ok`), so that each read can keep the
-/// disk server it was sent to.
+/// `send` asked of `url`, following up to four redirects, an `http://` one as `https://`, its host
+/// and port as written (with none written, https's own 443; docs/SPEC.md §7.2.4); the URL that
+/// answered, and its answer. The grid agent
+/// follows none itself (a 3xx comes back as `Ok`), so that each read can keep the disk server it
+/// was sent to.
 fn follow(
     url: &str,
     send: impl Fn(&str) -> Result<ureq::Response, ureq::Error>,
 ) -> (String, Result<ureq::Response, ureq::Error>) {
-    let mut url = url.to_string();
+    let (mut url, mut upgraded) = (url.to_string(), None);
     for _ in 0..4 {
-        let answer = send(&url);
+        let answer = plain(send(&url), upgraded.as_deref());
         let location = match &answer {
             Ok(r) if (300..400).contains(&r.status()) => r.header("Location"),
             _ => None,
         };
         match location {
-            Some(to) => url = absolute(&url, to),
+            Some(to) => {
+                url = absolute(&url, to);
+                upgraded = None;
+                if url.get(..7).is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://")) {
+                    upgraded = Some(origin(&url));
+                    url = format!("https://{}", &url[7..]);
+                }
+            }
             None => return (url, answer),
         }
     }
-    let answer = send(&url);
+    let answer = plain(send(&url), upgraded.as_deref());
     (url, answer)
+}
+
+/// A URL's scheme, host and port alone (`http://host:port`): never its user, path or query, which
+/// a storage's redirect fills with signed tokens.
+fn origin(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}")
+}
+
+/// The plain-HTTP server (its scheme, host and port) a door sent a request to by an `http://`
+/// Location, which answered the TLS handshake in plain HTTP: rvr reads only over https, so it is
+/// not asked again.
+#[derive(Debug)]
+struct PlainHttp(String);
+
+impl std::fmt::Display for PlainHttp {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "the door sent rvr to {}, a plain HTTP server, and rvr reads only over https (docs/SPEC.md §7.2.4): the storage's admins can say its https address", self.0)
+    }
+}
+
+impl std::error::Error for PlainHttp {}
+
+/// `answer` to an `upgraded` Location (asked as https): a handshake its server answered in plain
+/// HTTP made a `PlainHttp`, everything else as it is.
+#[allow(clippy::result_large_err)] // ureq's own error, as `follow` returns it
+fn plain(answer: Result<ureq::Response, ureq::Error>, upgraded: Option<&str>) -> Result<ureq::Response, ureq::Error> {
+    match (&answer, upgraded) {
+        (Err(ureq::Error::Transport(failure)), Some(location)) if spoke_plain(failure) => Err(std::io::Error::other(PlainHttp(location.to_owned())).into()),
+        _ => answer,
+    }
+}
+
+/// Whether a failed request's server answered the TLS handshake in plain HTTP.
+fn spoke_plain(failure: &ureq::Transport) -> bool {
+    matches!(grid_trust::tls_error(failure), Some(rustls::Error::InvalidMessage(rustls::InvalidMessage::InvalidContentType)))
+}
+
+/// The `PlainHttp` a failed request is, if it is one.
+fn plain_http(failure: &ureq::Transport) -> Option<&PlainHttp> {
+    let source = std::error::Error::source(failure)?;
+    source.downcast_ref::<std::io::Error>().and_then(|io| io.get_ref()).and_then(|inner| inner.downcast_ref::<PlainHttp>())
 }
 
 // Storage under load refuses requests for minutes at a time (EOS answers 403), so a press asks
@@ -220,7 +273,12 @@ impl Watch {
 
     /// A request came back as `reply`, from the door `door` (`host:port`) itself when it is named.
     pub fn note(&self, door: Option<&str>, reply: &Result<ureq::Response, ureq::Error>) {
-        self.answered(door, matches!(reply, Ok(_) | Err(ureq::Error::Status(..))));
+        // A server that answered the TLS handshake in plain HTTP answered all the same.
+        let answered = match reply {
+            Ok(_) | Err(ureq::Error::Status(..)) => true,
+            Err(ureq::Error::Transport(failure)) => spoke_plain(failure),
+        };
+        self.answered(door, answered);
     }
 
     /// A server at `host` (`host:port`) answered.
@@ -366,16 +424,23 @@ pub fn host_port(url: &str) -> Option<String> {
 }
 
 /// The site a door (`host:port`) is at, as the WLCG door list groups its doors: the list's own
-/// site for a door it lists, else the site the list would give the host, else the host itself.
+/// site for a door it lists; else the longest site the list names that its host is, or ends in
+/// after a `.`; else a site of its own, its host (docs/SPEC.md §7.4.5).
 fn domain(door: &str) -> String {
-    static SITES: std::sync::OnceLock<HashMap<(String, u16), String>> = std::sync::OnceLock::new();
-    let sites = SITES.get_or_init(|| wlcg_doors::snapshot().doors.iter().map(|d| ((d.host.to_ascii_lowercase(), d.port), d.site.clone())).collect());
+    type Sites = (HashMap<(String, u16), String>, BTreeSet<String>);
+    static SITES: std::sync::OnceLock<Sites> = std::sync::OnceLock::new();
+    let (doors, sites) = SITES.get_or_init(|| {
+        let listed = &wlcg_doors::snapshot().doors;
+        let doors = listed.iter().map(|d| ((d.host.to_ascii_lowercase(), d.port), d.site.clone())).collect();
+        (doors, listed.iter().map(|d| d.site.to_ascii_lowercase()).collect())
+    });
     let (host, port) = door.rsplit_once(':').map_or((door, None), |(host, port)| (host, port.parse::<u16>().ok()));
-    let listed = port.and_then(|port| sites.get(&(host.to_ascii_lowercase(), port)));
-    match listed {
-        Some(site) => site.clone(),
-        None => wlcg_doors::site_of(host).unwrap_or_else(|| host.to_owned()),
+    let host = host.to_ascii_lowercase();
+    if let Some(site) = port.and_then(|port| doors.get(&(host.clone(), port))) {
+        return site.clone();
     }
+    let within = |site: &&String| host == **site || host.strip_suffix(site.as_str()).is_some_and(|rest| rest.ends_with('.'));
+    sites.iter().filter(within).max_by_key(|site| site.len()).cloned().unwrap_or(host)
 }
 
 /// Whether any of `addresses`, or of the addresses `names` (`host:port`) have now, takes a TCP
@@ -419,6 +484,7 @@ fn reachable(names: &[String], addresses: &[std::net::SocketAddr], within: Durat
 fn passing(error: &ureq::Error, proxied: bool) -> Option<String> {
     use ureq::ErrorKind::{BadHeader, BadStatus, ConnectionFailed, Io};
     match error {
+        ureq::Error::Transport(failure) if plain_http(failure).is_some() => None,
         ureq::Error::Status(403, _) if !proxied => None,
         ureq::Error::Status(403 | 408 | 429 | 500..=599, _) => Some(why(error)),
         ureq::Error::Transport(failure)
@@ -615,6 +681,11 @@ impl Storage {
 
 /// What went wrong with a request, in a few words and without its URL.
 pub fn why(error: &ureq::Error) -> String {
+    if let ureq::Error::Transport(failure) = error {
+        if let Some(plain) = plain_http(failure) {
+            return plain.to_string();
+        }
+    }
     match error {
         ureq::Error::Status(code, answer) => {
             format!("its storage answered {code} {}", answer.status_text())
@@ -1055,6 +1126,48 @@ mod tests {
         (server, storage)
     }
 
+    // SPEC 7.2.4
+    #[test]
+    fn a_location_to_a_plain_http_server_fails_at_once_and_names_it() {
+        let (server, storage) = served(100);
+        // A port that answers in plain HTTP whatever it is sent, as a pool without TLS there does.
+        let plain = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = plain.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut stream in plain.incoming().flatten() {
+                let _ = std::io::Read::read(&mut stream, &mut [0; 4096]);
+                let _ = std::io::Write::write_all(&mut stream, b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            }
+        });
+        let location = format!("http://127.0.0.1:{port}/f.root");
+        let sent = location.clone();
+        server.script(move |_| server::Answer::Redirect(sent.clone()));
+        let started = std::time::Instant::now();
+        let failed = storage.digest(&server.url("/f.root")).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(3), "asked again: {:?}, {}", started.elapsed(), failed.why);
+        assert!(failed.why.contains(&format!("http://127.0.0.1:{port}, a plain HTTP server")) && failed.why.contains("only over https"), "{}", failed.why);
+        assert!(matches!(failed.fault, Fault::Unreachable), "a hole of its file, not a press stopped");
+    }
+
+    // SPEC 7.2.4
+    #[test]
+    fn an_http_location_is_followed_as_https_at_the_same_host_and_port() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let answer = |text: &str| text.parse::<ureq::Response>().unwrap();
+        let (url, got) = follow("https://door.example:1094/eos/f.root", |url| {
+            asked.borrow_mut().push(url.to_owned());
+            let n = asked.borrow().len();
+            Ok(match n {
+                1 => answer("HTTP/1.1 302 Found\r\nLocation: http://fst.example:8443/eos/f.root?id=7\r\n\r\n"),
+                2 => answer("HTTP/1.1 307 Temporary Redirect\r\nLocation: http://fst2.example/f.root\r\n\r\n"),
+                _ => answer("HTTP/1.1 200 OK\r\n\r\n"),
+            })
+        });
+        let asked = asked.into_inner();
+        assert_eq!(asked, ["https://door.example:1094/eos/f.root", "https://fst.example:8443/eos/f.root?id=7", "https://fst2.example/f.root"]);
+        assert_eq!((url.as_str(), got.unwrap().status()), ("https://fst2.example/f.root", 200));
+    }
+
     // SPEC 7.2.5
     #[test]
     fn many_ranges_are_asked_256_a_request_six_at_once() {
@@ -1212,8 +1325,13 @@ mod tests {
     fn the_network_is_gone_only_when_no_host_that_answered_can_be_reached() {
         assert_eq!(host_port("https://eos.example:9000/store/f.root").as_deref(), Some("eos.example:9000"));
         assert_eq!(host_port("https://Door.Example").as_deref(), Some("door.example:443"));
-        assert_eq!((domain("cmseos.fnal.gov:443"), domain("eos.cms.rcac.purdue.edu:9000")), ("fnal.gov".into(), "purdue.edu".into()));
+        assert_eq!((domain("cmseos.fnal.gov:9000"), domain("eos.cms.rcac.purdue.edu:9000")), ("fnal.gov".into(), "purdue.edu".into()));
         assert_eq!((domain("127.0.0.1:0"), domain("[::1]:0")), ("127.0.0.1".into(), "[::1]".into()));
+        // A door not on the list is at the longest site the list names that its host is or ends
+        // in, as EOS's disk servers are at its door's; else a site of its own, by its host.
+        assert_eq!((domain("cmseos.fnal.gov:443"), domain("CMSEOS.fnal.gov:1")), ("fnal.gov".into(), "fnal.gov".into()));
+        assert_eq!((domain("cmseos-fst12.fnal.gov:1094"), domain("Other.FNAL.gov:9000")), ("fnal.gov".into(), "fnal.gov".into()));
+        assert_eq!((domain("nowhere.example.org:443"), domain("notfnal.gov:443")), ("nowhere.example.org".into(), "notfnal.gov".into()));
         // As the door list groups them: two doors under ac.uk are two sites, as it says.
         assert_eq!((domain("antares.stfc.ac.uk:9000"), domain("ceph-dev-gw4.gridpp.rl.ac.uk:1094")), ("stfc.ac.uk".into(), "rl.ac.uk".into()));
         // A door that takes connections, and two that never do (port 0).
@@ -1252,10 +1370,11 @@ mod tests {
         works.heard_from(&door);
         works.note(Some(closed), &unanswered);
         assert!(!works.lost() && !works.stop.load(Ordering::Acquire));
-        // Two doors of one site, both failing, whose names no longer resolve: that site down
-        // cannot be told from the network gone, so the press stops and keeps what it read.
+        // Two doors of one site (one host not on the list, two ports), both failing, whose name no
+        // longer resolves: that site down cannot be told from the network gone, so the press stops
+        // and keeps what it read.
         let site = watch(Duration::ZERO);
-        for door in ["a.site.example:0", "b.site.example:0"] {
+        for door in ["door.site.example:0", "door.site.example:1"] {
             site.heard_from(door);
             site.note(Some(door), &unanswered);
         }

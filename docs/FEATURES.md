@@ -520,7 +520,9 @@ an *outage rule*. Once no storage has answered for 2 minutes, it tries for 5 s t
 doors that answered earlier in the press and are not failing now, or, when every one is failing,
 to all of them. One connection shows the network works and only the storage is down. No
 connection, twice 15 s apart, means the network is gone: the press stops, keeps what it read, and
-carries on when pressed again. When every door that answered is at one site, the press cannot tell
+carries on when pressed again. When every door that answered is at one site (as the WLCG door list
+groups them; a door not on it is at the longest site the list names that its host ends in, else
+a site of its own), the press cannot tell
 the site down from the network gone, and stops and keeps what it read, saying why
 ([SPEC §7.4](SPEC.md#74-when-a-storage-fails)).
 

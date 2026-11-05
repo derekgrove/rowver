@@ -121,7 +121,9 @@ each column has one kind in every sample: `if(sample.is_data, 1, genWeight)` is 
 
 A total is, for each file, its expression's value at each entry the press chose, before any cut,
 as an `f8`, added in entry order from +0.0; a sample's total is its files' added from +0.0 in the
-order `samples.lock` lists them. A total of `b1` values counts the true ones.
+order `samples.lock` lists them. A total of `b1` values counts the true ones. A total over another
+tree reads that tree's branches by name: a defined name, worked out over the events, is refused
+there.
 
 Every recipe writes all five tables, even the ones it leaves empty, so that it says at a glance
 what it does and does not use: an empty `[define]` defines nothing, an empty `[keep]` keeps every
@@ -300,7 +302,8 @@ For example, the leading good jet's pt is `nth(Jet_pt[good_jet], 0, 0)`, which g
 | `listed(list, positions)` | for each member, whether its position is among `positions` | `listed(Jet_pt, nearest_index(Muon_eta, Muon_phi, Jet_eta, Jet_phi))` | `[[true, false, true], [], [false, false]]` |
 
 In words: the `take` example lists the jets' eta from the highest-pt jet down, and the `listed`
-example marks each jet that is the closest jet to some muon.
+example marks each jet that is the closest jet to some muon. `'ascending'`, the order given when
+none is, may be written too: `sorted(Jet_pt, 'ascending')` is `sorted(Jet_pt)`.
 
 ### Joining lists
 
@@ -490,8 +493,9 @@ before anything is read.
 
 An expression is at most 100 levels deep. A value (a number, text, a name, `sample.FIELD`) is one
 level, a defined name as many as its own expression, and each operator, call, pair of brackets, mask
-and `in` list one more than the deepest part it holds: `a + b + c` is 3 levels, `abs(-x)` 3, and
-`(x)` 2. A derived column is as deep as its expression, counting each derived column it uses as deep
+and `in` one more than the deepest part it holds (an `in`'s parts are its left side and the list's
+members, whose brackets are no level): `a + b + c` is 3 levels, `abs(-x)` 3, `(x)` 2, and
+`x in [1, 2]` 2. A derived column is as deep as its expression, counting each derived column it uses as deep
 as that one's. A deeper expression is refused as it is read.
 
 ### Values the recipe cannot take
@@ -515,7 +519,8 @@ If you already make your selections in Python, here are some of the usual ones n
 write them in a recipe, starting simple and getting less simple as we go. The Python side is
 Awkward, with the branches read the way uproot reads NanoAOD (`ev = tree.arrays()`, so `ev.Jet_pt`
 and so on). Both sides were run on the example events above and give the result shown; a test
-runs them again every time, so if one ever stopped matching we'd know.
+runs the rvr side again every time, and `tests/readme_python.py` the Python side when run by hand,
+so if one ever stopped matching we'd know.
 
 A few things you'll notice: Awkward's `&` becomes `and` (and you don't need the parentheses
 around each condition), `axis=1` goes away because a function on a jagged list always works per
@@ -840,9 +845,15 @@ The kinds above are NumPy's type promotion, but for these differences:
 
 The float kind of a function's result is its input's kind, made a float: `f4` for `b1`, `i1`, `u1`,
 `i2`, `u2` and `f4`, `f8` for `i4`, `u4`, `i8`, `u8` and `f8`. For a function of several values it
-is that of the kind they combine in (the table), a fixed one weak beside it. Every float function
-works on its values as doubles and rounds its double result once to that kind. "libm" is the `libm`
-crate at 0.2.16; `sqrt` is IEEE's.
+is that of the kind they combine in (the table), a fixed one weak beside it. `atan2`, `hypot`,
+`min`, `max`, `clip` and `if` first bring a fixed value to the kind it takes beside the column, as
+an operator does, and work on it so (a fixed 5.1e38 beside an `f4` is inf); `delta_phi` and
+`delta_r` take the float kind of their columns alone, which a fixed value beside them leaves as it
+is (`delta_phi` of an `i1` and 1.5 is `f4`), and work on a fixed value as written, a double. Every float function
+works on its values as doubles and rounds its double result once to that kind. "libm" is musl 1.1.19's
+function of that name, which the `libm` crate at 0.2.16 computes bit for bit; `sqrt` is IEEE's. A function's `list` (and the `positions` of `take` and
+`listed`, the values of `join`, `pair_dr` and the kinematic functions, and the first four of the
+matching ones) is a list per event: a flat value there is refused, as `stored` refuses a fixed `x`.
 
 | function | exactly |
 |---|---|
@@ -856,8 +867,8 @@ crate at 0.2.16; `sqrt` is IEEE's.
 | `index(list)` | each member's position, 0, 1, …; `i8` |
 | `sorted(list)`, `sorted(list, 'descending')` | per event, the members in ascending (descending) order by a stable sort: equal members keep their order, and NaN comes first either way; whole numbers compared exactly; the list's kind |
 | `order(list)`, `order(list, 'descending')` | the positions, from 0, of that sort's members; `i8` |
-| `take(list, positions, otherwise)` | per event, for each of its whole-number positions the list's member there, or `otherwise` for a negative position or one past the end; shaped like the positions; the kind as `least` |
-| `listed(list, positions)` | `b1` shaped like the list: whether each member's position is among the event's whole-number positions |
+| `take(list, positions, otherwise)` | per event, for each of its whole-number positions (a list per event) the list's member there, or `otherwise` for a negative position or one past the end; shaped like the positions; the kind as `least` |
+| `listed(list, positions)` | `b1` shaped like the list: whether each member's position is among the event's whole-number positions (a list per event) |
 | `join(list, list, …)` | per event, every member of the first list, then of the second, and on; the kind they combine in |
 | `abs(x)` | a float's magnitude (its sign bit cleared); a signed whole number's, wrapping (an `i1` -128 stays -128); an unsigned or `b1` value unchanged |
 | `sign(x)` | of a float, 1 above 0, -1 below, +0.0 for either zero, NaN for NaN; of a whole number -1, 0 or 1 in its kind (0 or 1 when unsigned); `b1` unchanged |
@@ -891,5 +902,6 @@ must have the same number of members in each event, or it is one too.
 Every function works event by event, so no result depends on how many events are worked on at
 once. That number is only how much is held: a press reads up to 50,000 entries at a time, a reader
 works a derived column out a million rows at a time, and either works on fewer at once (halving
-until they fit) where the events' lists would make more than 67,108,864 (2^26) pairs together. Only
+until they fit) where the events' lists would make more than 67,108,864 (2^26) pairs together in
+one call of a pair function (counted for each call). Only
 the limit of one event, 65,536 pairs, ever stops a press.

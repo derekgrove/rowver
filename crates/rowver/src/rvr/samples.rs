@@ -98,7 +98,9 @@ pub(super) fn columns(data: &Value, made: &Value) -> Result<()> {
             continue;
         };
         expected += 1;
-        let agrees = held.get(key.as_str()).is_some_and(|(k, v)| *k == kind && v.iter().zip(&values).all(|(a, b)| super::facts::same(a, b, super::facts::Numbers::Written)));
+        // Numbers as numbers, whatever their spelling: an f8 column's as doubles, an i8 one's as whole numbers.
+        let numbers = super::facts::numbers(kind);
+        let agrees = held.get(key.as_str()).is_some_and(|(k, v)| *k == kind && v.iter().zip(&values).all(|(a, b)| super::facts::same(a, b, numbers)));
         if !agrees {
             return Err(invalid(format!("data.sample_cols has no column {key:?} of kind {kind} holding each sample's metadata value, which the samples' metadata gives (docs/FORMAT.md §5): {MEND}")));
         }

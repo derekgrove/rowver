@@ -64,13 +64,46 @@ pub(crate) fn verify(header: &Value) -> Result<Option<String>> {
     if signed_digest(header)? != sum {
         return Err(invalid(format!("the header changed after it was signed (signature.sha256 does not match it): {}", crate::rvr::MEND)));
     }
-    let public = VerifyingKey::from_bytes(&bytes::<32>(key).map_err(|_| hex("key", 64))?)
-        .map_err(|_| invalid("signature.key is not an ed25519 public key (docs/FORMAT.md §9): press its study again"))?;
-    let value = Signature::from_bytes(&bytes::<64>(field("ed25519")?).map_err(|_| hex("ed25519", 128))?);
+    let key_bytes = bytes::<32>(key).map_err(|_| hex("key", 64))?;
+    let signed = bytes::<64>(field("ed25519")?).map_err(|_| hex("ed25519", 128))?;
+    // One header and key have one valid signature: no second spelling of a point, nor of S. Each is
+    // checked here to say which it is; verify_strict checks R and S again.
+    let (mut r, s) = ([0; 32], &signed[32..]);
+    r.copy_from_slice(&signed[..32]);
+    if !encoded(&key_bytes) {
+        return Err(invalid("signature.key is not the canonical encoding of an ed25519 public key (its y is p or more) (docs/FORMAT.md §9): press its study again"));
+    }
+    if !encoded(&r) {
+        return Err(invalid("signature.ed25519's R is not a canonical encoding (its y is p or more) (docs/FORMAT.md §9): press its study again"));
+    }
+    if !below(s, &ORDER) {
+        return Err(invalid("signature.ed25519's S is not below L, the order of the group (docs/FORMAT.md §9): press its study again"));
+    }
+    let public = VerifyingKey::from_bytes(&key_bytes).map_err(|_| invalid("signature.key is not an ed25519 public key (docs/FORMAT.md §9): press its study again"))?;
+    if public.is_weak() {
+        return Err(invalid("signature.key is an ed25519 public key of small order, for which a signature holds of many headers (docs/FORMAT.md §9): press its study again"));
+    }
+    let value = Signature::from_bytes(&signed);
     public.verify_strict(&sum_bytes, &value).map_err(|_| {
-        invalid("signature.ed25519 does not hold for signature.key, checked strictly as RFC 8032 says, a key of small order refused (docs/FORMAT.md §9): the header changed after it was signed, or another key signed it; press its study again")
+        invalid("signature.ed25519 does not hold for signature.key, checked strictly as RFC 8032 says, its R of small order refused (docs/FORMAT.md §9): the header changed after it was signed, or another key signed it; press its study again")
     })?;
     Ok(Some(key.to_owned()))
+}
+
+/// The field's prime p, 2^255 − 19, and the group's order L, 2^252 + 27742317777372353535851937790883648493, little-endian.
+const PRIME: [u8; 32] = [0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f];
+const ORDER: [u8; 32] = [0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10];
+
+/// Whether the little-endian number `a` is below `b`, of as many bytes.
+fn below(a: &[u8], b: &[u8]) -> bool {
+    a.iter().rev().cmp(b.iter().rev()) == std::cmp::Ordering::Less
+}
+
+/// Whether a point's encoding is canonical: its y, the bits below the sign of x, below p.
+fn encoded(point: &[u8; 32]) -> bool {
+    let mut y = *point;
+    y[31] &= 0x7f;
+    below(&y, &PRIME)
 }
 
 /// Bytes written as lowercase hexadecimal, exactly `N` of them.

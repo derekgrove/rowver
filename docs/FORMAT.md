@@ -77,7 +77,10 @@ this is checked on opening, with no array read).
   the lists and objects in it), a file record's `totals`, and each tool key's object; every other
   object is a record.
 
-The header length is at most 2^32 − 1, as its four bytes allow.
+The header length is at most 2^32 − 1, as its four bytes allow. Beyond the forms this page gives a
+number (a count's above, a total's with a `.` or an exponent, a whole number told from a float by
+being written without either), its spelling is the writer's own: a reader takes `1.5e-7`,
+`1.5e-07` and `0.00000015` as one number.
 
 **An empty file** is a file's header, byte for byte, with nothing after it: the file ends at byte
 12 + header length, while its records still name every array, its checksums and its signature as
@@ -309,7 +312,8 @@ other value can be met.)
 through the samples' metadata in `data.samples` order, but the order carries no meaning. A value
 is written as `made` holds it: a whole number in an `f8` column stays a whole number (`59`, not
 `59.0`). `sample_cols` and `made` say the same thing twice, and a reader checks that they agree in
-both directions.
+both directions, comparing numbers as numbers, whatever their JSON spelling: in an `f8` column as
+the doubles they read as (`59` is `59.0`, `-0.0` is `0.0`), in an `i8` one as whole numbers.
 
 **The checksum** is of the values as bytes, so it does not depend on how a program writes a number
 in JSON. It is not part of `data.sha256`.
@@ -373,7 +377,7 @@ metadata has any of these names (SPEC.md §3.5.10, §2.3).
 | `by` | nonempty text naming the program that wrote the file |
 | `toolchain` | what built that program: exactly `program` (the implementation's name, nonempty: `rvr` for RowVer's own), `version` (its version, `15.MINOR.PATCH`, each number in digits with no leading zero), `rowver` (`"15"`), `commit` (below), `compiler` (the compiler's own one-line version text, as `rustc -V` prints it, nonempty) and `target` (the platform, nonempty) |
 | `recipe`, `samples`, `lock` | the study's three files, each exactly its whole `text` and the `sha256` of that text as UTF-8; `recipe` also has `format` (`"rvr-recipe"`) and `columns` (every column the recipe stores, in the file's order, each named once) |
-| `files` | every sample of `data.samples`, by name (below) |
+| `files` | every sample of `data.samples`, by name, in any order (below) |
 | `sha256` | the checksum of `made` (§8) |
 
 `commit` is the git commit the program was built from (40 lowercase hexadecimal digits), or
@@ -405,8 +409,9 @@ be read.
 - `files`: every file of the sample in `data.files`, keyed by its `at` in the lock, in that order
   (which is the lock's);
 - `metadata`: the sample's metadata from the lock, with `events_read`, `events_total`,
-  `events_missing` when the file has holes, and the sample's totals (§5), as text, whole numbers,
-  finite floats, `true` and `false`, and lists and objects of those (never `null`). The order of
+  `events_missing` when the file has holes, and the sample's totals (§5), as text, whole numbers
+  from −2^63 to 2^63 − 1 (as TOML's; a reader refuses any other on opening), finite floats, `true`
+  and `false`, and lists and objects of those (never `null`). The order of
   its keys carries no meaning: every checksum is of canonical JSON (§8), whose keys are sorted. The
   keys that hold one number, text or truth value per sample are written again as
   `data.sample_cols` (§5).
@@ -501,7 +506,8 @@ Each hole has exactly:
 - `entries`: `[first, last]`, two whole numbers with `first < last`, meaning the entries `first`
   to `last − 1` of the file's tree;
 - `kind`: one word of the list below, so a tool can group holes and act on them;
-- `why`: text that is not blank (not only spaces), for a person, saying what failed, where, and
+- `why`: text that is not blank (not only white space: spaces, tabs, line ends and any other
+  character Unicode counts as white space), for a person, saying what failed, where, and
   what to do. Its words are the program's own (they quote the library that read the file): two
   programs pressing the same study on the same inputs agree on every hole's `entries` and `kind`,
   and may word its `why` otherwise.
@@ -580,7 +586,9 @@ was resolved from), `sample` (one or more) and `branches` (one or more).
 **Each `[[sample]]`** has exactly `name`, `label`, `asked`, `tree`, `branches`, `events`,
 `events_total`, `events_read`, `metadata` and `file`, and `choose` (`"random"`) and `seed` exactly
 when the sample's choice is random. The samples are in the order, and have the name, label, tree,
-event choice and metadata, that `samples.toml` makes (SPEC.md §3.7), with `{file}` filled in.
+event choice and metadata, that `samples.toml` makes (SPEC.md §3.7), with `{file}` filled in: read
+alone, a lock's sample names are checked only to differ; their form, and the labels' differing,
+are checked against that `samples.toml`.
 `asked` is the sample's `files` entries, their placeholders filled, in order, each as written (a
 bare name stays `a.root`). `events_total` is the sum of its files' `entries`, and `events_read` the
 entries its own choice reads. `branches` is the SHA-256 of the branch list of its first file's tree
@@ -588,7 +596,8 @@ entries its own choice reads. `branches` is the SHA-256 of the branch list of it
 tree lacks a branch the recipe reads, or reads one as another kind or shape.
 
 **Each `[[sample.file]]`** has exactly `at`, `bytes`, `uuid` and `entries`; `adler32`
-when its storage gave one (a file on this computer always has one); `stop` for a first-N choice
+when its storage gave one (a file on this computer always has one, and a lock that gives one none
+is refused); `stop` for a first-N choice
 exactly when it reads fewer than `entries` of the file (0 for a file it never reaches); `take` for a
 random choice, always (how many chosen entries lie in it). The files are in the order SPEC.md §3.8
 gives: the matches of each `asked` entry, entry after entry, each entry's in byte order of name,
@@ -600,10 +609,11 @@ local path's `.` and `..` are taken out.
 | `at` | where the file is: its `asked` entry's folder and the matched name, joined by `/`. A local path is relative to the folder of `samples.toml` (an entry that is a bare name, `a.root`, is pinned `./a.root`), under `~/`, or absolute; or the URL |
 | `bytes` | its size, a whole number from 1 |
 | `adler32` | its adler32, 8 lowercase hexadecimal digits; every file on this computer has one |
-| `uuid` | the UUID inside the ROOT file, as §6 writes it |
+| `uuid` | the UUID of the ROOT file's header: its 16 bytes, in order, from byte 47 (59 in a file whose version is 1,000,000 or more), after the UUID's 2-byte version; as §6 writes it |
 | `entries` | the tree's entries |
 
-**Each `[[branches]]`** is one branch list, written once however many samples have it: exactly
+**Each `[[branches]]`** is one branch list, written once however many samples have it (resolve
+writes the lists in the order the samples first use them; a reader takes them in any order): exactly
 `sha256` and `list`. `list` holds one inline table per branch of the tree, in byte order of name,
 each exactly `name` (as a recipe writes it), `kind` and `shape`, and `why` exactly when `kind` is
 `"none"`:
@@ -621,6 +631,56 @@ A branch is read into a column by its shape: `"flat"` as a flat column; `"jagged
 column, one list per event; a whole number N as a jagged column whose every list holds the event's
 N values; `"jagged N"` as a jagged column whose list holds, one element after another, the N values
 of each of the event's elements (N times their count). The content's kind is the branch's `kind`.
+
+**What a branch list holds.** A tree's list holds every branch of it at any depth (those within a
+branch too), each named by its own name when that name finds it (a top-level branch of that name,
+else the first of that name, depth first), else by the names from the top down to it joined by `/`;
+a later branch of a name or path already given is left out. A branch's kind is its one leaf's (a
+branch of more leaves or none cannot be read): `TLeafO` `b1`; `TLeafB`, `TLeafS`, `TLeafI` and
+`TLeafL` `i1`, `i2`, `i4` and `i8`, or `u1`, `u2`, `u4` and `u8` when the leaf is unsigned; `TLeafF`
+`f4`; `TLeafD` `f8`; a `TLeafElement` by its streamer type, less 20 when it is from 21 to 39 (a
+fixed-size array): 1, 2, 3 or 6, and 4 or 16 `i1`, `i2`, `i4` and `i8`; 11, 12, 13 or 15, and 14 or 17
+`u1`, `u2`, `u4` and `u8`; 5, and 9 (a `Double32_t`), `f4`; 8 `f8`; 18 `b1`. No other leaf class
+(`TLeafC`, `TLeafG`, `TLeafF16`, `TLeafD32`, …) or streamer type can be read. A `TBranchElement`
+that is the top branch of a split `TClonesArray` or STL collection (element type 3 or 4) is `i4`,
+flat: its element count. One that holds a whole object an entry (element type 0 or -1, streamer
+type -1) is read only when its class is `vector<T>` or `std::vector<T>` of a basic `T`, as
+`"jagged"` of `T`'s kind: `bool`, `Bool_t` `b1`; `char`, `signed char`, `Char_t`, `int8_t` `i1`;
+`unsigned char`, `UChar_t`, `uint8_t` `u1`; `short`, `short int`, `Short_t`, `int16_t` `i2`;
+`unsigned short`, `unsigned short int`, `UShort_t`, `uint16_t` `u2`; `int`, `Int_t`, `int32_t` `i4`;
+`unsigned int`, `unsigned`, `UInt_t`, `uint32_t` `u4`; `long`, `long int`, `long long`, `Long_t`,
+`Long64_t`, `int64_t` `i8`; `unsigned long`, `unsigned long int`, `unsigned long long`, `ULong_t`,
+`ULong64_t`, `uint64_t` `u8`; `float`, `Float_t` `f4`; `double`, `Double_t` `f8`; each with or
+without `std::`. Any other object (a string, a nested vector, a vector of objects or strings) cannot
+be read. Any other readable branch's shape is its leaf's: counted by another leaf (`Jet_pt[nJet]`),
+or a member of a split collection (element type 31 or 41), it is `"jagged"`, or `"jagged N"` when
+each element holds N values; else N when the leaf holds N values, its dimensions multiplied
+(`m[2][3]/F` holds 6), or `"flat"` for one. A branch's `why` is the program's own words, naming its
+type: two programs' lists, and so their locks, differ in it alone.
+
+**The lock's spelling.** A reader takes the lock in any TOML spelling; `rvr samples resolve` writes
+it so, each line ended by LF: its two comment lines, as above, and a blank line; the top level's four
+keys in the order above; each sample after a blank line as `[[sample]]`, its keys in the order listed
+above with `choose` and `seed` after `events`; each of its files after a blank line as
+`[[sample.file]]`, its keys in the order `at`, `bytes`, `adler32`, `uuid`, `entries`, `stop`, `take`;
+then each branch list after a blank line as `[[branches]]`, `sha256`, `list = [`, one inline table a
+line, indented two spaces and followed by `,` (its keys in the order `name`, `kind`, `shape`, `why`),
+and `]`. Each line of a key is `key = value`. A whole number is its digits, after `-` when negative; a
+float the fewest digits that read back as it (of two as near, the one of greater magnitude), in plain
+decimal, never with an exponent, `.0` after a whole one (`59.0`, `-0.0`); a list `[a, b]` (`[]`); a
+table inline, `{ a = 1, b = 2 }` (`{}`), its keys in the metadata's order (SPEC.md §3.7.3, a key given
+again keeping its first place). A text is written `"…"` when it holds no `\`, `"`, line end or
+control character (U+0000 to U+001F, or U+007F) but tab; else `'…'` when it holds no `'`, line end or
+control character but tab; else `"""…"""` when it holds no `\`, no three `"` in a row and no control
+character but tab and line end; else `'''…'''` when it holds no three `'` in a row and no control
+character but those; else `"…"`, or `"""…"""` when it holds a line end, with escapes. A text of more
+than one line starts on the line after its opening quotes. In `"…"` and `"""…"""` a tab is `\t`; with
+escapes, backspace, form feed and carriage return are `\b`, `\f` and `\r`, `\` is `\\`, a line end is
+`\n` in `"…"` (and itself in `"""…"""`), a `"` is `\"` (in `"""…"""`, one that would make three in a
+row), and any other control character `\u` and its four hexadecimal digits, uppercase. A key is
+bare when it is one or more ASCII letters, digits, `-` and `_`; else `"…"` when it holds no `\`, `"`
+or control character but tab; else `'…'` when it holds no `'` or control character but tab; else
+`"…"` with escapes; a key's `"…"` is written as a text's.
 
 ## 7. Arrays
 
@@ -769,7 +829,8 @@ The canonical JSON of a value is:
 - **a whole number** (written without a fraction or an exponent): its digits as the header writes
   them, however many there are, with a leading `-` when negative and `-0` written `0`;
 - **any other number**: the double nearest to it, written with the fewest significant digits that
-  read back as that double; a number past the largest double has none, and a header holding one in
+  read back as that double (of two such spellings, the one nearest the double's exact value, and of
+  two as near, the one whose last digit is even); a number past the largest double has none, and a header holding one in
   `data`, `made` or `derived` is refused. With `e` the decimal exponent of its first significant
   digit, it is written in decimal when `-4 ≤ e < 16`, always with a `.` and at least one digit after
   it. Otherwise it is one digit, a `.` and the rest of the digits when there are more, then `e`, a
@@ -808,8 +869,9 @@ It has exactly these three members:
 
 A reader refuses a signed file whose `sha256` is not that of its header, or whose signature does
 not hold for `key`: either means the header changed after it was signed. The signature is checked
-strictly (RFC 8032's checks, and a key of small order refused), so that one header and key have one
-valid signature. Whether `key` belongs to
+strictly: RFC 8032's checks, and besides, the public key and the signature's `R` each a canonical
+encoding (its y below p) and neither of small order, and its S below L; so that one header and key
+have one valid signature. Whether `key` belongs to
 someone the reader trusts is for the reader to decide.
 
 ## 10. Derived columns
@@ -842,12 +904,14 @@ is the SHA-256 of the two chunks' SHA-256s joined.
 An expression uses only what the file holds: its stored columns, the derived columns above it,
 and `sample.KEY` (the metadata of the row's sample, as a press gives it to an expression: without
 `events_read`, `events_total` and `events_missing`, with its totals, and with `sample.file` the
-path of the row's file in the lock). Its values do not depend on how many rows are worked out at
+path of the row's file in the lock). It is worked out over each file's rows apart, where
+`sample.KEY` and `sample.file` are fixed values. Its values do not depend on how many rows are worked out at
 once, and every function of the recipe language computes the same bits on every platform (its
 exponentials, logarithms, trigonometry, roundings, `hypot` and `**` come from the `libm` crate, and
 `sqrt` and the remainders of `%` and `delta_phi` are exact in IEEE arithmetic), so it has the same
 values whoever works it out. A reader
-that works one out checks its values against the record, and refuses the column when they differ.
+that works one out checks its values against the record, and refuses the column when they differ,
+or when it is not one kind, flat or a list, in every sample and file.
 A later rvr may add functions to the language; a reader that meets one it does not know, in a
 file whose `made.toolchain.version` is newer than its own version, says that the file needs a newer
 reader, and still reads each stored column asked for by name. A function, once released, keeps
@@ -861,7 +925,8 @@ is dropped or renamed only with it, or after it.
 
 ## 11. Tool keys
 
-Any other top-level key belongs to a tool: one object per tool, named for it (one or more ASCII
+Any other top-level key belongs to a tool: one object per tool (a value that is not an object is
+refused), named for it (one or more ASCII
 letters, digits, `_`, `-` and `.`), holding whatever JSON the tool likes, within
 §1's rules. A key that is a slip of one of the format's own (`rowver`, `data`, `made`, `derived`,
 `signature`) is refused as a misspelling, naming the key it is near: compared ignoring case, at most
@@ -888,10 +953,11 @@ study's texts:
   content checksum 4);
 - §2 and §11: the top level, and the tool keys' names;
 - §3: every field of `data`, `chunk_rows` within its bounds, the samples and files in order, rows
-  adding up;
+  adding up; the samples' names nonempty and unique, their labels nonempty (the names' form, and
+  the labels' being unique, are checked with the study's texts, in full validation);
 - §4: every column record's fields, kinds and names; the facts' forms: `lim` in order, `nice` made
-  again from `lim`, `vals` only where it applies, ascending, within `lim`, and there whenever `lim`
-  spans 64 values or fewer;
+  again from `lim`, `vals` only where it applies, ascending from `lim`'s first end to its last
+  (empty only with `lim` `[0, 0]`), and there whenever `lim` spans 64 values or fewer;
 - §5: the sample columns, their kinds, values and checksums, against the metadata both ways;
   `events_read`, `events_total` and `events_missing` present as §5 says;
 - §6: every field of `made` and its values; each text against its `sha256`; `made.sha256`;

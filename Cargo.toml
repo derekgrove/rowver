@@ -38,7 +38,8 @@ zmij = "1"
 # Every float function, so every platform computes the same bits (pure Rust; rust-lang's port of musl),
 # pinned exactly: a function, once released, keeps its results.
 libm = "=0.2.16"
-# The tests' HTTPS storage only (a dev-dependency of rvr); grid-trust already builds it.
+# What rvr reads of grid-trust's TLS errors (a plain-HTTP server behind an upgraded Location), and
+# the tests' HTTPS storage; grid-trust already builds it.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 # The Python package only (crates/rowver-py).
 pyo3 = { version = "0.30.1", features = ["abi3-py311"] }

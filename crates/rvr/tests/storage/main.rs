@@ -253,6 +253,33 @@ fn a_read_whose_eight_tries_fail_is_a_hole() {
     assert_eq!((code, hole(&dir).as_deref()), (3, Some("refused")), "{said}");
 }
 
+// SPEC 7.2.4, 7.3.1
+#[test]
+fn a_location_to_a_plain_http_server_is_a_hole_naming_only_its_host_and_port() {
+    // A port answering in plain HTTP whatever it is sent, as a pool without TLS there does.
+    let plain = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = plain.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for mut stream in plain.incoming().flatten() {
+            let _ = std::io::Read::read(&mut stream, &mut [0; 4096]);
+            let _ = std::io::Write::write_all(&mut stream, b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        }
+    });
+    // Every read sent there, its query holding a storage's signed token, as EOS and dCache send.
+    let location = format!("http://127.0.0.1:{port}/eos/flat.root?authz=SECRET-TOKEN&cap.sym=XYZ");
+    let (dir, _server, code, said) = pressed("plain", false, move |request| match request.method.as_str() {
+        "GET" => Answer::Redirect(location.clone()),
+        _ => Answer::Serve,
+    });
+    assert_eq!((code, hole(&dir).as_deref()), (3, Some("unreachable")), "{said}");
+    assert!(!said.contains("waiting"), "asked again: {said}");
+    let header = header(&dir).to_string();
+    for shown in [&said, &header] {
+        assert!(shown.contains(&format!("http://127.0.0.1:{port}, a plain HTTP server")), "{shown}");
+        assert!(!shown.contains("SECRET") && !shown.contains("cap.sym") && !shown.contains("/eos/flat.root"), "{shown}");
+    }
+}
+
 // SPEC 7.4.3
 #[test]
 fn some_answers_are_taken_at_once() {

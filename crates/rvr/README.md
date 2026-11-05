@@ -595,7 +595,8 @@ tries for 5 s to connect to each door that answered earlier in the press and is 
 works: only the failing storage is down, and its files become holes after their waits. No
 connection, twice 15 s or more apart, means the network is gone: the press stops, keeps what it
 read, and says so; pressing again once it is back carries on. When every door that answered is at
-one site, rvr cannot tell the site down from the network gone, and stops and keeps what it read,
+one site (as the WLCG door list groups them; a door not on it is at the longest site the list
+names that its host ends in, else a site of its own), rvr cannot tell the site down from the network gone, and stops and keeps what it read,
 saying why.
 
 ### `rvr status [DIR] [--out FILE] [--events N|all] [--random] [--seed S] [--holes]`
