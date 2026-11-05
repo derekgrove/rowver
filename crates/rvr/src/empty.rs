@@ -50,6 +50,10 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result
         println!("{shown} is empty already.");
         return Ok(());
     }
+    if reader.rows().map_err(|e| rowver::plain(file, &e))? == 0 {
+        println!("{shown} has no rows, so its arrays hold no bytes: there is nothing to empty.");
+        return Ok(());
+    }
     let by = reader.header()["made"]["by"].as_str().unwrap_or("an unknown rvr").to_owned();
     let this = concat!("rvr ", env!("CARGO_PKG_VERSION"));
     if by != this && !anyway {

@@ -146,22 +146,27 @@ state therefore needs no change to the specification.
 
 ### 3.6 Array encoding
 
-Each array is stored in three steps. Its values are written little-endian. When the kind is wider
-than one byte, the bytes are shuffled: every value's first byte, then every value's second byte,
-and so on, which puts the slowly changing bytes of neighbouring values together. The result is
-then compressed as one Zstandard frame [RFC 8878]. Both steps run in pure Rust, and reading a
-flat column takes one read and one decode (a jagged one two: its offsets and its content).
+Every array is cut at the same rows into chunks: within each sample, every `chunk_rows` rows
+(65,536 unless the recipe says otherwise), so chunk `k` is the same rows in every array and no
+chunk spans two samples. Each chunk's values are written little-endian and cut into byte lanes,
+every value's first byte, then every value's second byte, and so on, which puts the slowly
+changing bytes of neighbouring values together; each lane is compressed as one Zstandard frame
+[RFC 8878]. After an array's frames comes its chunk table: each frame's size and each chunk's
+SHA-256. A reader can therefore read, decompress and check any rows of any column alone, and the
+chunks of a column in parallel. Everything runs in pure Rust.
 
 ## 4. Integrity, provenance and reproducibility
 
 ### 4.1 A hierarchy of checksums
 
-- Every array carries the SHA-256 of its uncompressed bytes.
+- Every chunk carries, in its array's chunk table, the SHA-256 of its uncompressed values; every
+  array carries the SHA-256 of its chunks' SHA-256s, so it is checked from the table with nothing
+  decompressed.
 - `data.sha256` hashes the concatenated array checksums in file order. It fingerprints all the
   data without decompressing anything.
-- Every per-row array also carries `by_sample`: one SHA-256 per sample, over that sample's slice.
-  For jagged offsets the slice is shifted to start at zero, so a change in one sample never
-  changes another sample's checksum.
+- Every per-row array also carries `by_sample`: one SHA-256 per sample, of that sample's chunks'
+  SHA-256s. A chunk's jagged offsets start at zero and no chunk spans two samples, so a change in
+  one sample never changes another sample's checksum.
 - `made.sha256` hashes a canonical JSON encoding defined in
   [the format](FORMAT.md#canonical-json). Keys are sorted by code point, string escapes are
   fixed, and there is no whitespace. Integers are written as given and never turned into

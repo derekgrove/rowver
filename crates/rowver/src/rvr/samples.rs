@@ -1,70 +1,9 @@
-use super::{checksum, digest, exactly, hex, list, nonempty, MEND};
-use crate::numeric::width;
-use crate::write::NumericBuffer;
+use super::{checksum, digest, exactly, list, nonempty, MEND};
 use crate::{invalid, Result};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
 pub(crate) use rvr_recipe::RESERVED;
-
-/// The half-open row range of every sample, in `data.samples` order (their sum checked on opening).
-pub(super) fn spans(data: &Value) -> Result<Vec<(usize, usize)>> {
-    let mut start = 0_usize;
-    let mut spans = Vec::new();
-    for record in list(data, "data", "samples")? {
-        let end = start.checked_add(super::whole_count(&record["rows"]).unwrap_or(0) as usize).ok_or_else(|| invalid(format!("data.samples' rows add up past 2^64: {MEND}")))?;
-        spans.push((start, end));
-        start = end;
-    }
-    Ok(spans)
-}
-
-/// Require one recorded checksum per sample, each matching the bytes `part` gives for that sample.
-fn compare(
-    record: &Value,
-    spans: &[(usize, usize)],
-    place: &str,
-    part: impl Fn(usize, usize) -> Result<String>,
-) -> Result<()> {
-    let recorded = list(record, place, "by_sample")?;
-    for (index, (sum, (start, end))) in recorded.iter().zip(spans).enumerate() {
-        if sum.as_str() != Some(part(*start, *end)?.as_str()) {
-            return Err(invalid(format!("{place}.by_sample[{index}] is not the SHA-256 of that sample's part of the array (docs/FORMAT.md §8): {MEND}")));
-        }
-    }
-    Ok(())
-}
-
-/// Check the per-sample checksums of an array holding one value per row.
-pub(super) fn per_row(
-    record: &Value,
-    array: &NumericBuffer,
-    spans: &[(usize, usize)],
-    place: &str,
-) -> Result<()> {
-    let w = width(&array.kind)?;
-    compare(record, spans, place, |start, end| Ok(digest(&array.bytes[start * w..end * w])))
-}
-
-/// Check the per-sample checksums of a jagged column's rebased offsets and of its content.
-pub(super) fn jagged(
-    record: &Value,
-    offsets: &[usize],
-    content: &NumericBuffer,
-    spans: &[(usize, usize)],
-    place: &str,
-) -> Result<()> {
-    compare(&record["offsets"], spans, &format!("{place}.offsets"), |start, end| {
-        let mut hash = Sha256::new();
-        for offset in &offsets[start..=end] {
-            hash.update(((offset - offsets[start]) as i64).to_le_bytes());
-        }
-        Ok(hex(&hash.finalize()))
-    })?;
-    let w = width(&content.kind)?;
-    compare(&record["content"], spans, &format!("{place}.content"), |start, end| Ok(digest(&content.bytes[offsets[start] * w..offsets[end] * w])))
-}
 
 /// Work out the kind of sample column these per-sample values make, if they make one.
 pub(crate) fn kind_of(values: &[&Value]) -> Option<&'static str> {

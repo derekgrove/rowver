@@ -30,7 +30,7 @@ fn flat(kind: Kind, values: Vec<i64>) -> Array {
 fn a_recipe_with_many_problems_is_refused_with_all_of_them() {
     let said = refused("titel = \"x\"\n[define]\ngood = \"cnt(Jet_pt > 30)\"\n[keep]\n\"two jets\" = \"count(good) >= 2\"\nmet = { if = \"sample.era == 3\", aply = \"MET_pt > 30\" }\n[columns]\nht = { value = \"sum(Jet_pt, 1)\", stored = \"f2\" }\n[totals]\nsumw = { value = \"genWeight\", trees = \"Runs\" }\n[derived]\nr = \"ht / nothing\"\n");
     let want = [
-        "A recipe has no key \"titel\"; it takes format, version, title, define, keep, columns, totals, derived. Did you mean: title?",
+        "A recipe has no key \"titel\"; it takes format, version, title, chunk_rows, define, keep, columns, totals, derived. Did you mean: title?",
         "[define] good: There is no function named cnt. Did you mean: ",
         "[keep] two jets: a cut is named with one plain name, such as two_muons",
         "[keep] met has no key \"aply\"; it takes if, apply. Did you mean: apply?",
@@ -55,6 +55,18 @@ fn a_recipe_with_many_problems_is_refused_with_all_of_them() {
     // Every problem on one line, for a sentence that holds them.
     let both = Recipe::read(&complete("titel = 1\nx = 2\n")).unwrap_err();
     assert!(both.0.contains('\n') && !both.line().contains('\n') && both.line().contains("\"titel\"; it takes") && both.line().contains("; A recipe has no key \"x\""), "{}", both.line());
+}
+
+// RECIPE the-keys-exactly; FORMAT 3, 7
+#[test]
+fn chunk_rows_is_a_whole_number_within_its_bounds_and_65536_when_not_given() {
+    let read = |line: &str| Recipe::read(&complete(line)).map(|recipe| recipe.chunk_rows());
+    assert_eq!(read(""), Ok(65_536));
+    assert_eq!(read("chunk_rows = 1024\n"), Ok(1024));
+    assert_eq!(read("chunk_rows = 16_777_216\n"), Ok(16_777_216));
+    for wrong in ["chunk_rows = 1023\n", "chunk_rows = 16777217\n", "chunk_rows = 65536.0\n", "chunk_rows = \"65536\"\n", "chunk_rows = -1\n"] {
+        assert_eq!(refused(wrong), ["chunk_rows must be a whole number from 1,024 to 16,777,216, the rows of one chunk of the file's arrays (FORMAT.md §7): leave it out for 65,536"], "{wrong}");
+    }
 }
 
 // RECIPE mistakes, functions-exactly, defined-names, values, operators, text-branches-and-stored-types; SPEC 1.5, 4.1.5

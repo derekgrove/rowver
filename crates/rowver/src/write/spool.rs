@@ -1,7 +1,7 @@
 //! A file's columns gathered a piece at a time, held compressed on disk until each is packed,
 //! so what is held in memory does not grow with the rows.
 
-use super::column::{read_at, write_at, Pieces};
+use super::column::{read_at, write_at, Piece, Pieces};
 use super::Values;
 use crate::numeric::width;
 use crate::{codec, invalid, Result};
@@ -146,9 +146,9 @@ impl Spool {
     /// (the low bytes of measured values are mostly noise, which costs time to compress for little).
     fn put(&self, bytes: &[u8], compress: bool) -> Result<Span> {
         let probe = &bytes[..bytes.len().min(PROBE)];
-        let worth = compress && codec::pack(probe, 1).len() * 5 < probe.len() * 4;
+        let worth = compress && codec::pack(probe).len() * 5 < probe.len() * 4;
         let packed = match worth {
-            true => Cow::Owned(codec::pack(bytes, 1)),
+            true => Cow::Owned(codec::pack(bytes)),
             false => Cow::Borrowed(bytes),
         };
         let at = {
@@ -165,12 +165,12 @@ impl Spool {
         })
     }
 
-    /// Read back what `put` added.
-    fn get(&self, span: &Span) -> Result<Vec<u8>> {
+    /// Read back what `put` added, which `holds` says.
+    fn get(&self, span: &Span, holds: &str) -> Result<Vec<u8>> {
         let mut packed = vec![0; span.size];
         read_at(&self.file, &mut packed, span.at).map_err(|e| crate::about(&self.path, e.into()))?;
         match span.packed {
-            true => codec::unpack(packed, 1, span.bytes, "a spooled piece"),
+            true => codec::unpack(&packed, span.bytes, &self.path.display().to_string(), holds),
             false => Ok(packed),
         }
     }
@@ -278,14 +278,15 @@ impl Pieces for Spooled<'_> {
     fn values(&self, piece: usize) -> usize {
         self.parts[piece].values
     }
-    fn lane(&self, piece: usize, lane: usize) -> Result<Cow<'_, [u8]>> {
-        Ok(Cow::Owned(self.spool.get(&self.parts[piece].lanes[lane])?))
+    fn piece(&self, piece: usize) -> Result<Piece<'_>> {
+        let lanes = self.parts[piece].lanes.iter().map(|lane| self.spool.get(lane, "a spooled piece's lane").map(Cow::Owned));
+        Ok(Piece::Lanes(lanes.collect::<Result<_>>()?))
     }
     fn counts(&self, piece: usize) -> Result<Option<Cow<'_, [usize]>>> {
         let Some(span) = &self.parts[piece].counts else {
             return Ok(None);
         };
-        let raw = self.spool.get(span)?;
+        let raw = self.spool.get(span, "a spooled piece's counts")?;
         let (held, _) = raw.as_chunks::<8>();
         Ok(Some(Cow::Owned(
             held.iter()
@@ -308,7 +309,8 @@ mod tests {
         let w = width(held.kind()).unwrap();
         let (mut bytes, mut counts) = (Vec::new(), Vec::new());
         for piece in 0..held.pieces() {
-            let lanes: Vec<_> = (0..w).map(|lane| held.lane(piece, lane).unwrap()).collect();
+            let Piece::Lanes(lanes) = held.piece(piece).unwrap() else { panic!("a spooled piece in lanes") };
+            assert_eq!(lanes.len(), w);
             for value in 0..held.values(piece) {
                 bytes.extend(lanes.iter().map(|lane| lane[value]));
             }

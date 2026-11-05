@@ -53,6 +53,12 @@ fn pairs<'a>(lists: &[Vec<(&str, &'a Value)>; 2], what: &str) -> Vec<(String, &'
 fn compare(a: &str, b: &str, headers: [&Value; 2]) -> Vec<String> {
     let (first, second) = (&headers[0]["data"], &headers[1]["data"]);
     let mut said = Vec::new();
+    // Files cut in chunks of other sizes have other per-sample checksums whatever their values.
+    let cut = first["chunk_rows"] == second["chunk_rows"];
+    if !cut {
+        let rows = |data: &Value| rowver::rvr::grouped(data["chunk_rows"].as_u64().unwrap_or(0));
+        said.push(format!("chunk_rows: the files are cut in chunks of {} and {} rows: their per-sample checksums cannot be compared; rvr diff --rows compares the events", rows(first), rows(second)));
+    }
     if first["rows"] != second["rows"] {
         said.push(format!(
             "rows: {} in {a}, {} in {b}",
@@ -87,7 +93,7 @@ fn compare(a: &str, b: &str, headers: [&Value; 2]) -> Vec<String> {
     }
     let shared: Vec<&str> = shared.into_iter().map(|(name, _, _)| name).collect();
     let differs = |one: &Value, other: &Value, sample: &str| {
-        one["by_sample"][index(0, sample)] != other["by_sample"][index(1, sample)]
+        cut && one["by_sample"][index(0, sample)] != other["by_sample"][index(1, sample)]
     };
     let both: Vec<(String, &Value, &Value)> = pairs(&columns, "column")
         .into_iter()

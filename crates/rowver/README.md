@@ -42,8 +42,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   says) and `samples.lock` (`study::lock::Lock::read`), and whether a lock was resolved from a
   `samples.toml` (`study::lock::agree`).
 
-Arrays are byte-shuffled and compressed with Zstandard in pure Rust; reading a flat column is one
-read and one decode, a jagged one two (its offsets and its content). The format is specified in
+Arrays are cut in chunks of rows, each chunk's byte lanes compressed with Zstandard in pure Rust and
+checked against its chunk table's SHA-256; a column's chunks decode in parallel, and
+`Reader::slice` reads any rows of a column alone. The format is specified in
 [docs/FORMAT.md](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md).
 
 The [`rvr`](https://crates.io/crates/rvr) command makes `.rvr` files from ROOT files and

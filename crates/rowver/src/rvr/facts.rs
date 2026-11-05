@@ -3,9 +3,6 @@
 
 use super::{field, MEND};
 use crate::decimal::{nice, Decimal};
-use crate::numeric::width;
-use crate::write::NumericBuffer;
-use crate::write::facts::Facts;
 use crate::{invalid, Result};
 use serde_json::{Map, Value};
 
@@ -111,15 +108,6 @@ pub(super) fn forms(record: &Value, kind: &str, place: &str) -> Result<()> {
         true => Ok(()),
         false => Err(invalid(format!("{place}.vals must be every distinct value, ascending, from lim's first end to its last, at most 64 of them (docs/FORMAT.md §4): {MEND}"))),
     }
-}
-
-/// Check a flat column's facts against its values: each made again, and equal as a number.
-pub(super) fn values(record: &Value, array: &NumericBuffer, place: &str) -> Result<()> {
-    let mut facts = Facts::new(&array.kind);
-    for chunk in array.bytes.chunks(width(&array.kind)? << 16) {
-        facts.add(chunk)?;
-    }
-    agree(record, &facts.finish(), &array.kind, place)
 }
 
 /// Require a record's facts to be `want`'s, compared as numbers, `vals` there exactly when wanted.

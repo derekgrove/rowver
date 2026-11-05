@@ -187,26 +187,26 @@ fn the_running_example_of_format_md_is_what_a_press_writes() {
     let length = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
     let h: Value = serde_json::from_slice(&bytes[12..12 + length]).unwrap();
     let arrays = &bytes[12 + length..];
-    assert_eq!(arrays.len(), 332);
+    assert_eq!(arrays.len(), 1962);
     let d = &h["data"];
     let cut = |v: &Value| v.as_str().unwrap()[..8].to_owned();
     let at = |v: &Value| (v["at"].as_u64().unwrap(), v["size"].as_u64().unwrap());
     let cols = |name: &str| d["cols"].as_array().unwrap().iter().find(|c| c["name"] == name).unwrap().clone();
     let (njet, jet, ht) = (cols("nJet"), cols("Jet_pt"), cols("ht"));
-    assert_eq!([at(&d["sample"]), at(&d["entry"]), at(&njet), at(&jet["offsets"]), at(&jet["content"]), at(&ht)], [(0, 50), (50, 51), (101, 50), (151, 52), (203, 80), (283, 49)]);
+    assert_eq!([at(&d["sample"]), at(&d["entry"]), at(&njet), at(&jet["offsets"]), at(&jet["content"]), at(&ht)], [(0, 240), (240, 430), (670, 254), (924, 432), (1356, 324), (1680, 282)]);
     assert_eq!(&arrays[..6], [0x28, 0xb5, 0x2f, 0xfd, 0x04, 0x38]);
-    assert_eq!(d["rows"], 8);
+    assert_eq!((&d["rows"], &d["chunk_rows"]), (&serde_json::json!(8), &serde_json::json!(65_536)));
     let hashes = [cut(&d["sample"]["sha256"]), cut(&d["entry"]["sha256"]), cut(&njet["sha256"]), cut(&jet["offsets"]["sha256"]), cut(&jet["content"]["sha256"]), cut(&ht["sha256"]), cut(&d["sha256"])];
-    assert_eq!(hashes, ["eeb59ffe", "02ea099d", "4c0f18a1", "1e8928fc", "89d29a1d", "ce0457c7", "1325524b"]);
+    assert_eq!(hashes, ["0b8e189d", "d618105e", "d9237950", "af72e3c9", "69fa98c7", "e5fc4c13", "d943535f"]);
     let both = |v: &Value| v["by_sample"].as_array().unwrap().iter().map(cut).collect::<Vec<_>>();
-    assert_eq!([both(&d["entry"]), both(&njet), both(&jet["offsets"]), both(&jet["content"])], [["045487dc"; 2], ["af095d9c"; 2], ["fa00c623"; 2], ["a5cf09fd"; 2]]);
+    assert_eq!([both(&d["entry"]), both(&njet), both(&jet["offsets"]), both(&jet["content"])], [["904543e2"; 2], ["84697797"; 2], ["439e0157"; 2], ["bcda9316"; 2]]);
     assert_eq!((&njet["lim"], &njet["nice"], &njet["vals"]), (&serde_json::json!([1, 4]), &serde_json::json!([1, 4]), &serde_json::json!([1, 3, 4])));
     assert_eq!((&ht["lim"], &ht["nice"], &jet["content"]["count"]), (&serde_json::json!([101.703125, 154.046875]), &serde_json::json!([100.0, 160.0]), &serde_json::json!(22)));
     let sample_cols: Vec<(String, String)> = d["sample_cols"].as_array().unwrap().iter().map(|c| (c["name"].as_str().unwrap().to_owned(), cut(&c["sha256"]))).collect();
     assert_eq!(&sample_cols[..2], [("kind".to_owned(), "023c71f9".to_owned()), ("xsec".to_owned(), "e98f4aa4".to_owned())]);
     assert_eq!(d["sample_cols"][1]["values"], serde_json::json!([2.5, null]));
     let mean = &h["derived"]["columns"][0];
-    assert_eq!((cut(&mean["sha256"]), both(mean)), ("e641687e".to_owned(), vec!["e73c3af8".to_owned(); 2]));
+    assert_eq!((cut(&mean["sha256"]), both(mean)), ("9e715cef".to_owned(), vec!["124d1600".to_owned(); 2]));
     assert_eq!((&mean["lim"], &mean["nice"]), (&serde_json::json!([33.901041666666664, 120.5]), &serde_json::json!([33.0, 130.0])));
     let made = &h["made"];
     assert_eq!((cut(&made["recipe"]["sha256"]), cut(&made["samples"]["sha256"])), ("937f05be".to_owned(), "a960276a".to_owned()));
@@ -276,6 +276,57 @@ fn what_a_press_holds_does_not_grow_with_the_events_it_keeps() {
     // time (SPEC 7.6.2): at most `8 + widest` bytes a row more for each row more.
     let ((few, small), (many, large)) = (built[0], built[1]);
     assert!(large <= small + small / 10 + (8 << 20) + (8 + widest) * (many - few), "{built:?}, {widest} bytes a row in the widest column");
+}
+
+// FORMAT 3, 7, 8, 10; SPEC 4.1.1
+#[test]
+fn a_file_of_many_chunks_holds_and_slices_the_values_of_one_of_one_chunk() {
+    let samples = samples("[[sample]]\nname = \"whole\"\nfiles = [\"runs.root\", \"copy.root\"]\ntree = \"Events\"\n\n[[sample]]\nname = \"one\"\nfiles = \"runs.root\"\ntree = \"Events\"\n");
+    let columns = "branches = [\"run\", \"event\", \"nJet\", \"Jet_pt\", \"MET\"]\nht = \"sum(Jet_pt)\"\n";
+    let recipe = recipe("some = \"nJet >= 1\"\n", columns, "ratio = \"ht / MET\"\nfirst = \"pair_first(Jet_pt)\"\n");
+    let dir = study("chunks", &samples, &recipe);
+    for to in ["runs.root", "copy.root"] {
+        std::fs::copy(common::fixture("runs.root"), dir.join(to)).unwrap();
+    }
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    // The same study pressed in chunks of 1,024 rows and of 65,536.
+    let pressed = |chunk_rows: &str, out: &str| {
+        std::fs::write(dir.join("recipe.toml"), recipe.replacen("version = 1\n", &format!("version = 1\nchunk_rows = {chunk_rows}\n"), 1)).unwrap();
+        let (code, said) = common::rvr_with(&dir, &[("RVR_RUN", "97")], &["press", "--workers", "3", "--out", out]);
+        assert_eq!(code, 0, "{said}");
+        assert_eq!(rvr(&dir, &["validate", out]).0, 0);
+        rowver::rvr::Reader::open(dir.join(out)).unwrap()
+    };
+    let (small, large) = (pressed("1024", "small.rvr"), pressed("65536", "large.rvr"));
+    let (rows, spans) = (small.rows().unwrap(), small.chunk_spans().unwrap());
+    assert!(rows > 3000 && spans.len() == 5 && large.chunk_spans().unwrap().len() == 2, "{rows} rows, chunks {spans:?}");
+    // Every value, fact and count alike; only the checksums cut at the chunks differ.
+    let all = |file: &str| rvr(&dir, &["dump", "--all", file]).1.lines().filter(|l| l.contains('\t')).map(str::to_owned).collect::<Vec<_>>();
+    let values = all("small.rvr");
+    assert!(values.len() == rows + 1 && values == all("large.rvr"));
+    let (a, b) = (&small.header()["data"], &large.header()["data"]);
+    assert_eq!((&a["cols"][3]["lim"], &a["cols"][3]["content"]["count"]), (&b["cols"][3]["lim"], &b["cols"][3]["content"]["count"]));
+    assert_ne!(a["sha256"], b["sha256"]);
+    // Rows read alone, across chunks and samples, are the column's.
+    for name in ["event", "Jet_pt", "ratio", "first"] {
+        let whole = small.column(name).unwrap().unwrap();
+        for (from, to) in [(0, 1), (1000, 1100), (1023, 1025), (rows - 5, rows), (7, 7), (0, rows)] {
+            let slice = small.slice(name, from, to).unwrap().unwrap();
+            assert_eq!(slice, whole.rows(from, to).unwrap(), "{name} rows {from} to {to}");
+        }
+    }
+    let entries = small.entry().unwrap();
+    assert_eq!(small.entry_slice(1020, 1030).unwrap(), entries[1020..1030]);
+    assert!(small.slice("event", 5, rows + 1).is_err());
+    // Every slice is refused past the file or with its first row after its last, sample and entry too.
+    for refused in [small.slice("event", 9, 3).err(), small.sample_slice(9, 3).err(), small.entry_slice(9, 3).err(), small.sample_slice(0, rows + 1).err(), small.entry_slice(rows, rows + 1).err()] {
+        assert!(refused.is_some_and(|e| e.to_string().contains("the first no later than the last")));
+    }
+    let (code, said) = rvr(&dir, &["diff", "small.rvr", "large.rvr", "--rows"]);
+    assert!(code == 0 && said.contains("The two hold the same events with the same values."), "{said}");
+    // From their headers, two files of other chunks say so, and name no column as differing.
+    let (code, said) = rvr(&dir, &["diff", "small.rvr", "large.rvr"]);
+    assert!(code == 1 && said.contains("chunk_rows: the files are cut in chunks of 1,024 and 65,536 rows: their per-sample checksums cannot be compared; rvr diff --rows compares the events") && !said.contains("differs in sample"), "{said}");
 }
 
 // SPEC 8.5

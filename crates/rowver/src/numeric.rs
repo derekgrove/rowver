@@ -7,6 +7,11 @@ pub fn width(kind: &str) -> Result<usize> {
     Kind::named(kind).map(Kind::width).map_err(|_| invalid(format!("{kind:?} is not a kind of the format (f8, f4, i8, i4, i2, i1, u8, u4, u2, u1, b1): press its study again")))
 }
 
+/// The first byte of `b1` values that is neither 0 nor 1; none for another kind.
+pub(crate) fn untrue(kind: &str, values: &[u8]) -> Option<u8> {
+    (kind == "b1").then(|| values.iter().find(|byte| **byte > 1).copied()).flatten()
+}
+
 /// Whether a kind holds whole numbers (every kind but `f4` and `f8`).
 pub(crate) fn whole_kind(kind: &str) -> bool {
     !Kind::named(kind).is_ok_and(Kind::float)

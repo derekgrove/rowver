@@ -413,7 +413,7 @@ fn holed(holes: &[rowver::rvr::Hole]) -> String {
 /// Print a file's line of `rvr validate`; whether it is valid.
 fn said(file: &str, verdict: &Result<(usize, usize, String), String>) -> bool {
     match verdict {
-        Ok((rows, columns, summary)) => println!("{file}: valid, {rows} rows, {columns} columns, {summary}"),
+        Ok((rows, columns, summary)) => println!("{file}: valid, {}, {}, {summary}", samples::some(*rows, "row", "rows"), samples::some(*columns, "column", "columns")),
         Err(why) => println!("{file}: INVALID: {why}"),
     }
     verdict.is_ok()

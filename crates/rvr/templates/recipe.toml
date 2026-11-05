@@ -5,6 +5,9 @@
 format = "rvr-recipe"
 version = 1
 title = "{study}"
+# The rows of one chunk of the file's arrays: the default, chosen for most uses. A reader reads,
+# checks and decompresses a chunk at a time; change it only knowing why (FORMAT.md §7).
+chunk_rows = 65536
 
 # [define]: names for expressions, used by the lines below them. Nothing here is stored.
 [define]

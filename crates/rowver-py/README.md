@@ -17,6 +17,7 @@ f.path, f.header          # where it is; its JSON header, as a dict
 f.derived                 # the derived columns: kept as expressions, worked out when first asked for
 f["mean_jet_pt"]          # a derived column, read as any other, checked against what the file records
 f.forget("mean_jet_pt")   # let it go from memory (f.forget(), every one); f holds each until then
+f.slice("MET_pt", 100, 200)  # rows 100 to 199 alone: only the chunks of the file that hold them read
 f.labels                  # each sample's label, what a plot shows
 f.sample_columns          # per-sample values: events_read, events_total, metadata
 f.recipe                  # the recipe.toml that made it

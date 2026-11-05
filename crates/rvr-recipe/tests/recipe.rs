@@ -585,10 +585,10 @@ n_negative = "count(negative)"
     // The earlier language's tables and keys are refused as any unknown name is.
     assert_eq!(
         refused("[object.good]\nfrom = \"lep\"\n"),
-        "A recipe has no key \"object\"; it takes format, version, title, define, keep, columns, totals, derived."
+        "A recipe has no key \"object\"; it takes format, version, title, chunk_rows, define, keep, columns, totals, derived."
     );
     assert!(refused("[column]\n").ends_with("Did you mean: columns?"));
-    assert!(refused("[derive]\n").contains("A recipe has no key \"derive\"; it takes format, version, title, define, keep, columns, totals, derived. Did you mean: derived, define?"));
+    assert!(refused("[derive]\n").contains("A recipe has no key \"derive\"; it takes format, version, title, chunk_rows, define, keep, columns, totals, derived. Did you mean: derived, define?"));
     assert_eq!(
         refused("[keep]\nx = { if = \"sample.y == 1\", pass = \"PT_lep > 1\" }\n"),
         "[keep] x has no key \"pass\"; it takes if, apply.\n[keep] x needs apply = \"…\": the cut, for the samples its if is true for"

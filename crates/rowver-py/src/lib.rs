@@ -39,6 +39,14 @@ fn handed(py: Python<'_>, held: Held) -> Column<'_> {
     (held.kind, held.bytes.into_pyarray(py), offsets)
 }
 
+/// A row number as Python gives it, any whole number: past what an i64 holds, the most one holds of its sign.
+fn row(at: &Bound<'_, PyAny>) -> PyResult<i64> {
+    match at.extract::<i64>() {
+        Err(e) if e.is_instance_of::<pyo3::exceptions::PyOverflowError>(at.py()) => Ok(if at.lt(0)? { i64::MIN } else { i64::MAX }),
+        held => held,
+    }
+}
+
 /// An open `.rvr` file: its header read and checked, its arrays read when asked for.
 #[pyclass(frozen, module = "rowver._rowver")]
 struct File {
@@ -98,8 +106,20 @@ impl File {
         Ok(values.into_pyarray(py))
     }
 
-    /// The columns of these names: the stored ones read at once on every core, then the derived
-    /// ones worked out together; `None` for a name the file holds no column of.
+    /// Rows `start..stop` of the column (or `sample`, `entry`) of this name, only the chunks holding
+    /// them read; `None` for a name the file holds no column of.
+    fn slice<'py>(&self, py: Python<'py>, name: String, start: &Bound<'py, PyAny>, stop: &Bound<'py, PyAny>) -> PyResult<Option<Column<'py>>> {
+        let (start, stop) = self.reader.asked(&name, row(start)?, row(stop)?).map_err(|e| self.located(&e))?;
+        let read = py.detach(|| match name.as_str() {
+            "sample" => self.reader.sample_slice(start, stop).map(|v| Some(Held { kind: "i4".into(), bytes: v.iter().flat_map(|x| x.to_le_bytes()).collect(), offsets: None })),
+            "entry" => self.reader.entry_slice(start, stop).map(|v| Some(Held { kind: "i8".into(), bytes: v.iter().flat_map(|x| x.to_le_bytes()).collect(), offsets: None })),
+            _ => self.reader.slice(&name, start, stop),
+        });
+        Ok(read.map_err(|e| self.located(&e))?.map(|held| handed(py, held)))
+    }
+
+    /// The columns of these names: every chunk of the stored ones decoded in one pool of threads,
+    /// then the derived ones worked out together; `None` for a name the file holds no column of.
     fn columns<'py>(
         &self,
         py: Python<'py>,
@@ -109,10 +129,7 @@ impl File {
         let derived: Vec<String> = listed.into_iter().map(|(name, _)| name).filter(|name| names.contains(name)).collect();
         let read = py.detach(|| {
             let plain = |e: rowver::Error| rowver::plain(self.reader.path(), &e);
-            let stored = rowver::parallel::map(&names, rowver::parallel::cores(), |name| match derived.contains(name) {
-                true => Ok(None),
-                false => self.reader.column(name).map_err(plain),
-            })?;
+            let stored = self.reader.stored_columns(&names).map_err(plain)?;
             let worked = rowver::rvr::derived::columns(&self.reader, &derived).map_err(plain)?;
             let mut worked: std::collections::HashMap<&String, _> = derived.iter().zip(worked).collect();
             Ok::<_, String>(names.iter().zip(stored).map(|(name, held)| worked.remove(name).or(held)).collect::<Vec<_>>())

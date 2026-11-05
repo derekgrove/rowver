@@ -45,6 +45,8 @@ enum Change {
     /// Sample B's file split in two (`two_files`), the lock's two takes swapped; its own choice the
     /// file's (true), or another seed (false).
     SwappedTakes(bool),
+    /// The fixture of no rows (`rowless`), its header changed and `data.sha256` made again, sealed.
+    Rowless(fn(&mut Value)),
 }
 
 use Change::*;
@@ -53,16 +55,73 @@ fn sha(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// An array's stored form: shuffled, then one zstd frame, as the writer packs it.
-fn pack(raw: &[u8], w: usize) -> Vec<u8> {
-    let n = raw.len() / w;
-    let mut shuffled = raw.to_vec();
-    for i in 0..n {
-        for j in 0..w {
-            shuffled[j * n + i] = raw[i * w + j];
+/// The rows of each of the fixture's chunks (FORMAT §7): its samples' rows cut every chunk_rows.
+fn chunk_rows(header: &Value) -> Vec<(usize, usize, usize)> {
+    let r = header["data"]["chunk_rows"].as_u64().unwrap() as usize;
+    let (mut out, mut at) = (Vec::new(), 0);
+    for (sample, record) in header["data"]["samples"].as_array().unwrap().iter().enumerate() {
+        let end = at + record["rows"].as_u64().unwrap() as usize;
+        while at < end {
+            let to = (at + r).min(end);
+            out.push((sample, at, to));
+            at = to;
         }
     }
-    ruzstd::encoding::compress_to_vec(&shuffled[..], ruzstd::encoding::CompressionLevel::Fastest)
+    out
+}
+
+/// One chunk as stored: each lane's frame, and the chunk's SHA-256.
+type Stored = (Vec<Vec<u8>>, Vec<u8>);
+
+/// A chunk's values `w` wide stored as FORMAT §7 says: each byte lane one zstd frame.
+fn chunk(values: &[u8], w: usize) -> Stored {
+    let lanes = (0..w).map(|j| ruzstd::encoding::compress_to_vec(&values.iter().skip(j).step_by(w).copied().collect::<Vec<u8>>()[..], ruzstd::encoding::CompressionLevel::Fastest)).collect();
+    (lanes, Sha256::digest(values).to_vec())
+}
+
+/// An array laid from its stored chunks: their frames, then the chunk table of their sizes and SHA-256s.
+fn laid(chunks: &[Stored]) -> Vec<u8> {
+    let (mut out, mut table) = (Vec::new(), Vec::new());
+    for (lanes, digest) in chunks {
+        for frame in lanes {
+            table.extend((frame.len() as u64).to_le_bytes());
+            out.extend(frame);
+        }
+        table.extend(digest);
+    }
+    out.extend(table);
+    out
+}
+
+/// An array's stored chunks, as its chunk table lays them out, for values `w` wide.
+fn unlaid(array: &[u8], chunks: usize, w: usize) -> Vec<Stored> {
+    let table = &array[array.len() - chunks * (8 * w + 32)..];
+    let mut at = 0;
+    table
+        .chunks(8 * w + 32)
+        .map(|entry| {
+            let lanes = (0..w)
+                .map(|j| {
+                    let size = u64::from_le_bytes(entry[8 * j..8 * j + 8].try_into().unwrap()) as usize;
+                    at += size;
+                    array[at - size..at].to_vec()
+                })
+                .collect();
+            (lanes, entry[8 * w..].to_vec())
+        })
+        .collect()
+}
+
+/// Change array `index`'s stored chunks (values `w` wide) as `f` says, and lay it again.
+fn edit(header: &Value, arrays: &mut [Vec<u8>], index: usize, w: usize, f: impl FnOnce(&mut Vec<Stored>)) {
+    let mut chunks = unlaid(&arrays[index], chunk_rows(header).len(), w);
+    f(&mut chunks);
+    arrays[index] = laid(&chunks);
+}
+
+/// The SHA-256 of these SHA-256s' hex texts joined (FORMAT §8).
+fn joined(digests: &[&[u8]]) -> String {
+    sha(digests.iter().map(|d| d.iter().map(|b| format!("{b:02x}")).collect::<String>()).collect::<String>().as_bytes())
 }
 
 /// The record of the fixture's array `index`, in file order.
@@ -77,10 +136,30 @@ fn record(header: &mut Value, index: usize) -> &mut Value {
     }
 }
 
-/// Array `index` holding these little-endian bytes of values `w` wide, its record's sha256 theirs.
+/// Array `index` holding these little-endian values `w` wide, cut at the fixture's chunks (each
+/// chunk of a list's offsets counted from its first): its record's sha256 and by_sample theirs.
 fn put(header: &mut Value, arrays: &mut [Vec<u8>], index: usize, raw: &[u8], w: usize) {
-    arrays[index] = pack(raw, w);
-    record(header, index)["sha256"] = sha(raw).into();
+    let rows = chunk_rows(header);
+    let at = |row: usize| (row * w).min(raw.len());
+    let chunks: Vec<Stored> = rows
+        .iter()
+        .map(|&(_, a, b)| match index {
+            4 => {
+                let steps: Vec<i64> = raw[at(a)..at(b + 1)].chunks(8).map(|v| i64::from_le_bytes(v.try_into().unwrap())).collect();
+                chunk(&steps.iter().flat_map(|v| (v - steps[0]).to_le_bytes()).collect::<Vec<u8>>(), w)
+            }
+            _ => chunk(&raw[at(a)..at(b)], w),
+        })
+        .collect();
+    arrays[index] = laid(&chunks);
+    let digests: Vec<&[u8]> = chunks.iter().map(|(_, d)| d.as_slice()).collect();
+    let held = record(header, index);
+    held["sha256"] = joined(&digests).into();
+    if held.get("by_sample").is_some() {
+        let samples = header["data"]["samples"].as_array().unwrap().len();
+        let by: Vec<String> = (0..samples).map(|s| joined(&rows.iter().zip(&digests).filter(|(r, _)| r.0 == s).map(|(_, d)| *d).collect::<Vec<_>>())).collect();
+        record(header, index)["by_sample"] = json!(by);
+    }
 }
 
 /// Every array's `at` and `size` from the arrays, and `data.sha256`, made again.
@@ -107,7 +186,11 @@ fn set_text(header: &mut Value, name: &str, text: &str) {
 
 /// The fixture with two derived columns, worked out from its arrays.
 fn derived() -> (Value, Vec<Vec<u8>>) {
-    let (mut header, arrays) = rebuilt(10.);
+    derived_of(rebuilt(10.))
+}
+
+/// A file of the fixture's study with two derived columns, worked out from its arrays.
+fn derived_of((mut header, arrays): (Value, Vec<Vec<u8>>)) -> (Value, Vec<Vec<u8>>) {
     let recipe = common::recipe() + "twice = \"MET * 2\"\nmuons = \"Muon_pt * 2\"\n";
     set_text(&mut header, "recipe", &recipe);
     let header = sealed(header);
@@ -161,7 +244,6 @@ fn two_files(header: &mut Value, arrays: &mut [Vec<u8>], same: bool, swapped: bo
     listed.push(json!({"sample": "B", "path": "./fixture-b2.root", "rows": 1}));
     let entry = |values: &[i64]| values.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
     put(header, arrays, 1, &entry(&[0, 2, 4, 1, 6]), 8);
-    header["data"]["entry"]["by_sample"][1] = sha(&entry(&[1, 6])).into();
     relaid(header, arrays);
 }
 
@@ -237,6 +319,12 @@ fn bytes_of(base: (Value, Vec<Vec<u8>>), change: Change) -> Vec<u8> {
             two_files(&mut header, &mut arrays, same, true);
             header = sealed(header);
         }
+        Rowless(f) => {
+            let (mut none, arrays) = common::rowless();
+            f(&mut none);
+            relaid(&mut none, &arrays);
+            return to_bytes(&sealed(none), &arrays);
+        }
         Derived(f) | EmptyDerived(f) => {
             let (mut with, arrays) = derived();
             f(&mut with);
@@ -301,6 +389,20 @@ fn hole(first: u64, last: u64) -> Value {
     json!({"entries": [first, last], "kind": "damaged", "why": "basket 2 does not decompress"})
 }
 
+/// The file of no rows with a total, sumw, and every entry it chose in a hole, so no file holds
+/// the total: each sample's sumw `a` and `b`.
+fn holed_with_total(h: &mut Value, a: Value, b: Value) {
+    let text = common::recipe().replace("[totals]\n", "[totals]\nsumw = \"MET\"\n");
+    set_text(h, "recipe", &text);
+    for (sample, path, last) in [("A", "./fixture-a.root", 10), ("A", "./fixture-empty.root", 10), ("A", "./fixture-a2.root", 5), ("B", "./fixture-b.root", 20)] {
+        h["made"]["files"][sample]["files"][path]["holes"] = json!([hole(0, last)]);
+    }
+    for (sample, missing, total) in [("A", 25, a), ("B", 4, b)] {
+        let metadata = &mut h["made"]["files"][sample]["metadata"];
+        (metadata["events_read"], metadata["events_missing"], metadata["sumw"]) = (0.into(), missing.into(), total);
+    }
+}
+
 /// A frame made a single segment that declares a content size of `declared` bytes.
 fn sized(frame: &[u8], declared: u8) -> Vec<u8> {
     let mut out = frame[..5].to_vec();
@@ -358,9 +460,15 @@ fn allowed() -> Vec<(&'static str, Change)> {
         ("§4 a flat float column of NaN and infinities", Arrays(|h, a| {
             let raw: Vec<u8> = [f32::NAN, 0., f32::INFINITY, 40., f32::NEG_INFINITY].iter().flat_map(|v| v.to_le_bytes()).collect();
             put(h, a, 3, &raw, 4);
-            h["data"]["cols"][1]["by_sample"] = json!([sha(&raw[..12]), sha(&raw[12..])]);
         })),
-        ("§7 a frame declaring its content size", Arrays(|_, a| a[3] = sized(&a[3], 20))),
+        ("§3 §7 a file of no rows, its arrays of no bytes", Rowless(|_| {})),
+        ("§6 a total no file holds, 0.0 on every sample", Rowless(|h| holed_with_total(h, json!(0.0), json!(0.0)))),
+        ("§7 a frame declaring its content size", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0] = sized(&c[0].0[0], 3)))),
+        ("§3 §7 a chunk_rows the recipe gives", Header(|h| {
+            h["data"]["chunk_rows"] = 1024.into();
+            let text = h["made"]["recipe"]["text"].as_str().unwrap().replacen("version = 1\n", "version = 1\nchunk_rows = 1024\n", 1);
+            set_text(h, "recipe", &text);
+        })),
         ("§11 tool keys of every allowed character", Raw(|h| h["A_b-9.z"] = json!({"x": [null, {}]}))),
         ("§11 a tool key two edits from data", Raw(|h| h["dash"] = json!({}))),
         ("§11 a tool key two edits from made", Raw(|h| h["mile"] = json!({}))),
@@ -384,6 +492,42 @@ fn opening() -> Vec<Row> {
     vec![
         // §1 The file and the header's JSON
         ("§1", "the magic", Bytes(|b| b[0] ^= 1), "it is not an .rvr file"),
+        // §3 and §6: what the header alone shows of the files read and the totals
+        ("§3 R17", "the lock's files, leaving out only those never reached", Header(|h| {
+            h["data"]["files"].as_array_mut().unwrap().insert(3, json!({"sample": "A", "path": "./fixture-a3.root", "rows": 0}));
+            h["made"]["files"]["A"]["files"]["./fixture-a3.root"] = json!({"tree": "Events", "uuid": "31e851e4-b994-11f1-ba5c-000000000009", "entries": 10, "stop": 0});
+        }), "made.files[\"A\"].events: the file ./fixture-a3.root is listed, and the first N never reach it"),
+        ("§6 R16", "totals only when the recipe has one", Header(|h| { h["made"]["files"]["A"]["files"]["./fixture-a.root"]["totals"] = json!({"sumw": 1.0}); h["made"]["files"]["A"]["metadata"]["sumw"] = json!(1.0) }), "made.files[\"B\"].metadata has no total sumw, and every sample's metadata holds each total a file record holds"),
+        ("§6", "a sample's total of no file is 0.0, written as a double", Header(|h| {
+            let text = common::recipe().replace("[totals]\n", "[totals]\nsumw = \"MET\"\n");
+            set_text(h, "recipe", &text);
+            for path in ["./fixture-a.root", "./fixture-empty.root", "./fixture-a2.root"] {
+                h["made"]["files"]["A"]["files"][path]["totals"] = json!({"sumw": 1.0});
+            }
+            h["made"]["files"]["A"]["metadata"]["sumw"] = json!(3.0);
+            h["made"]["files"]["B"]["files"]["./fixture-b.root"]["holes"] = json!([hole(0, 20)]);
+            h["made"]["files"]["B"]["metadata"]["sumw"] = json!(0);
+            h["made"]["files"]["B"]["metadata"]["events_read"] = 0.into();
+            h["made"]["files"]["B"]["metadata"]["events_missing"] = 4.into();
+            h["made"]["files"]["A"]["metadata"]["events_missing"] = 0.into();
+        }), "made.files[\"B\"].metadata.sumw is 0, and a total is a finite double, written with a . or an exponent"),
+        ("§6 R16", "no totals on a file read none of", Header(|h| {
+            h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["holes"] = json!([hole(0, 10)]);
+            h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["totals"] = json!({"sumw": 0.0});
+            h["made"]["files"]["A"]["metadata"]["sumw"] = json!(0.0);
+            h["made"]["files"]["A"]["metadata"]["events_read"] = 15.into();
+            h["made"]["files"]["A"]["metadata"]["events_missing"] = 10.into();
+            h["made"]["files"]["B"]["metadata"]["events_missing"] = 0.into();
+        }), "made.files[\"B\"].metadata has no total sumw, and every sample's metadata holds each total a file record holds"),
+        // §3 and §7: chunks
+        ("§3", "chunk_rows there", Header(|h| { h["data"].as_object_mut().unwrap().remove("chunk_rows"); }), "data.chunk_rows is missing"),
+        ("§3", "chunk_rows within its bounds", Header(|h| h["data"]["chunk_rows"] = 1023.into()), "data.chunk_rows is 1023, and a chunk holds from 1,024 to 16,777,216 rows"),
+        ("§7 §12", "an array at least its table and a frame a lane", Header(|h| h["data"]["cols"][1]["size"] = 231.into()), "data.cols[\"MET\"].size is 231, and its 2 chunks take at least 232 bytes"),
+        ("§7 §8", "no chunk spanning two samples", Arrays(|h, a| {
+            let values: Vec<u8> = [20_f32, 0., 40., 30., 10.].iter().flat_map(|v| v.to_le_bytes()).collect();
+            a[3] = laid(&[chunk(&values, 4)]);
+            h["data"]["cols"][1]["sha256"] = joined(&[Sha256::digest(&values).as_slice()]).into();
+        }), "data.cols[\"MET\"].size is 136, and its 2 chunks take at least 232 bytes"),
         ("§1", "the header length within the file", Bytes(|b| b[8..12].copy_from_slice(&u32::MAX.to_le_bytes())), "the header's length (bytes 8 to 11)"),
         ("§1", "rowver is 15", Raw(|h| h["rowver"] = 14.into()), "This file is rowver 14"),
         ("§1", "rowver is the whole number 15", Raw(|h| h["rowver"] = json!(15.0)), "rowver must be the whole number 15"),
@@ -561,19 +705,15 @@ fn in_full() -> Vec<Row> {
         // §3 Rows, against the arrays and the lock
         ("§3 §6.3", "samples are the lock's, with its labels", Header(|h| h["data"]["samples"][1]["label"] = "Bee".into()), "data.samples holds A (Sample A, π⁰), B (Bee), and it holds the lock's samples"),
         ("§3", "the sample index runs through the samples", Arrays(|h, a| put(h, a, 0, &[0_i32, 0, 1, 1, 1].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), 4)), "data.sample: row 2 holds 1"),
-        ("§3 R17", "the lock's files, leaving out only those never reached", Header(|h| {
-            h["data"]["files"].as_array_mut().unwrap().insert(3, json!({"sample": "A", "path": "./fixture-a3.root", "rows": 0}));
-            h["made"]["files"]["A"]["files"]["./fixture-a3.root"] = json!({"tree": "Events", "uuid": "31e851e4-b994-11f1-ba5c-000000000009", "entries": 10, "stop": 0});
-        }), "data.files lists of sample A [\"./fixture-a.root\", \"./fixture-empty.root\", \"./fixture-a2.root\", \"./fixture-a3.root\"], and it lists the lock's files"),
         ("§3 R15", "entries strictly increasing within a file", Arrays(|h, a| put(h, a, 1, &[2_i64, 0, 4, 1, 17].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), 8)), "data.entry: row 1 holds entry 0 of data.files[0] after entry 2"),
         ("§3 §6.1", "each entry chosen", Arrays(|h, a| put(h, a, 1, &[0_i64, 2, 6, 1, 17].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), 8)), "data.entry: row 2 holds entry 6 of data.files[2] (./fixture-a2.root), which the event choice did not choose"),
         ("§3 §6.1", "a random choice made again", Header(|h| h["made"]["files"]["B"]["events"]["seed"] = 8.into()), "data.entry: row 3 holds entry 1 of data.files[3] (./fixture-b.root), which the event choice did not choose"),
         ("§6.3", "each file's random take its share, the choice the file made again", SwappedTakes(true), "made.lock.text: sample B's file ./fixture-b.root has take 1, and its random choice takes 3 of it"),
         ("§6.3", "each file's random take its share, the lock's own choice made again", SwappedTakes(false), "made.lock.text: sample B's file ./fixture-b.root has take"),
-        ("§3 §7", "entry is i8[rows]", Arrays(|h, a| put(h, a, 1, &[0_i64, 2, 4, 1].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), 8)), "data.entry: its zstd frame decodes to 32 bytes, and its record's values take 40"),
+        ("§3 §7", "entry is i8[rows]", Arrays(|h, a| put(h, a, 1, &[0_i64, 2, 4, 1].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), 8)), "data.entry: its zstd frame decodes to 1 bytes, and its chunk's lane holds 2"),
         // §4 Columns, against their values and the lock
         ("§4", "a copied column keeps its branch's kind", Lock(|l| met_as(l, "f8")), "data.cols[\"MET\"] is f4, and the recipe makes it f8"),
-        ("§4", "offsets never decrease", Arrays(|h, a| put(h, a, 4, &[0_i64, 2, 1, 3, 6, 6].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), 8)), "data.cols[\"Muon_pt\"].offsets decrease, or pass the content's count, at row 2"),
+        ("§4", "offsets never decrease", Arrays(|h, a| put(h, a, 4, &[0_i64, 2, 1, 3, 6, 6].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), 8)), "data.cols[\"Muon_pt\"].offsets: a chunk's offsets must start at 0 and never decrease"),
         ("§4 F9", "lim made again from the values", Header(|h| { h["data"]["cols"][1]["lim"] = json!([0, 50]); h["data"]["cols"][1]["nice"] = json!([0, 50]) }), "data.cols[\"MET\"].lim is [0,50], and its values give |[0.0,40.0]"),
         ("§4", "vals made again from the values", Header(|h| h["data"]["cols"][0]["vals"] = json!([0, 2, 3])), "data.cols[\"nlep\"].vals is [0,2,3], and its values give [0,1,2,3]"),
         ("§4", "a lim of 38 digits, wider than a span holds", Header(|h| {
@@ -582,7 +722,7 @@ fn in_full() -> Vec<Row> {
             h["data"]["cols"][0]["nice"] = ends;
             drop(h["data"]["cols"][0].as_object_mut().unwrap().shift_remove("vals"));
         }), "data.cols[\"nlep\"].lim is [-150000000000000000000000000000000000000,150000000000000000000000000000000000000], and its values give [0,3]"),
-        ("§4", "a b1 value is 0 or 1", Arrays(|h, a| put(h, a, 13, &[0, 1, 2, 1, 1], 1)), "data.cols[\"flag\"]: value 2 of a b1 array is 2"),
+        ("§4", "a b1 value is 0 or 1", Arrays(|h, a| put(h, a, 13, &[0, 1, 2, 1, 1], 1)), "data.cols[\"flag\"]: a b1 value is 2"),
         // §5 Sample columns: the counts
         ("§5 F7", "events_read exact", Header(|h| h["made"]["files"]["A"]["metadata"]["events_read"] = 24.into()), "made.files[\"A\"].metadata.events_read is 24, and the sample's event choice chose 25 entries"),
         ("§5 F7", "events_total exact", Header(|h| h["made"]["files"]["A"]["metadata"]["events_total"] = 31.into()), "made.files[\"A\"].metadata.events_total is 31, and it is the entries of all the sample's files in the lock, 30"),
@@ -607,28 +747,18 @@ fn in_full() -> Vec<Row> {
         ("§6", "entries: the lock's", Header(|h| h["made"]["files"]["B"]["files"]["./fixture-b.root"]["entries"] = 21.into()), "made.files[\"B\"].files[\"./fixture-b.root\"].entries is 21"),
         ("§6", "metadata: the lock's values", Header(|h| h["made"]["files"]["A"]["metadata"]["xsec"] = json!(87.4)), "made.files[\"A\"].metadata.xsec is 87.4, and it is the lock's value"),
         ("§6", "metadata: the lock's keys and rvr's", Header(|h| h["made"]["files"]["A"]["metadata"]["note"] = "x".into()), "made.files[\"A\"].metadata holds the keys"),
-        ("§6 R16", "totals only when the recipe has one", Header(|h| { h["made"]["files"]["A"]["files"]["./fixture-a.root"]["totals"] = json!({"sumw": 1.0}); h["made"]["files"]["A"]["metadata"]["sumw"] = json!(1.0) }), "made.files[\"A\"].files[\"./fixture-a.root\"].totals holds [\"sumw\"], and a file the press read holds each total"),
+        ("§6", "a total no file holds is 0.0 on every sample", Rowless(|h| holed_with_total(h, json!(5.0), json!(0.0))), "made.files[\"A\"].metadata.sumw is 5.0, and no file of the sample holds that total"),
+        ("§6 R16", "a total no file holds is written as a double", Rowless(|h| holed_with_total(h, json!(0.0), json!(0))), "made.files[\"B\"].metadata.sumw is 0, and a total is a finite double"),
         ("§6 R16", "totals on every file read", Recipe(|t| *t = t.replace("[totals]\n", "[totals]\nsumw = \"MET\"\n")), "made.files[\"A\"].files[\"./fixture-a.root\"].totals holds [], and a file the press read holds each total"),
-        ("§6", "a sample's total of no file is 0.0, written as a double", Header(|h| {
-            let text = common::recipe().replace("[totals]\n", "[totals]\nsumw = \"MET\"\n");
-            set_text(h, "recipe", &text);
-            for path in ["./fixture-a.root", "./fixture-empty.root", "./fixture-a2.root"] {
-                h["made"]["files"]["A"]["files"][path]["totals"] = json!({"sumw": 1.0});
-            }
-            h["made"]["files"]["A"]["metadata"]["sumw"] = json!(3.0);
-            h["made"]["files"]["B"]["files"]["./fixture-b.root"]["holes"] = json!([hole(0, 20)]);
-            h["made"]["files"]["B"]["metadata"]["sumw"] = json!(0);
-            h["made"]["files"]["B"]["metadata"]["events_read"] = 0.into();
-            h["made"]["files"]["B"]["metadata"]["events_missing"] = 4.into();
-            h["made"]["files"]["A"]["metadata"]["events_missing"] = 0.into();
-        }), "made.files[\"B\"].metadata.sumw is 0, and a total is a finite double, written with a . or an exponent"),
-        ("§6 R16", "no totals on a file read none of", Header(|h| {
+        ("§6 R16", "totals only when the recipe has one, every sample holding them", Header(|h| { h["made"]["files"]["A"]["files"]["./fixture-a.root"]["totals"] = json!({"sumw": 1.0}); h["made"]["files"]["A"]["metadata"]["sumw"] = json!(1.0); h["made"]["files"]["B"]["metadata"]["sumw"] = json!(0.0) }), "made.files[\"A\"].files[\"./fixture-a.root\"].totals holds [\"sumw\"], and a file the press read holds each total"),
+        ("§6 R16", "no totals on a file read none of, every sample holding them", Header(|h| {
             h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["holes"] = json!([hole(0, 10)]);
             h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["totals"] = json!({"sumw": 0.0});
             h["made"]["files"]["A"]["metadata"]["sumw"] = json!(0.0);
             h["made"]["files"]["A"]["metadata"]["events_read"] = 15.into();
             h["made"]["files"]["A"]["metadata"]["events_missing"] = 10.into();
             h["made"]["files"]["B"]["metadata"]["events_missing"] = 0.into();
+            h["made"]["files"]["B"]["metadata"]["sumw"] = json!(0.0);
         }), "made.files[\"A\"].files[\"./fixture-empty.root\"] has totals, and the press did not read the file"),
         // §6.2 Holes, against the choice and the rows
         ("§6.2", "a hole holds a chosen entry", Header(|h| {
@@ -662,23 +792,30 @@ fn in_full() -> Vec<Row> {
         ("§6.3 L17", "a branch's kind", Lock(|l| met_as(l, "f16")), "kind is a .rvr kind"),
         ("§6.3 L18", "no list twice", Lock(|l| l.branches.push(l.branches[0].clone())), "samples.lock writes one branch list twice"),
         ("§6.3 L19", "2^40 entries a sample", Lock(|l| l.samples[1].files[0].entries = 1 << 41), "samples.lock sample \"B\"'s files hold more than 2^40 entries in all"),
-        // §7 Arrays: each frame
-        ("§7", "the byte shuffle", Arrays(|h, a| {
-            let raw: Vec<u8> = [20_f32, 0., 40., 30., 10.].iter().flat_map(|v| v.to_le_bytes()).collect();
-            a[3] = ruzstd::encoding::compress_to_vec(&raw[..], ruzstd::encoding::CompressionLevel::Fastest);
-            h["data"]["cols"][1]["sha256"] = sha(&raw).into();
-        }), "data.cols[\"MET\"]: its array's bytes are not the sha256 its record states"),
-        ("§7 F5", "exactly one frame", Arrays(|_, a| a[3] = [a[3].clone(), a[3].clone()].concat()), "data.cols[\"MET\"]: its zstd frame ends"),
-        ("§7 F5", "no skippable frame", Arrays(|_, a| a[3] = [vec![0x50, 0x2a, 0x4d, 0x18, 0, 0, 0, 0], a[3].clone()].concat()), "data.cols[\"MET\"]: its zstd frame does not begin with the zstd magic"),
-        ("§7 F5", "no dictionary", Arrays(|_, a| a[3][4] |= 1), "data.cols[\"MET\"]: its zstd frame has a dictionary ID"),
-        ("§7 F5", "a content checksum", Arrays(|_, a| a[3][4] &= !4), "data.cols[\"MET\"]: its zstd frame has no content checksum"),
-        ("§7 F5", "the content checksum right", Arrays(|_, a| *a[3].last_mut().unwrap() ^= 1), "data.cols[\"MET\"]: its zstd frame has a content checksum that is not that of its content"),
-        ("§7 F5", "a declared content size exact", Arrays(|_, a| a[3] = sized(&a[3], 21)), "data.cols[\"MET\"]: its zstd frame declares 21 bytes of content"),
-        ("§7", "a window of at most 2^27", Arrays(|_, a| a[3][5] = 18 << 3), "data.cols[\"MET\"]: its zstd frame asks for a window of 268435456 bytes"),
-        // §8 Checksums, against the arrays
-        ("§8", "an array's sha256", Arrays(|h, _| h["data"]["cols"][1]["sha256"] = ZEROS.into()), "data.cols[\"MET\"]: its array's bytes are not the sha256 its record states"),
-        ("§8", "by_sample", Header(|h| h["data"]["cols"][1]["by_sample"][0] = ZEROS.into()), "data.cols[\"MET\"].by_sample[0] is not the SHA-256"),
-        ("§8", "jagged content's by_sample", Header(|h| h["data"]["cols"][2]["content"]["by_sample"][1] = ZEROS.into()), "data.cols[\"Muon_pt\"].content.by_sample[1] is not the SHA-256"),
+        // §7 Arrays: chunks, lanes, frames and tables
+        ("§3 §7", "chunk_rows the recipe's", Header(|h| h["data"]["chunk_rows"] = 1024.into()), "data.chunk_rows is 1024, and it is the recipe's chunk_rows, 65,536"),
+        ("§7", "lane sizes adding up to the frames", Arrays(|_, a| { let n = a[3].len(); a[3][n - 128] += 1; }), "data.cols[\"MET\"]: its chunk table gives its frames"),
+        ("§7", "byte lanes in order", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0.swap(2, 3))), "data.cols[\"MET\"]: a chunk's values are not the SHA-256 its chunk table states"),
+        ("§7 §8", "a chunk's SHA-256 its values'", Arrays(|h, a| {
+            edit(h, a, 3, 4, |c| c[0].1[0] ^= 1);
+            let digests: Vec<Vec<u8>> = unlaid(&a[3], 2, 4).into_iter().map(|(_, d)| d).collect();
+            h["data"]["cols"][1]["sha256"] = joined(&[&digests[0][..], &digests[1][..]]).into();
+            h["data"]["cols"][1]["by_sample"] = json!([joined(&[&digests[0][..]]), joined(&[&digests[1][..]])]);
+        }), "data.cols[\"MET\"]: a chunk's values are not the SHA-256 its chunk table states"),
+        ("§7", "a lane decodes to the chunk's values", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0] = ruzstd::encoding::compress_to_vec(&[0_u8; 4][..], ruzstd::encoding::CompressionLevel::Fastest))), "data.cols[\"MET\"]: its zstd frame decodes to 4 bytes, and its chunk's lane holds 3"),
+        ("§7 F5", "exactly one frame a lane", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0] = [c[0].0[0].clone(), c[0].0[0].clone()].concat())), "data.cols[\"MET\"]: its zstd frame ends"),
+        ("§7 F5", "no skippable frame", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0] = [vec![0x50, 0x2a, 0x4d, 0x18, 0, 0, 0, 0], c[0].0[0].clone()].concat())), "data.cols[\"MET\"]: its zstd frame does not begin with the zstd magic"),
+        ("§7 F5", "no dictionary", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0][4] |= 1)), "data.cols[\"MET\"]: its zstd frame has a dictionary ID"),
+        ("§7 F5", "a content checksum", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0][4] &= !4)), "data.cols[\"MET\"]: its zstd frame has no content checksum"),
+        ("§7 F5", "the content checksum right", Arrays(|h, a| edit(h, a, 3, 4, |c| *c[0].0[0].last_mut().unwrap() ^= 1)), "data.cols[\"MET\"]: its zstd frame has a content checksum that is not that of its content"),
+        ("§7 F5", "a declared content size exact", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0] = sized(&c[0].0[0], 4))), "data.cols[\"MET\"]: its zstd frame declares 4 bytes of content"),
+        ("§7", "a window of at most 2^27", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0][5] = 18 << 3)), "data.cols[\"MET\"]: its zstd frame asks for a window of 268435456 bytes"),
+        ("§7 §8", "a file of no rows: each array's sha256 that of no chunks", Rowless(|h| h["data"]["entry"]["sha256"] = sha(b"x").into()), "data.entry: its chunk table does not give the array's sha256"),
+        ("§7 §8", "a file of no rows: each array's by_sample that of no chunks", Rowless(|h| h["data"]["cols"][1]["by_sample"][1] = sha(b"x").into()), "data.cols[\"MET\"]: its chunk table does not give by_sample[1]"),
+        // §8 Checksums, against the chunk tables
+        ("§8", "an array's sha256", Arrays(|h, _| h["data"]["cols"][1]["sha256"] = ZEROS.into()), "data.cols[\"MET\"]: its chunk table does not give the array's sha256"),
+        ("§8", "by_sample", Header(|h| h["data"]["cols"][1]["by_sample"][0] = ZEROS.into()), "data.cols[\"MET\"]: its chunk table does not give by_sample[0]"),
+        ("§8", "jagged content's by_sample", Header(|h| h["data"]["cols"][2]["content"]["by_sample"][1] = ZEROS.into()), "data.cols[\"Muon_pt\"].content: its chunk table does not give by_sample[1]"),
         // §10 Derived columns, worked out
         ("§10 F6", "facts made again, compared as numbers", Derived(|h| { h["derived"]["columns"][0]["lim"] = json!([0, 90]); h["derived"]["columns"][0]["nice"] = json!([0, 90]) }), "derived.columns[\"twice\"], worked out here, is not what the file records"),
         ("§10 §8", "checksums made again", Derived(|h| h["derived"]["columns"][1]["content"]["by_sample"][0] = ZEROS.into()), "derived.columns[\"muons\"], worked out here, is not what the file records"),
@@ -793,10 +930,31 @@ fn a_file_that_validates_whole_validates_emptied() {
 #[test]
 fn reading_a_column_of_an_empty_file_says_it_is_empty() {
     let path = written(&to_bytes(&rebuilt(10.).0, &[]), "empty");
-    for refused in [Reader::open(&path).unwrap().column("MET").map(drop), Reader::open(&path).unwrap().entry().map(drop)] {
+    let derived = written(&to_bytes(&sealed(derived().0), &[]), "empty-derived");
+    let reader = Reader::open(&derived).unwrap();
+    let asked = [reader.column("twice").map(drop), reader.slice("muons", 0, 2).map(drop), rowver::rvr::derived::checked(&reader).map(drop)];
+    for refused in [Reader::open(&path).unwrap().column("MET").map(drop), Reader::open(&path).unwrap().entry().map(drop)].into_iter().chain(asked) {
         let said = refused.unwrap_err().to_string();
         assert!(said.contains("the file is empty") && said.contains("rvr refill"), "{said}");
     }
+    // Asking for no columns gives none.
+    assert_eq!(reader.stored_columns(&[]).unwrap(), vec![]);
+    // Over no rows an empty file's derived columns still say what kind each is.
+    assert_eq!(reader.slice("twice", 0, 0).unwrap().unwrap().kind, "f4");
+}
+
+// SPEC 11.8; FORMAT 10
+#[test]
+fn a_slice_of_a_derived_column_is_checked_against_its_record() {
+    let (mut header, arrays) = derived();
+    header["derived"]["columns"][0]["sha256"] = sha(b"x").into();
+    let path = written(&to_bytes(&sealed(header), &arrays), "derived-lying");
+    let reader = Reader::open(&path).unwrap();
+    for refused in [reader.slice("twice", 1, 3).map(drop), reader.column("twice").map(drop)] {
+        let said = refused.unwrap_err().to_string();
+        assert!(said.contains("derived.columns[\"twice\"], worked out here, is not what the file records of it"), "{said}");
+    }
+    assert_eq!(reader.slice("muons", 1, 3).unwrap().unwrap().offsets.map(|o| o.len()), Some(3));
 }
 
 // FORMAT 7, 8, 12
@@ -804,22 +962,22 @@ fn reading_a_column_of_an_empty_file_says_it_is_empty() {
 fn reading_a_column_checks_its_frame_length_and_sha256() {
     let (mut header, mut arrays) = rebuilt(10.);
     let raw: Vec<u8> = [20_f32, 0., 40., 30., 10.].iter().flat_map(|v| v.to_le_bytes()).collect();
-    arrays[3] = [arrays[3].clone(), arrays[3].clone()].concat();
+    edit(&header, &mut arrays, 3, 4, |c| c[1].0[2] = [c[1].0[2].clone(), c[1].0[2].clone()].concat());
     relaid(&mut header, &arrays);
     let path = written(&to_bytes(&header, &arrays), "column");
     let reader = Reader::open(&path).unwrap();
-    assert!(reader.column("MET").unwrap_err().to_string().contains("exactly one frame"));
+    assert!(reader.column("MET").unwrap_err().to_string().contains("before its chunk's lane does: it is exactly one frame"));
     assert!(reader.column("nlep").is_ok());
     let (mut header, mut arrays) = rebuilt(10.);
     put(&mut header, &mut arrays, 3, &raw[..16], 4);
     relaid(&mut header, &arrays);
     let path = written(&to_bytes(&header, &arrays), "column");
-    assert!(Reader::open(&path).unwrap().column("MET").unwrap_err().to_string().contains("decodes to 16 bytes"));
+    assert!(Reader::open(&path).unwrap().column("MET").unwrap_err().to_string().contains("decodes to 1 bytes, and its chunk's lane holds 2"));
     let (mut header, arrays) = rebuilt(10.);
     header["data"]["cols"][1]["sha256"] = ZEROS.into();
     relaid(&mut header, &arrays);
     let path = written(&to_bytes(&header, &arrays), "column");
-    assert!(Reader::open(&path).unwrap().column("MET").unwrap_err().to_string().contains("not the sha256 its record states"));
+    assert!(Reader::open(&path).unwrap().column("MET").unwrap_err().to_string().contains("its chunk table does not give the array's sha256"));
 }
 
 // FORMAT 6, 6.1, 6.3
@@ -878,11 +1036,17 @@ fn the_conformance_corpus_holds_what_this_reader_says() {
     let mut signed = header.clone();
     rowver::sign::sign(&mut signed, &[3; 32]).unwrap();
     let (with_derived, derived_arrays) = derived();
+    let (mut none, none_arrays) = common::rowless();
+    relaid(&mut none, &none_arrays);
+    let (none_derived, _) = derived_of((sealed(none.clone()), none_arrays.clone()));
     let mut named: Vec<(String, Vec<u8>)> = vec![
         ("fixture".into(), to_bytes(&header, &arrays)),
         ("fixture-empty".into(), to_bytes(&header, &[])),
         ("fixture-signed".into(), to_bytes(&signed, &arrays)),
-        ("fixture-derived".into(), to_bytes(&sealed(with_derived), &derived_arrays)),
+        ("fixture-derived".into(), to_bytes(&sealed(with_derived.clone()), &derived_arrays)),
+        ("fixture-empty-derived".into(), to_bytes(&sealed(with_derived), &[])),
+        ("fixture-rowless".into(), to_bytes(&sealed(none), &none_arrays)),
+        ("fixture-rowless-derived".into(), to_bytes(&sealed(none_derived), &none_arrays)),
     ];
     for seed in 0..12 {
         let mut rng = common::gen::Rng::new(seed);

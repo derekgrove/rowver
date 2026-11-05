@@ -16,7 +16,8 @@ pub(crate) mod facts;
 mod spool;
 
 pub use column::Source;
-use column::{Indices, Measure, Packed};
+use column::Packed;
+pub(crate) use column::Measuring;
 pub use derived::derived;
 pub use spool::{Order, Spool, Spooled};
 
@@ -115,6 +116,8 @@ pub struct Rows<'a> {
     pub files: Vec<Value>,
     /// Each row's entry number in its source tree, as `i8` values.
     pub entry: Source<'a>,
+    /// The rows of one chunk of every array (docs/FORMAT.md §7).
+    pub chunk_rows: usize,
 }
 
 /// The data section of these rows and columns, packed a piece at a time beside `beside` on `workers` threads.
@@ -140,7 +143,9 @@ pub fn stream(
         return Err(invalid(format!("the column name {name:?} is empty or given twice: give each column a name of its own")));
     }
     let count = edges[edges.len() - 1];
-    let per_sample: Vec<usize> = rows.samples.iter().map(|s| s.rows).collect();
+    bounded(rows.chunk_rows)?;
+    let cut = crate::chunks::rows(&edges, rows.chunk_rows);
+    let samples = rows.samples.len();
     let mut weights = vec![count * 4, rows.entry.weight()];
     weights.extend(columns.iter().map(|(_, source)| source.weight()));
     let (names, sources): (Vec<String>, Vec<Source>) = columns.into_iter().unzip();
@@ -167,9 +172,9 @@ pub fn stream(
         let pack = || -> Result<Packed> {
             let mut out = std::io::BufWriter::new(std::fs::File::create(&path)?);
             let packed = match item {
-                0 => column::plain("sample", &Indices::new(&per_sample)?, &Measure::Nothing, &mut out)?,
-                1 => column::entry(take(0)?, &edges, &files, &mut out)?,
-                n => column::column(&names[n - 2], take(n - 1)?, &edges, &mut out, &path.with_extension("decoded"))?,
+                0 => column::sample(&cut, &mut out)?,
+                1 => column::entry(take(0)?, &cut, samples, &files, &mut out)?,
+                n => column::column(&names[n - 2], take(n - 1)?, &cut, samples, &mut out, &path.with_extension("content"))?,
             };
             out.flush()?;
             Ok(packed)
@@ -189,6 +194,7 @@ pub fn stream(
     }
     let mut data = Map::new();
     data.insert("rows".into(), count.into());
+    data.insert("chunk_rows".into(), rows.chunk_rows.into());
     let samples = rows.samples.iter();
     data.insert(
         "samples".into(),
@@ -249,7 +255,7 @@ impl Drop for Laid {
 /// SHA-256 of every array's sha256, in file order, as one ASCII string; or the place of an array record with none.
 pub(crate) fn data_checksum(data: &Value) -> std::result::Result<String, String> {
     let mut all = String::new();
-    for (record, place) in crate::rvr::arrays::records(data) {
+    for (record, place, _) in crate::rvr::arrays::records(data) {
         all.push_str(record.get("sha256").and_then(Value::as_str).ok_or_else(|| place.to_string())?);
     }
     Ok(digest(all.as_bytes()))
@@ -400,4 +406,13 @@ pub fn refilled(shell: impl AsRef<Path>, from: impl AsRef<Path>, to: impl AsRef<
 fn header_end(path: &Path) -> Result<(u64, u64)> {
     let (_, size, end) = crate::rvr::framed(path)?;
     Ok((end as u64, size as u64))
+}
+
+/// Refuse a `chunk_rows` outside the bounds a chunk's rows lie in.
+pub(crate) fn bounded(chunk_rows: usize) -> Result<()> {
+    let (fewest, most) = rvr_recipe::CHUNK_BOUNDS;
+    match (fewest..=most).contains(&chunk_rows) {
+        true => Ok(()),
+        false => Err(invalid(format!("chunk_rows is {chunk_rows}, and a chunk holds from 1,024 to 16,777,216 rows (docs/FORMAT.md §3): give the recipe's chunk_rows within them, or leave it out"))),
+    }
 }

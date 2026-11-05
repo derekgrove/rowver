@@ -1,13 +1,15 @@
 //! The `derived` section: the columns a file keeps as the expressions that compute them, each
 //! with the checksums and facts of its values. The records are checked with the header; the
-//! values are worked out here from the whole columns they use, a run of rows at a time, and
-//! checked against the records.
+//! values are worked out here a run of rows at a time, each run within one chunk of the file and
+//! one file read, from the chunks of the columns they use, and measured chunk by chunk.
 
 use super::{exactly, list, nonempty, text, Held, Reader, MEND};
 use crate::{invalid, Result};
-use rvr_recipe::{parse, per_event, reads, Array, Columns, Constant, Expression, Kind, Recipe, Scope, Values};
+use rvr_recipe::{parse, per_event, Array, Columns, Constant, Expression, Kind, Recipe, Scope, Values};
 use serde_json::{Map, Value};
 use std::cell::RefCell;
+use crate::chunks::Rows;
+use crate::write::Measuring;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -39,10 +41,6 @@ pub(super) fn validate(derived: &Value, data: &Value) -> Result<()> {
     }
     Ok(())
 }
-
-/// How many rows are worked on at a time (fewer where their pairs would be too many): no value
-/// depends on it, only how much is held at once.
-const RUN: usize = 1 << 20;
 
 /// The metadata fields an expression can read: numbers, text, and truth values.
 pub fn fields(metadata: &Map<String, Value>) -> BTreeMap<String, Constant> {
@@ -100,24 +98,82 @@ fn add(whole: &mut Option<Held>, array: Array) {
     }
 }
 
-/// The columns of a file an expression can name: its stored columns, read when first asked for,
-/// and its derived columns, worked out when first asked for.
+/// One run of rows a derived column is worked out over: within one chunk (none: no rows) and one file.
+struct Span<'h> {
+    chunk: Option<usize>,
+    first: usize,
+    last: usize,
+    sample: &'h str,
+    path: &'h str,
+}
+
+/// The runs of a file, in row order: each file's rows cut at the chunks' edges (FORMAT.md §7). Over
+/// no rows (`hollow`, an empty file), one run of no rows a file with rows; for a file of no rows,
+/// one run of no rows of its first sample, which still says what kind of column each is. Refused
+/// when its files hold rows past its chunks', which its samples' rows make.
+fn spans<'h>(header: &'h Value, chunks: &[Rows], hollow: bool) -> Result<Vec<Span<'h>>> {
+    let (mut out, mut first, mut k) = (Vec::new(), 0, 0);
+    for read in header["data"]["files"].as_array().into_iter().flatten() {
+        let rows = super::whole_count(&read["rows"]).unwrap_or(0) as usize;
+        let (sample, path) = (read["sample"].as_str().unwrap_or_default(), read["path"].as_str().unwrap_or_default());
+        if hollow {
+            if rows > 0 {
+                out.push(Span { chunk: None, first: 0, last: 0, sample, path });
+            }
+            continue;
+        }
+        let (mut at, end) = (first, first + rows);
+        while at < end {
+            while k < chunks.len() && chunks[k].2 <= at {
+                k += 1;
+            }
+            let Some(chunk) = chunks.get(k) else {
+                return Err(invalid(format!("the header's files hold more rows than its samples: data.files' rows go past the {} its samples' rows give (docs/FORMAT.md §3): {MEND}", chunks.last().map_or(0, |c| c.2))));
+            };
+            let to = chunk.2.min(end);
+            out.push(Span { chunk: Some(k), first: at, last: to, sample, path });
+            at = to;
+        }
+        first = end;
+    }
+    if out.is_empty() {
+        let sample = header["data"]["samples"][0]["name"].as_str().unwrap_or_default();
+        out.push(Span { chunk: None, first: 0, last: 0, sample, path: "" });
+    }
+    Ok(out)
+}
+
+/// What an expression of a run sees of its sample: the sample's metadata as a press gives it, and the file.
+fn metadata(header: &Value, sample: &str, path: &str) -> BTreeMap<String, Constant> {
+    let mut held = header["made"]["files"][sample]["metadata"].as_object().map(fields).unwrap_or_default();
+    held.retain(|key, _| !rvr_recipe::ADDED.contains(&key.as_str()));
+    held.insert("file".into(), Constant::Text(path.into()));
+    held
+}
+
+/// The columns of a file an expression can name: its stored columns, a chunk at a time, and its
+/// derived columns, worked out a run at a time.
 struct Store<'a> {
     file: &'a Reader,
     derived: &'a [(String, String)],
-    held: RefCell<BTreeMap<String, Rc<Held>>>,
+    /// Each stored column's (and `sample`'s and `entry`'s) chunk read last, by name: the chunk, and its rows' values.
+    chunk: RefCell<BTreeMap<String, (usize, Rc<Held>)>>,
+    /// Each derived column's expression, read once.
+    parsed: RefCell<BTreeMap<String, Rc<Expression>>>,
     /// The derived columns being worked out, which none of them may use.
     working: RefCell<BTreeSet<String>>,
     /// How a column an expression asked for failed, said as it is rather than as the expression's.
     failed: RefCell<Option<crate::Error>>,
-    /// Whether every column is worked out over no rows, as for an empty file.
-    hollow: bool,
+    chunks: Arc<Vec<Rows>>,
 }
 
 impl<'a> Store<'a> {
-    fn new(file: &'a Reader, derived: &'a [(String, String)]) -> Self {
-        let (held, working, failed) = Default::default();
-        Store { file, derived, held, working, failed, hollow: false }
+    /// The store of a file's columns; with no chunks for work over no rows (`hollow`), which reads
+    /// none, and for an empty file, whose chunks are never made.
+    fn new(file: &'a Reader, derived: &'a [(String, String)], hollow: bool) -> Result<Self> {
+        let (chunk, parsed, working, failed) = Default::default();
+        let chunks = if hollow || file.empty() { Arc::default() } else { file.chunks()? };
+        Ok(Store { file, derived, chunk, parsed, working, failed, chunks })
     }
 
     /// A stored column of no rows, of the kind its record gives.
@@ -136,120 +192,381 @@ impl<'a> Store<'a> {
         }
     }
 
-    /// A column by name, or `None` when the file has no column of that name.
-    fn get(&self, name: &str) -> Result<Option<Rc<Held>>> {
+    /// The rows of chunk `k` of the stored column `name` (or `sample` or `entry`, with no record),
+    /// read once while that chunk's runs are worked on.
+    fn chunk(&self, name: &str, record: Option<&Value>, k: usize) -> Result<Rc<Held>> {
+        if let Some((_, held)) = self.chunk.borrow().get(name).filter(|(at, _)| *at == k) {
+            return Ok(held.clone());
+        }
+        let (first, end) = (self.chunks[k].1, self.chunks[k].2);
+        let held = Rc::new(match (record, name) {
+            (Some(record), _) => self.file.stored_rows(name, record, first, end)?,
+            (None, "sample") => Held { kind: "i4".into(), bytes: self.file.sample_slice(first, end)?.iter().flat_map(|v| v.to_le_bytes()).collect(), offsets: None },
+            (None, "entry") => Held { kind: "i8".into(), bytes: self.file.entry_slice(first, end)?.iter().flat_map(|v| v.to_le_bytes()).collect(), offsets: None },
+            (None, name) => return Err(invalid(format!("a bug in rowver: the rows of {name} were asked for, and the file holds no such column: please report it"))),
+        });
+        self.chunk.borrow_mut().insert(name.to_owned(), (k, held.clone()));
+        Ok(held)
+    }
+
+    /// Derived column `name`'s expression, read once.
+    fn parsed(&self, name: &str, expression: &str) -> Result<Rc<Expression>> {
+        if let Some(parsed) = self.parsed.borrow().get(name) {
+            return Ok(parsed.clone());
+        }
+        let parsed = Rc::new(parse(expression).map_err(|e| invalid(format!("{}: {}", self.place(name), e.0)))?);
+        self.parsed.borrow_mut().insert(name.to_owned(), parsed.clone());
+        Ok(parsed)
+    }
+}
+
+/// One run's rows of a file's columns, as an expression reads them: each read or worked out once.
+struct Run<'s, 'a> {
+    store: &'s Store<'a>,
+    chunk: Option<usize>,
+    first: usize,
+    last: usize,
+    sample: String,
+    metadata: BTreeMap<String, Constant>,
+    held: RefCell<BTreeMap<String, Option<Array>>>,
+}
+
+impl Columns for Run<'_, '_> {
+    fn column(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
         if let Some(held) = self.held.borrow().get(name) {
-            return Ok(Some(held.clone()));
+            return Ok(held.clone());
         }
-        let whole = if let Some(record) = self.file.record(name) {
-            match self.hollow {
-                true => Self::none_of(record),
-                false => self.file.stored(name, record)?,
-            }
-        } else if let Some((_, expression)) = self.derived.iter().find(|(n, _)| n == name) {
-            if !self.working.borrow_mut().insert(name.to_owned()) {
-                return Err(invalid(format!("{} uses itself, directly or through other derived columns: rvr derive drops one of them", self.place(name))));
-            }
-            let computed = self.compute(name, expression);
-            self.working.borrow_mut().remove(name);
-            computed?
-        } else {
-            return Ok(None);
-        };
-        let whole = Rc::new(whole);
-        self.held.borrow_mut().insert(name.to_owned(), whole.clone());
-        Ok(Some(whole))
+        let array = self.read(name)?;
+        self.held.borrow_mut().insert(name.to_owned(), array.clone());
+        Ok(array)
     }
 
-    /// A column the file has, stored or derived.
-    fn had(&self, name: &str) -> Result<Rc<Held>> {
-        Ok(self.get(name)?.expect("a derived column is worked out"))
+    fn has(&self, name: &str) -> bool {
+        self.store.file.record(name).is_some() || self.store.derived.iter().any(|(n, _)| n == name)
+    }
+}
+
+impl Run<'_, '_> {
+    /// A failure of a column the expression asked for, kept to be said as it is.
+    fn failed(&self, e: crate::Error) -> rvr_recipe::Error {
+        let said = rvr_recipe::problem(e.to_string());
+        self.store.failed.borrow_mut().get_or_insert(e);
+        said
     }
 
-    /// Let go of every column held that working out `rest` does not need.
-    fn keep_for(&self, rest: &[String]) {
-        let mut needed = BTreeSet::new();
-        let mut todo: Vec<String> = rest.to_vec();
-        while let Some(name) = todo.pop() {
-            if !needed.insert(name.clone()) || self.held.borrow().contains_key(&name) {
-                continue;
-            }
-            if let Some(parsed) = self.derived.iter().find(|(n, _)| *n == name).and_then(|(_, e)| parse(e).ok()) {
-                let mut used = BTreeSet::new();
-                reads(&parsed, &mut used);
-                todo.extend(used);
-            }
+    /// The column's rows of the run: a stored one's, from its chunk; a derived one's, worked out.
+    fn read(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
+        if let Some(record) = self.store.file.record(name) {
+            let (held, at) = match self.chunk {
+                None => (Rc::new(Store::none_of(record)), 0),
+                Some(k) => (self.store.chunk(name, Some(record), k).map_err(|e| self.failed(e))?, self.store.chunks[k].1),
+            };
+            return array_of(&held, self.first - at, self.last - at).map(Some);
         }
-        self.held.borrow_mut().retain(|name, _| needed.contains(name));
+        match self.store.derived.iter().find(|(n, _)| n == name) {
+            Some((_, expression)) => self.derived(name, expression).map(Some).map_err(|e| self.failed(e)),
+            None => Ok(None),
+        }
     }
 
-    /// Work one derived column out over every row, a file's rows at a time, each with its
-    /// sample's metadata and its file, as a press gives them. A column it uses that failed is said
-    /// as it failed; its own expression failing, in a column a newer rvr recorded, says to update.
-    fn compute(&self, name: &str, expression: &str) -> Result<Held> {
-        self.worked_out(name, expression).map_err(|e| {
-            if let Some(failed) = self.failed.borrow_mut().take() {
-                return failed;
-            }
-            let header = self.file.header();
-            let recorded = listed(header).iter().any(|(n, x)| n == name && x == expression);
-            match unread(header).filter(|_| recorded) {
-                Some(hint) => invalid(format!("{e}. {hint}")),
-                None => e,
-            }
-        })
-    }
-
-    /// `compute`, before its failure is told.
-    fn worked_out(&self, name: &str, expression: &str) -> Result<Held> {
-        let header = self.file.header();
-        let place = self.place(name);
-        let parsed = parse(expression).map_err(|e| invalid(format!("{place}: {}", e.0)))?;
-        let mut runs = Vec::new();
-        let mut first = 0;
-        for read in header["data"]["files"].as_array().into_iter().flatten() {
-            let rows = super::whole_count(&read["rows"]).unwrap_or(0) as usize;
-            let sample = read["sample"].as_str().unwrap_or_default();
-            let path = read["path"].as_str().unwrap_or_default();
-            // Over no rows, the runs a whole file has, one for each file that has rows.
-            if self.hollow {
-                if rows > 0 {
-                    runs.push((0, 0, sample, path));
+    /// Derived column `name` worked out over the run's rows; a column it uses that failed is said
+    /// as it failed, and its own expression failing, in a column a newer rvr recorded, says to update.
+    fn derived(&self, name: &str, expression: &str) -> Result<Array> {
+        if let Some(Some(held)) = self.held.borrow().get(name) {
+            return Ok(held.clone());
+        }
+        let place = self.store.place(name);
+        if !self.store.working.borrow_mut().insert(name.to_owned()) {
+            return Err(invalid(format!("{place} uses itself, directly or through other derived columns: rvr derive drops one of them")));
+        }
+        let worked = self.store.parsed(name, expression).and_then(|parsed| {
+            evaluate(&parsed, self, &self.metadata, self.last - self.first).map_err(|e| {
+                if let Some(failed) = self.store.failed.borrow_mut().take() {
+                    return failed;
                 }
-                continue;
-            }
-            let mut at = first;
-            while at < first + rows {
-                let to = (at + RUN).min(first + rows);
-                runs.push((at, to, sample, path));
-                at = to;
-            }
-            first += rows;
-        }
-        // A file with no rows still says what kind of column it is.
-        if runs.is_empty() {
-            let sample = header["data"]["samples"][0]["name"].as_str().unwrap_or_default();
-            runs.push((0, 0, sample, ""));
-        }
-        let (mut whole, mut seen) = (None, None);
-        for (first, last, sample, path) in runs {
-            let metadata = &header["made"]["files"][sample]["metadata"];
-            let mut metadata = metadata.as_object().map(fields).unwrap_or_default();
-            metadata.retain(|key, _| !rvr_recipe::ADDED.contains(&key.as_str()));
-            metadata.insert("file".into(), Constant::Text(path.into()));
-            let run = Run { store: self, first, last, held: RefCell::default() };
-            let values = evaluate(&parsed, &run, &metadata, last - first).map_err(|e| match e.1 {
-                Some(at) => invalid(format!("sample {sample}: {place}, row {}: {}", first + at, e.0)),
-                None => invalid(format!("sample {sample}: {place}: {}", e.0)),
-            })?;
-            let shape = values.shape().expect("per_event gives one value per row");
-            if *seen.get_or_insert(shape) != shape {
-                return Err(invalid(format!("sample {sample}: {place} is not the same kind of column for every sample: give each sample's value the same type")));
-            }
-            add(&mut whole, values);
-        }
-        Ok(whole.expect("one run or more is worked out"))
+                let said = match e.1 {
+                    Some(at) => invalid(format!("sample {}: {place}, row {}: {}", self.sample, self.first + at, e.0)),
+                    None => invalid(format!("sample {}: {place}: {}", self.sample, e.0)),
+                };
+                let header = self.store.file.header();
+                let recorded = listed(header).iter().any(|(n, x)| n == name && x == expression);
+                match unread(header).filter(|_| recorded) {
+                    Some(hint) => invalid(format!("{said}. {hint}")),
+                    None => said,
+                }
+            })
+        });
+        self.store.working.borrow_mut().remove(name);
+        let worked = worked?;
+        self.held.borrow_mut().insert(name.to_owned(), Some(worked.clone()));
+        Ok(worked)
     }
+}
+
+/// Rows `from..to` of a column held, as an expression reads them.
+fn array_of(held: &Held, from: usize, to: usize) -> rvr_recipe::Result<Array> {
+    let kind = Kind::named(&held.kind)?;
+    let (bytes, offsets) = held.part(from, to).map_err(|e| rvr_recipe::problem(e.to_string()))?;
+    Ok(match offsets {
+        None => Array::Event(Values::from_bytes(kind, bytes)),
+        Some(offsets) => Array::Object { offsets: Arc::new(offsets), values: Values::from_bytes(kind, bytes) },
+    })
+}
+
+/// A run's values as a column measures them: their little-endian bytes, and a list's counts.
+fn parts(array: &Array) -> (Vec<u8>, Option<Vec<usize>>) {
+    match array {
+        Array::Event(values) => (values.to_bytes(), None),
+        Array::Object { offsets, values } => {
+            let (from, to) = (offsets.first().copied().unwrap_or(0), offsets.last().copied().unwrap_or(0));
+            let w = values.kind.width();
+            (values.to_bytes()[from * w..to * w].to_vec(), Some(offsets.windows(2).map(|p| p[1] - p[0]).collect()))
+        }
+        Array::Constant(_) => unreachable!("per_event gives one value per row"),
+    }
+}
+
+/// One derived column worked out: its record from its kind on (when measured), and its values (when kept).
+type Done = (Option<Map<String, Value>>, Option<Held>);
+
+/// One derived column being worked out: its record from its kind on (when measured), and its
+/// values over every row (when kept).
+struct Worked {
+    measured: Option<Measuring>,
+    whole: Option<Held>,
+    shape: Option<(Kind, bool)>,
+}
+
+/// What is handed each run's rows `first..last` of the columns asked for.
+type Each<'f> = dyn FnMut(usize, usize, Vec<Held>) -> Result<()> + 'f;
+
+/// How the derived columns are worked out: over no rows (`hollow`), kept whole, over only the
+/// rows `range`, not measured; and, for `each`, each run's rows of the columns `stored` (with
+/// `sample` and `entry`) and of the derived ones.
+#[derive(Default)]
+struct Ask<'f> {
+    hollow: bool,
+    whole: bool,
+    range: Option<(usize, usize)>,
+    unmeasured: bool,
+    stored: &'f [String],
+    each: Option<&'f mut Each<'f>>,
+}
+
+/// The values of a run's array as a column holds them.
+fn held_of(array: &Array) -> Held {
+    let (bytes, counts) = parts(array);
+    let kind = match array {
+        Array::Event(values) | Array::Object { values, .. } => values.kind.name().to_owned(),
+        Array::Constant(_) => unreachable!("per_event gives one value per row"),
+    };
+    let offsets = counts.map(|counts| std::iter::once(0).chain(counts.iter().scan(0, |at, n| { *at += n; Some(*at) })).collect());
+    Held { kind, bytes, offsets }
+}
+
+/// The derived columns `names` (with their expressions) of the store's file, worked out run by
+/// run, every one over each run: each measured (unless over no rows, or only the rows asked),
+/// and kept whole (over those rows) when asked.
+fn worked(store: &Store, names: &[(String, String)], mut ask: Ask) -> Result<Vec<Done>> {
+    let (hollow, whole, range) = (ask.hollow, ask.whole, ask.range);
+    // An empty file's rows are let go: its expressions are tried over none, so a function's name
+    // is checked first, and then it is refused as empty.
+    if !hollow && store.file.empty() {
+        worked(store, names, Ask { hollow: true, ..Ask::default() })?;
+        return Err(invalid(super::EMPTY));
+    }
+    let header = store.file.header();
+    let samples = header["data"]["samples"].as_array().map_or(0, Vec::len);
+    let mut out: Vec<Worked> = names.iter().map(|_| Worked { measured: None, whole: None, shape: None }).collect();
+    let mut chunk = None;
+    let measure = !hollow && range.is_none() && !ask.unmeasured;
+    let (from, to) = range.unwrap_or((0, usize::MAX));
+    let cut = spans(header, &store.chunks, hollow)?.into_iter().filter_map(|span| {
+        let (first, last) = (span.first.max(from), span.last.min(to));
+        (first < last || (span.first == span.last && range.is_none())).then_some(Span { first, last, ..span })
+    });
+    for span in cut {
+        // The chunk before, every run of it worked out, is let go.
+        if span.chunk != chunk {
+            store.chunk.borrow_mut().clear();
+            chunk = span.chunk;
+        }
+        let run = Run { store, chunk: span.chunk, first: span.first, last: span.last, sample: span.sample.into(), metadata: metadata(header, span.sample, span.path), held: RefCell::default() };
+        for ((name, expression), done) in names.iter().zip(&mut out) {
+            let values = run.derived(name, expression)?;
+            let (kind, listed) = match &values {
+                Array::Object { values, .. } => (values.kind, true),
+                Array::Event(values) => (values.kind, false),
+                Array::Constant(_) => unreachable!("per_event gives one value per row"),
+            };
+            if *done.shape.get_or_insert((kind, listed)) != (kind, listed) {
+                return Err(invalid(format!("sample {}: {} is not the same kind of column for every sample: give each sample's value the same type", span.sample, store.place(name))));
+            }
+            if measure {
+                let measuring = match &mut done.measured {
+                    Some(measuring) => measuring,
+                    measured => measured.insert(Measuring::new(name, kind.name(), listed, &store.chunks)?),
+                };
+                let (bytes, counts) = parts(&values);
+                measuring.take(&bytes, counts.as_deref()).map_err(|e| invalid(format!("derived column {e}")))?;
+            }
+            if whole {
+                add(&mut done.whole, values);
+            }
+        }
+        // A run of no rows, in no chunk, says only what kind each column is: nothing to hand on.
+        if let (Some(each), Some(k)) = (ask.each.as_mut(), span.chunk) {
+            let mut held = Vec::new();
+            for name in ["sample", "entry"].into_iter().chain(ask.stored.iter().map(String::as_str)) {
+                let record = store.file.record(name);
+                let at = store.chunks[k].1;
+                held.push(store.chunk(name, record, k)?.rows(span.first - at, span.last - at)?);
+            }
+            for (name, expression) in names {
+                held.push(held_of(&run.derived(name, expression)?));
+            }
+            each(span.first, span.last, held)?;
+        }
+    }
+    out.into_iter()
+        .map(|done| Ok((done.measured.map(|m| m.finish(samples)).transpose()?, done.whole)))
+        .collect()
+}
+
+/// The records of `derived`: one of `before` with the same name and expression, or worked out.
+pub fn records(file: &Reader, derived: &[(String, String)], before: &[Value]) -> Result<Vec<Value>> {
+    let store = Store::new(file, derived, false)?;
+    let kept = |name: &str, expression: &str| before.iter().find(|r| r["name"] == name && r["expression"] == expression).cloned();
+    let todo: Vec<(String, String)> = derived.iter().filter(|(n, x)| kept(n, x).is_none()).cloned().collect();
+    let mut measured = worked(&store, &todo, Ask::default())?.into_iter();
+    let mut out = Vec::new();
+    for (name, expression) in derived {
+        if let Some(record) = kept(name, expression) {
+            out.push(record);
+            continue;
+        }
+        let mut record = Map::new();
+        record.insert("name".into(), name.as_str().into());
+        record.insert("expression".into(), expression.as_str().into());
+        record.extend(measured.next().and_then(|(m, _)| m).unwrap_or_default());
+        out.push(Value::Object(record));
+    }
+    Ok(out)
+}
+
+/// Derived columns of a file, worked out and each checked against the file's record of it.
+pub fn columns(file: &Reader, names: &[String]) -> Result<Vec<Held>> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let derived = listed(file.header());
+    let store = Store::new(file, &derived, false)?;
+    let wanted = named(&derived, names)?;
+    let done = worked(&store, &wanted, Ask { whole: true, ..Ask::default() })?;
+    let mut wholes = Vec::new();
+    for ((name, expression), (measured, whole)) in wanted.iter().zip(done) {
+        agrees(&store, name, expression, &measured.unwrap_or_default())?;
+        file.checked(name, true);
+        wholes.push(whole.expect("a derived column worked out whole"));
+    }
+    Ok(wholes)
+}
+
+/// Each derived column `names` asks for, with its expression.
+fn named(derived: &[(String, String)], names: &[String]) -> Result<Vec<(String, String)>> {
+    names.iter().map(|name| derived.iter().find(|(n, _)| n == name).cloned().ok_or_else(|| invalid(format!("the file has no derived column named {name}")))).collect()
+}
+
+/// Every row of a file a run at a time to `each`: sample, entry, `stored`, then the derived columns, checked first.
+pub fn walk(file: &Reader, stored: &[String], each: &mut dyn FnMut(usize, usize, Vec<Held>) -> Result<()>) -> Result<()> {
+    checked(file)?;
+    let derived = listed(file.header());
+    let store = Store::new(file, &derived, false)?;
+    worked(&store, &derived, Ask { stored, each: Some(each), unmeasured: true, ..Ask::default() })?;
+    Ok(())
+}
+
+/// Require derived column `name`'s record to be what working it out here gave, `again`.
+fn agrees(store: &Store, name: &str, expression: &str, again: &Map<String, Value>) -> Result<()> {
+    let file = store.file;
+    let header = file.header();
+    let record = header["derived"]["columns"].as_array().into_iter().flatten().find(|r| r["name"] == name).ok_or_else(|| invalid(format!("the file has no derived column named {name}")))?;
+    let mut again = again.clone();
+    again.insert("name".into(), name.into());
+    again.insert("expression".into(), expression.into());
+    // A jagged record's only number is its content's count.
+    let numbers = match record["kind"].as_str().unwrap_or_default() {
+        "jagged" => super::facts::Numbers::Whole,
+        kind => super::facts::numbers(kind),
+    };
+    if super::facts::same(&Value::Object(again), record, numbers) {
+        return Ok(());
+    }
+    let differs = format!("{}, worked out here, is not what the file records of it (its checksums or facts differ)", store.place(name));
+    // A newer rvr's record is not to be replaced by this rowver's: it says to update too.
+    if let Some(hint) = unread(header) {
+        return Err(invalid(format!("{differs}: its header was changed, or a newer rvr works the expression out otherwise. {hint}")));
+    }
+    // Quoted for a shell: an expression may hold quotes of its own, as branch('Jet.pt').
+    let quoted = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+    let (path, line) = (quoted(&file.path().display().to_string()), quoted(&format!("{name} = {expression}")));
+    Err(invalid(format!("{differs}: its header was changed, or the rowver that wrote it works the expression out differently. rvr derive {path} --drop {name} (with any derived column that uses it), then rvr derive {path} {line}, records it as this rowver works it out.")))
+}
+
+/// Rows `from..to` of derived columns `names` of a file, each checked against its record first (once an open file).
+pub fn slice(file: &Reader, names: &[String], from: usize, to: usize) -> Result<Vec<Held>> {
+    file.within(&names.join(", "), from, to)?;
+    let derived = listed(file.header());
+    let store = Store::new(file, &derived, from >= to)?;
+    let wanted = named(&derived, names)?;
+    // No rows: worked out over none, which still says what kind of column each is.
+    if from >= to {
+        let done = worked(&store, &wanted, Ask { hollow: true, whole: true, ..Ask::default() })?;
+        return Ok(done.into_iter().map(|(_, whole)| whole.expect("a derived column worked out")).collect());
+    }
+    // A record is of every row, so each column is worked out over every row once to check it.
+    let unchecked: Vec<(String, String)> = wanted.iter().filter(|(name, _)| !file.checked(name, false)).cloned().collect();
+    if !unchecked.is_empty() {
+        for ((name, expression), (measured, _)) in unchecked.iter().zip(worked(&store, &unchecked, Ask::default())?) {
+            agrees(&store, name, expression, &measured.unwrap_or_default())?;
+            file.checked(name, true);
+        }
+    }
+    let done = worked(&store, &wanted, Ask { whole: true, range: Some((from, to)), ..Ask::default() })?;
+    Ok(done.into_iter().map(|(_, whole)| whole.expect("a derived column worked out")).collect())
+}
+
+/// An empty file's derived columns, worked out over no rows: each of its record's kind and shape
+/// (its checksums and facts are of the rows the file no longer holds); how many.
+pub(super) fn checked_empty(file: &Reader) -> Result<usize> {
+    let derived = listed(file.header());
+    let store = Store::new(file, &derived, true)?;
+    let records = file.header()["derived"]["columns"].as_array().map_or(&[][..], Vec::as_slice);
+    let done = worked(&store, &derived, Ask { hollow: true, whole: true, ..Ask::default() })?;
+    for (((name, _), record), (_, whole)) in derived.iter().zip(records).zip(done) {
+        let whole = whole.expect("a derived column worked out whole");
+        let want = Store::none_of(record);
+        if (&whole.kind, whole.offsets.is_some()) != (&want.kind, want.offsets.is_some()) {
+            let shape = |held: &Held| if held.offsets.is_some() { format!("jagged of {}", held.kind) } else { held.kind.clone() };
+            return Err(invalid(format!("derived.columns[{name:?}] is {}, and its expression, worked out over no rows, gives {} (docs/FORMAT.md §10): {MEND}", shape(&want), shape(&whole))));
+        }
+    }
+    Ok(derived.len())
+}
+
+/// Check a file's derived columns against the recipe it carries and its records, a run at a
+/// time, none held whole; how many.
+pub fn checked(file: &Reader) -> Result<usize> {
+    let derived = listed(file.header());
+    if agreed(file.header())? == 0 {
+        return Ok(0);
+    }
+    let store = Store::new(file, &derived, false)?;
+    for ((name, expression), (measured, _)) in derived.iter().zip(worked(&store, &derived, Ask::default())?) {
+        agrees(&store, name, expression, &measured.unwrap_or_default())?;
+        file.checked(name, true);
+    }
+    Ok(derived.len())
 }
 
 /// For a file a newer rvr pressed than this version, or another program: what to do, said after what failed.
@@ -282,165 +599,11 @@ fn later(made: &str, this: &str) -> bool {
     numbers(made) > numbers(this)
 }
 
-/// Rows `first..last` of a file's columns, as an expression reads them: each read from the file's
-/// bytes once, when first asked for (`rvr_recipe::over_runs` slices a part of the run from it).
-struct Run<'s, 'a> {
-    store: &'s Store<'a>,
-    first: usize,
-    last: usize,
-    held: RefCell<BTreeMap<String, Option<Array>>>,
-}
-
-impl Columns for Run<'_, '_> {
-    fn column(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
-        if let Some(held) = self.held.borrow().get(name) {
-            return Ok(held.clone());
-        }
-        let array = self.read(name)?;
-        self.held.borrow_mut().insert(name.to_owned(), array.clone());
-        Ok(array)
-    }
-
-    fn has(&self, name: &str) -> bool {
-        self.store.file.record(name).is_some() || self.store.derived.iter().any(|(n, _)| n == name)
-    }
-}
-
-impl Run<'_, '_> {
-    /// The column's rows of the run, from the bytes the file holds of it.
-    fn read(&self, name: &str) -> rvr_recipe::Result<Option<Array>> {
-        let got = self.store.get(name).map_err(|e| {
-            let said = rvr_recipe::problem(e.to_string());
-            self.store.failed.borrow_mut().get_or_insert(e);
-            said
-        });
-        let Some(whole) = got? else {
-            return Ok(None);
-        };
-        let kind = Kind::named(&whole.kind)?;
-        let w = kind.width();
-        Ok(Some(match &whole.offsets {
-            None => Array::Event(Values::from_bytes(kind, &whole.bytes[self.first * w..self.last * w])),
-            Some(offsets) => {
-                let (from, to) = (offsets[self.first], offsets[self.last]);
-                let lists = offsets[self.first..=self.last].iter().map(|o| o - from);
-                Array::Object {
-                    offsets: Arc::new(lists.collect()),
-                    values: Values::from_bytes(kind, &whole.bytes[from * w..to * w]),
-                }
-            }
-        }))
-    }
-}
-
-/// Each sample's rows, in order.
-fn sample_rows(header: &Value) -> Vec<usize> {
-    let samples = header["data"]["samples"].as_array().into_iter().flatten();
-    samples.map(|s| super::whole_count(&s["rows"]).unwrap_or(0) as usize).collect()
-}
-
 /// A file's derived columns, by name and expression, as its header records them.
 pub fn listed(header: &Value) -> Vec<(String, String)> {
     let records = header["derived"]["columns"].as_array().into_iter().flatten();
     let text = |r: &Value, key: &str| r[key].as_str().unwrap_or_default().to_owned();
     records.map(|r| (text(r, "name"), text(r, "expression"))).collect()
-}
-
-/// The records of `derived`: one of `before` with the same name and expression, or worked out.
-pub fn records(file: &Reader, derived: &[(String, String)], before: &[Value]) -> Result<Vec<Value>> {
-    let store = Store::new(file, derived);
-    let rows = sample_rows(file.header());
-    let names: Vec<String> = derived.iter().map(|(name, _)| name.clone()).collect();
-    let mut out = Vec::new();
-    for (at, (name, expression)) in derived.iter().enumerate() {
-        store.keep_for(&names[at..]);
-        let same = |r: &&Value| r["name"] == name.as_str() && r["expression"] == expression.as_str();
-        if let Some(kept) = before.iter().find(same) {
-            out.push(kept.clone());
-            continue;
-        }
-        let whole = store.had(name)?;
-        let record = crate::write::derived(name, expression, &whole, &rows).map_err(|e| invalid(format!("derived column {e}")))?;
-        out.push(record);
-    }
-    Ok(out)
-}
-
-/// Derived columns of a file, worked out and each checked against the file's record of it.
-pub fn columns(file: &Reader, names: &[String]) -> Result<Vec<Held>> {
-    columns_with(file, names, &[])
-}
-
-/// `columns`, worked out from the stored columns `held` as they are, reading only the others.
-pub fn columns_with(file: &Reader, names: &[String], held: &[(String, Rc<Held>)]) -> Result<Vec<Held>> {
-    let header = file.header();
-    let derived = listed(header);
-    let store = Store::new(file, &derived);
-    store.held.borrow_mut().extend(held.iter().cloned());
-    let rows = sample_rows(header);
-    let records = header["derived"]["columns"].as_array();
-    let mut wholes = Vec::new();
-    for (at, name) in names.iter().enumerate() {
-        store.keep_for(&names[at..]);
-        let record = records
-            .into_iter()
-            .flatten()
-            .find(|r| r["name"] == name.as_str())
-            .ok_or_else(|| invalid(format!("the file has no derived column named {name}")))?;
-        let place = store.place(name);
-        let whole = store.had(name)?;
-        let expression = record["expression"].as_str().unwrap_or_default();
-        let again = crate::write::derived(name, expression, &whole, &rows).map_err(|e| invalid(format!("derived column {e}")))?;
-        // A jagged record's only number is its content's count.
-        let numbers = match record["kind"].as_str().unwrap_or_default() {
-            "jagged" => super::facts::Numbers::Whole,
-            kind => super::facts::numbers(kind),
-        };
-        if !super::facts::same(&again, record, numbers) {
-            let differs = format!("{place}, worked out here, is not what the file records of it (its checksums or facts differ)");
-            // A newer rvr's record is not to be replaced by this rowver's: it says to update too.
-            if let Some(hint) = unread(header) {
-                return Err(invalid(format!("{differs}: its header was changed, or a newer rvr works the expression out otherwise. {hint}")));
-            }
-            // Quoted for a shell: an expression may hold quotes of its own, as branch('Jet.pt').
-            let quoted = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
-            let (path, line) = (quoted(&file.path().display().to_string()), quoted(&format!("{name} = {expression}")));
-            return Err(invalid(format!("{differs}: its header was changed, or the rowver that wrote it works the expression out differently. rvr derive {path} --drop {name} (with any derived column that uses it), then rvr derive {path} {line}, records it as this rowver works it out.")));
-        }
-        wholes.push(whole);
-    }
-    // The values are handed out, not copied, once nothing else holds them.
-    drop(store);
-    Ok(wholes.into_iter().map(|whole| Rc::try_unwrap(whole).unwrap_or_else(|shared| (*shared).clone())).collect())
-}
-
-/// An empty file's derived columns, worked out over no rows: each of its record's kind and shape
-/// (its checksums and facts are of the rows the file no longer holds); how many.
-pub(super) fn checked_empty(file: &Reader) -> Result<usize> {
-    let derived = listed(file.header());
-    let mut store = Store::new(file, &derived);
-    store.hollow = true;
-    let records = file.header()["derived"]["columns"].as_array().map_or(&[][..], Vec::as_slice);
-    for ((name, _), record) in derived.iter().zip(records) {
-        let whole = store.had(name)?;
-        let want = Store::none_of(record);
-        if (&whole.kind, whole.offsets.is_some()) != (&want.kind, want.offsets.is_some()) {
-            let shape = |held: &Held| if held.offsets.is_some() { format!("jagged of {}", held.kind) } else { held.kind.clone() };
-            return Err(invalid(format!("derived.columns[{name:?}] is {}, and its expression, worked out over no rows, gives {} (docs/FORMAT.md §10): {MEND}", shape(&want), shape(&whole))));
-        }
-    }
-    Ok(derived.len())
-}
-
-/// Check a file's derived columns against the recipe it carries and its records; how many.
-pub fn checked(file: &Reader) -> Result<usize> {
-    let derived = listed(file.header());
-    if agreed(file.header())? == 0 {
-        return Ok(0);
-    }
-    let names: Vec<String> = derived.iter().map(|(name, _)| name.clone()).collect();
-    columns(file, &names)?;
-    Ok(derived.len())
 }
 
 /// Check that the recipe a header carries lists its derived columns; how many there are.

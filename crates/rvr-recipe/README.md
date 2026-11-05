@@ -61,6 +61,7 @@ the three events), and `[[65, 41], [], [120, 35]]` is a jagged one (a list for e
 format = "rvr-recipe"
 version = 1
 title = "my study"                  # optional
+chunk_rows = 65536                  # optional: the default; change only knowing why (FORMAT.md §7)
 
 [define]                            # names for expressions, used by the lines below them
 good_jet = "Jet_pt > 30 and abs(Jet_eta) < 2.4"
@@ -95,7 +96,7 @@ known key nearest to it when there is one ("Did you mean: keep?"):
 
 | where | keys |
 |---|---|
-| the top | `format = "rvr-recipe"` and `version = 1`, both required; `title`, text, optional; the five tables |
+| the top | `format = "rvr-recipe"` and `version = 1`, both required; `title`, text, optional; `chunk_rows`, a whole number from 1,024 to 16,777,216, optional (the rows of one chunk of the file's arrays, FORMAT.md §7: 65,536 when not given; change it only knowing why); the five tables |
 | `[define]` | `NAME = "expression"`, as many as wanted |
 | `[keep]` | `NAME = "condition"`, or `NAME = { if = "condition", apply = "condition" }`: `apply` required, `if` optional, no other key |
 | `[columns]` | `branches = ["…", …]`, each a branch's name as the file spells it (nonempty, not a defined name); `NAME = "expression"`, or `NAME = { value = "expression", stored = "KIND" }`: `value` required, `stored` optional (one of the [kinds](#kinds-exactly)) |
@@ -480,7 +481,7 @@ tells you what's wrong, in plain words, every problem at once, one a line:
 | `not nJet` | not needs a true-or-false value, not u4: to test a number, compare it, as x != 0 |
 | `nJet > -1` | -1 does not fit beside a u4 column |
 | `MET_pt < 'high'` | Text can only be compared with == and !=, not < |
-| `select = "…"` at the top of the recipe | A recipe has no key "select"; it takes format, version, title, define, keep, columns, totals, derived. |
+| `select = "…"` at the top of the recipe | A recipe has no key "select"; it takes format, version, title, chunk_rows, define, keep, columns, totals, derived. |
 
 A name that is not a branch (`Jet_ptt`) is answered with the nearest branches the samples have,
 before anything is read.

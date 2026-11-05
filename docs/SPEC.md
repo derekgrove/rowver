@@ -292,8 +292,10 @@ The recipe language (every table, operator and function, its kinds and its bits)
 ### 4.1 The document
 
 **4.1.1** `recipe.toml` holds exactly these keys at its top: `format = "rvr-recipe"` and
-`version = 1` (both required), `title` (text, optional), and the five tables `[define]`, `[keep]`,
-`[columns]`, `[totals]` and `[derived]`. Any other key is refused, with the nearest known key when
+`version = 1` (both required), `title` (text, optional), `chunk_rows` (a whole number from 1,024 to
+16,777,216, optional: the rows of one chunk of the file's arrays, FORMAT.md §7; 65,536 when not
+given), and the five tables `[define]`, `[keep]`, `[columns]`, `[totals]` and `[derived]`. Any
+other key is refused, with the nearest known key when
 one is within the slip a "Did you mean" names (§1.4).
 
 **4.1.2** The tables hold these, and nothing else:
@@ -474,7 +476,8 @@ terminals; `y` or `yes`, in any case, is yes, and any other answer is no.
 
 **5.3.1** Makes `DIR` when needed, and writes into it `samples.toml`, `recipe.toml` and `.gitignore`:
 two CMS Open Data samples that need no grid proxy, a muon and tau selection for them, and all five
-recipe tables. The recipe's title is `DIR`'s own name, the name a press gives the file (for `.`, the
+recipe tables, and `chunk_rows = 65536` with a comment saying it is the default, chosen for most uses,
+and not to be changed without knowing why. The recipe's title is `DIR`'s own name, the name a press gives the file (for `.`, the
 current folder's name).
 
 **5.3.2** It writes nothing when any of the three is already there, and says which.
@@ -742,14 +745,15 @@ rows less 5), those under way and then those to come get a bar, one fewer than f
 one line, `and N more: D done, C to come, U under way`. Under the bars, one line has the events
 kept so far, the holes, the read rate and the time. They are redrawn every 200 ms, each line cut
 to 79 characters or the terminal's width less one; what happens meanwhile (a wait, a hole) is
-printed above the bars. Elsewhere it prints one line per file as it finishes:
-`  N/F  ENTRIES entries  KEPT kept   FILE`.
+printed above the bars. Elsewhere it prints one line per file as it finishes,
+`  N/F  ENTRIES entries  KEPT kept   FILE`, each of its holes under it, `    hole (KIND): WHY`;
+the list after the file is written (§7.7.3) gives them all again, in the lock's order.
 
 **7.7.3** Then the cutflow, `Read E entries; kept after each cut:` and one line per cut, or `with no
 cuts, every one is kept.`; then, when the file is signed, `Signed with your key K…`; then
 `Wrote FILE (R rows, C columns[ and D derived], S MB) in T s.`, with its holes listed when it has
-any. A press that builds on columns, or on samples with none new, prints no cutflow, as it runs no
-cut.
+any, in the lock's order (by sample, then file, then entries), so the list is the same every time.
+A press that builds on columns, or on samples with none new, prints no cutflow, as it runs no cut.
 
 **7.7.4** `RVR_TRACE` set (to anything) prints every byte-range request on standard error, with what
 answered it (its status, or why it failed), for looking into a storage's answers.
@@ -790,7 +794,7 @@ every sample it holds is in the lock as it was (its files, tree, metadata and ev
 new samples are read; a sample taken out, or the samples put in another order, reads nothing. Every
 column is packed again, in the lock's order of samples; a sample it holds keeps its holes.
 
-**8.5** Any other difference (other cuts, totals or event choices, a sample whose files changed, a
+**8.5** Any other difference (other cuts, totals, event choices or `chunk_rows`, a sample whose files changed, a
 column changed together with the samples, another build) means every column is pressed, and the
 press says why: `Pressing every column: FILE cannot be built on, as WHY.` `--full` always presses
 every column.
@@ -817,7 +821,7 @@ key, saying whose signature it replaces (or that the file is no longer signed). 
 **8.9 `rvr empty FILE…`** lets a file's arrays go and keeps its header byte for byte: the file then
 ends where its header does. It first checks each input the lock names is as the lock recorded it
 (unless `--anyway`), refuses a file with holes, and refuses a file made by another rvr version unless
-`--anyway`. At a terminal it asks first, naming the file's rows, columns and size; `--force` (`-f`)
+`--anyway`. A file of no rows has no array bytes to give back: it says so and leaves it, exit 0. At a terminal it asks first, naming the file's rows, columns and size; `--force` (`-f`)
 empties without asking, and is needed where nobody is at a terminal. Each file is its own; the exit
 status is the worst.
 
@@ -951,6 +955,13 @@ dictionary in `to_arrow()`) and `entry` first;
 
 **11.7** `rowver.validate(path)` checks the file in full, as `rvr validate` does, and returns its
 `(rows, columns)`, or raises `rowver.Error`.
+
+**11.8** `f.slice(name, start, stop)` reads rows `start` to `stop` (not included) of a column, as
+`f[name]` gives it (`sample` and `entry` too), decoding only the chunks of the file that hold them,
+each checked against its chunk table (FORMAT.md §7, §12); a derived column is checked against its
+record first, as `f[name]` checks it, once for the open file (its record is of every row, so that
+first slice works it out over every row, holding none): rows past the file, or `start` after `stop`,
+raise `rowver.Error`, an unknown name `KeyError`.
 
 ## 12. Builds and releases
 

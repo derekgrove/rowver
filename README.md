@@ -225,7 +225,7 @@ Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 2.8 s.
 
 ```text
 $ rvr validate higgs_tautau.rvr
-higgs_tautau.rvr: valid, 2248 rows, 11 columns, read 100,000 of 968,616 entries, not signed
+higgs_tautau.rvr: valid, 2,248 rows, 11 columns, read 100,000 of 968,616 entries, not signed
 $ rvr dump higgs_tautau.rvr --columns
 sample          i4[2248]  [0, 0, 0, 0, 0, ...]
 entry           i8[2248]  [29, 45, 140, 157, 162, ...]

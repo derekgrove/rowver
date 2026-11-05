@@ -4,6 +4,7 @@
 #![warn(missing_docs)]
 
 pub mod choice;
+mod chunks;
 mod codec;
 mod decimal;
 mod json;

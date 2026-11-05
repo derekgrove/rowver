@@ -28,6 +28,9 @@ pub(super) fn validate(header: &Value, reads: &Reads) -> Result<()> {
     if recipe.derived != super::derived::listed(header) {
         return Err(invalid(format!("the [derived] table of made.recipe.text does not list the derived columns its header records, by the same names and expressions in the same order (docs/FORMAT.md §10): one of the two was edited after it was written. {}", super::derived::remedy(header))));
     }
+    if data["chunk_rows"].as_u64() != Some(recipe.chunk_rows() as u64) {
+        return Err(invalid(format!("data.chunk_rows is {}, and it is the recipe's chunk_rows, {} (65,536 when the recipe gives none; docs/FORMAT.md §3, §7): {MEND}", data["chunk_rows"], crate::rvr::grouped(recipe.chunk_rows() as u64))));
+    }
     if recipe.title.as_deref() != made.get("title").and_then(Value::as_str) {
         return Err(invalid(format!("made.title is {}, and it is the recipe's title, there exactly when the recipe sets one (docs/FORMAT.md §6): {MEND}", made.get("title").unwrap_or(&Value::Null))));
     }

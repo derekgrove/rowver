@@ -141,7 +141,7 @@ pub(crate) fn write(plan: &Plan, mut done: Done) -> Result<usize, String> {
         Some(spooled) => write::Source::Spooled(spooled),
         None => write::Source::Values(write::Values::Flat(write::array::<i64>(&[]))),
     };
-    let rows = write::Rows { samples, files: tally.files.clone(), entry };
+    let rows = write::Rows { samples, files: tally.files.clone(), entry, chunk_rows: plan.recipe.chunk_rows() };
     let columns = columns(plan, done.spool).map_err(|e| stuck(what(&staged_file, e)))?;
     let (mut data, laid) = write::stream(rows, columns, plan.workers, &staged_file).map_err(|e| stuck(what(&staged_file, e)))?;
     let failed = |e: rowver::Error| e.to_string();

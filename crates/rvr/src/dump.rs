@@ -3,7 +3,6 @@
 
 use rowver::rvr::{push_shown, width, Held, Reader};
 use serde_json::Value;
-use std::rc::Rc;
 
 /// What a column record of `data.cols` the file does not hold (a damaged header, as one with no name) is said as.
 fn unheld(reader: &rowver::rvr::Reader, name: &str) -> String {
@@ -19,9 +18,9 @@ fn first(kind: &str, bytes: &[u8], n: usize) -> String {
     out
 }
 
-/// One line for a column: name, `wide` characters at least, kind, length, first values; for a
-/// derived column, `derived` and the expression it is worked out by, too.
-fn show(name: &str, wide: usize, held: &Held, expression: Option<&str>) {
+/// One line for a column of `rows` rows, `held` its first ones: name, `wide` characters at least,
+/// kind, length, first values; for a derived column, `derived` and its expression, too.
+fn show(name: &str, wide: usize, held: &Held, rows: usize, expression: Option<&str>) {
     let w = width(&held.kind).unwrap_or(1);
     let derived = match expression {
         Some(expression) => format!("derived = {expression:?}  "),
@@ -29,13 +28,14 @@ fn show(name: &str, wide: usize, held: &Held, expression: Option<&str>) {
     };
     match &held.offsets {
         None => {
-            let count = held.bytes.len() / w;
-            println!("{name:wide$} {}[{count}]  {derived}{}", held.kind, first(&held.kind, &held.bytes, 5));
+            let shown = first(&held.kind, &held.bytes, 5);
+            let shown = if rows > held.bytes.len() / w { shown.replacen(']', ", ...]", 1) } else { shown };
+            println!("{name:wide$} {}[{rows}]  {derived}{shown}", held.kind);
         }
         Some(offsets) => {
             let lists: Vec<String> = offsets.windows(2).take(3).map(|r| first(&held.kind, &held.bytes[r[0] * w..r[1] * w], 4)).collect();
-            let more = if offsets.len() > 4 { ", ..." } else { "" };
-            println!("{name:wide$} jagged {}[{}]  {derived}[{}{more}]", held.kind, offsets.len() - 1, lists.join(", "));
+            let more = if rows > 3 { ", ..." } else { "" };
+            println!("{name:wide$} jagged {}[{rows}]  {derived}[{}{more}]", held.kind, lists.join(", "));
         }
     }
 }
@@ -101,32 +101,35 @@ fn print_columns(reader: &Reader) -> Result<(), String> {
     let data = &reader.header()["data"];
     let failed = |e: rowver::Error| rowver::plain(reader.path(), &e);
     let rows = reader.rows().map_err(failed)?;
-    let sample: Vec<u8> = reader.sample().map_err(failed)?.iter().flat_map(|x| x.to_le_bytes()).collect();
-    let entry: Vec<u8> = reader.entry().map_err(failed)?.iter().flat_map(|x| x.to_le_bytes()).collect();
+    // Each column's first rows alone are read: as many as its first values shown.
+    let few = rows.min(5);
+    let sample: Vec<u8> = reader.sample_slice(0, few).map_err(failed)?.iter().flat_map(|x| x.to_le_bytes()).collect();
+    let entry: Vec<u8> = reader.entry_slice(0, few).map_err(failed)?.iter().flat_map(|x| x.to_le_bytes()).collect();
     let wide = wide(reader);
-    println!("{:wide$} i4[{rows}]  {}", "sample", first("i4", &sample, 5));
-    println!("{:wide$} i8[{rows}]  {}", "entry", first("i8", &entry, 5));
+    let more = |shown: &str| if rows > few { shown.replacen(']', ", ...]", 1) } else { shown.to_owned() };
+    println!("{:wide$} i4[{rows}]  {}", "sample", more(&first("i4", &sample, 5)));
+    println!("{:wide$} i8[{rows}]  {}", "entry", more(&first("i8", &entry, 5)));
     for record in data["cols"].as_array().into_iter().flatten() {
         let name = record["name"].as_str().unwrap_or_default();
-        let held = reader.column(name).map_err(failed)?.ok_or_else(|| unheld(reader, name))?;
-        show(name, wide, &held, None);
+        let held = reader.slice(name, 0, few).map_err(failed)?.ok_or_else(|| unheld(reader, name))?;
+        show(name, wide, &held, rows, None);
     }
-    // The derived columns are worked out together, each column they use read once; when that
-    // fails, one at a time, to say which cannot be.
+    // The derived columns are checked a run at a time, then their first rows worked out; when the
+    // check fails, each one alone, to say which cannot be.
     let derived = rowver::rvr::derived::listed(reader.header());
     let names: Vec<String> = derived.iter().map(|(name, _)| name.clone()).collect();
-    let together = rowver::rvr::derived::columns(reader, &names);
+    let checked = rowver::rvr::derived::checked(reader).and_then(|_| rowver::rvr::derived::slice(reader, &names, 0, few));
     for (at, (name, expression)) in derived.iter().enumerate() {
         let alone;
-        let held = match &together {
+        let held = match &checked {
             Ok(held) => Ok(&held[at]),
             Err(_) => {
-                alone = rowver::rvr::derived::columns(reader, std::slice::from_ref(name));
-                alone.as_ref().map(|held| &held[0])
+                alone = rowver::rvr::derived::columns(reader, std::slice::from_ref(name)).and_then(|whole| whole[0].rows(0, few));
+                alone.as_ref()
             }
         };
         match held {
-            Ok(held) => show(name, wide, held, Some(expression)),
+            Ok(held) => show(name, wide, held, rows, Some(expression)),
             Err(why) => println!("{name:wide$} derived = {expression:?}  (not worked out: {why})"),
         }
     }
@@ -143,33 +146,33 @@ fn print_all(reader: &Reader) -> Result<(), String> {
         return Ok(());
     }
     let data = &reader.header()["data"];
-    let failed = |e: rowver::Error| rowver::plain(reader.path(), &e);
-    let (samples, entries) = (reader.sample().map_err(failed)?, reader.entry().map_err(failed)?);
-    let mut columns = Vec::new();
-    for record in data["cols"].as_array().into_iter().flatten() {
-        let name = record["name"].as_str().unwrap_or_default();
-        columns.push((name.to_owned(), Rc::new(reader.column(name).map_err(failed)?.ok_or_else(|| unheld(reader, name))?)));
-    }
-    // The derived columns are worked out from the stored ones held, none of them read again.
-    let names: Vec<String> = rowver::rvr::derived::listed(reader.header()).into_iter().map(|(name, _)| name).collect();
-    let worked = rowver::rvr::derived::columns_with(reader, &names, &columns).map_err(|why| format!("its derived columns could not be worked out: {}", rowver::plain(reader.path(), &why)))?;
-    columns.extend(names.into_iter().zip(worked.into_iter().map(Rc::new)));
-    let heads: Vec<&str> = ["sample", "entry"].into_iter().chain(columns.iter().map(|(name, _)| name.as_str())).collect();
+    let stored: Vec<String> = data["cols"].as_array().into_iter().flatten().filter_map(|r| r["name"].as_str().map(str::to_owned)).collect();
+    let derived = rowver::rvr::derived::listed(reader.header());
+    let heads: Vec<&str> = ["sample", "entry"].into_iter().chain(stored.iter().map(String::as_str)).chain(derived.iter().map(|(name, _)| name.as_str())).collect();
     let samples_named = sample_names(data);
     let mut out = heads.join("\t") + "\n";
-    for (row, (at, entry)) in samples.iter().zip(&entries).enumerate() {
+    // The derived columns checked against their records first; then a run of rows at a time, every
+    // column of it read or worked out once, written, and let go.
+    let mut each = |first: usize, last: usize, columns: Vec<Held>| {
         use std::fmt::Write;
-        let _ = write!(out, "{}\t{entry}", samples_named.get(*at as usize).copied().unwrap_or("?"));
-        for (_, held) in &columns {
-            out.push('\t');
-            push_row(held, row, &mut out);
+        let (samples, entries) = (&columns[0].bytes, &columns[1].bytes);
+        for row in 0..last - first {
+            let at = i32::from_le_bytes(samples[row * 4..row * 4 + 4].try_into().unwrap_or_default());
+            let entry = i64::from_le_bytes(entries[row * 8..row * 8 + 8].try_into().unwrap_or_default());
+            let _ = write!(out, "{}\t{entry}", samples_named.get(at as usize).copied().unwrap_or("?"));
+            for held in &columns[2..] {
+                out.push('\t');
+                push_row(held, row, &mut out);
+            }
+            out.push('\n');
+            if out.len() > 1 << 16 {
+                crate::out("dump", out.as_bytes()).map_err(rowver::Error::Invalid)?;
+                out.clear();
+            }
         }
-        out.push('\n');
-        if out.len() > 1 << 16 {
-            crate::out("dump", out.as_bytes())?;
-            out.clear();
-        }
-    }
+        Ok(())
+    };
+    rowver::rvr::derived::walk(reader, &stored, &mut each).map_err(|why| rowver::plain(reader.path(), &why))?;
     crate::out("dump", out.as_bytes())?;
     print_sample_columns(data, wide(reader));
     Ok(())

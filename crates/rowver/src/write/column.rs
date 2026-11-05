@@ -1,18 +1,18 @@
-//! One array packed a piece at a time: measured in row order, then compressed from its
-//! byte-shuffled form, so no array is held whole.
+//! One array packed a chunk at a time (docs/FORMAT.md §7): its values taken in row order, a piece
+//! at a time, cut at the file's chunks, each chunk hashed and its lanes compressed, so no array is
+//! held whole.
 
 use super::facts::Facts;
 use super::spool::Spooled;
 use super::Values;
+use crate::chunks::{self, Rows};
 use crate::numeric::width;
-use crate::rvr::{hex, Reader};
+use crate::rvr::Reader;
 use crate::{invalid, Result};
-use ruzstd::decoding::StreamingDecoder;
-use ruzstd::encoding::{compress, CompressionLevel};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 
 /// Where `stream` takes a column from.
@@ -49,6 +49,13 @@ impl Source<'_> {
     }
 }
 
+/// One piece's values as they are at hand: little-endian, or in byte lanes (every value's first
+/// byte, then every value's second, and so on).
+pub(super) enum Piece<'a> {
+    Raw(Cow<'a, [u8]>),
+    Lanes(Vec<Cow<'a, [u8]>>),
+}
+
 /// An array's values in row order, held in pieces.
 pub(super) trait Pieces {
     /// The kind of the values: `f4`, `i8`, `b1`.
@@ -57,12 +64,8 @@ pub(super) trait Pieces {
     fn pieces(&self) -> usize;
     /// How many values piece `piece` holds.
     fn values(&self, piece: usize) -> usize;
-    /// Byte `lane` of every value of piece `piece`, in order.
-    fn lane(&self, piece: usize, lane: usize) -> Result<Cow<'_, [u8]>>;
-    /// The little-endian values of piece `piece`, when they are at hand without unshuffling.
-    fn raw(&self, _piece: usize) -> Result<Option<Cow<'_, [u8]>>> {
-        Ok(None)
-    }
+    /// The values of piece `piece`, as they are at hand.
+    fn piece(&self, piece: usize) -> Result<Piece<'_>>;
     /// For a list column, how many values each row of piece `piece` holds.
     fn counts(&self, _piece: usize) -> Result<Option<Cow<'_, [usize]>>> {
         Ok(None)
@@ -108,14 +111,8 @@ impl Pieces for Whole<'_> {
     fn values(&self, _piece: usize) -> usize {
         self.bytes.len() / self.w
     }
-    fn lane(&self, _piece: usize, lane: usize) -> Result<Cow<'_, [u8]>> {
-        Ok(match self.w {
-            1 => Cow::Borrowed(&self.bytes),
-            w => Cow::Owned(self.bytes.iter().skip(lane).step_by(w).copied().collect()),
-        })
-    }
-    fn raw(&self, _piece: usize) -> Result<Option<Cow<'_, [u8]>>> {
-        Ok(Some(Cow::Borrowed(&self.bytes)))
+    fn piece(&self, _piece: usize) -> Result<Piece<'_>> {
+        Ok(Piece::Raw(Cow::Borrowed(&self.bytes)))
     }
     fn counts(&self, _piece: usize) -> Result<Option<Cow<'_, [usize]>>> {
         Ok(self.counts.as_deref().map(Cow::Borrowed))
@@ -124,9 +121,6 @@ impl Pieces for Whole<'_> {
         self.counts.is_some()
     }
 }
-
-/// How many values are unshuffled, or read of a decoded array, at a time.
-const AT_ONCE: usize = 1 << 16;
 
 /// Read `buffer.len()` bytes of `file` from `at`, without moving a shared cursor.
 pub(super) fn read_at(file: &std::fs::File, buffer: &mut [u8], at: u64) -> std::io::Result<()> {
@@ -162,445 +156,256 @@ pub(super) fn write_at(file: &std::fs::File, bytes: &[u8], at: u64) -> std::io::
     }
 }
 
-/// Each row's index into the samples, as `i4`, in pieces of at most `AT_ONCE` rows.
-pub(super) struct Indices(Vec<(i32, usize)>);
-
-impl Indices {
-    /// The pieces of samples of these many rows each.
-    pub(super) fn new(rows: &[usize]) -> Result<Self> {
-        let mut pieces = Vec::new();
-        for (sample, rows) in rows.iter().enumerate() {
-            let sample = i32::try_from(sample).map_err(|_| invalid("Too many samples"))?;
-            for start in (0..*rows).step_by(AT_ONCE) {
-                pieces.push((sample, AT_ONCE.min(rows - start)));
-            }
+/// Piece `piece` as it is at hand, its lanes refused unless each holds its values.
+fn piece<'a>(pieces: &'a dyn Pieces, piece: usize, w: usize) -> Result<Piece<'a>> {
+    let held = pieces.piece(piece)?;
+    if let Piece::Lanes(lanes) = &held {
+        if lanes.len() != w || lanes.iter().any(|lane| lane.len() != pieces.values(piece)) {
+            return Err(invalid("A piece's lanes do not hold its values"));
         }
-        Ok(Self(pieces))
     }
+    Ok(held)
 }
 
-impl Pieces for Indices {
-    fn kind(&self) -> &str {
-        "i4"
-    }
-    fn pieces(&self) -> usize {
-        self.0.len()
-    }
-    fn values(&self, piece: usize) -> usize {
-        self.0[piece].1
-    }
-    fn lane(&self, piece: usize, lane: usize) -> Result<Cow<'_, [u8]>> {
-        let (sample, rows) = self.0[piece];
-        Ok(Cow::Owned(vec![sample.to_le_bytes()[lane]; rows]))
-    }
-}
-
-/// An array decoded into a scratch file in its byte-shuffled order, read as pieces of
-/// `AT_ONCE` values.
-struct Decoded {
-    file: std::fs::File,
-    kind: String,
-    count: usize,
-}
-
-impl Decoded {
-    /// Value `index` of an `i8` array.
-    fn signed(&self, index: usize) -> Result<i64> {
-        let mut value = [0; 8];
-        for (lane, byte) in value.iter_mut().enumerate() {
-            let mut one = [0];
-            read_at(&self.file, &mut one, (lane * self.count + index) as u64)?;
-            *byte = one[0];
-        }
-        Ok(i64::from_le_bytes(value))
-    }
-}
-
-impl Pieces for Decoded {
-    fn kind(&self) -> &str {
-        &self.kind
-    }
-    fn pieces(&self) -> usize {
-        self.count.div_ceil(AT_ONCE)
-    }
-    fn values(&self, piece: usize) -> usize {
-        AT_ONCE.min(self.count - piece * AT_ONCE)
-    }
-    fn lane(&self, piece: usize, lane: usize) -> Result<Cow<'_, [u8]>> {
-        let mut bytes = vec![0; self.values(piece)];
-        read_at(
-            &self.file,
-            &mut bytes,
-            (lane * self.count + piece * AT_ONCE) as u64,
-        )?;
-        Ok(Cow::Owned(bytes))
-    }
-}
-
-/// A list column's offsets, counted from its pieces' counts: one more value than rows.
-struct Steps<'a> {
-    column: &'a dyn Pieces,
-    /// Each piece's first offset, then the last offset.
-    bases: Vec<i64>,
-    /// Each piece's rows.
-    rows: Vec<usize>,
-}
-
-impl Steps<'_> {
-    /// The offsets piece `piece` begins, as values.
-    fn offsets(&self, piece: usize) -> Result<Vec<i64>> {
-        if piece == self.bases.len() - 1 {
-            return Ok(vec![self.bases[piece]]);
-        }
-        let counts = self.column.counts(piece)?.unwrap_or_default();
-        let mut offset = self.bases[piece];
-        Ok(counts
-            .iter()
-            .map(|count| {
-                let at = offset;
-                offset += *count as i64;
-                at
-            })
-            .collect())
-    }
-}
-
-impl Pieces for Steps<'_> {
-    fn kind(&self) -> &str {
-        "i8"
-    }
-    fn pieces(&self) -> usize {
-        self.bases.len()
-    }
-    fn values(&self, piece: usize) -> usize {
-        self.rows.get(piece).copied().unwrap_or(1)
-    }
-    fn lane(&self, piece: usize, lane: usize) -> Result<Cow<'_, [u8]>> {
-        let offsets = self.offsets(piece)?;
-        Ok(Cow::Owned(
-            offsets.iter().map(|o| o.to_le_bytes()[lane]).collect(),
-        ))
-    }
-    fn raw(&self, piece: usize) -> Result<Option<Cow<'_, [u8]>>> {
-        let offsets = self.offsets(piece)?;
-        Ok(Some(Cow::Owned(
-            offsets.iter().flat_map(|o| o.to_le_bytes()).collect(),
-        )))
-    }
-}
-
-/// What is measured of an array besides its own checksum.
-pub(super) enum Measure<'a> {
-    Nothing,
-    /// `by_sample` between these value bounds.
-    Bounds(&'a [usize]),
-    /// `by_sample` between these row bounds, then the column's facts.
-    Column(&'a [usize]),
-    /// `by_sample` of each sample's offsets counted from its first; the samples' row bounds.
-    Steps(&'a [usize]),
-    /// The entry array: `by_sample` between the samples' row bounds, each file's entries (between
-    /// the second bounds) strictly increasing.
-    Entries(&'a [usize], &'a [usize]),
-}
-
-/// The checksums of an array taken in row order, a piece at a time.
-struct Meter<'a> {
-    name: &'a str,
-    kind: &'a str,
+/// One array being written a chunk at a time: each chunk's lanes a frame each to `out`, then, when
+/// it is finished, its chunk table; with no `out`, each chunk only hashed (a derived column's).
+struct Chunked<'o> {
     w: usize,
-    measure: &'a Measure<'a>,
-    seen: usize,
-    total: Sha256,
-    /// The sample being hashed, and its hash so far.
-    at: usize,
-    sample: Sha256,
-    /// For offsets, the first offset of the sample being hashed, and the last offset seen.
-    first: Option<i64>,
-    last: Option<i64>,
-    by_sample: Vec<Value>,
-    facts: Option<Facts>,
-    /// For the entry array, the file being read and its last entry.
-    file: (usize, Option<i64>),
+    out: Option<&'o mut dyn Write>,
+    table: Vec<u8>,
+    hashes: Vec<[u8; 32]>,
+    size: usize,
 }
 
-impl<'a> Meter<'a> {
-    fn new(name: &'a str, kind: &'a str, measure: &'a Measure<'a>) -> Result<Self> {
+impl<'o> Chunked<'o> {
+    fn new(kind: &str, out: Option<&'o mut dyn Write>) -> Result<Self> {
+        Ok(Self { w: width(kind)?, out, table: Vec::new(), hashes: Vec::new(), size: 0 })
+    }
+
+    /// The next chunk's values, little-endian, and its byte lanes when they are at hand.
+    fn chunk(&mut self, values: &[u8], lanes: Option<&[Vec<u8>]>) -> Result<()> {
+        let digest: [u8; 32] = Sha256::digest(values).into();
+        self.hashes.push(digest);
+        if let Some(out) = self.out.as_mut() {
+            let frames = match lanes {
+                Some(lanes) => lanes.iter().map(|lane| crate::codec::pack(lane)).collect(),
+                None => chunks::frames(values, self.w),
+            };
+            for frame in frames {
+                out.write_all(&frame)?;
+                self.size += frame.len();
+                self.table.extend((frame.len() as u64).to_le_bytes());
+            }
+            self.table.extend_from_slice(&digest);
+        }
+        Ok(())
+    }
+
+    /// Its table written: the record's `at` and `size` when it is written, its `sha256`, and, with
+    /// `samples`, its `by_sample` from the chunks of rows `rows`.
+    fn finish(mut self, rows: &[Rows], samples: Option<usize>) -> Result<Map<String, Value>> {
+        let mut record = Map::new();
+        if let Some(out) = self.out.as_mut() {
+            out.write_all(&self.table)?;
+            record.insert("at".into(), 0.into());
+            record.insert("size".into(), (self.size + self.table.len()).into());
+        }
+        let (sha256, by_sample) = chunks::sums(rows, &self.hashes, samples.unwrap_or(0));
+        record.insert("sha256".into(), sha256.into());
+        if samples.is_some() {
+            record.insert("by_sample".into(), by_sample.into());
+        }
+        Ok(record)
+    }
+}
+
+/// A column's values taken in row order, any number of rows at a time, and cut at the file's
+/// chunks: a flat column's array (with its facts), or a list column's offsets and content.
+struct Cutting<'o> {
+    name: String,
+    kind: String,
+    w: usize,
+    rows: Vec<Rows>,
+    /// The next chunk, the rows taken so far, and the chunk's values (and counts) gathered: in
+    /// byte lanes when the pieces come in lanes, so they are written as they come.
+    next: usize,
+    taken: usize,
+    values: Vec<u8>,
+    lanes: Option<Vec<Vec<u8>>>,
+    counts: Vec<usize>,
+    members: usize,
+    facts: Option<Facts>,
+    array: Chunked<'o>,
+    offsets: Option<Chunked<'o>>,
+}
+
+impl<'o> Cutting<'o> {
+    /// A column `name` of `kind`, a list column when `listed`, over the chunks `rows`, its array
+    /// (a list column's content) to `out` and a list column's offsets to `offsets`.
+    fn new(name: &str, kind: &str, listed: bool, rows: &[Rows], out: Option<&'o mut dyn Write>, offsets: Option<&'o mut dyn Write>) -> Result<Self> {
+        let measured = out.is_none();
+        let offsets = match listed {
+            true if measured => Some(Chunked::new("i8", None)?),
+            true => Some(Chunked::new("i8", offsets)?),
+            false => None,
+        };
         Ok(Self {
-            name,
-            kind,
+            name: name.into(),
+            kind: kind.into(),
             w: width(kind)?,
-            measure,
-            seen: 0,
-            total: Sha256::new(),
-            at: 0,
-            sample: Sha256::new(),
-            first: None,
-            last: None,
-            by_sample: Vec::new(),
-            facts: matches!(measure, Measure::Column(..)).then(|| Facts::new(kind)),
-            file: (0, None),
+            rows: rows.to_vec(),
+            next: 0,
+            taken: 0,
+            values: Vec::new(),
+            lanes: None,
+            counts: Vec::new(),
+            members: 0,
+            facts: (!listed).then(|| Facts::new(kind)),
+            array: Chunked::new(kind, out)?,
+            offsets,
         })
     }
 
-    /// Close the sample being hashed.
-    fn close(&mut self) {
-        self.by_sample
-            .push(hex(&self.sample.finalize_reset()).into());
-        self.at += 1;
-        self.first = None;
-    }
-
-    /// See the next values, as little-endian bytes.
-    fn add(&mut self, bytes: &[u8]) -> Result<()> {
-        if self.kind == "b1" {
-            if let Some(byte) = bytes.iter().find(|byte| **byte > 1) {
-                return Err(invalid(format!("{}: a b1 value is the byte 0 or 1, and one is {byte}: give false as 0 and true as 1", self.name)));
-            }
-        }
-        self.total.update(bytes);
-        if let Some(facts) = &mut self.facts {
-            facts.add(bytes)?;
-        }
-        let name = self.name;
-        let too_many = || invalid(format!("{name}: holds more values than its rows"));
-        let bounds = match self.measure {
-            Measure::Nothing => {
-                self.seen += bytes.len() / self.w;
-                return Ok(());
-            }
-            Measure::Steps(edges) if edges.len() < 2 => {
-                self.seen += bytes.len() / self.w;
-                return Ok(());
-            }
-            Measure::Steps(edges) => {
-                for value in bytes.chunks_exact(8) {
-                    let offset = i64::from_le_bytes(value.try_into().unwrap());
-                    if self.last.map_or(offset != 0, |last| offset < last) {
-                        return Err(invalid(format!(
-                            "{name}: offsets must start at zero and not decrease"
-                        )));
-                    }
-                    self.last = Some(offset);
-                    let row = self.seen;
-                    self.seen += 1;
-                    // Each sample's offsets run from its first row through its last row's end,
-                    // so the offset between two samples belongs to both.
-                    loop {
-                        if self.at + 1 >= edges.len() {
-                            return Err(too_many());
-                        }
-                        let first = *self.first.get_or_insert(offset);
-                        self.sample.update((offset - first).to_le_bytes());
-                        if row != edges[self.at + 1] {
-                            break;
-                        }
-                        self.close();
-                        if self.at + 1 == edges.len() {
-                            break;
-                        }
-                    }
-                }
-                return Ok(());
-            }
-            Measure::Entries(bounds, files) => {
-                for (at, value) in bytes.chunks_exact(8).enumerate() {
-                    let (row, entry) = (self.seen + at, i64::from_le_bytes(value.try_into().unwrap()));
-                    while self.file.0 + 1 < files.len() && row >= files[self.file.0 + 1] {
-                        self.file = (self.file.0 + 1, None);
-                    }
-                    // Rows no file of `files` holds are not a file's.
-                    if self.file.0 + 1 >= files.len() {
-                        continue;
-                    }
-                    if self.file.1.is_some_and(|last| entry <= last) {
-                        return Err(invalid(format!("the entries of a file's rows must be strictly increasing, and row {row} holds entry {entry} after a row of entry {}: keep each file's rows in the order of their entries", self.file.1.unwrap_or_default())));
-                    }
-                    self.file.1 = Some(entry);
-                }
-                *bounds
-            }
-            Measure::Bounds(bounds) | Measure::Column(bounds) => *bounds,
+    /// The next rows: their values, and for a list column how many each row holds.
+    fn take(&mut self, values: &Piece, counts: Option<&[usize]>) -> Result<()> {
+        let (n, truths) = match values {
+            Piece::Raw(raw) if raw.len() % self.w != 0 => return Err(invalid(format!("{}: its {} bytes are not whole values of {}, {} bytes each: give it exactly its values' bytes", self.name, raw.len(), self.kind, self.w))),
+            Piece::Raw(raw) => (raw.len() / self.w, &raw[..]),
+            Piece::Lanes(lanes) => (lanes.first().map_or(0, |lane| lane.len()), lanes.first().map_or(&[][..], |lane| &lane[..])),
         };
-        let mut rest = bytes;
-        while !rest.is_empty() {
-            while self.at + 1 < bounds.len() && self.seen == bounds[self.at + 1] {
-                self.close();
-            }
-            if self.at + 1 >= bounds.len() {
-                return Err(too_many());
-            }
-            let take = ((bounds[self.at + 1] - self.seen) * self.w).min(rest.len());
-            self.sample.update(&rest[..take]);
-            rest = &rest[take..];
-            self.seen += take / self.w;
+        if let Some(byte) = crate::numeric::untrue(&self.kind, truths) {
+            return Err(invalid(format!("{}: a b1 value is the byte 0 or 1, and one is {byte}: give false as 0 and true as 1", self.name)));
         }
+        let (name, rows) = (self.name.clone(), self.rows.last().map_or(0, |last| last.2));
+        let per = if counts.is_some() { "list" } else { "value" };
+        let too_many = move || invalid(format!("{name}: it holds more rows than the file's {rows}: give it one {per} per row"));
+        let Some(counts) = counts else {
+            let mut at = 0;
+            while at < n {
+                let end = self.rows.get(self.next).ok_or_else(&too_many)?.2;
+                let take = (end - self.taken).min(n - at);
+                self.gather(values, at, at + take);
+                (self.taken, at) = (self.taken + take, at + take);
+                if self.taken == end {
+                    self.close()?;
+                }
+            }
+            return Ok(());
+        };
+        let (mut at, mut from) = (0_usize, 0_usize);
+        for count in counts {
+            let end = self.rows.get(self.next).ok_or_else(&too_many)?.2;
+            at = at.checked_add(*count).filter(|to| *to <= n).ok_or_else(|| invalid(format!("{}: its lists hold more values than it has: give it one list per row, the lists together holding every value", self.name)))?;
+            self.counts.push(*count);
+            self.members = self.members.checked_add(*count).ok_or_else(|| invalid(format!("{}: its lists hold more values than an offset counts: write fewer rows into one file", self.name)))?;
+            self.taken += 1;
+            if self.taken == end {
+                self.gather(values, from, at);
+                from = at;
+                self.close()?;
+            }
+        }
+        if at != n {
+            return Err(invalid(format!("{}: it holds values no row's list holds: give it one list per row, the lists together holding every value", self.name)));
+        }
+        self.gather(values, from, at);
         Ok(())
     }
 
-    /// The array's checksum, then what its record holds after it.
-    fn finish(mut self) -> Result<(String, Map<String, Value>)> {
-        let mut after = Map::new();
-        let bounds = match self.measure {
-            Measure::Nothing => None,
-            Measure::Bounds(bounds) | Measure::Column(bounds) | Measure::Steps(bounds) | Measure::Entries(bounds, _) => {
-                Some(*bounds)
+    /// Values `from..to` of a piece added to the chunk gathered: in lanes once a piece came in
+    /// lanes, whole until then.
+    fn gather(&mut self, values: &Piece, from: usize, to: usize) {
+        let w = self.w;
+        match (values, &mut self.lanes) {
+            (Piece::Raw(raw), None) => self.values.extend_from_slice(&raw[from * w..to * w]),
+            (Piece::Raw(raw), Some(gathered)) => {
+                for (lane, into) in gathered.iter_mut().enumerate() {
+                    into.extend(raw[from * w..to * w].iter().skip(lane).step_by(w));
+                }
             }
+            (Piece::Lanes(lanes), gathered) => {
+                let gathered = gathered.get_or_insert_with(|| vec![Vec::new(); w]);
+                if !self.values.is_empty() {
+                    for (lane, into) in gathered.iter_mut().enumerate() {
+                        into.extend(self.values.iter().skip(lane).step_by(w));
+                    }
+                    self.values.clear();
+                }
+                for (into, lane) in gathered.iter_mut().zip(lanes) {
+                    into.extend_from_slice(&lane[from..to]);
+                }
+            }
+        }
+    }
+
+    /// The chunk gathered, hashed and stored: its lanes put back together for its SHA-256 and
+    /// facts, when it came in lanes, and written as they are.
+    fn close(&mut self) -> Result<()> {
+        if let Some(lanes) = &self.lanes {
+            self.values = crate::codec::merge(lanes, self.w, lanes.first().map_or(0, Vec::len));
+        }
+        if let Some(facts) = &mut self.facts {
+            facts.add(&self.values)?;
+        }
+        self.array.chunk(&self.values, self.lanes.as_deref())?;
+        self.values.clear();
+        for lane in self.lanes.iter_mut().flatten() {
+            lane.clear();
+        }
+        if let Some(offsets) = &mut self.offsets {
+            let mut steps = Vec::with_capacity((self.counts.len() + 1) * 8);
+            let mut at = 0_i64;
+            steps.extend(at.to_le_bytes());
+            for count in self.counts.drain(..) {
+                at = i64::try_from(count).ok().and_then(|count| at.checked_add(count)).ok_or_else(|| invalid(format!("{}: its lists hold more values than an offset counts (2^63 − 1): write fewer rows into one file", self.name)))?;
+                steps.extend(at.to_le_bytes());
+            }
+            offsets.chunk(&steps, None)?;
+        }
+        self.next += 1;
+        Ok(())
+    }
+
+    /// The column's record (after its name): its kind, then its array's, or its offsets' and content's.
+    fn finish(self, samples: usize) -> Result<(Map<String, Value>, Vec<usize>)> {
+        let rows = self.rows.last().map_or(0, |last| last.2);
+        if self.next != self.rows.len() || !self.values.is_empty() || self.lanes.iter().flatten().any(|lane| !lane.is_empty()) {
+            return Err(invalid(format!("{}: it holds {} rows, and the file {rows}: give it one value (or list) per row", self.name, self.taken)));
+        }
+        let mut record = Map::new();
+        let Some(offsets) = self.offsets else {
+            record.insert("kind".into(), self.kind.clone().into());
+            let mut placed = self.array.finish(&self.rows, Some(samples))?;
+            let size = placed.get("size").and_then(Value::as_u64).unwrap_or(0) as usize;
+            record.append(&mut placed);
+            if let Some(facts) = self.facts {
+                record.append(&mut facts.finish());
+            }
+            return Ok((record, vec![size]));
         };
-        if let Some(bounds) = bounds {
-            if matches!(self.measure, Measure::Steps(_)) {
-                if self.at + 1 != bounds.len() && bounds.len() > 1 {
-                    return Err(invalid(format!("{}: offsets end early", self.name)));
-                }
-            } else {
-                while self.at + 1 < bounds.len() {
-                    self.close();
-                }
-            }
-            after.insert("by_sample".into(), Value::Array(self.by_sample));
-        }
-        if let Some(facts) = self.facts {
-            after.append(&mut facts.finish());
-        }
-        Ok((hex(&self.total.finalize()), after))
+        record.insert("kind".into(), "jagged".into());
+        let offsets = offsets.finish(&self.rows, Some(samples))?;
+        let mut content = Map::new();
+        content.insert("kind".into(), self.kind.clone().into());
+        content.insert("count".into(), self.members.into());
+        content.append(&mut self.array.finish(&self.rows, Some(samples))?);
+        let size = |m: &Map<String, Value>| m.get("size").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let sizes = vec![size(&offsets), size(&content)];
+        record.insert("offsets".into(), Value::Object(offsets));
+        record.insert("content".into(), Value::Object(content));
+        Ok((record, sizes))
     }
 }
 
-/// Every value of an array, little-endian, a piece at a time.
-fn each_raw(
-    pieces: &dyn Pieces,
-    w: usize,
-    mut each: impl FnMut(&[u8]) -> Result<()>,
-) -> Result<()> {
-    let mut buffer = Vec::new();
-    for piece in 0..pieces.pieces() {
-        if let Some(raw) = pieces.raw(piece)? {
-            each(&raw)?;
-            continue;
-        }
-        let lanes = (0..w)
-            .map(|lane| pieces.lane(piece, lane))
-            .collect::<Result<Vec<_>>>()?;
-        let count = pieces.values(piece);
-        if lanes.iter().any(|lane| lane.len() != count) {
-            return Err(invalid("A piece's lanes do not hold its values"));
-        }
-        for start in (0..count).step_by(AT_ONCE) {
-            let end = (start + AT_ONCE).min(count);
-            buffer.clear();
-            buffer.resize((end - start) * w, 0);
-            for (lane, bytes) in lanes.iter().enumerate() {
-                let to = buffer[lane..].iter_mut().step_by(w);
-                to.zip(&bytes[start..end])
-                    .for_each(|(to, byte)| *to = *byte);
-            }
-            each(&buffer)?;
-        }
+/// Feed every value of `pieces` to `cutting`, a piece at a time, as each is at hand.
+fn fed(pieces: &dyn Pieces, cutting: &mut Cutting) -> Result<()> {
+    let w = width(pieces.kind())?;
+    for at in 0..pieces.pieces() {
+        let values = piece(pieces, at, w)?;
+        let counts = pieces.counts(at)?;
+        cutting.take(&values, counts.as_deref())?;
     }
     Ok(())
-}
-
-/// The byte-shuffled form of an array, lane by lane and piece by piece, as one stream; the first
-/// failure ends it and is kept.
-struct Shuffled<'a> {
-    pieces: &'a dyn Pieces,
-    w: usize,
-    next: (usize, usize),
-    held: Cow<'a, [u8]>,
-    at: usize,
-    failed: Option<crate::Error>,
-}
-
-impl Read for Shuffled<'_> {
-    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        while self.at == self.held.len() {
-            let (lane, piece) = self.next;
-            if lane == self.w || self.pieces.pieces() == 0 || self.failed.is_some() {
-                return Ok(0);
-            }
-            self.next = match piece + 1 == self.pieces.pieces() {
-                true => (lane + 1, 0),
-                false => (lane, piece + 1),
-            };
-            match self.pieces.lane(piece, lane) {
-                Ok(held) => (self.held, self.at) = (held, 0),
-                Err(error) => self.failed = Some(error),
-            }
-        }
-        let n = out.len().min(self.held.len() - self.at);
-        out[..n].copy_from_slice(&self.held[self.at..self.at + n]);
-        self.at += n;
-        Ok(n)
-    }
-}
-
-/// A writer that counts what it is given and keeps its first failure instead of returning it.
-struct Counted<'a> {
-    out: &'a mut dyn Write,
-    size: usize,
-    failed: Option<std::io::Error>,
-}
-
-impl Write for Counted<'_> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if self.failed.is_none() {
-            match self.out.write_all(bytes) {
-                Ok(()) => self.size += bytes.len(),
-                Err(error) => self.failed = Some(error),
-            }
-        }
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-/// Measure one array and write its compressed form to `out`: its record's `size`, `sha256` and
-/// what follows them. With no `out`, the array is measured and not written: its record has no
-/// `at` or `size`.
-fn array<'w>(
-    name: &str,
-    pieces: &dyn Pieces,
-    measure: &Measure,
-    out: Option<&mut (dyn Write + 'w)>,
-) -> Result<Map<String, Value>> {
-    let kind = pieces.kind();
-    let w = width(kind)?;
-    let mut meter = Meter::new(name, kind, measure)?;
-    each_raw(pieces, w, |bytes| meter.add(bytes))?;
-    let (sha256, mut after) = meter.finish()?;
-    let Some(out) = out else {
-        let mut record = Map::new();
-        record.insert("sha256".into(), sha256.into());
-        record.append(&mut after);
-        return Ok(record);
-    };
-    let mut source = Shuffled {
-        pieces,
-        w,
-        next: (0, 0),
-        held: Cow::Borrowed(&[]),
-        at: 0,
-        failed: None,
-    };
-    let mut drain = Counted {
-        out,
-        size: 0,
-        failed: None,
-    };
-    compress(&mut source, &mut drain, CompressionLevel::Fastest);
-    if let Some(error) = source.failed {
-        return Err(error);
-    }
-    if let Some(error) = drain.failed {
-        return Err(error.into());
-    }
-    let mut record = Map::new();
-    record.insert("at".into(), 0.into());
-    record.insert("size".into(), drain.size.into());
-    record.insert("sha256".into(), sha256.into());
-    record.append(&mut after);
-    Ok(record)
 }
 
 /// A packed column or array: its record, whose arrays are given their `at` when placed.
@@ -626,19 +431,16 @@ impl Packed {
     }
 }
 
-/// Pack the `sample` or `entry` array, which has no name in the file.
-pub(super) fn plain(
-    label: &str,
-    pieces: &dyn Pieces,
-    measure: &Measure,
-    out: &mut dyn Write,
-) -> Result<Packed> {
-    let record = array(label, pieces, measure, Some(out))?;
+/// Pack the `sample` array: each chunk holds its sample's index, which no checksum but its own has.
+pub(super) fn sample(rows: &[Rows], out: &mut dyn Write) -> Result<Packed> {
+    let mut array = Chunked::new("i4", Some(out))?;
+    for (sample, first, end) in rows {
+        let index = i32::try_from(*sample).map_err(|_| invalid("Too many samples"))?;
+        array.chunk(&index.to_le_bytes().repeat(end - first), None)?;
+    }
+    let record = array.finish(rows, None)?;
     let size = record["size"].as_u64().unwrap_or(0) as usize;
-    Ok(Packed {
-        record,
-        arrays: vec![(size, None)],
-    })
+    Ok(Packed { record, arrays: vec![(size, None)] })
 }
 
 /// The pieces a source holds.
@@ -658,7 +460,7 @@ impl Held<'_> {
 
 /// Pack the `entry` array, which must hold one `i8` value per row, from its source; `files` are
 /// the files' row bounds, within each of which the entries strictly increase.
-pub(super) fn entry(source: Source, edges: &[usize], files: &[usize], out: &mut dyn Write) -> Result<Packed> {
+pub(super) fn entry(source: Source, rows: &[Rows], samples: usize, files: &[usize], out: &mut dyn Write) -> Result<Packed> {
     let held = match source {
         Source::Values(values) => Held::Whole(Whole::new(values, "entry")?),
         Source::Spooled(spooled) => Held::Spooled(spooled),
@@ -666,313 +468,177 @@ pub(super) fn entry(source: Source, edges: &[usize], files: &[usize], out: &mut 
     };
     let pieces = held.pieces();
     let total: usize = (0..pieces.pieces()).map(|p| pieces.values(p)).sum();
-    if pieces.listed() || pieces.kind() != "i8" || total != edges[edges.len() - 1] {
-        return Err(invalid(format!("the entry array holds {total} {} values{}, and it holds one i8 value per row, {}: give each row's entry as an i8", pieces.kind(), if pieces.listed() { " in lists" } else { "" }, edges[edges.len() - 1])));
+    let end = rows.last().map_or(0, |last| last.2);
+    if pieces.listed() || pieces.kind() != "i8" || total != end {
+        return Err(invalid(format!("the entry array holds {total} {} values{}, and it holds one i8 value per row, {end}: give each row's entry as an i8", pieces.kind(), if pieces.listed() { " in lists" } else { "" })));
     }
-    plain("entry", pieces, &Measure::Entries(edges, files), out)
+    let mut cutting = Cutting::new("entry", "i8", false, rows, Some(out), None)?;
+    cutting.facts = None;
+    let (mut row, mut file, mut last) = (0_usize, 0_usize, None::<i64>);
+    for at in 0..pieces.pieces() {
+        // The entries are checked as values; they are written as they came, in lanes or not.
+        let held = piece(pieces, at, 8)?;
+        let values = match &held {
+            Piece::Raw(raw) => Cow::Borrowed(&raw[..]),
+            Piece::Lanes(lanes) => Cow::Owned(crate::codec::merge(lanes, 8, pieces.values(at))),
+        };
+        for value in values.chunks_exact(8) {
+            let entry = i64::from_le_bytes(value.try_into().unwrap_or_default());
+            while file + 1 < files.len() && row >= files[file + 1] {
+                (file, last) = (file + 1, None);
+            }
+            // Rows no file of `files` holds are not a file's.
+            if file + 1 < files.len() {
+                if last.is_some_and(|last| entry <= last) {
+                    return Err(invalid(format!("the entries of a file's rows must be strictly increasing, and row {row} holds entry {entry} after a row of entry {}: keep each file's rows in the order of their entries", last.unwrap_or_default())));
+                }
+                last = Some(entry);
+            }
+            row += 1;
+        }
+        drop(values);
+        cutting.take(&held, None)?;
+    }
+    let (mut record, sizes) = cutting.finish(samples)?;
+    record.remove("kind");
+    Ok(Packed { record, arrays: vec![(sizes[0], None)] })
 }
 
-/// Pack one column of the rows bounded by `edges` from its source.
-pub(super) fn column(
-    name: &str,
-    source: Source,
-    edges: &[usize],
-    out: &mut dyn Write,
-    scratch: &Path,
-) -> Result<Packed> {
+/// Pack one column of the chunks `rows` from its source; a list column's content goes through
+/// `scratch` while its offsets are written.
+pub(super) fn column(name: &str, source: Source, rows: &[Rows], samples: usize, out: &mut dyn Write, scratch: &Path) -> Result<Packed> {
     let held = match source {
-        Source::Copied(reader, from) => {
-            let copy = Copy {
-                name,
-                reader,
-                from: &from,
-                edges,
-                scratch,
-            };
-            return copied(&copy, out);
-        }
+        Source::Copied(reader, from) => return copied(name, reader, &from, rows, out),
         Source::Spooled(spooled) => Held::Spooled(spooled),
         Source::Values(values) => Held::Whole(Whole::new(values, name)?),
     };
-    laid(name, held.pieces(), edges, Some(out))
-}
-
-/// The record a column of these values would have, its checksums, `by_sample` and facts, with
-/// no array written: a derived column's. `edges` are the samples' row bounds.
-pub(super) fn measured(name: &str, column: &crate::rvr::Held, edges: &[usize]) -> Result<Map<String, Value>> {
-    let w = width(&column.kind)?;
-    if !column.bytes.len().is_multiple_of(w) {
-        return Err(invalid(format!("{name}: bytes do not hold its values")));
-    }
-    let counts = column.offsets.as_ref().map(|o| Cow::Owned(o.windows(2).map(|w| w[1] - w[0]).collect()));
-    let whole = Whole {
-        kind: column.kind.clone(),
-        w,
-        bytes: Cow::Borrowed(&column.bytes),
-        counts,
-    };
-    Ok(laid(name, &whole, edges, None)?.record)
-}
-
-/// Measure a column's pieces and, with `out`, write their arrays.
-fn laid<'w>(
-    name: &str,
-    pieces: &dyn Pieces,
-    edges: &[usize],
-    mut out: Option<&mut (dyn Write + 'w)>,
-) -> Result<Packed> {
-    let rows = edges[edges.len() - 1];
-    let total: usize = (0..pieces.pieces()).map(|p| pieces.values(p)).sum();
-    let size = |record: &Map<String, Value>| record.get("size").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let pieces = held.pieces();
     let mut record = Map::new();
     record.insert("name".into(), name.into());
     if !pieces.listed() {
-        if total != rows {
-            return Err(invalid(format!("{name}: it holds {total} values for {rows} rows: give it one value per row")));
-        }
-        record.insert("kind".into(), pieces.kind().into());
-        let mut placed = array(name, pieces, &Measure::Column(edges), out)?;
-        let arrays = vec![(size(&placed), None)];
+        let mut cutting = Cutting::new(name, pieces.kind(), false, rows, Some(out), None)?;
+        fed(pieces, &mut cutting)?;
+        let (mut placed, sizes) = cutting.finish(samples)?;
         record.append(&mut placed);
-        return Ok(Packed { record, arrays });
+        return Ok(Packed { record, arrays: vec![(sizes[0], None)] });
     }
-    let mut bases = Vec::with_capacity(pieces.pieces() + 1);
-    let mut held = Vec::with_capacity(pieces.pieces());
-    let (mut row, mut offset, mut bounds) = (0_usize, 0_i64, Vec::with_capacity(edges.len()));
-    let too_many = || invalid(format!("{name}: its lists hold more values than an offset counts (2^63 − 1): write fewer rows into one file"));
-    for piece in 0..pieces.pieces() {
-        bases.push(offset);
-        let counts = pieces.counts(piece)?.unwrap_or_default();
-        held.push(counts.len());
-        for count in counts.iter() {
-            while bounds.len() < edges.len() && edges[bounds.len()] == row {
-                bounds.push(offset as usize);
-            }
-            let count = i64::try_from(*count).map_err(|_| too_many())?;
-            offset = offset.checked_add(count).ok_or_else(too_many)?;
-            row += 1;
-        }
-    }
-    bases.push(offset);
-    while bounds.len() < edges.len() && edges[bounds.len()] == row {
-        bounds.push(offset as usize);
-    }
-    if row != rows || offset as usize != total || bounds.len() != edges.len() {
-        return Err(invalid(format!("{name}: it holds {row} lists of {total} values for {rows} rows: give it one list per row, the lists together holding every value")));
-    }
-    let steps = Steps {
-        column: pieces,
-        bases,
-        rows: held,
+    // The content's frames wait in `scratch` while the offsets, which come first, are written.
+    let mut content = std::io::BufWriter::new(std::fs::File::options().read(true).write(true).create(true).truncate(true).open(scratch)?);
+    let packed = {
+        let mut cutting = Cutting::new(name, pieces.kind(), true, rows, Some(&mut content), Some(out))?;
+        fed(pieces, &mut cutting)?;
+        cutting.finish(samples)?
     };
-    record.insert("kind".into(), "jagged".into());
-    let offsets = array(
-        &format!("{name} offsets"),
-        &steps,
-        &Measure::Steps(edges),
-        out.as_deref_mut(),
-    )?;
-    let mut content = Map::new();
-    content.insert("kind".into(), pieces.kind().into());
-    content.insert("count".into(), total.into());
-    let mut placed = array(name, pieces, &Measure::Bounds(&bounds), out)?;
-    content.append(&mut placed);
-    let arrays = vec![
-        (size(&offsets), Some("offsets")),
-        (size(&content), Some("content")),
-    ];
-    record.insert("offsets".into(), Value::Object(offsets));
-    record.insert("content".into(), Value::Object(content));
-    Ok(Packed { record, arrays })
+    let mut file = content.into_inner().map_err(|e| e.into_error())?;
+    std::io::Seek::rewind(&mut file)?;
+    std::io::copy(&mut file, out)?;
+    drop(file);
+    let _ = std::fs::remove_file(scratch);
+    let (mut placed, sizes) = packed;
+    record.append(&mut placed);
+    Ok(Packed { record, arrays: vec![(sizes[0], Some("offsets")), (sizes[1], Some("content"))] })
 }
 
-/// A `Read` over a span of a file that copies every byte it gives to `out`.
-/// A failure to write it is kept apart, so it is not taken for damage in what was read.
-struct Tee<'a, R: Read> {
-    from: R,
-    out: &'a mut dyn Write,
-    copied: usize,
-    failed: Option<std::io::Error>,
+/// The record a column of these values would have, its checksums (cut at the chunks `rows`),
+/// `by_sample` and facts, with no array written: a derived column's.
+pub(super) fn measured(name: &str, column: &crate::rvr::Held, rows: &[Rows], samples: usize) -> Result<Map<String, Value>> {
+    let mut measuring = Measuring::new(name, &column.kind, column.offsets.is_some(), rows)?;
+    let counts: Option<Vec<usize>> = column.offsets.as_ref().map(|o| o.windows(2).map(|w| w[1] - w[0]).collect());
+    measuring.take(&column.bytes, counts.as_deref())?;
+    measuring.finish(samples)
 }
 
-impl<R: Read> Read for Tee<'_, R> {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let n = self.from.read(buffer)?;
-        if let Err(error) = self.out.write_all(&buffer[..n]) {
-            self.failed = Some(error);
-            return Err(std::io::Error::other("the copy could not be written"));
-        }
-        self.copied += n;
-        Ok(n)
+/// A column measured a few rows at a time, as a derived column's record holds it: its kind, its
+/// checksums (cut at the file's chunks) and facts, and no array.
+pub(crate) struct Measuring(Cutting<'static>);
+
+impl Measuring {
+    /// A column `name` of `kind` (a list column's values' kind, when `listed`) over the chunks `rows`.
+    pub(crate) fn new(name: &str, kind: &str, listed: bool, rows: &[Rows]) -> Result<Self> {
+        Ok(Self(Cutting::new(name, kind, listed, rows, None, None)?))
+    }
+
+    /// The next rows: their values, and for a list column how many each row holds.
+    pub(crate) fn take(&mut self, values: &[u8], counts: Option<&[usize]>) -> Result<()> {
+        self.0.take(&Piece::Raw(Cow::Borrowed(values)), counts)
+    }
+
+    /// The record, from its kind on, every row taken.
+    pub(crate) fn finish(self, samples: usize) -> Result<Map<String, Value>> {
+        self.0.finish(samples).map(|(record, _)| record)
     }
 }
 
-/// A column to copy as it lies in another file of the same rows, and where to check it.
-struct Copy<'a> {
-    name: &'a str,
-    reader: &'a Reader,
-    from: &'a str,
-    edges: &'a [usize],
-    /// A file to decode each array into while it is checked.
-    scratch: &'a Path,
+/// An array as another file holds it, copied to `out` byte for byte a chunk at a time, read as
+/// the reader reads it: its table checked against its record there, then each chunk decoded,
+/// checked and handed to `each` before its frames are written; how many bytes it takes. A table
+/// unlike its record is `unlike`, a chunk unlike its table `damaged`.
+#[allow(clippy::too_many_arguments)]
+fn checked_copy(reader: &Reader, record: &Value, kind: &str, place: &str, n: &dyn Fn(usize) -> usize, out: &mut dyn Write, refused: (&dyn Fn() -> crate::Error, &dyn Fn() -> crate::Error), each: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<usize> {
+    let (unlike, damaged) = refused;
+    let mapped = |e: crate::Error, to: &dyn Fn() -> crate::Error| match e {
+        crate::Error::Invalid(_) => to(),
+        e => e,
+    };
+    let table = reader.chunk_table(record, kind, place).map_err(|e| mapped(e, unlike))?;
+    let (mut handed, mut size) = (false, 0);
+    let read = reader.frames(record, kind, place, n, None, &mut |_, frames, values| {
+        handed = true;
+        each(&values)?;
+        handed = false;
+        out.write_all(frames)?;
+        size += frames.len() as u64;
+        Ok(())
+    });
+    read.map_err(|e| if handed { e } else { mapped(e, damaged) })?;
+    let end = size + table.bytes();
+    out.write_all(&reader.array_bytes(record, place, size, end)?)?;
+    Ok(end as usize)
 }
 
-/// Copy one array to `out` as it lies, decoding it into the scratch file: its frame must
-/// carry its own checksum and decode to `values` values of `kind`.
-fn decoded(
-    copy: &Copy,
-    held: &Value,
-    kind: &str,
-    values: usize,
-    out: &mut dyn Write,
-) -> Result<Decoded> {
-    let damaged = || {
-        invalid(format!(
-            "{}: its array in {} is damaged. Run rvr validate on that file, or press again with --full.",
-            copy.name,
-            copy.reader.path().display()
-        ))
+/// Copy a column as it lies in another file of the same rows and chunks: its arrays byte for byte,
+/// each chunk decoded and checked; its facts made again, and equal to its record's there.
+fn copied(name: &str, reader: &Reader, from: &str, rows: &[Rows], out: &mut dyn Write) -> Result<Packed> {
+    let Some(held) = reader.record(from).filter(|held| held.is_object()) else {
+        return Err(invalid(format!("{name}: the file it is copied from does not hold {from}")));
     };
-    let (file, size) = copy.reader.span(held, copy.name)?;
-    let mut start = file.clone();
-    let expected = values.checked_mul(width(kind)?).ok_or_else(damaged)?;
-    if expected > crate::codec::most(size as usize) {
-        return Err(damaged());
+    if reader.chunks()?.as_slice() != rows {
+        return Err(invalid(format!("{name}: the file it is copied from, {}, is not cut into the same chunks: press again with --full", reader.path().display())));
     }
-    let mut head = vec![0; (size as usize).min(18)];
-    start.read_exact(&mut head)?;
-    crate::codec::frame(&head, expected, copy.name).map_err(|_| damaged())?;
-    let mut tee = Tee {
-        from: file,
-        out,
-        copied: 0,
-        failed: None,
-    };
-    let scratch = std::fs::File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(copy.scratch)?;
-    // Decoded no further than one byte past what the record states, so a damaged frame cannot
-    // fill the disk; reading and decoding fail as damage, writing as itself.
-    let (mut into, mut decoded) = (std::io::BufWriter::new(&scratch), 0_usize);
-    let sound = {
-        let mut decoder = match StreamingDecoder::new(&mut tee) {
-            Ok(decoder) => decoder,
-            Err(_) => return Err(tee.failed.take().map_or_else(damaged, Into::into)),
-        };
-        let mut buffer = vec![0; 1 << 16];
-        loop {
-            let room = buffer.len().min(expected + 1 - decoded);
-            let n = match decoder.read(&mut buffer[..room]) {
-                Ok(n) => n,
-                Err(_) => break false,
-            };
-            into.write_all(&buffer[..n])?;
-            decoded += n;
-            if n == 0 || decoded > expected {
-                let frame = &decoder.decoder;
-                break frame.get_checksum_from_data().is_some()
-                    && frame.get_checksum_from_data() == frame.get_calculated_checksum();
-            }
-        }
-    };
-    if let Some(error) = tee.failed.take() {
-        return Err(error.into());
-    }
-    into.flush()?;
-    drop(into);
-    let after = std::io::copy(&mut tee, &mut std::io::sink())?;
-    if let Some(error) = tee.failed.take() {
-        return Err(error.into());
-    }
-    if !sound || decoded != expected || after != 0 || tee.copied as u64 != size {
-        return Err(damaged());
-    }
-    Ok(Decoded {
-        file: scratch,
-        kind: kind.to_owned(),
-        count: values,
-    })
-}
-
-/// Copy a column as it lies in another file of the same rows. Each array is decoded and measured
-/// again, and must match its record there in `sha256`, `by_sample` and facts, as a full read of
-/// that file checks it.
-fn copied(copy: &Copy, out: &mut dyn Write) -> Result<Packed> {
-    let name = copy.name;
-    let Some(Value::Object(found)) = copy.reader.record(copy.from) else {
-        return Err(invalid(format!(
-            "{name}: the file it is copied from does not hold {}",
-            copy.from
-        )));
-    };
-    let mut record = found.clone();
+    let mut record = held.as_object().cloned().unwrap_or_default();
     record.insert("name".into(), name.into());
-    let rows = copy.edges[copy.edges.len() - 1];
-    let unlike = || {
-        invalid(format!(
-            "{name}: its array in {} does not hold what its record says. Run rvr validate on that file, or press again with --full.",
-            copy.reader.path().display()
-        ))
+    let path = reader.path().display();
+    let unlike = || invalid(format!("{name}: its array in {path} does not hold what its record says. Run rvr validate on that file, or press again with --full."));
+    let damaged = || invalid(format!("{name}: its array in {path} is damaged. Run rvr validate on that file, or press again with --full."));
+    let place = format!("data.cols[{from:?}]");
+    let kind_of = |held: &Value| held["kind"].as_str().unwrap_or("").to_owned();
+    let truths = |values: &[u8], kind: &str| match crate::numeric::untrue(kind, values) {
+        Some(_) => Err(unlike()),
+        None => Ok(()),
     };
-    let check = |held: &Value,
-                 kind: &str,
-                 values: usize,
-                 measure: &Measure,
-                 out: &mut dyn Write|
-     -> Result<(Decoded, usize)> {
-        let array = decoded(copy, held, kind, values, out)?;
-        let mut meter = Meter::new(name, kind, measure)?;
-        each_raw(&array, width(kind)?, |bytes| meter.add(bytes))?;
-        let (sha256, after) = meter.finish()?;
-        if held["sha256"] != sha256.as_str() || after.iter().any(|(key, value)| &held[key] != value)
-        {
+    if held["kind"] != "jagged" {
+        let kind = kind_of(held);
+        let mut facts = Facts::new(&kind);
+        let size = checked_copy(reader, held, &kind, &place, &|k| rows[k].2 - rows[k].1, out, (&unlike, &damaged), &mut |values| {
+            truths(values, &kind)?;
+            facts.add(values)
+        })?;
+        if facts.finish().iter().any(|(key, value)| &held[key] != value) {
             return Err(unlike());
         }
-        Ok((array, held["size"].as_u64().unwrap_or(0) as usize))
-    };
-    let text = |held: &Value, key: &str| held[key].as_str().unwrap_or("").to_owned();
-    let result = (|| -> Result<Vec<(usize, Option<&'static str>)>> {
-        if record["kind"] != "jagged" {
-            let held = Value::Object(record.clone());
-            let kind = text(&held, "kind");
-            let (_, size) = check(
-                &held,
-                &kind,
-                rows,
-                &Measure::Column(copy.edges),
-                out,
-            )?;
-            return Ok(vec![(size, None)]);
-        }
-        let offsets = record.get("offsets").cloned().ok_or_else(unlike)?;
-        let content = record.get("content").cloned().ok_or_else(unlike)?;
-        let (steps, size) = check(&offsets, "i8", rows + 1, &Measure::Steps(copy.edges), out)?;
-        let bounds = copy
-            .edges
-            .iter()
-            .map(|row| steps.signed(*row).map(|offset| offset as usize))
-            .collect::<Result<Vec<_>>>()?;
-        drop(steps);
-        let count = content["count"].as_u64().unwrap_or(0) as usize;
-        let ordered = bounds.windows(2).all(|pair| pair[0] <= pair[1]);
-        if !ordered || bounds.first() != Some(&0) || bounds.last() != Some(&count) {
-            return Err(unlike());
-        }
-        let (_, more) = check(
-            &content,
-            &text(&content, "kind"),
-            count,
-            &Measure::Bounds(&bounds),
-            out,
-        )?;
-        Ok(vec![(size, Some("offsets")), (more, Some("content"))])
-    })();
-    let _ = std::fs::remove_file(copy.scratch);
-    Ok(Packed {
-        record,
-        arrays: result?,
-    })
+        return Ok(Packed { record, arrays: vec![(size, None)] });
+    }
+    let (offsets, content) = (&held["offsets"], &held["content"]);
+    let mut members = Vec::with_capacity(rows.len());
+    let size = checked_copy(reader, offsets, "i8", &format!("{place}.offsets"), &|k| rows[k].2 - rows[k].1 + 1, out, (&unlike, &damaged), &mut |values| {
+        members.push(chunks::offsets(values, name).map_err(|_| unlike())?.1);
+        Ok(())
+    })?;
+    let total = members.iter().try_fold(0_u64, |sum, m| sum.checked_add(*m as u64));
+    if total.is_none() || total != content["count"].as_u64() {
+        return Err(unlike());
+    }
+    let kind = kind_of(content);
+    let more = checked_copy(reader, content, &kind, &format!("{place}.content"), &|k| members[k], out, (&unlike, &damaged), &mut |values| truths(values, &kind))?;
+    Ok(Packed { record, arrays: vec![(size, Some("offsets")), (more, Some("content"))] })
 }

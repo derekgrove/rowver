@@ -35,8 +35,8 @@ Checksums are cut to their first 8 hex digits here; a file holds all 64.
 ```
 ┌─────────────┬──────────────────┬────────────────────────────┬──────────────────────────────┐
 │ magic       │ header length    │ header                     │ arrays                       │
-│ 8 bytes     │ u32 little-endian│ UTF-8 JSON, not compressed │ each compressed on its own,  │
-│             │                  │                            │ end to end, nothing after    │
+│ 8 bytes     │ u32 little-endian│ UTF-8 JSON, not compressed │ each cut in row-aligned      │
+│             │                  │                            │ chunks, end to end (§7)      │
 └─────────────┴──────────────────┴────────────────────────────┴──────────────────────────────┘
  byte 0        byte 8             byte 12                      byte 12 + header length
 ```
@@ -53,9 +53,10 @@ The first bytes of `tiny.rvr`:
   therefore breaks the file visibly.
 - **The header length** is `C2 1B 00 00`, that is 0x1BC2 = 7,106 bytes. A reader parses that many
   bytes of JSON and has every fact about the file without touching any array.
-- **The arrays** start at byte 12 + 7,106 = 7,118 and fill the rest of the file: 332 bytes here.
-  Each is compressed on its own (§7), so a reader decompresses only the arrays it needs. A program
-  that changes only the header writes the new header and copies the arrays byte for byte.
+- **The arrays** start at byte 12 + 7,106 = 7,118 and fill the rest of the file: 1,962 bytes here.
+  Each is cut in chunks of rows that line up across every array, each chunk compressed on its own
+  (§7), so a reader decompresses only the arrays, and only the rows, it needs, in parallel. A
+  program that changes only the header writes the new header and copies the arrays byte for byte.
 
 A reader refuses a file whose first 8 bytes are not the magic, whose `rowver` is not 15, or whose
 arrays do not fill the rest of the file exactly (the header's array records say where each lies, so
@@ -67,7 +68,7 @@ this is checked on opening, with no array read).
 - no object holds the same key twice, at any depth;
 - arrays and objects nest at most 64 deep, the header itself the first;
 - a string holds no lone surrogate (`\ud800` without its pair);
-- every count the format names (`rows`, `at`, `size`, `count`, `entries`, `stop`, `take`, `n`, a
+- every count the format names (`rows`, `chunk_rows`, `at`, `size`, `count`, `entries`, `stop`, `take`, `n`, a
   hole's entries, and `events_read`, `events_total` and `events_missing`) is a whole number written
   without a fraction or an exponent, from 0 to 2^63 − 1; `seed` from 0 to 2^64 − 1;
 - every record holds exactly the fields this page gives it, no more; only the top level may hold
@@ -83,11 +84,11 @@ The header length is at most 2^32 − 1, as its four bytes allow.
 they were. It keeps the study it was pressed from, which can press the same arrays again, so it gives
 back a file's space and keeps its place (`rvr empty`; `rvr refill` presses the arrays again and puts
 them back once each has the `sha256` its record states). Its array records are laid out as a whole
-file's are (§7: from `at` 0, end to end, each `size` from 1), only the bytes they name are gone. A
-reader opens it and checks its header as for any file, says it is empty, and refuses to read a
-column of it; nothing else in the format marks it. Full validation of it runs every check but those
-of the arrays' bytes (§12). A whole file always has arrays after its header, since even an array of
-no values is a compressed frame of a few bytes.
+file's are (§7: from `at` 0, end to end), only the bytes they name are gone. A reader opens it and
+checks its header as for any file, says it is empty, and refuses to read a column of it; nothing
+else in the format marks it. Full validation of it runs every check but those of the arrays' bytes
+(§12). A file of no rows has no chunks, so its arrays hold no bytes: it is whole, not empty. A file
+is empty exactly when it ends at its header while its arrays' records name bytes after it.
 
 ## 2. The header at a glance
 
@@ -95,7 +96,7 @@ no values is a compressed frame of a few bytes.
 {
   "rowver": 15,                 the format version
   "data": {                     the rows and their columns (§3 to §5); written once, by the press
-    "rows", "samples", "files",
+    "rows", "chunk_rows", "samples", "files",
     "sample", "entry",          the two arrays every file has
     "cols",                     one record per column
     "sha256",                   one checksum of all the arrays
@@ -130,17 +131,19 @@ rows because their files are copies of one ntuple.
 
 ```json
 "rows": 8,
+"chunk_rows": 65536,
 "samples": [{"name": "signal", "label": "Signal", "rows": 4},
             {"name": "background", "label": "Background", "rows": 4}],
 "files":   [{"sample": "signal", "path": "./signal.root", "rows": 4},
             {"sample": "background", "path": "./background.root", "rows": 4}],
-"sample":  {"at": 0,  "size": 50, "sha256": "eeb59ffe"},
-"entry":   {"at": 50, "size": 51, "sha256": "02ea099d", "by_sample": ["045487dc", "045487dc"]},
+"sample":  {"at": 0,   "size": 240, "sha256": "0b8e189d"},
+"entry":   {"at": 240, "size": 430, "sha256": "d618105e", "by_sample": ["904543e2", "904543e2"]},
 ```
 
 | field | holds |
 |---|---|
 | `rows` | the number of kept events |
+| `chunk_rows` | the rows of one chunk (§7): a whole number from 1,024 to 16,777,216; the recipe's `chunk_rows`, 65,536 when it gives none |
 | `samples` | every sample in row order, each with exactly `name` (what every tool calls it), `label` (what a plot shows, nonempty text) and `rows` |
 | `files` | every input file read, in row order, each with exactly `sample`, `path` (its `at` in the lock, a key of that sample's `made.files[sample].files`) and `rows` (zero included) |
 | `sample` | the array `i4[rows]`: each row's index into `samples` |
@@ -190,17 +193,17 @@ alike, and none `sample`, `entry` or `file`, nor the name of a derived column.
 facts:
 
 ```json
-{"name": "nJet", "kind": "i4", "at": 101, "size": 50, "sha256": "4c0f18a1",
- "by_sample": ["af095d9c", "af095d9c"], "lim": [1, 4], "nice": [1, 4], "vals": [1, 3, 4]}
+{"name": "nJet", "kind": "i4", "at": 670, "size": 254, "sha256": "d9237950",
+ "by_sample": ["84697797", "84697797"], "lim": [1, 4], "nice": [1, 4], "vals": [1, 3, 4]}
 ```
 
 **A jagged column** is two arrays. Row `i` owns `content[offsets[i] : offsets[i + 1]]`:
 
 ```json
 {"name": "Jet_pt", "kind": "jagged",
- "offsets": {"at": 151, "size": 52, "sha256": "1e8928fc", "by_sample": ["fa00c623", "fa00c623"]},
- "content": {"kind": "f4", "count": 22, "at": 203, "size": 80, "sha256": "89d29a1d",
-             "by_sample": ["a5cf09fd", "a5cf09fd"]}}
+ "offsets": {"at": 924, "size": 432, "sha256": "af72e3c9", "by_sample": ["439e0157", "439e0157"]},
+ "content": {"kind": "f4", "count": 22, "at": 1356, "size": 324, "sha256": "69fa98c7",
+             "by_sample": ["bcda9316", "bcda9316"]}}
 ```
 
 ```
@@ -499,7 +502,9 @@ Each hole has exactly:
   to `last − 1` of the file's tree;
 - `kind`: one word of the list below, so a tool can group holes and act on them;
 - `why`: text that is not blank (not only spaces), for a person, saying what failed, where, and
-  what to do.
+  what to do. Its words are the program's own (they quote the library that read the file): two
+  programs pressing the same study on the same inputs agree on every hole's `entries` and `kind`,
+  and may word its `why` otherwise.
 
 | `kind` | the press found |
 |---|---|
@@ -619,14 +624,66 @@ of each of the event's elements (N times their count). The content's kind is the
 
 ## 7. Arrays
 
+**Chunks.** Every array is cut at the same rows into *chunks*, so that a reader can find,
+decompress and check any rows of any column alone. Within each sample, rows are cut every
+`chunk_rows` rows (R) from the sample's first row: a sample of `r` rows has `ceil(r / R)` chunks,
+the last holding what is left, and a sample of no rows has none. No chunk spans two samples. The
+file's chunks are the samples' chunks in sample order, numbered from 0; chunk `k` is the same rows
+in every array. In `tiny.rvr` (R = 65,536, two samples of 4 rows) there are two chunks: rows 0-3
+and rows 4-7.
+
+What a chunk of rows `[r0, r1)` holds, as values:
+
+| array | its chunk's values |
+|---|---|
+| `sample`, `entry`, a flat column | `values[r0:r1]` |
+| jagged `offsets` | `offsets[r0 : r1 + 1] − offsets[r0]`: `r1 − r0 + 1` values, the first 0 |
+| jagged `content` | `content[offsets[r0] : offsets[r1]]`: the chunk's rows' members, as many as its offsets chunk's last value |
+
+so every chunk decodes alone (a jagged chunk needs its offsets chunk only).
+
+**A chunk is stored** in three steps:
+
+1. its values as little-endian bytes, `n` values of width `w`;
+2. cut into `w` **lanes**: lane `j` holds byte `j` of every value, in order, `n` bytes (a kind of
+   width 1 has one lane, the bytes themselves; a chunk of no values, as a jagged content chunk
+   whose rows hold no members, has `w` lanes of no bytes, each still one frame). Putting the slowly changing bytes of neighbouring
+   values together compresses better;
+3. each lane **compressed** as exactly one Zstandard frame (RFC 8878), which fills its size exactly
+   and decompresses to exactly the lane's `n` bytes:
+   - it begins with the magic `28 B5 2F FD`; no skippable frame comes before or after it;
+   - it uses no dictionary (its dictionary ID flag is 0);
+   - it has a content checksum (its checksum flag is 1), and the checksum (the low 32 bits of
+     XXH64 of the decompressed bytes, seed 0) is right;
+   - a content size, when the frame gives one, is `n`;
+   - its window is at most 2^27 bytes (128 MiB), which every Zstandard library reads by default.
+
+   Zstandard's blocks hold at most 128 KiB each, so a frame of `s` bytes cannot give more than
+   32,768 × `s` + 128 KiB; a reader refuses a lane whose `n` would take more before it decodes it.
+
+**An array** is its chunks, each its lanes' frames in lane order, chunk after chunk, then its
+**chunk table**: one entry per chunk, in chunk order, each `8w + 32` bytes: the size of each of the
+chunk's `w` lane frames as a `u8` (little-endian), then the chunk's SHA-256 (§8) as 32 bytes. The
+table is not compressed. The array's frames and table are contiguous, from its `at`, filling its
+`size`: `size` is the frames' sizes added up plus the table's `chunks × (8w + 32)` bytes. An array of
+no chunks (a file of no rows) holds no bytes: `size` 0.
+
+To read rows `[a, b)` of a column, a reader reads the column's chunk tables (their places follow
+from the header), checks the array's `sha256` against the chunk hashes they hold (§8: no frame is
+decompressed for it), then decompresses the frames of only the chunks holding those rows, checking
+each chunk's SHA-256. Chunks decode independently, in parallel.
+
 An array reference is `{"at", "size", "sha256"}`, with `by_sample` on every array but `sample`
 (§8).
 
 - `at` counts bytes from the start of the arrays (the byte after the header), so a header of
   another length leaves every `at` unchanged.
-- `size` is the compressed length, from 1 (a frame is a few bytes even of no values).
-- The uncompressed length is the number of values times the kind's width: `rows` values for
-  `sample`, `entry` and flat columns, `rows + 1` for jagged offsets, `count` for jagged content.
+- `size` is the bytes the array takes, frames and table.
+- The array's values, in chunk order, are its whole values: `rows` values for `sample`, `entry` and
+  flat columns, `count` for jagged content; for jagged offsets, the whole `offsets` (`rows + 1`
+  values) is the chunks' offsets laid end to end, each chunk's shifted by the sum of the previous
+  chunks' last values, and each chunk's leading 0 but the first's dropped; a file of no rows (no
+  chunks) has the whole offsets `[0]`.
 
 The arrays are written in file order, one after another from `at` 0, with no gap between them and
 nothing after the last: `sample`, `entry`, then each column in `cols` order, a jagged column as
@@ -634,52 +691,45 @@ its offsets then its content. In `tiny.rvr`:
 
 | array | `at` | `size` |
 |---|---|---|
-| `sample` | 0 | 50 |
-| `entry` | 50 | 51 |
-| `nJet` | 101 | 50 |
-| `Jet_pt` offsets | 151 | 52 |
-| `Jet_pt` content | 203 | 80 |
-| `ht` | 283 | 49 |
-| | 332 | the end of the file |
+| `sample` | 0 | 240 |
+| `entry` | 240 | 430 |
+| `nJet` | 670 | 254 |
+| `Jet_pt` offsets | 924 | 432 |
+| `Jet_pt` content | 1356 | 324 |
+| `ht` | 1680 | 282 |
+| | 1962 | the end of the file |
 
-Each array is stored in three steps:
+Each array of `tiny.rvr` is two chunks, one a sample: `nJet`'s 254 bytes are each chunk's four lane
+frames, of 21, 14, 14 and 14 bytes, then its table of two entries of 64 bytes (each lane's size as
+a `u8`, then the chunk's SHA-256, `af095d9c…` for both chunks).
 
-1. its values as little-endian bytes;
-2. **byte-shuffled**, when the kind is wider than one byte: every value's first byte, then every
-   value's second byte, and so on. With `n` values of width `w`, output byte `j × n + i` is input
-   byte `i × w + j`. Shuffling puts the slowly changing bytes of neighbouring values together,
-   which compresses better;
-3. **compressed** as exactly one Zstandard frame (RFC 8878), which fills `size` exactly and
-   decompresses to exactly the shuffled bytes:
-   - it begins with the magic `28 B5 2F FD`; no skippable frame comes before or after it;
-   - it uses no dictionary (its dictionary ID flag is 0);
-   - it has a content checksum (its checksum flag is 1), and the checksum (the low 32 bits of
-     XXH64 of the decompressed bytes, seed 0) is right;
-   - a content size, when the frame gives one, is the decompressed length;
-   - its window is at most 2^27 bytes (128 MiB), which every Zstandard library reads by default.
-
-   Zstandard's blocks hold at most 128 KiB each, so a frame of `size` bytes cannot give more than
-   32,768 × `size` + 128 KiB; a reader refuses an array whose values would take more before it
-   decodes anything.
-
-The `sample` array of `tiny.rvr`, step by step:
+The `sample` array of `tiny.rvr`'s first chunk, step by step:
 
 ```
-values      0  0  0  0  1  1  1  1                                    i4[8]
-bytes       00000000 00000000 00000000 00000000 01000000 01000000 01000000 01000000
-shuffled    00 00 00 00 01 01 01 01   then 24 bytes of 00             the first bytes, then the rest
-stored      28 b5 2f fd 04 38 …                                       a zstd frame, 50 bytes
+values      0  0  0  0                                                i4[4], rows 0-3
+bytes       00000000 00000000 00000000 00000000
+lanes       lane 0: 00 00 00 00   lanes 1, 2, 3: 00 00 00 00 each
+stored      four zstd frames of 14 bytes, one a lane, then (after the second chunk's) the table
 ```
+
+**Choosing R.** `chunk_rows` is set by the recipe (its optional `chunk_rows` key, the recipe
+reference) and is 65,536 when the recipe gives none: measured on real data, it costs nothing in size
+(lane frames compress as well as one frame for the whole array) and keeps every chunk small enough
+to read a few rows quickly. A larger R suits files read only whole; a smaller one, files read in
+small slices. It changes no value and no fact; it changes the arrays' and derived columns' `sha256`
+and `by_sample`, so `data.sha256`, and (being in the recipe's text) `made`'s checksums and the
+signature. `data.chunk_rows` is the recipe's `chunk_rows`, or 65,536 when it gives none.
 
 ## 8. Checksums
 
 | checksum | of | on |
 |---|---|---|
-| array `sha256` | the array's uncompressed little-endian bytes, after undoing the shuffle | every array |
+| chunk SHA-256 | the chunk's values as little-endian bytes (§7's table of what a chunk holds) | every chunk of every array, in its chunk table |
+| array `sha256` | the ASCII text of the array's chunk SHA-256s (64 hex characters each) joined, in chunk order; for an array of no chunks, the SHA-256 of nothing | every array |
 | `data.sha256` | the ASCII text of every array's `sha256` joined, with nothing between them, in file order | `data` |
 | `by_sample` | one SHA-256 per sample, of that sample's part of the array (below) | `entry`, every flat column, both arrays of every jagged column |
 | `made.sha256` | the canonical JSON (below) of `made` without its own `sha256`, as UTF-8 | `made` |
-| a derived column's `sha256` and `by_sample` | its values as they are worked out, as a stored column's are of its array | each derived column |
+| a derived column's `sha256` and `by_sample` | its values as they are worked out, cut at the file's chunks as a stored column's array is: its chunk SHA-256s give its `sha256` and `by_sample` as for an array | each derived column |
 | `made.recipe.sha256`, `made.samples.sha256`, `made.lock.sha256` | that text alone | the three texts |
 | sample column `sha256` | its values as bytes (§5) | each sample column |
 | `signature.sha256` | §9 | `signature` |
@@ -690,31 +740,19 @@ and readers check them. Tool keys are outside every checksum, and outside the si
 
 **`data.sha256`** fingerprints all the data without decompressing any of it. It does not cover the
 `data` JSON describing the arrays. In `tiny.rvr` it is the SHA-256 of
-`"eeb59ffe…" + "02ea099d…" + "4c0f18a1…" + "1e8928fc…" + "89d29a1d…" + "ce0457c7…"` (the full 64
-characters of each), which is `1325524b`.
+`"0b8e189d…" + "d618105e…" + "d9237950…" + "af72e3c9…" + "69fa98c7…" + "e5fc4c13…"` (the full 64
+characters of each), which is `d943535f`.
 
-**`by_sample`.** With sample `s` on rows `[r0, r1)`:
+**`by_sample`** of an array, for each sample in order, is the SHA-256 of the ASCII text of that
+sample's chunks' SHA-256s joined, in chunk order (the SHA-256 of nothing for a sample of no rows).
+Since no chunk spans two samples and a jagged chunk's offsets count from its own first offset, a
+change in one sample changes no other sample's checksum. In `tiny.rvr`, the two samples hold the
+same rows, so each column's `by_sample` is the same for both.
 
-- `entry` and a flat column: the SHA-256 of the bytes of `values[r0:r1]`;
-- jagged `offsets`: the SHA-256 of the `i8` bytes of `offsets[r0 : r1 + 1] − offsets[r0]`, which
-  is `r1 − r0 + 1` values starting at 0;
-- jagged `content`: the SHA-256 of the bytes of `content[offsets[r0] : offsets[r1]]`;
-- a sample with no rows: the SHA-256 of zero bytes for `entry`, a flat column and jagged content,
-  and of the single `i8` value 0 for jagged offsets.
-
-Counting the offsets from the sample's own first offset means a change in an earlier sample does
-not change a later sample's checksum. In `tiny.rvr`, `Jet_pt`'s offsets give the same values, and
-so the same checksum `fa00c623`, for both samples:
-
-```
-offsets      [0, 3, 7, 10, 11, 14, 18, 21, 22]
-signal       rows 0–3: offsets[0:5] − 0   = [0, 3, 7, 10, 11]
-background   rows 4–7: offsets[4:9] − 11  = [0, 3, 7, 10, 11]
-```
-
-`by_sample` is not part of `data.sha256`: it can be worked out from the arrays, and full validation
-checks it. `sample` has none, since it is constant within a sample. Two headers are enough to say
-which column of which sample changed between two presses, with no array decompressed.
+`by_sample` is not part of `data.sha256`: it is worked out from the chunk tables, and validation
+checks it against them. `sample` has none, since it is constant within a sample. Two headers are
+enough to say which column of which sample changed between two presses of the same `chunk_rows`,
+with no array decompressed; two chunk tables, which chunk.
 
 ### Canonical JSON
 
@@ -783,8 +821,8 @@ choice. It is listed in `derived.columns`, in the order the recipe's `[derived]`
 
 ```json
 "derived": {"columns": [
-  {"name": "mean_jet_pt", "expression": "ht / nJet", "kind": "f8", "sha256": "e641687e",
-   "by_sample": ["e73c3af8", "e73c3af8"], "lim": [33.901041666666664, 120.5], "nice": [33.0, 130.0]}
+  {"name": "mean_jet_pt", "expression": "ht / nJet", "kind": "f8", "sha256": "9e715cef",
+   "by_sample": ["124d1600", "124d1600"], "lim": [33.901041666666664, 120.5], "nice": [33.0, 130.0]}
 ]}
 ```
 
@@ -798,7 +836,8 @@ The checksums and facts are of the column's values over every row, as a stored c
 array (§8): the press works each derived column out once, to record them. Its facts are compared as
 numbers, as a stored column's are (§4), and its float values, like any float, may be NaN or
 infinite. In `tiny.rvr`, `mean_jet_pt` is `ht / nJet` on each row, `[33.901041666666664,
-38.51171875, 34.822916666666664, 120.5, …]`, and `e641687e` is the SHA-256 of those eight doubles.
+38.51171875, 34.822916666666664, 120.5, …]`, cut at the file's two chunks of four rows: `9e715cef`
+is the SHA-256 of the two chunks' SHA-256s joined.
 
 An expression uses only what the file holds: its stored columns, the derived columns above it,
 and `sample.KEY` (the metadata of the row's sample, as a press gives it to an expression: without
@@ -843,9 +882,13 @@ steps, each refusing the file at the first problem, on one line that says which 
 study's texts:
 
 - §1: the magic, the header's JSON rules, `rowver: 15`, and the arrays filling the rest of the file
-  exactly, from their records (laid out from `at` 0, end to end, in an empty file too);
+  exactly, from their records (laid out from `at` 0, end to end, in an empty file too); each array's
+  `size` at least its chunk table's `chunks × (8w + 32)` bytes plus 13 bytes a lane per chunk (the
+  least a frame §7 allows takes: its magic 4, a frame header of 2, one block header 3 and the
+  content checksum 4);
 - §2 and §11: the top level, and the tool keys' names;
-- §3: every field of `data`, the samples and files in order, rows adding up;
+- §3: every field of `data`, `chunk_rows` within its bounds, the samples and files in order, rows
+  adding up;
 - §4: every column record's fields, kinds and names; the facts' forms: `lim` in order, `nice` made
   again from `lim`, `vals` only where it applies, ascending, within `lim`, and there whenever `lim`
   spans 64 values or fewer;
@@ -853,18 +896,25 @@ study's texts:
   `events_read`, `events_total` and `events_missing` present as §5 says;
 - §6: every field of `made` and its values; each text against its `sha256`; `made.sha256`;
   `made.files` against `data`; each sample's event choice against its files' `stop` and `take`
-  (a random choice's `take` summing to its N, or to every entry when fewer), the entry cap; every
-  file record's fields and their forms; the holes' fields, kinds, order and bounds; the totals
-  present, finite doubles, and their sums;
+  (a random choice's `take` summing to its N, or to every entry when fewer; under a first-N choice,
+  no file listed whose `stop` would be 0, §3), the entry cap; every file record's fields and their
+  forms; the holes' fields, kinds, order and bounds; the totals: their names are those any file
+  record holds, each in every sample's metadata (a sample no file of which holds it with 0.0) and
+  in no other key, written as a finite double (with a fraction or exponent), and each sample's
+  equal to its files' sum (§6);
 - §8: `data.sha256` against the arrays' `sha256`s;
 - §9: the signature, when there is one;
 - §10: every derived record's fields, name, kind and facts.
 
-**When it reads a column**, it checks the array's frame (§7), its length and its `sha256`.
+**When it reads a column**, or rows of it, it checks the array's chunk table (its size, the lane
+sizes adding up to the frames' bytes, the array's `sha256` and its `by_sample` from the table's
+chunk SHA-256s) and each chunk it decodes: its lanes' frames (§7), their lengths, the chunk's
+SHA-256.
 
 **Full validation** (`rvr validate`, `rowver::rvr::validate_file`, and `rowver.validate` in Python,
 all the same checks) does all of the above and:
 
+- §3 and §7: `data.chunk_rows` the recipe's `chunk_rows` (65,536 when it gives none);
 - §6: parses the three texts: the recipe as the recipe reference reads it, `samples.toml` as
   SPEC.md §3 reads it, the lock as §6.3 reads it; and checks them against each other and the file:
   the recipe's tables, columns, their kinds, derived columns, title and totals; the lock resolved
@@ -873,10 +923,11 @@ all the same checks) does all of the above and:
 - §6.1: each random choice made again from its seed, each file's `take` its share;
 - §5, §6 and §6.2: every hole holding a chosen entry; `events_read`, `events_missing` and
   `events_total` exact; totals on exactly the files the press read;
-- §7, unless the file is empty: every array, its frame, its length and its `sha256`;
+- §7, unless the file is empty: every array's chunk table, and every chunk: its frames, their
+  lengths, its SHA-256;
 - §3, unless the file is empty: the sample index running through the samples in order; each file's
   entries strictly increasing, each chosen, none in a hole;
-- §8, unless the file is empty: every `by_sample`;
+- §8, unless the file is empty: every `sha256` and `by_sample` from the chunk tables;
 - §4, unless the file is empty: jagged offsets starting at 0, never decreasing, ending at `count`;
   `b1` values 0 or 1; `lim`, `nice` and `vals` made again from the values, and equal to the
   record's;

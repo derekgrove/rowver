@@ -42,14 +42,14 @@ pub enum At {
     /// One is there that cannot be opened: why.
     Unopened(rowver::Error),
     /// One is there: it, and what checking its header found.
-    Opened(rowver::rvr::Reader, rowver::Result<()>),
+    Opened(Box<rowver::rvr::Reader>, rowver::Result<()>),
 }
 
 impl At {
     /// The file at `target` as it is now.
     pub fn open(target: &std::path::Path) -> At {
         match rowver::rvr::Reader::inspect(target) {
-            Ok((file, checked)) => At::Opened(file, checked),
+            Ok((file, checked)) => At::Opened(Box::new(file), checked),
             Err(rowver::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => At::Missing,
             Err(e) => At::Unopened(e),
         }
@@ -60,7 +60,7 @@ impl At {
         match self {
             At::Missing => None,
             At::Unopened(e) | At::Opened(_, Err(e)) => Some(Err(e)),
-            At::Opened(file, Ok(())) => Some(Ok(file)),
+            At::Opened(file, Ok(())) => Some(Ok(*file)),
         }
     }
 }

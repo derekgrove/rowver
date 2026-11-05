@@ -70,7 +70,7 @@ pub fn pack(pieces: Vec<Piece>, files: Vec<Value>) -> rowver::Result<(Value, Vec
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("rowver-test-{}-{n}-packed.rvr", std::process::id()));
-    let rows = Rows { samples, files, entry: Source::Values(Values::Flat(array(&entry))) };
+    let rows = Rows { samples, files, entry: Source::Values(Values::Flat(array(&entry))), chunk_rows: 65_536 };
     let columns = columns.into_iter().map(|(name, values)| (name, Source::Values(values))).collect();
     let (data, laid) = stream(rows, columns, 2, &path)?;
     write_laid(&path, &json!({}), laid)?;
@@ -256,17 +256,22 @@ pub fn text(text: &str) -> Value {
 
 /// The fixture's header and arrays, with a chosen first muon.
 pub fn rebuilt(muon: f32) -> (Value, Vec<Vec<u8>>) {
-    rebuilt_with(muon, None)
+    rebuilt_with(muon, None, false)
+}
+
+/// The fixture of no rows: its cuts kept no event, so its arrays hold no bytes.
+pub fn rowless() -> (Value, Vec<Vec<u8>>) {
+    rebuilt_with(10., None, true)
 }
 
 /// The fixture with every column's values but nlep's drawn from `seed` instead (its kinds, rows,
 /// lists' lengths and study as they are): a generated valid file every refusal applies to. nlep
 /// keeps its few values, which the rules of `vals` need.
 pub fn variant(seed: u64) -> (Value, Vec<Vec<u8>>) {
-    rebuilt_with(10., Some(&mut gen::Rng::new(seed)))
+    rebuilt_with(10., Some(&mut gen::Rng::new(seed)), false)
 }
 
-fn rebuilt_with(muon: f32, mut drawn: Option<&mut gen::Rng>) -> (Value, Vec<Vec<u8>>) {
+fn rebuilt_with(muon: f32, mut drawn: Option<&mut gen::Rng>, rowless: bool) -> (Value, Vec<Vec<u8>>) {
     let mut redrawn = |columns: Vec<(String, Values)>| -> Vec<(String, Values)> {
         let Some(rng) = drawn.as_deref_mut() else { return columns };
         columns
@@ -281,25 +286,27 @@ fn rebuilt_with(muon: f32, mut drawn: Option<&mut gen::Rng>) -> (Value, Vec<Vec<
             })
             .collect()
     };
+    let (a, b) = if rowless { ((0, 0), (0, 0)) } else { ((0, 3), (3, 5)) };
     let pieces = vec![
         Piece {
             name: "A".into(),
             label: "Sample A, π⁰".into(),
-            columns: redrawn(columns(0, 3, muon)),
-            entry: vec![0, 2, 4],
+            columns: redrawn(columns(a.0, a.1, muon)),
+            entry: if rowless { vec![] } else { vec![0, 2, 4] },
         },
         Piece {
             name: "B".into(),
             label: "B".into(),
-            columns: redrawn(columns(3, 5, muon)),
-            entry: vec![1, 17],
+            columns: redrawn(columns(b.0, b.1, muon)),
+            entry: if rowless { vec![] } else { vec![1, 17] },
         },
     ];
+    let rows = |n: u64| if rowless { 0 } else { n };
     let files = vec![
-        json!({"sample": "A", "path": "./fixture-a.root", "rows": 2}),
+        json!({"sample": "A", "path": "./fixture-a.root", "rows": rows(2)}),
         json!({"sample": "A", "path": "./fixture-empty.root", "rows": 0}),
-        json!({"sample": "A", "path": "./fixture-a2.root", "rows": 1}),
-        json!({"sample": "B", "path": "./fixture-b.root", "rows": 2}),
+        json!({"sample": "A", "path": "./fixture-a2.root", "rows": rows(1)}),
+        json!({"sample": "B", "path": "./fixture-b.root", "rows": rows(2)}),
     ];
     let (mut data, arrays) = pack(pieces, files).unwrap();
     let lock_text = lock();

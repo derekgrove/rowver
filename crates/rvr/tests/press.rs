@@ -671,6 +671,13 @@ branches = ["weight", "nJet"]
         "{said}"
     );
     assert!(said.contains("kept after each cut"), "{said}");
+    // Another chunk_rows: its chunks are not the file's, so every column is pressed (SPEC 8.5).
+    std::fs::write(dir.join("recipe.toml"), added.replace("nJet >= 1", "nJet >= 2").replacen("version = 1\n", "version = 1\nchunk_rows = 1024\n", 1)).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains("cannot be built on, as the recipe's chunk_rows has changed (65,536 to 1,024)"), "{said}");
+    let (_, header) = rvr(&dir, &["header", &file]);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&header).unwrap()["data"]["chunk_rows"], 1024);
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
 }
 
 /// A file's arrays: every byte after its header.
@@ -1026,7 +1033,7 @@ fn a_damaged_basket_is_a_hole_named_with_its_file_tree_and_entries() {
     assert!(said.contains("has no holes: there is nothing to fill"), "{said}");
 }
 
-// SPEC 2.6, 5.1.2, 7.2.3, 7.3.1, 7.3.3, 7.3.4, 7.7.1, 8.7, 9.1; FORMAT 6.2
+// SPEC 2.6, 5.1.2, 7.2.3, 7.3.1, 7.3.3, 7.3.4, 7.7.1, 7.7.2, 7.7.3, 8.7, 9.1; FORMAT 6.2
 #[test]
 fn a_file_gone_or_changed_since_the_lock_is_a_hole_of_its_own() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
@@ -1037,8 +1044,13 @@ fn a_file_gone_or_changed_since_the_lock_is_a_hole_of_its_own() {
     std::fs::copy(dir.join("codecs-zlib.root"), dir.join("flat_c.root")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 3, "{said}");
+    // Off a terminal each hole is said under its file's line as the file finishes, and all of
+    // them again after the file is written, in the lock's order.
+    assert!(said.contains("flat_b.root\n    hole (gone): ./flat_b.root no longer exists"), "{said}");
+    assert!(said.contains("flat_c.root\n    hole (changed): ./flat_c.root: it was "), "{said}");
     assert!(said.contains("with 2 holes:\n  gone        flat  ./flat_b.root no longer exists"), "{said}");
-    assert!(said.contains("\n  changed     flat  "), "{said}");
+    assert!(said.contains("then rvr press).\n  changed     flat  "), "{said}");
+    assert_eq!((said.matches("no longer exists").count(), said.matches("hole (").count()), (2, 2), "{said}");
     let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     let (code, said) = rvr(&dir, &["validate", &name]);
     assert_eq!(code, 0, "{said}");
@@ -1369,7 +1381,7 @@ fn a_press_whose_every_entry_is_in_a_hole_writes_the_file_and_its_holes() {
     assert!(said.contains("in basket 0 of branch weight (entries 0 to "), "{said}");
     let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     let (code, said) = rvr(&dir, &["validate", &name]);
-    assert!(code == 0 && said.contains("0 rows, 1 columns, read 0 of 5 entries, 1 hole (damaged)"), "{said}");
+    assert!(code == 0 && said.contains("0 rows, 1 column, read 0 of 5 entries, 1 hole (damaged)"), "{said}");
 }
 
 // SPEC 1.4, 5.1.3, 5.5.1, 5.5.2, 5.5.3; RECIPE defined-names, mistakes

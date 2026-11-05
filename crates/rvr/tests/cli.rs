@@ -17,7 +17,7 @@ fn pressed(path: &Path, met_b: f32, xsec_b: f64) {
         json!({"sample": "A", "path": "./a.root", "rows": 3}),
         json!({"sample": "B", "path": "./b.root", "rows": 2}),
     ];
-    let rows = Rows { samples: vec![sample("A", 3), sample("B", 2)], files, entry: Source::Values(Values::Flat(array(&[0_i64, 1, 2, 0, 1]))) };
+    let rows = Rows { samples: vec![sample("A", 3), sample("B", 2)], files, entry: Source::Values(Values::Flat(array(&[0_i64, 1, 2, 0, 1]))), chunk_rows: 65_536 };
     let columns = vec![
         ("MET".to_owned(), Source::Values(Values::Flat(array(&[10_f32, 20., 30., met_b, 50.])))),
         ("Jet_pt".to_owned(), Source::Values(Values::Jagged { counts: vec![1, 0, 2, 2, 1], content: array(&[40_f32, 50., 60., 70., 80., 90.]) })),
@@ -167,6 +167,10 @@ fn new_makes_a_study_that_expands_and_never_overwrites() {
     }
     let recipe = std::fs::read_to_string(study.join("recipe.toml")).unwrap();
     assert!(recipe.contains("title = \"higgs_tautau\""));
+    // chunk_rows at its default, with a word not to change it without knowing why (SPEC 5.3.1).
+    let line = recipe.lines().find(|l| l.starts_with("chunk_rows")).unwrap_or_default();
+    assert!(line.starts_with("chunk_rows = 65536") && recipe.contains("change it only knowing why"), "{recipe}");
+    assert_eq!(rvr_recipe::Recipe::read(&recipe).map(|r| r.chunk_rows), Ok(Some(65_536)));
     // The .gitignore leaves out exactly what SPEC 5.3.3 names.
     let ignored = std::fs::read_to_string(study.join(".gitignore")).unwrap();
     let lines: Vec<&str> = ignored.lines().filter(|l| !l.starts_with('#')).collect();

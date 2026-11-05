@@ -18,7 +18,6 @@ pub(crate) mod samples;
 mod snapshot;
 mod texts;
 
-use arrays::Arrays;
 pub use crate::numeric::{push_shown, width};
 pub use identity::chosen_in_holes;
 pub use reader::{Held, Reader};
@@ -97,24 +96,19 @@ pub fn validate_file(path: impl AsRef<Path>) -> Result<Validated> {
     let (file, size, text) = head(path)?;
     let start = 12 + text.len();
     let (header, end) = checked(&text)?;
-    let empty = size == start;
+    let empty = size == start && end > 0;
     arrays::fill(end, size - start)?;
     let reads = identity::choices(&header)?;
     texts::validate(&header, &reads)?;
-    // The file is read for its derived columns through the handle it was checked through.
-    let handle = file.try_clone()?;
+    // The arrays and derived columns are read through the handle the file was checked through.
+    let file = Reader::of(path, file, header.clone(), start as u64, (size - start) as u64)?;
     if !empty {
-        read_body(&header, Arrays::new(file, size - start), &reads)?;
+        read_body(&file, &reads)?;
     }
-    let derived = match listed_derived(&header) {
-        0 => 0,
-        _ => {
-            let file = Reader::of(path, handle, header.clone(), start as u64, (size - start) as u64)?;
-            match empty {
-                true => derived::checked_empty(&file)?,
-                false => derived::checked(&file)?,
-            }
-        }
+    let derived = match (listed_derived(&header), empty) {
+        (0, _) => 0,
+        (_, true) => derived::checked_empty(&file)?,
+        (_, false) => derived::checked(&file)?,
     };
     let data = &header["data"];
     Ok(Validated {
@@ -262,7 +256,11 @@ fn checks(header: &Value) -> Result<u64> {
     }
     let data = object(header, "", "data")?;
     let made = object(header, "", "made")?;
-    exactly(data, "data", &["rows", "samples", "files", "sample", "entry", "cols", "sha256", "sample_cols"], &[])?;
+    exactly(data, "data", &["rows", "chunk_rows", "samples", "files", "sample", "entry", "cols", "sha256", "sample_cols"], &[])?;
+    let (fewest, most) = rvr_recipe::CHUNK_BOUNDS;
+    if !(fewest..=most).contains(&count(data, "data", "chunk_rows")?) {
+        return Err(invalid(format!("data.chunk_rows is {}, and a chunk holds from 1,024 to 16,777,216 rows (docs/FORMAT.md §3): {MEND}", data["chunk_rows"])));
+    }
     snapshot::validate(made)?;
     identity::records(data, made)?;
     columns::records(data, made)?;
@@ -278,49 +276,65 @@ fn checks(header: &Value) -> Result<u64> {
     Ok(end)
 }
 
-/// Check every array of a checked header as it streams past, one at a time.
-fn read_body(header: &Value, mut decoder: Arrays<impl Read>, reads: &identity::Reads) -> Result<()> {
+/// Check every array of a checked file a chunk at a time (docs/FORMAT.md §12): each chunk against
+/// its table, the sample index and entries against the samples and files, list offsets, `b1`
+/// values, and every flat column's facts made again from its values; every array but the list
+/// columns' content in one pool of threads, then the content, whose chunks' members the offsets give.
+fn read_body(file: &Reader, reads: &identity::Reads) -> Result<()> {
+    let header = file.header();
     let data = &header["data"];
-    let rows = count(data, "data", "rows")?;
-    let sample = decoder.read(&data["sample"], "i4", rows, "data.sample")?;
-    let entry = decoder.read(&data["entry"], "i8", rows, "data.entry")?;
-    identity::rows(header, &sample, &entry, reads)?;
-    drop(sample);
-    let spans = samples::spans(data)?;
-    samples::per_row(&data["entry"], &entry, &spans, "data.entry")?;
-    drop(entry);
+    let rows = file.chunks()?;
+    let per = Reader::rows_of(&rows);
+    let more: Vec<usize> = per.iter().map(|n| n + 1).collect();
+    let mut check = identity::Rows::new(header, reads)?;
+    let mut first: Vec<reader::Whole> = vec![(&data["sample"], "i4", "data.sample".into(), (&per[..]).into()), (&data["entry"], "i8", "data.entry".into(), (&per[..]).into())];
+    let mut columns = Vec::new();
     for record in list(data, "data", "cols")? {
         let name = text(record, "data.cols", "name")?;
         let place = format!("data.cols[{name:?}]");
         let kind = text(record, &place, "kind")?;
-        if kind == "jagged" {
-            let offsets = decoder.read(&record["offsets"], "i8", rows + 1, &format!("{place}.offsets"))?;
-            let content = &record["content"];
-            let count = count(content, &place, "count")?;
-            let array = decoder.read(content, text(content, &place, "kind")?, count, &format!("{place}.content"))?;
-            let offsets = jagged_offsets(&offsets.bytes, count, &format!("{place}.offsets"))?;
-            samples::jagged(record, &offsets, &array, &spans, &place)?;
-        } else {
-            let array = decoder.read(record, kind, rows, &place)?;
-            facts::values(record, &array, &place)?;
-            samples::per_row(record, &array, &spans, &place)?;
+        match kind == "jagged" {
+            true => first.push((&record["offsets"], "i8", format!("{place}.offsets"), (&more[..]).into())),
+            false => first.push((record, kind, place.clone(), (&per[..]).into())),
+        }
+        columns.push((record, place, kind));
+    }
+    // Each flat column's facts made again, each list column's offsets put together (not kept).
+    let mut made: Vec<std::result::Result<crate::write::facts::Facts, reader::Stitched>> = columns.iter().map(|(_, _, kind)| match *kind {
+        "jagged" => Err(reader::Stitched::new(false)),
+        kind => Ok(crate::write::facts::Facts::new(kind)),
+    }).collect();
+    file.each_chunks(&first, &mut |a, k, values, _| match a {
+        0 => check.sample(rows[k].0, rows[k].1, &values),
+        1 => check.entry(rows[k].1, &values),
+        a => match &mut made[a - 2] {
+            Ok(facts) => {
+                truth(&values, columns[a - 2].2, &columns[a - 2].1)?;
+                facts.add(&values)
+            }
+            Err(stitched) => stitched.add(&values, &first[a].2),
+        },
+    })?;
+    let mut contents: Vec<reader::Whole> = Vec::new();
+    for ((record, place, kind), made) in columns.iter().zip(made) {
+        match made {
+            Ok(facts) => facts::agree(record, &facts.finish(), kind, place)?,
+            Err(stitched) => {
+                let content = &record["content"];
+                reader::ends(stitched.end, content, place)?;
+                contents.push((content, text(content, place, "kind")?, format!("{place}.content"), stitched.members.into()));
+            }
         }
     }
-    decoder.finish()
+    file.each_chunks(&contents, &mut |a, _, values, _| truth(&values, contents[a].1, &contents[a].2))
 }
 
-/// The `i8` offsets `bytes` holds, refused unless they start at 0, never decrease, and end at the content's `count`.
-pub(crate) fn jagged_offsets(bytes: &[u8], count: usize, place: &str) -> Result<Vec<usize>> {
-    let (steps, _) = bytes.as_chunks::<8>();
-    let mut offsets = Vec::with_capacity(steps.len());
-    for (index, step) in steps.iter().enumerate() {
-        let offset = usize::try_from(i64::from_le_bytes(*step)).ok().filter(|offset| *offset <= count && offsets.last().is_none_or(|before| before <= offset));
-        offsets.push(offset.ok_or_else(|| invalid(format!("{place} decrease, or pass the content's count, at row {index} (docs/FORMAT.md §4): {MEND}")))?);
+/// Refuse a `b1` value that is not 0 or 1.
+fn truth(values: &[u8], kind: &str, place: &str) -> Result<()> {
+    match crate::numeric::untrue(kind, values) {
+        Some(byte) => Err(invalid(format!("{place}: a b1 value is {byte}, and a b1 value is 0 or 1 (docs/FORMAT.md §4): {MEND}"))),
+        None => Ok(()),
     }
-    if offsets.first() != Some(&0) || offsets.last() != Some(&count) {
-        return Err(invalid(format!("{place} must start at 0 and end at content.count, {count} (docs/FORMAT.md §4): {MEND}")));
-    }
-    Ok(offsets)
 }
 
 /// A record's member `key`, refused when missing; `place` is where the record is.

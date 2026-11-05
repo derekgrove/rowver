@@ -161,6 +161,24 @@ class Pressed(unittest.TestCase):
         self.assertEqual((arrays["sample"].tolist(), arrays["entry"].tolist()), (["flat"] * 4, [0, 1, 2, 4]))
         self.assertEqual(self.file.arrays(["ht", "sample"]).fields, ["sample", "entry", "ht"])
 
+    # SPEC 11.8; FORMAT 7
+    def test_a_slice_of_rows_reads_as_the_column_does(self):
+        f = self.file
+        for name in ["ht", "weight", "isGood", "sample", "entry", "ht_per_jet"]:
+            self.assertEqual(f.slice(name, 1, 3).tolist(), f[name][1:3].tolist(), name)
+            self.assertEqual(f.slice(name, 2, 2).tolist(), [], name)
+        for name in ["ht", "sample", "entry", "ht_per_jet"]:
+            for start, stop in [(3, 9), (3, 1), (-1, 2), (0, -1), (-(2**70), 2), (0, 2**70)]:
+                with self.assertRaises(rowver.Error):
+                    f.slice(name, start, stop)
+        with self.assertRaises(KeyError):
+            f.slice("nothing", 0, 1)
+
+    # SPEC 11.8
+    @unittest.skipUnless(has("awkward"), "needs awkward")
+    def test_a_slice_of_a_list_column_is_its_rows(self):
+        self.assertEqual(self.file.slice("Jet_pt", 1, 3).tolist(), self.file["Jet_pt"][1:3].tolist())
+
     # SPEC 11.6
     @unittest.skipUnless(has("pyarrow") and has("pandas"), "needs pyarrow and pandas")
     def test_arrow_pandas_and_parquet_hold_the_same(self):
@@ -200,7 +218,7 @@ class Pressed(unittest.TestCase):
         public = {n for n in dir(rowver) if not n.startswith("_")}
         self.assertEqual(public, {"Error", "File", "open", "validate"})
         documented = {"path", "header", "rows", "samples", "labels", "columns", "derived", "sample_columns", "recipe",
-                      "study", "signed_by", "holes", "complete", "empty", "read", "forget", "arrays", "to_arrow",
+                      "study", "signed_by", "holes", "complete", "empty", "read", "slice", "forget", "arrays", "to_arrow",
                       "to_pandas", "to_parquet"}
         self.assertEqual({n for n in dir(self.file) if not n.startswith("_")}, documented)
         self.assertIn("sample", self.file)
@@ -247,6 +265,8 @@ class Pressed(unittest.TestCase):
             self.assertIn(", empty>", repr(f))
             with self.assertRaisesRegex(rowver.Error, "the file is empty: .*rvr refill"):
                 f["weight"]
+            # Asking for no columns gives none, whatever the file.
+            self.assertEqual(f.read([]), {})
             self.assertEqual(rvr(["refill", str(copy)]), 0)
             self.assertEqual(copy.read_bytes(), whole)
         finally:

@@ -1,7 +1,7 @@
 //! What a press shows while it reads. On a terminal, one bar per sample (its entries read of those
 //! chosen), redrawn at most 5 times a second by a thread of its own from counters the readers add
 //! to once per run of entries, with what was said meanwhile (a wait, a hole) printed above the
-//! bars; elsewhere (a log, a batch job), one line per file read, as it finishes.
+//! bars; elsewhere (a log, a batch job), one line per file read, as it finishes, with its holes.
 
 use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};

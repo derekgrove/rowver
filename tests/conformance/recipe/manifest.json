@@ -297,7 +297,7 @@
     {
       "rule": "RECIPE the-keys-exactly: no other top key",
       "rust_says": [
-        "A recipe has no key \"select\"; it takes format, version, title, define, keep, columns, totals, derived."
+        "A recipe has no key \"select\"; it takes format, version, title, chunk_rows, define, keep, columns, totals, derived."
       ],
       "text": "format = \"rvr-recipe\"\nversion = 1\nselect = \"x\"\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[totals]\n\n[derived]\n\n",
       "verdict": "refused"

@@ -167,6 +167,10 @@ pub fn read(
     if totaled(&old) != totaled(recipe) {
         return Err("the totals under [totals] have changed, which count every event read".into());
     }
+    if old.chunk_rows() != recipe.chunk_rows() {
+        let grouped = |n: usize| rowver::rvr::grouped(n as u64);
+        return Err(format!("the recipe's chunk_rows has changed ({} to {}), and a column is copied in its file's chunks", grouped(old.chunk_rows()), grouped(recipe.chunk_rows())));
+    }
     let reused: Vec<bool> = recipe
         .columns
         .iter()

@@ -79,7 +79,7 @@ fn the_writer_refuses_what_the_format_refuses() {
     ];
     assert!(one(twice).is_err());
     let same = vec![Sample { name: "A".into(), label: "A".into(), rows: 0 }; 2];
-    let rows = rowver::write::Rows { samples: same, files: Vec::new(), entry: rowver::write::Source::Values(Values::Flat(array::<i64>(&[]))) };
+    let rows = rowver::write::Rows { samples: same, files: Vec::new(), entry: rowver::write::Source::Values(Values::Flat(array::<i64>(&[]))), chunk_rows: 65_536 };
     let beside = std::env::temp_dir().join(format!("rowver-test-{}-twice.rvr", std::process::id()));
     assert!(rowver::write::stream(rows, Vec::new(), 1, &beside).is_err());
 }
@@ -138,7 +138,13 @@ fn a_derived_column_is_a_record_with_no_array_that_the_header_check_takes() {
         bytes: twice.iter().flat_map(|v| v.to_le_bytes()).collect(),
         offsets: None,
     };
-    let record = rowver::write::derived("twice", "MET * 2", &twice, &rows).unwrap();
+    let record = rowver::write::derived("twice", "MET * 2", &twice, &rows, 65_536).unwrap();
+    // A chunk_rows out of bounds, and bytes that are not whole values, are refused.
+    let said = rowver::write::derived("twice", "MET * 2", &twice, &rows, 0).unwrap_err().to_string();
+    assert!(said.contains("chunk_rows is 0, and a chunk holds from 1,024 to 16,777,216 rows"), "{said}");
+    let ragged = rowver::rvr::Held { bytes: twice.bytes[1..].to_vec(), ..twice.clone() };
+    let said = rowver::write::derived("twice", "MET * 2", &ragged, &rows, 65_536).unwrap_err().to_string();
+    assert!(said.contains("are not whole values of f4, 4 bytes each"), "{said}");
     assert_eq!(record["expression"], "MET * 2");
     assert!(record.get("at").is_none() && record.get("size").is_none());
     assert_eq!(record["by_sample"].as_array().unwrap().len(), rows.len());
@@ -290,6 +296,7 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
             samples: samples.clone(),
             files: files.clone(),
             entry,
+            chunk_rows: 65_536,
         };
         let (mut data, laid) = stream(rows, columns, 3, &file(name)).unwrap();
         data["sample_cols"] = whole["sample_cols"].clone();
@@ -351,9 +358,11 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
         Source::Values(Values::Flat(array(&entry))),
         "copied.rvr",
     );
-    // A damaged array is refused, not copied: the file's last byte lies in its last column.
+    // A damaged array is refused, not copied: the first byte of its last column's first frame.
     let mut bytes = std::fs::read(file("spooled.rvr")).unwrap();
-    *bytes.last_mut().unwrap() ^= 0xff;
+    let last = reader.header()["data"]["cols"].as_array().unwrap().last().unwrap();
+    let start = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    bytes[start + last.get("offsets").unwrap_or(last)["at"].as_u64().unwrap() as usize] ^= 0xff;
     std::fs::write(file("damaged.rvr"), bytes).unwrap();
     let damaged = rowver::rvr::Reader::open(file("damaged.rvr")).unwrap();
     let last = names.last().unwrap().clone();
@@ -361,6 +370,7 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
         samples: samples.clone(),
         files: files.clone(),
         entry: Source::Values(Values::Flat(array(&entry))),
+        chunk_rows: 65_536,
     };
     let refused = stream(
         rows,
@@ -380,6 +390,7 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
         samples: samples.clone(),
         files: files.clone(),
         entry: Source::Values(Values::Flat(array(&entry))),
+        chunk_rows: 65_536,
     };
     let met = vec![("MET".to_owned(), Source::Copied(&lying, "MET".into()))];
     let refused = stream(rows, met, 1, &file("x.rvr"));
@@ -426,7 +437,7 @@ fn a_column_copied_from_a_file_cut_short_since_names_that_file() {
     std::fs::write(&path, &golden()[..golden().len() / 2]).unwrap();
     let samples = vec![Sample { name: "A".into(), label: "Sample A, π⁰".into(), rows: 3 }, Sample { name: "B".into(), label: "B".into(), rows: 2 }];
     let files = reader.header()["data"]["files"].as_array().unwrap().clone();
-    let rows = Rows { samples, files, entry: Source::Values(Values::Flat(array(&[0_i64, 2, 4, 1, 17]))) };
+    let rows = Rows { samples, files, entry: Source::Values(Values::Flat(array(&[0_i64, 2, 4, 1, 17]))), chunk_rows: 65_536 };
     let beside = std::env::temp_dir().join(format!("rowver-test-{}-copied.rvr", std::process::id()));
     let refused = stream(rows, vec![("double".into(), Source::Copied(&reader, "double".into()))], 1, &beside).unwrap_err();
     let said = rowver::plain(&beside, &refused);

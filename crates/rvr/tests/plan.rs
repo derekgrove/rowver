@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{rvr, study, Study};
+use common::{reheadered, rvr, study, Study};
 use serde_json::Value;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -55,6 +55,31 @@ fn a_study_whose_problems_span_its_inputs_is_refused_with_every_one_at_once() {
     assert!(said.lines().count() >= 4 && !said.contains("Pressing"), "one a line: {said}");
 }
 
+// SPEC 9.3; FORMAT 3, 7, 12
+#[test]
+fn a_header_whose_rows_disagree_is_shown_and_its_columns_refused_not_read_past() {
+    // nJet is 3, 4, 3, 0, 1: four rows kept, in one chunk.
+    let derived = recipe("jets = \"nJet >= 1\"\n", "branches = [\"nJet\"]").replace("[derived]\n", "[derived]\ntwice = \"nJet * 2\"\n");
+    let dir = study("disagree", FLAT, &derived);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    assert_eq!(rvr(&dir, &["press", "--out", "four.rvr"]).0, 0);
+    // data.rows says 5 of a file whose samples (and chunks) hold 4: its first 5 rows are refused,
+    // and every row its arrays hold is shown. A file record says 7: the derived column is refused.
+    reheadered(&dir.join("four.rvr"), &dir.join("rows.rvr"), |h| h["data"]["rows"] = 5.into());
+    reheadered(&dir.join("four.rvr"), &dir.join("files.rvr"), |h| h["data"]["files"][0]["rows"] = 7.into());
+    let files = "the header's files hold more rows than its samples";
+    let cases = [
+        (&["dump", "rows.rvr"][..], 1, "rows 0 to 5 of sample are asked for, and the file has 4".to_owned()),
+        (&["dump", "rows.rvr", "--all"], 0, "\nflat\t4\t1\t2\n".to_owned()),
+        (&["dump", "files.rvr"], 0, format!("(not worked out: {files}")),
+        (&["dump", "files.rvr", "--all"], 1, files.to_owned()),
+    ];
+    for (args, want, why) in cases {
+        let (code, said) = rvr(&dir, args);
+        assert!(code == want && said.contains("is not valid") && said.contains(&why) && !said.contains("panicked"), "{args:?}: {said}");
+    }
+}
+
 // SPEC 2.6, 4.2.2, 4.2.3, 4.4.2, 7.5.3, 7.5.4, 7.5.5, 7.5.7, 8.9
 #[test]
 fn a_data_error_stops_the_press_only_in_a_chosen_and_kept_event_and_keeps_what_was_read() {
@@ -68,6 +93,19 @@ fn a_data_error_stops_the_press_only_in_a_chosen_and_kept_event_and_keeps_what_w
     std::fs::copy(dir.join(target(&dir)), dir.join("copy.rvr")).unwrap();
     let (code, said) = rvr(&dir, &["empty", "copy.rvr", "-f"]);
     assert!(code == 0 && said.contains("keeps its study and every checksum (it is not signed)."), "{said}");
+    // A file of no rows has nothing to give back: it is left as it is.
+    std::fs::write(dir.join("recipe.toml"), recipe("jets = \"nJet >= 99\"\n", x).replace("[derived]\n", "[derived]\nhalf = \"x / 2\"\n")).unwrap();
+    assert_eq!(rvr(&dir, &["press", "--out", "none.rvr"]).0, 0);
+    for dump in [&["dump", "none.rvr"][..], &["dump", "none.rvr", "--all"]] {
+        let (code, said) = rvr(&dir, dump);
+        assert!(code == 0 && said.contains("half"), "{dump:?}: {said}");
+    }
+    let before = std::fs::read(dir.join("none.rvr")).unwrap();
+    let (code, said) = rvr(&dir, &["empty", "none.rvr", "-f"]);
+    assert!(code == 0 && said.contains("none.rvr has no rows, so its arrays hold no bytes: there is nothing to empty."), "{said}");
+    assert_eq!(std::fs::read(dir.join("none.rvr")).unwrap(), before);
+    assert_eq!(rvr(&dir, &["validate", "none.rvr"]).0, 0);
+    std::fs::write(dir.join("recipe.toml"), recipe("jets = \"nJet >= 1\"\n", x)).unwrap();
     // A random choice of entries that leaves entry 3 out reads no error either, without the cut.
     std::fs::write(dir.join("recipe.toml"), recipe("", x)).unwrap();
     let seed = (1..100).find(|seed| !rowver::choice::per_file(&[5], 2, *seed)[0].contains(&3)).unwrap().to_string();

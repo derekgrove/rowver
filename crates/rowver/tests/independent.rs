@@ -390,17 +390,53 @@ fn facts(v: &Vals, m: &mut Map<String, Value>) {
 
 // ---- arrays (§7) and their checksums (§8) ----
 
-fn frame(v: &Vals) -> Vec<u8> {
-    let (n, w) = (v.nums.len(), v.width);
-    let mut shuffled = v.le.clone();
-    if w > 1 {
-        for i in 0..n {
-            for j in 0..w {
-                shuffled[j * n + i] = v.le[i * w + j];
-            }
+/// The rows of one chunk (§7): this writer gives no `chunk_rows`, so the default.
+const R: usize = 65_536;
+
+type Ranges = [(usize, usize)];
+
+/// The file's chunks (§7): each sample's rows cut every R rows from its first, as (sample, first, end).
+fn chunks_of(ranges: &Ranges) -> Vec<(usize, usize, usize)> {
+    let mut out = Vec::new();
+    for (s, &(a, b)) in ranges.iter().enumerate() {
+        let mut at = a;
+        while at < b {
+            let to = (at + R).min(b);
+            out.push((s, at, to));
+            at = to;
         }
     }
-    ruzstd::encoding::compress_to_vec(&shuffled[..], ruzstd::encoding::CompressionLevel::Fastest)
+    out
+}
+
+/// One array of values `w` bytes wide from its chunks' values (§7): each chunk cut into `w` lanes,
+/// each lane one zstd frame, chunk after chunk, then the chunk table; and each chunk's SHA-256.
+fn stored(chunks: &[Vec<u8>], w: usize) -> (Vec<u8>, Vec<String>) {
+    let (mut frames, mut table, mut shas) = (Vec::new(), Vec::new(), Vec::new());
+    for chunk in chunks {
+        for j in 0..w {
+            let lane: Vec<u8> = chunk.iter().skip(j).step_by(w).copied().collect();
+            let f = ruzstd::encoding::compress_to_vec(&lane[..], ruzstd::encoding::CompressionLevel::Fastest);
+            table.extend((f.len() as u64).to_le_bytes());
+            frames.extend(f);
+        }
+        let d = Sha256::digest(chunk);
+        table.extend_from_slice(&d);
+        shas.push(hex(&d));
+    }
+    frames.extend(table);
+    (frames, shas)
+}
+
+/// The SHA-256 of these SHA-256s' hex texts joined (§8).
+fn joined(shas: &[String]) -> String {
+    sha(shas.concat().as_bytes())
+}
+
+/// An array's `sha256` and `by_sample` (§8) from its chunks' SHA-256s.
+fn sums(cut: &[(usize, usize, usize)], shas: &[String], samples: usize) -> (String, Value) {
+    let of = |s: usize| joined(&cut.iter().zip(shas).filter(|(c, _)| c.0 == s).map(|(_, h)| h.clone()).collect::<Vec<_>>());
+    (joined(shas), json!((0..samples).map(of).collect::<Vec<_>>()))
 }
 
 /// The arrays of a file, in file order, and each one's `sha256`.
@@ -409,72 +445,64 @@ struct Store {
     shas: Vec<String>,
 }
 
+/// The chunks, rows and samples of a file.
+struct Cut {
+    chunks: Vec<(usize, usize, usize)>,
+    samples: usize,
+}
+
 impl Store {
-    fn put(&mut self, v: &Vals, m: &mut Map<String, Value>) {
-        let f = frame(v);
+    /// One array from its chunks' values, after the others: its record's `at`, `size` and `sha256`,
+    /// and `by_sample` when `per_sample`.
+    fn put(&mut self, chunks: &[Vec<u8>], w: usize, cut: &Cut, per_sample: bool, m: &mut Map<String, Value>) {
+        let (bytes, shas) = stored(chunks, w);
         m.insert("at".into(), json!(self.bytes.len()));
-        m.insert("size".into(), json!(f.len()));
-        self.bytes.extend(f);
-        self.shas.push(sha(&v.le));
+        m.insert("size".into(), json!(bytes.len()));
+        self.bytes.extend(bytes);
+        let (sha256, by_sample) = sums(&cut.chunks, &shas, cut.samples);
+        self.shas.push(sha256.clone());
+        m.insert("sha256".into(), json!(sha256));
+        if per_sample {
+            m.insert("by_sample".into(), by_sample);
+        }
     }
 }
 
-type Ranges = [(usize, usize)];
-
-fn by_flat(v: &Vals, ranges: &Ranges) -> Value {
-    json!(ranges
-        .iter()
-        .map(|&(a, b)| sha(v.bytes(a, b)))
-        .collect::<Vec<_>>())
+/// An array's checksums with nothing stored (a derived column's): from its chunks' values.
+fn measured(chunks: &[Vec<u8>], cut: &Cut, m: &mut Map<String, Value>) {
+    let shas: Vec<String> = chunks.iter().map(|c| sha(c)).collect();
+    let (sha256, by_sample) = sums(&cut.chunks, &shas, cut.samples);
+    m.insert("sha256".into(), json!(sha256));
+    m.insert("by_sample".into(), by_sample);
 }
 
-fn by_offsets(off: &[i64], ranges: &Ranges) -> Value {
-    let one = |&(a, b): &(usize, usize)| {
-        let bytes: Vec<u8> = off[a..=b]
-            .iter()
-            .flat_map(|o| (o - off[a]).to_le_bytes())
-            .collect();
-        sha(&bytes)
-    };
-    json!(ranges.iter().map(one).collect::<Vec<_>>())
-}
-
-fn by_content(off: &[i64], content: &Vals, ranges: &Ranges) -> Value {
-    json!(ranges
-        .iter()
-        .map(|&(a, b)| sha(content.bytes(off[a] as usize, off[b] as usize)))
-        .collect::<Vec<_>>())
+/// One array of the values `v` holds, or would hold, at `put` or measured.
+fn array(chunks: Vec<Vec<u8>>, w: usize, cut: &Cut, store: Option<&mut Store>, m: &mut Map<String, Value>) {
+    match store {
+        Some(s) => s.put(&chunks, w, cut, true, m),
+        None => measured(&chunks, cut, m),
+    }
 }
 
 /// A column's record after its name: stored (with `at` and `size`) when `store` is given.
-fn record(data: &Data, ranges: &Ranges, mut store: Option<&mut Store>, m: &mut Map<String, Value>) {
+fn record(data: &Data, cut: &Cut, mut store: Option<&mut Store>, m: &mut Map<String, Value>) {
     match data {
         Data::Flat(v) => {
             m.insert("kind".into(), json!(v.kind));
-            if let Some(s) = store {
-                s.put(v, m);
-            }
-            m.insert("sha256".into(), json!(sha(&v.le)));
-            m.insert("by_sample".into(), by_flat(v, ranges));
+            let chunks = cut.chunks.iter().map(|&(_, a, b)| v.bytes(a, b).to_vec()).collect();
+            array(chunks, v.width, cut, store, m);
             facts(v, m);
         }
         Data::Jagged(off, content) => {
             m.insert("kind".into(), json!("jagged"));
             let mut o = Map::new();
-            let ov = vals(off.iter().copied());
-            if let Some(s) = store.as_deref_mut() {
-                s.put(&ov, &mut o);
-            }
-            o.insert("sha256".into(), json!(sha(&ov.le)));
-            o.insert("by_sample".into(), by_offsets(off, ranges));
+            let steps = cut.chunks.iter().map(|&(_, a, b)| off[a..=b].iter().flat_map(|x| (x - off[a]).to_le_bytes()).collect()).collect();
+            array(steps, 8, cut, store.as_deref_mut(), &mut o);
             let mut c = Map::new();
             c.insert("kind".into(), json!(content.kind));
             c.insert("count".into(), json!(content.nums.len()));
-            if let Some(s) = store {
-                s.put(content, &mut c);
-            }
-            c.insert("sha256".into(), json!(sha(&content.le)));
-            c.insert("by_sample".into(), by_content(off, content, ranges));
+            let members = cut.chunks.iter().map(|&(_, a, b)| content.bytes(off[a] as usize, off[b] as usize).to_vec()).collect();
+            array(members, content.width, cut, store, &mut c);
             m.insert("offsets".into(), Value::Object(o));
             m.insert("content".into(), Value::Object(c));
         }
@@ -929,21 +957,20 @@ impl Study {
             bytes: Vec::new(),
             shas: Vec::new(),
         };
+        let cut = Cut { chunks: chunks_of(&ranges), samples: ranges.len() };
+        let of = |v: &Vals| cut.chunks.iter().map(|&(_, a, b)| v.bytes(a, b).to_vec()).collect::<Vec<_>>();
         let sample_vals = vals(rows.iter().map(|r| r.sample as i32));
         let mut sample_ref = Map::new();
-        store.put(&sample_vals, &mut sample_ref);
-        sample_ref.insert("sha256".into(), json!(sha(&sample_vals.le)));
+        store.put(&of(&sample_vals), 4, &cut, false, &mut sample_ref);
         let entry_vals = vals(rows.iter().map(|r| r.entry as i64));
         let mut entry_ref = Map::new();
-        store.put(&entry_vals, &mut entry_ref);
-        entry_ref.insert("sha256".into(), json!(sha(&entry_vals.le)));
-        entry_ref.insert("by_sample".into(), by_flat(&entry_vals, &ranges));
+        store.put(&of(&entry_vals), 8, &cut, true, &mut entry_ref);
         let mut col_records = Vec::new();
         for c in cols {
             assert_eq!(c.data_rows(), rows.len(), "column {} has the wrong number of rows", c.name);
             let mut m = Map::new();
             m.insert("name".into(), json!(c.name));
-            record(&c.data, &ranges, Some(&mut store), &mut m);
+            record(&c.data, &cut, Some(&mut store), &mut m);
             col_records.push(Value::Object(m));
         }
         let derived_records: Vec<Value> = derived_cols
@@ -952,7 +979,7 @@ impl Study {
                 let mut m = Map::new();
                 m.insert("name".into(), json!(d.name));
                 m.insert("expression".into(), json!(d.expression));
-                record(&d.data, &ranges, None, &mut m);
+                record(&d.data, &cut, None, &mut m);
                 Value::Object(m)
             })
             .collect();
@@ -1051,6 +1078,7 @@ impl Study {
         let names: Vec<String> = cols.iter().map(|c| c.name.clone()).collect();
         let data = json!({
             "rows": rows.len(),
+            "chunk_rows": R,
             "samples": data_samples,
             "files": data_files,
             "sample": sample_ref,
@@ -1272,20 +1300,20 @@ fn my_checksums_agree_with_the_ones_format_md_quotes_for_tiny_rvr() {
     let (d, cols, sc) = (&h["data"], &h["data"]["cols"], &h["data"]["sample_cols"]);
     let mean = &h["derived"]["columns"][0];
     let quoted = [
-        (&d["sample"]["sha256"], "eeb59ffe"),
-        (&d["entry"]["sha256"], "02ea099d"),
-        (&d["entry"]["by_sample"][0], "045487dc"),
-        (&cols[0]["sha256"], "4c0f18a1"),
-        (&cols[0]["by_sample"][1], "af095d9c"),
-        (&cols[1]["offsets"]["sha256"], "1e8928fc"),
-        (&cols[1]["offsets"]["by_sample"][0], "fa00c623"),
-        (&cols[1]["offsets"]["by_sample"][1], "fa00c623"),
-        (&cols[1]["content"]["sha256"], "89d29a1d"),
-        (&cols[1]["content"]["by_sample"][0], "a5cf09fd"),
-        (&cols[2]["sha256"], "ce0457c7"),
-        (&d["sha256"], "1325524b"),
-        (&mean["sha256"], "e641687e"),
-        (&mean["by_sample"][0], "e73c3af8"),
+        (&d["sample"]["sha256"], "0b8e189d"),
+        (&d["entry"]["sha256"], "d618105e"),
+        (&d["entry"]["by_sample"][0], "904543e2"),
+        (&cols[0]["sha256"], "d9237950"),
+        (&cols[0]["by_sample"][1], "84697797"),
+        (&cols[1]["offsets"]["sha256"], "af72e3c9"),
+        (&cols[1]["offsets"]["by_sample"][0], "439e0157"),
+        (&cols[1]["offsets"]["by_sample"][1], "439e0157"),
+        (&cols[1]["content"]["sha256"], "69fa98c7"),
+        (&cols[1]["content"]["by_sample"][0], "bcda9316"),
+        (&cols[2]["sha256"], "e5fc4c13"),
+        (&d["sha256"], "d943535f"),
+        (&mean["sha256"], "9e715cef"),
+        (&mean["by_sample"][0], "124d1600"),
         (&sc[0]["sha256"], "023c71f9"),
         (&sc[1]["sha256"], "e98f4aa4"),
     ];

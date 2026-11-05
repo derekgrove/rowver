@@ -99,7 +99,7 @@ Read 100,000 entries; kept after each cut:
 Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 3.7 s.
 
 $ rvr validate higgs_tautau.rvr
-higgs_tautau.rvr: valid, 2248 rows, 11 columns, read 100,000 of 968,616 entries, not signed
+higgs_tautau.rvr: valid, 2,248 rows, 11 columns, read 100,000 of 968,616 entries, not signed
 $ rvr dump higgs_tautau.rvr --columns
 sample          i4[2248]  [0, 0, 0, 0, 0, ...]
 entry           i8[2248]  [29, 45, 140, 157, 162, ...]
@@ -443,7 +443,8 @@ out takes 1.0 s, where one that reads them stored takes 0.10 s and one that only
 On a terminal, a press shows one bar per sample under way, with the entries read of those it chose,
 the events kept so far, the read rate and the time, redrawn every 200 ms and cut to the terminal's
 width; what happens meanwhile (a wait, a hole) is printed above the bars. Elsewhere (a log, a batch
-job) it prints one line per file as it finishes
+job) it prints one line per file as it finishes, with its holes, and all the holes again once the
+file is written, in the lock's order
 ([SPEC §7.7](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#77-what-a-press-shows)).
 
 ```text
@@ -803,8 +804,8 @@ in a stored or derived column both hold (floats bit for bit), with how many diff
 written as `rvr dump --all` writes them, with their bits in hex when two that differ read alike (as
 NaNs). `--sample NAME` compares one sample. A column held with two kinds, or as a list in one file
 only, is named and not compared, as is a column only one file holds. It holds the key columns of
-both files, two row numbers per event both hold, and one stored column of each file at a time,
-then the derived columns both hold, worked out together. Exit status 0 when the two hold the same events with the
+both files, two row numbers per event both hold, and one column of each file at a time (a derived
+one worked out alone, a chunk of the columns it uses at a time). Exit status 0 when the two hold the same events with the
 same values, 1 when they do not, 2 when one cannot be read.
 
 ```text

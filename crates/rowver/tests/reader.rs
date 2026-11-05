@@ -8,6 +8,49 @@ use common::{golden, rebuilt, sealed, split, to_bytes, written};
 use rowver::rvr::{validate_file, Reader};
 use rowver::write::Values;
 use serde_json::{json, Value};
+use sha2::Digest;
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+
+/// Every allocation counted, per thread: so a test can say how much one call held at most.
+struct Counting;
+
+std::thread_local! {
+    /// The bytes this thread holds now, and the most it has held since `most_during` began.
+    static HELD: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+}
+
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let _ = HELD.try_with(|held| {
+            let (now, most) = held.get();
+            held.set((now + layout.size(), most.max(now + layout.size())));
+        });
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, at: *mut u8, layout: Layout) {
+        let _ = HELD.try_with(|held| {
+            let (now, most) = held.get();
+            held.set((now.saturating_sub(layout.size()), most));
+        });
+        unsafe { System.dealloc(at, layout) }
+    }
+}
+
+#[global_allocator]
+static COUNTING: Counting = Counting;
+
+/// What `work` gives, and the most bytes this thread held beyond what it held before, while it ran.
+fn most_during<T>(work: impl FnOnce() -> T) -> (T, usize) {
+    let before = HELD.with(|held| {
+        let (now, _) = held.get();
+        held.set((now, now));
+        now
+    });
+    let done = work();
+    (done, HELD.with(|held| held.get().1) - before)
+}
 
 // SPEC 1.7; FORMAT 14
 #[test]
@@ -43,8 +86,8 @@ fn a_header_declaring_more_rows_than_its_arrays_hold_is_refused_not_allocated() 
     short["data"]["rows"] = (1_u64 << 40).into();
     let Err(said) = Reader::open(written(&to_bytes(&short, std::slice::from_ref(&arrays)), "rows")) else { panic!("opened") };
     assert!(said.to_string().contains("rows"), "{said}");
-    // 2^39 rows of sample B, every count agreeing: the header opens, and each array, whose
-    // frame could not give that many values, is refused before anything is allocated for them.
+    // 2^39 rows of sample B, every count agreeing: each array is refused on opening, as too small
+    // for its chunks' table and frames, before anything is allocated for them.
     let huge: u64 = 1 << 39;
     let rows = header["data"]["rows"].as_u64().unwrap() - header["data"]["samples"][1]["rows"].as_u64().unwrap() + huge;
     header["data"]["rows"] = rows.into();
@@ -61,13 +104,80 @@ fn a_header_declaring_more_rows_than_its_arrays_hold_is_refused_not_allocated() 
     b["metadata"]["events_total"] = huge.into();
     b["metadata"]["events_read"] = huge.into();
     let header = sealed(header);
-    let reader = Reader::open(written(&to_bytes(&header, &[arrays]), "huge")).unwrap_or_else(|e| panic!("{e}"));
-    let refused = |e: rowver::Error| assert!(e.to_string().contains("too small to hold the values its record states"), "{e}");
-    refused(reader.sample().unwrap_err());
-    for column in header["data"]["cols"].as_array().unwrap() {
-        let Err(e) = reader.column(column["name"].as_str().unwrap()) else { panic!("{column} read") };
-        refused(e);
+    let huge = written(&to_bytes(&header, std::slice::from_ref(&arrays)), "huge");
+    let (opened, most) = most_during(|| Reader::open(&huge));
+    let Err(said) = opened else { panic!("opened") };
+    assert!(said.to_string().contains("data.sample.size is 240, and its 8388609 chunks take at least"), "{said}");
+    assert!(most < 1 << 20, "opening held {most} bytes");
+    // 2^62 rows of sample B: refused on opening, and an inspected file's columns refused to read,
+    // with as little held.
+    let mut header = header;
+    let rows = header["data"]["rows"].as_u64().unwrap() - huge_rows(&header) + (1 << 62);
+    header["data"]["rows"] = rows.into();
+    header["data"]["samples"][1]["rows"] = (1_u64 << 62).into();
+    let path = written(&to_bytes(&sealed(header), &[arrays]), "huger");
+    let ((opened, inspected), most) = most_during(|| (Reader::open(&path).err(), Reader::inspect(&path).map(|(reader, _)| reader.column("MET").err())));
+    assert!(opened.is_some() && inspected.unwrap().is_some_and(|e| e.to_string().contains("chunks, more than its")), "{opened:?}");
+    assert!(most < 1 << 20, "opening and reading held {most} bytes");
+}
+
+// FORMAT 1, 7, 12
+#[test]
+fn an_empty_file_of_many_rows_makes_no_chunks_to_read_none() {
+    // 2^39 rows of sample B in chunks of 1,024, every count and size agreeing, the file emptied:
+    // no chunk list is made, and nothing is held for one, whatever is asked of it.
+    let (mut header, _) = split(&golden());
+    let huge: u64 = 1 << 39;
+    let rows = header["data"]["rows"].as_u64().unwrap() - huge_rows(&header) + huge;
+    header["data"]["rows"] = rows.into();
+    header["data"]["chunk_rows"] = 1024.into();
+    header["data"]["samples"][1]["rows"] = huge.into();
+    for file in header["data"]["files"].as_array_mut().unwrap().iter_mut().filter(|f| f["sample"] == "B") {
+        file["rows"] = huge.into();
     }
+    let b = &mut header["made"]["files"]["B"];
+    b["events"] = json!({"choose": "all"});
+    for file in b["files"].as_object_mut().unwrap().values_mut() {
+        file["entries"] = huge.into();
+        file.as_object_mut().unwrap().remove("take");
+    }
+    b["metadata"]["events_total"] = huge.into();
+    b["metadata"]["events_read"] = huge.into();
+    let text = header["made"]["recipe"]["text"].as_str().unwrap().replacen("version = 1\n", "version = 1\nchunk_rows = 1024\n", 1);
+    header["made"]["recipe"]["sha256"] = sha2::Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>().into();
+    header["made"]["recipe"]["text"] = text.into();
+    // Each array's size what its chunks take at least: 13 bytes a lane, 8 lanes, and its table.
+    let chunks = 1 + huge / 1024;
+    let mut at = 0_u64;
+    let mut lay = |record: &mut Value| {
+        record["at"] = at.into();
+        record["size"] = (chunks * (8 * 13 + 8 * 8 + 32)).into();
+        at += chunks * (8 * 13 + 8 * 8 + 32);
+    };
+    lay(&mut header["data"]["sample"]);
+    lay(&mut header["data"]["entry"]);
+    for column in header["data"]["cols"].as_array_mut().unwrap() {
+        match column["kind"] == "jagged" {
+            true => {
+                lay(&mut column["offsets"]);
+                lay(&mut column["content"]);
+            }
+            false => lay(column),
+        }
+    }
+    let header = sealed(header);
+    let empty = written(&to_bytes(&header, &[]), "huge-empty");
+    let (asked, most) = most_during(|| {
+        let reader = Reader::open(&empty).unwrap();
+        (reader.empty(), reader.sample().is_err(), reader.entry().is_err(), reader.column("MET").is_err(), reader.slice("MET", 0, 1).is_err(), validate_file(&empty).err().map(|e| e.to_string()))
+    });
+    assert!(asked.0 && asked.1 && asked.2 && asked.3 && asked.4, "{asked:?}");
+    assert!(most < 1 << 20, "an empty file held {most} bytes: {asked:?}");
+}
+
+/// The rows of sample B.
+fn huge_rows(header: &Value) -> u64 {
+    header["data"]["samples"][1]["rows"].as_u64().unwrap()
 }
 
 /// Whether a header, written with the fixture's arrays, opens and validates; the first error.

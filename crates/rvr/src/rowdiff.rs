@@ -3,8 +3,8 @@
 //!
 //! What it holds: each file's key columns (by default its entries, and a rank of its files' ROOT
 //! UUIDs, 12 bytes a row), read whole, as every array is; the join, two row numbers (u32) and a
-//! flag per event both hold; and, while the values are compared, one stored column of each file,
-//! then the derived columns both hold, worked out together.
+//! flag per event both hold; and, while the values are compared, one column of each file (a derived
+//! one worked out alone, a chunk of its inputs at a time).
 
 use crate::samples::some;
 use rowver::rvr::{derived, grouped as count, Held, Reader};
@@ -225,7 +225,7 @@ fn compare(a: &str, b: &str, key: Option<&str>, only: Option<&str>) -> Result<bo
         pairs.sort_unstable();
         joined.push(Joined { name: name.clone(), pairs, only, first: None, differ: 0 });
     }
-    // Every column both hold: one at a time, but those both derive worked out together, as dump does.
+    // Every column both hold, one at a time: a derived one worked out alone, a chunk of its inputs at a time.
     let listed = |side: &Side| -> (Vec<String>, Vec<String>) {
         let h = side.reader.header();
         let stored = h["data"]["cols"].as_array().into_iter().flatten().filter_map(|c| c["name"].as_str().map(str::to_owned)).collect();
@@ -240,19 +240,9 @@ fn compare(a: &str, b: &str, key: Option<&str>, only: Option<&str>) -> Result<bo
         }
     }
     let mut differs: Vec<Vec<bool>> = joined.iter().map(|j| vec![false; j.pairs.len()]).collect();
-    let both_derive = |name: &String| derived_a.contains(name) && derived_b.contains(name);
-    for name in in_a.iter().filter(|c| in_b.contains(c) && !both_derive(c)) {
+    for name in in_a.iter().filter(|c| in_b.contains(c)) {
         let read = |side: usize, path: &str| sides[side].reader.column(name).map_err(|e| rowver::plain(path, &e)).and_then(|c| Col::new(c.expect("a listed column reads"), path));
         compared(name, &read(0, a)?, &read(1, b)?, &mut joined, &mut differs, &mut said);
-    }
-    let derive = |side: usize, path: &str, of: &[String]| {
-        let names: Vec<String> = of.iter().filter(|n| both_derive(n)).cloned().collect();
-        let worked = derived::columns_with(&sides[side].reader, &names, &[]).map_err(|e| format!("its derived columns could not be worked out: {}", rowver::plain(path, &e)))?;
-        names.into_iter().zip(worked).map(|(n, held)| Ok((n, Col::new(held, path)?))).collect::<Result<BTreeMap<String, Col>, String>>()
-    };
-    let (worked_a, worked_b) = (derive(0, a, &derived_a)?, derive(1, b, &derived_b)?);
-    for name in derived_a.iter().filter(|n| both_derive(n)) {
-        compared(name, &worked_a[name], &worked_b[name], &mut joined, &mut differs, &mut said);
     }
     let by = if names.is_empty() { "their file (its ROOT UUID, and which of the sample's files with it) and entry".to_owned() } else { names.join(", ") };
     println!("Comparing the events of {a} (A) and {b} (B) by {by}:");

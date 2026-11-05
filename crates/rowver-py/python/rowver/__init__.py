@@ -179,6 +179,19 @@ class File:
                 self._held[name] = (values, None)
         return {n: self._held[n] for n in names}
 
+    def slice(self, name, start, stop):
+        """Rows `start` to `stop` (not included) of a column, as `f[name]` gives it: only the chunks
+        of the file that hold them read, each checked against its chunk table; a derived column is
+        checked against its record first, once for the open file, over every row."""
+        if name not in self:
+            raise KeyError(f"{name}: not a column of {self.path}; it has {', '.join(self.columns + self.derived)}")
+        kind, raw, offsets = self._file.slice(name, start, stop)
+        values = _typed(raw, kind)
+        if offsets is None:
+            return values
+        ak = _needs("awkward", "a list column")
+        return ak.Array(ak.contents.ListOffsetArray(ak.index.Index64(offsets), ak.contents.NumpyArray(values)))
+
     def forget(self, *names):
         """Let go of columns held in memory, the ones named or else every one: each is read, or
         worked out, again when next asked for."""

@@ -61,6 +61,8 @@ pub struct Total {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Recipe {
     pub title: Option<String>,
+    /// The rows of one chunk of the file's arrays, as `chunk_rows` gives it (FORMAT.md §7).
+    pub chunk_rows: Option<usize>,
     /// The names `[define]` gives expressions; none is stored.
     pub defines: BTreeMap<String, Expression>,
     /// The cuts in the order written, which is the order of the cutflow.
@@ -76,6 +78,12 @@ pub struct Recipe {
     /// The defined names in the order written, each with how many levels deep it is (README "How deep").
     pub depths: Vec<(String, usize)>,
 }
+
+/// The rows of one chunk of a file's arrays when the recipe gives no `chunk_rows` (FORMAT.md §7).
+pub const CHUNK_ROWS: usize = 65_536;
+
+/// The fewest and the most rows a chunk may have (FORMAT.md §3).
+pub const CHUNK_BOUNDS: (usize, usize) = (1_024, 16_777_216);
 
 /// The names every row has (its sample, entry and file), which no column may have.
 pub const RESERVED: [&str; 3] = ["sample", "entry", "file"];
@@ -172,7 +180,7 @@ fn unparsed(text: &str, error: &toml::de::Error) -> String {
 }
 
 /// The keys a recipe has at its top: these and no others.
-const TOP: [&str; 8] = ["format", "version", "title", "define", "keep", "columns", "totals", "derived"];
+const TOP: [&str; 9] = ["format", "version", "title", "chunk_rows", "define", "keep", "columns", "totals", "derived"];
 
 /// The tables every recipe writes, even empty, in their order.
 pub const TABLES: [&str; 5] = ["define", "keep", "columns", "totals", "derived"];
@@ -256,6 +264,11 @@ impl Reading {
 }
 
 impl Recipe {
+    /// The rows of one chunk of the file's arrays: `chunk_rows`, or `CHUNK_ROWS`.
+    pub fn chunk_rows(&self) -> usize {
+        self.chunk_rows.unwrap_or(CHUNK_ROWS)
+    }
+
     /// Read a recipe from its TOML text, refusing it with every problem it has, one a line.
     pub fn read(text: &str) -> Result<Self> {
         let root: Table = text.parse().map_err(|error: toml::de::Error| problem(unparsed(text, &error)))?;
@@ -302,6 +315,12 @@ impl Reading {
             None => {}
             Some(Value::String(title)) => recipe.title = Some(title.clone()),
             Some(_) => self.said.push("title must be text, as title = \"my study\"".into()),
+        }
+        let (fewest, most) = (CHUNK_BOUNDS.0 as i64, CHUNK_BOUNDS.1 as i64);
+        match root.get("chunk_rows") {
+            None => {}
+            Some(Value::Integer(rows)) if (fewest..=most).contains(rows) => recipe.chunk_rows = Some(*rows as usize),
+            Some(_) => self.said.push("chunk_rows must be a whole number from 1,024 to 16,777,216, the rows of one chunk of the file's arrays (FORMAT.md §7): leave it out for 65,536".into()),
         }
         self.defines(root, &mut recipe);
         self.keep(root, &mut recipe);

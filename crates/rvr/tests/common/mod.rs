@@ -67,3 +67,14 @@ pub fn rvr_with(dir: &Path, set: &[(&str, &str)], args: &[&str]) -> (i32, String
     let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     (out.status.code().unwrap_or(-1), text)
 }
+
+/// The file at `from` written to `to` with its header changed by `edit`, its arrays as they are.
+pub fn reheadered(from: &Path, to: &Path, edit: impl FnOnce(&mut serde_json::Value)) {
+    let bytes = std::fs::read(from).unwrap();
+    let start = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let mut header: serde_json::Value = serde_json::from_slice(&bytes[12..start]).unwrap();
+    edit(&mut header);
+    let text = serde_json::to_vec(&header).unwrap();
+    let framed = [&bytes[..8], &(text.len() as u32).to_le_bytes(), &text, &bytes[start..]].concat();
+    std::fs::write(to, framed).unwrap();
+}
