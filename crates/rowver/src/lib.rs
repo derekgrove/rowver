@@ -33,8 +33,20 @@ pub enum Error {
     #[error("{}", plain_io(.0, .1))]
     File(std::path::PathBuf, std::io::Error),
     /// A header's JSON does not parse.
-    #[error("the header is not JSON ({0}): the file is damaged; copy it again, or press its study again")]
+    #[error("the header is not JSON as docs/FORMAT.md §1 reads it ({0}): the file is damaged, or the program that wrote it does not follow the format; copy it again, or press its study again with rvr")]
     Json(#[from] serde_json::Error),
+    /// A header's JSON parses, but breaks a rule of docs/FORMAT.md §1.
+    #[error("the header breaks docs/FORMAT.md §1: {fact} (line {line}, column {column}): the program that wrote it does not follow the format; press its study again with rvr")]
+    Breaks {
+        /// What breaks the rule, and where in the header.
+        fact: String,
+        /// The top-level key it lies under.
+        under: Option<String>,
+        /// The line of the header's text it is on.
+        line: usize,
+        /// The column of that line.
+        column: usize,
+    },
 }
 
 /// A value, or the `Error` that stopped it.
@@ -75,6 +87,7 @@ pub(crate) fn about(path: &Path, error: Error) -> Error {
             None => Error::File(path.to_path_buf(), e),
         },
         Error::Invalid(why) => Error::Invalid(named(path, &why)),
+        e @ (Error::Json(_) | Error::Breaks { .. }) => Error::Invalid(named(path, &e.to_string())),
         e => e,
     }
 }

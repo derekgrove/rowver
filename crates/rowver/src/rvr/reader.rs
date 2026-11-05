@@ -223,7 +223,11 @@ impl Reader {
 
     /// Read the arrays laid in `files` under `header`, checked as `open` checks it, before they are written.
     pub(crate) fn laid(dir: &Path, files: &[PathBuf], header: Value) -> Result<Self> {
-        let (_, end) = super::checked(&serde_json::to_vec(&header)?)?;
+        let (_, end) = super::checked(&serde_json::to_vec(&header)?).map_err(|e| match e {
+            crate::Error::Breaks { fact, under: Some(key), .. } if !super::TOP.contains(&key.as_str()) => invalid(format!("the header rowver was about to write breaks docs/FORMAT.md §1: {fact}, in the tool key {key} it was given: change that tool key's data to follow §1")),
+            crate::Error::Breaks { fact, .. } => invalid(format!("the header rowver was about to write breaks docs/FORMAT.md §1: {fact}, in what it was given to write: change that to follow §1")),
+            e => e,
+        })?;
         let mut parts = Vec::new();
         for path in files {
             let length = std::fs::metadata(path).map_err(|e| crate::about(path, e.into()))?.len();

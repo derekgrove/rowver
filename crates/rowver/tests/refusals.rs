@@ -449,12 +449,6 @@ fn what_the_format_allows_is_valid() {
 fn allowed() -> Vec<(&'static str, Change)> {
     vec![
         ("§1 nesting to 64 deep", Raw(|h| h["fixture_tool"]["deep"] = nested(62))),
-        ("§1 a count written -0", Header(|h| {
-            h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["holes"] = json!([hole(3, 7)]);
-            h["made"]["files"]["A"]["metadata"]["events_read"] = 21.into();
-            h["made"]["files"]["A"]["metadata"]["events_missing"] = 4.into();
-            h["made"]["files"]["B"]["metadata"]["events_missing"] = serde_json::from_str("-0").unwrap();
-        })),
         ("§5 a sample column's numbers compared as numbers: in an f8 one, as the doubles they read as", Raw(|h| {
             let cols = h["data"]["sample_cols"].as_array_mut().unwrap();
             let seed = cols.iter_mut().find(|c| c["name"] == "seed_like").unwrap();
@@ -498,6 +492,12 @@ fn opening() -> Vec<Row> {
     vec![
         // §1 The file and the header's JSON
         ("§1", "the magic", Bytes(|b| b[0] ^= 1), "it is not an .rvr file"),
+        // A whole number written -0, refused wherever it is (the header's text written so).
+        ("§1", "no whole number written -0: a count", Text(|t| *t = t.replacen("\"path\":\"./fixture-empty.root\",\"rows\":0", "\"path\":\"./fixture-empty.root\",\"rows\":-0", 1)), "the header breaks docs/FORMAT.md §1: data.files[1].rows is written -0 (line 1, column "),
+        ("§1 §6.1", "no whole number written -0: a file's stop", Text(|t| *t = t.replacen("\"entries\":10}", "\"entries\":10,\"stop\":-0}", 1)), "made.files[\"A\"].files[\"./fixture-a.root\"].stop is written -0"),
+        ("§1 §6.1", "no whole number written -0: a seed", Text(|t| *t = t.replacen("\"seed\":7", "\"seed\":-0", 1)), "made.files[\"B\"].events.seed is written -0"),
+        ("§1 §6", "no whole number written -0: metadata", Text(|t| *t = t.replacen("\"seed_like\":9223372036854775807", "\"seed_like\":-0", 1)), "made.files[\"B\"].metadata.seed_like is written -0"),
+        ("§1 §11", "no whole number written -0: a tool key's object", Text(|t| *t = t.replacen('{', "{\"fixture_tool\":{\"x\":[1,-0]},", 1)), "fixture_tool.x[1] is written -0"),
         ("§5 §6", "a metadata whole number at most 2^63 − 1", Header(|h| h["made"]["files"]["A"]["metadata"]["big"] = serde_json::from_str("9223372036854775808").unwrap()), "made.files[\"A\"].metadata.big is 9223372036854775808, and a whole number of metadata is from −2^63 to 2^63 − 1"),
         ("§5 §6", "a metadata whole number at least −2^63", Header(|h| h["made"]["files"]["B"]["metadata"]["small"] = json!([serde_json::from_str::<Value>("-9223372036854775809").unwrap()])), "made.files[\"B\"].metadata.small[0] is -9223372036854775809, and a whole number of metadata is from −2^63 to 2^63 − 1"),
         // §3 and §6: what the header alone shows of the files read and the totals
@@ -541,12 +541,12 @@ fn opening() -> Vec<Row> {
         ("§1", "rowver is the whole number 15", Raw(|h| h["rowver"] = json!(15.0)), "rowver must be the whole number 15"),
         ("§1", "the arrays fill the file: no byte after", Bytes(|b| b.extend([0, 0, 0])), "the arrays' records end at byte"),
         ("§1", "the arrays fill the file: none missing", Bytes(|b| b.truncate(b.len() - 1)), "the arrays' records end at byte"),
-        ("§1", "no byte-order mark", Text(|t| t.insert(0, '\u{feff}')), "the header is not JSON"),
+        ("§1", "no byte-order mark", Text(|t| t.insert(0, '\u{feff}')), "the header is not JSON as docs/FORMAT.md §1 reads it"),
         ("§1", "one JSON object", Text(|t| *t = format!("[{t}]")), "the header must be one JSON object"),
-        ("§1", "no key twice", Text(|t| *t = t.replacen("{\"rows\":", "{\"rows\":5,\"rows\":", 1)), "data.rows is written twice"),
+        ("§1", "no key twice", Text(|t| *t = t.replacen("{\"rows\":", "{\"rows\":5,\"rows\":", 1)), "the header breaks docs/FORMAT.md §1: data.rows is written twice (line 1, column "),
         ("§1 §11", "no key twice in a tool key", Text(|t| *t = t.replace("\"preserved\":\"μ\"", "\"preserved\":\"μ\",\"preserved\":1")), "fixture_tool.preserved is written twice"),
-        ("§1 §11", "nesting at most 64", Raw(|h| h["fixture_tool"]["deep"] = nested(63)), "nested 65 arrays and objects deep"),
-        ("§1", "no lone surrogate", Text(|t| *t = t.replace("\"preserved\":\"μ\"", "\"preserved\":\"\\ud800\"")), "the header is not JSON"),
+        ("§1 §11", "nesting at most 64", Raw(|h| h["fixture_tool"]["deep"] = nested(63)), "is nested 65 arrays and objects deep, more than 64 (line 1, column "),
+        ("§1", "no lone surrogate", Text(|t| *t = t.replace("\"preserved\":\"μ\"", "\"preserved\":\"\\ud800\"")), "the header is not JSON as docs/FORMAT.md §1 reads it"),
         ("§1", "a count has no fraction", Raw(|h| h["data"]["rows"] = json!(5.0)), "data.rows must be a whole number from 0 to 2^63 − 1"),
         ("§1", "a count to 2^63 − 1", Header(|h| h["made"]["files"]["A"]["files"]["./fixture-a.root"]["entries"] = json!(9223372036854775808_u64)), "made.files[\"A\"].files[\"./fixture-a.root\"].entries must be a whole number"),
         ("§1", "a hole's entries are counts", Header(|h| h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["holes"] = json!([{"entries": [1.5, 3], "kind": "damaged", "why": "x"}])), "holes[0].entries must be [first, last]"),
@@ -640,7 +640,6 @@ fn opening() -> Vec<Row> {
         ("§6.1", "choose all, first or random", Header(|h| h["made"]["files"]["A"]["events"]["choose"] = "last".into()), "made.files[\"A\"].events: events.choose is not all, first or random"),
         ("§6.1 R10", "N from 1", Header(|h| h["made"]["files"]["A"]["events"]["n"] = 0.into()), "made.files[\"A\"].events: events.n must be a whole number from 1"),
         ("§6.1", "all: no stop", Header(|h| h["made"]["files"]["A"]["events"] = json!({"choose": "all"})), "made.files[\"A\"].events: the file ./fixture-a2.root's stop or take is not what"),
-        ("§1 §6.1", "a count written -0 is 0, not left out", Header(|h| h["made"]["files"]["A"]["files"]["./fixture-a.root"]["stop"] = serde_json::from_str("-0").unwrap()), "made.files[\"A\"].events: the file ./fixture-a.root's stop is not what"),
         ("§6.1", "first: stop when it read fewer", Header(|h| drop(h["made"]["files"]["A"]["files"]["./fixture-a2.root"].as_object_mut().unwrap().shift_remove("stop"))), "made.files[\"A\"].events: the file ./fixture-a2.root's stop is not what"),
         ("§6.1", "random: take on every file", Header(|h| drop(h["made"]["files"]["B"]["files"]["./fixture-b.root"].as_object_mut().unwrap().shift_remove("take"))), "made.files[\"B\"].events: the file ./fixture-b.root's take is not what"),
         ("§6.1", "random: takes add up to min(N, total)", Header(|h| h["made"]["files"]["B"]["files"]["./fixture-b.root"]["take"] = 3.into()), "made.files[\"B\"].events: the files' take adds up to 3, and a random choice of 4 takes 4"),

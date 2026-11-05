@@ -67,6 +67,7 @@ this is checked on opening, with no array read).
 - no byte-order mark; spaces, tabs and line ends may stand between tokens and around the value;
 - no object holds the same key twice, at any depth;
 - arrays and objects nest at most 64 deep, the header itself the first;
+- no whole number (one written without a fraction or an exponent) is written `-0`;
 - a string holds no lone surrogate (`\ud800` without its pair);
 - every count the format names (`rows`, `chunk_rows`, `at`, `size`, `count`, `entries`, `stop`, `take`, `n`, a
   hole's entries, and `events_read`, `events_total` and `events_missing`) is a whole number written
@@ -827,7 +828,7 @@ The canonical JSON of a value is:
   Every other character is itself, in UTF-8;
 - **`true`, `false` and `null`**: as themselves;
 - **a whole number** (written without a fraction or an exponent): its digits as the header writes
-  them, however many there are, with a leading `-` when negative and `-0` written `0`;
+  them, however many there are, with a leading `-` when negative;
 - **any other number**: the double nearest to it, written with the fewest significant digits that
   read back as that double (of two such spellings, the one nearest the double's exact value, and of
   two as near, the one whose last digit is even); a number past the largest double has none, and a header holding one in
@@ -843,7 +844,6 @@ There is no space anywhere outside strings. A whole number is never turned into 
 |---|---|
 | `{ "b": 1, "a": [true, null] }` | `{"a":[true,null],"b":1}` |
 | `18446744073709551615` | `18446744073709551615` |
-| `-0` | `0` |
 | `1.5e2` | `150.0` |
 | `0.00010` | `0.0001` |
 | `0.00001` | `1e-05` |

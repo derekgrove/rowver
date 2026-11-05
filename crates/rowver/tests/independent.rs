@@ -209,10 +209,9 @@ fn is_whole(text: &str) -> bool {
 }
 
 fn canon_number(text: &str) -> String {
-    match text {
-        "-0" => "0".into(),
-        t if is_whole(t) => t.into(),
-        t => shortest(t.parse().unwrap()),
+    match is_whole(text) {
+        true => text.into(),
+        false => shortest(text.parse().unwrap()),
     }
 }
 
@@ -1341,7 +1340,6 @@ fn canonical_json_follows_the_table_of_section_8() {
             r#"{"a":[true,null],"b":1}"#,
         ),
         ("18446744073709551615", "18446744073709551615"),
-        ("-0", "0"),
         ("1.5e2", "150.0"),
         ("0.00010", "0.0001"),
         ("0.00001", "1e-05"),
