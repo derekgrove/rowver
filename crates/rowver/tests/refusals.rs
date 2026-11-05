@@ -497,7 +497,7 @@ fn opening() -> Vec<Row> {
         ("§1 §6.1", "no whole number written -0: a file's stop", Text(|t| *t = t.replacen("\"entries\":10}", "\"entries\":10,\"stop\":-0}", 1)), "made.files[\"A\"].files[\"./fixture-a.root\"].stop is written -0"),
         ("§1 §6.1", "no whole number written -0: a seed", Text(|t| *t = t.replacen("\"seed\":7", "\"seed\":-0", 1)), "made.files[\"B\"].events.seed is written -0"),
         ("§1 §6", "no whole number written -0: metadata", Text(|t| *t = t.replacen("\"seed_like\":9223372036854775807", "\"seed_like\":-0", 1)), "made.files[\"B\"].metadata.seed_like is written -0"),
-        ("§1 §11", "no whole number written -0: a tool key's object", Text(|t| *t = t.replacen('{', "{\"fixture_tool\":{\"x\":[1,-0]},", 1)), "fixture_tool.x[1] is written -0"),
+        ("§1 §11", "no whole number written -0: a tool key's object", Text(|t| *t = t.replacen("\"fixture_tool\":{\"preserved\":\"μ\"}", "\"fixture_tool\":{\"preserved\":\"μ\",\"x\":[1,-0]}", 1)), "fixture_tool.x[1] is written -0"),
         ("§5 §6", "a metadata whole number at most 2^63 − 1", Header(|h| h["made"]["files"]["A"]["metadata"]["big"] = serde_json::from_str("9223372036854775808").unwrap()), "made.files[\"A\"].metadata.big is 9223372036854775808, and a whole number of metadata is from −2^63 to 2^63 − 1"),
         ("§5 §6", "a metadata whole number at least −2^63", Header(|h| h["made"]["files"]["B"]["metadata"]["small"] = json!([serde_json::from_str::<Value>("-9223372036854775809").unwrap()])), "made.files[\"B\"].metadata.small[0] is -9223372036854775809, and a whole number of metadata is from −2^63 to 2^63 − 1"),
         // §3 and §6: what the header alone shows of the files read and the totals
