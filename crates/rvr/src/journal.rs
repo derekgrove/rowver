@@ -7,10 +7,10 @@ use serde_json::{json, Value};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 /// How often finished inputs are made durable (a checkpoint costs two syncs of ~4 ms: too much per file).
@@ -22,7 +22,7 @@ const SPOOL: &str = "spool";
 
 /// The folder a press stages `target` in: its name with `.partial` added.
 pub fn folder(target: &Path) -> PathBuf {
-    crate::files::beside(target, ".partial")
+    rowver::write::beside(target, ".partial")
 }
 
 /// The folder `target` is in.
@@ -49,10 +49,12 @@ pub fn under_way(folder: &Path) -> bool {
 }
 
 /// The folder a press is staged in, locked through its journal; removed when dropped unless `keep`.
+// The journal is read and written through the descriptor locked, shared, and no other opened while
+// it is held: where flock is POSIX locks (Linux NFS), closing any descriptor of it lets the lock go.
 pub struct Staged {
     /// The folder.
     pub folder: PathBuf,
-    journal: File,
+    journal: Arc<File>,
     /// Whether the folder stays when the press ends, for the next press to pick up.
     pub keep: Cell<bool>,
 }
@@ -87,7 +89,7 @@ impl Staged {
             if locked && still_there(&journal, &folder.join(JOURNAL)) {
                 // A press that ends before it is staged leaves a journal it found, and no folder it made.
                 let keep = journal.metadata().map_err(failed)?.len() > 0;
-                return Ok(Staged { folder, journal, keep: Cell::new(keep) });
+                return Ok(Staged { folder, journal: Arc::new(journal), keep: Cell::new(keep) });
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -136,7 +138,7 @@ pub struct Picked {
 pub fn pick_up(staged: &Staged, press: &Value) -> Option<Picked> {
     let folder = &staged.folder;
     let over = |why: &str| println!("Starting over: the press that stopped in {} {why}.", folder.display());
-    match read(folder, press) {
+    match found(unfinished_in(&staged.journal), press) {
         Found::Same(done) if !done.inputs.is_empty() => {
             let inputs = press["inputs"].as_u64().unwrap_or(0) as usize;
             let taken: Option<BTreeMap<usize, Taken>> = done
@@ -167,7 +169,7 @@ pub fn stage(target: &Path, staged: &Staged, press: &Value, picked: Option<Picke
     let failed = |e: &dyn std::fmt::Display| {
         format!("{} could not be staged in {}: {e}. Make it writable, or free disk space there.", target.display(), folder.display())
     };
-    let file = staged.journal.try_clone().map_err(|e| failed(&e))?;
+    let file = staged.journal.clone();
     if let Some(Picked { done, spool, .. }) = picked {
         let journal = Journal::on(file, folder.join(JOURNAL), press, Some(&done)).map_err(|e| failed(&e))?;
         staged.keep.set(false);
@@ -221,10 +223,11 @@ pub enum Found {
 }
 
 /// The journal's whole lines, each with where it ends, and when it was written; a line cut short is left out.
-fn lines(folder: &Path) -> Option<(Vec<(Value, u64)>, String)> {
-    let path = folder.join(JOURNAL);
-    let bytes = std::fs::read(&path).ok()?;
-    let when = std::fs::metadata(&path)
+fn lines(mut file: &File) -> Option<(Vec<(Value, u64)>, String)> {
+    let mut bytes = Vec::new();
+    file.seek(SeekFrom::Start(0)).and_then(|_| file.read_to_end(&mut bytes)).ok()?;
+    let when = file
+        .metadata()
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -257,7 +260,12 @@ fn covered(lines: impl Iterator<Item = (Value, u64)>, when: String, mut end: u64
 
 /// The journal in `folder`, read against `press` (this press's first line).
 pub fn read(folder: &Path, press: &Value) -> Found {
-    match unfinished(folder) {
+    found(unfinished(folder), press)
+}
+
+/// An unfinished press, read against `press` (this press's first line).
+fn found(unfinished: Option<(Value, Done)>, press: &Value) -> Found {
+    match unfinished {
         None => Found::Nothing,
         Some((was, done)) if was == *press => Found::Same(done),
         Some((was, _)) => Found::Other(differs(&was, press)),
@@ -266,7 +274,12 @@ pub fn read(folder: &Path, press: &Value) -> Found {
 
 /// An unfinished press in `folder`, whatever press it is: its first line, and what its checkpoints cover.
 pub fn unfinished(folder: &Path) -> Option<(Value, Done)> {
-    let (lines, when) = lines(folder)?;
+    unfinished_in(&File::open(folder.join(JOURNAL)).ok()?)
+}
+
+/// `unfinished`, its journal read through `file`.
+fn unfinished_in(file: &File) -> Option<(Value, Done)> {
+    let (lines, when) = lines(file)?;
     let mut lines = lines.into_iter();
     let (first, end) = lines.next()?;
     let press = first.get("press")?.clone();
@@ -324,7 +337,7 @@ pub fn taken(line: &Value) -> Option<Taken> {
 pub struct Journal {
     waiting: Mutex<Waiting>,
     /// The journal's file, held by one checkpoint at a time.
-    file: Mutex<File>,
+    file: Mutex<Arc<File>>,
     path: PathBuf,
 }
 
@@ -341,7 +354,7 @@ fn held<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Journal {
     /// The journal in `file` (at `path`): a new one whose first line is `press`, or `done`'s, written on.
-    fn on(mut file: File, path: PathBuf, press: &Value, done: Option<&Done>) -> std::io::Result<Self> {
+    fn on(mut file: Arc<File>, path: PathBuf, press: &Value, done: Option<&Done>) -> std::io::Result<Self> {
         match done {
             Some(done) => file.set_len(done.end)?,
             None => {
@@ -375,13 +388,13 @@ impl Journal {
         if lines.is_empty() {
             return Ok(finished);
         }
-        let start = (&*file).stream_position();
+        let start = file.stream_position();
         let written = || -> std::io::Result<()> {
             spool.sync().map_err(|e| match e {
                 rowver::Error::Io(e) => e,
                 e => std::io::Error::other(e.to_string()),
             })?;
-            let mut out = std::io::BufWriter::new(&*file);
+            let mut out = std::io::BufWriter::new(&**file);
             for line in &lines {
                 writeln!(out, "{line}")?;
             }

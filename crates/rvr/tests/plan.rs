@@ -276,11 +276,11 @@ fn header_prints_its_bytes_and_diff_and_derive_say_what_they_find() {
     assert_eq!(rvr(&dir, &["press"]).0, 0);
     let file = dir.join(target(&dir));
     let bytes = std::fs::read(&file).unwrap();
-    let end = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let (text, _) = common::parts(&bytes);
     let out = Command::new(env!("CARGO_BIN_EXE_rvr")).args(["header", file.to_str().unwrap()]).output().unwrap();
-    assert!(out.status.success() && out.stdout == bytes[12..end], "the header's bytes as the file holds them");
+    assert!(out.status.success() && out.stdout == text, "the header's bytes as the file holds them");
     // A header that fails its checks is printed all the same, and why is said (exit 1).
-    let mut header: Value = serde_json::from_slice(&bytes[12..end]).unwrap();
+    let mut header: Value = serde_json::from_slice(text).unwrap();
     header["made"]["study"] = "other".into();
     let broken = dir.join("broken.rvr");
     rowver::write::rewrite(&file, &broken, &header).unwrap();

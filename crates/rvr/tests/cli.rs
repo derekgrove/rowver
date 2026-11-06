@@ -59,17 +59,12 @@ fn pressed(path: &Path, met_b: f32, xsec_b: f64) {
     data["sample_cols"] = sample_cols(&["A", "B"], &made["files"], &["MET", "Jet_pt"])
         .unwrap()
         .into();
-    write_laid(path, &json!({"rowver": 15, "data": data, "made": made}), laid).unwrap();
+    write_laid(&json!({"rowver": 15, "data": data, "made": made}), laid).unwrap();
 }
 
 /// The bytes of a file of this header and arrays, whatever the header holds.
 fn framed(header: &Value, arrays: &[u8]) -> Vec<u8> {
-    let text = serde_json::to_string(header).unwrap();
-    let mut bytes = b"\x89RVR\r\n\x1a\n".to_vec();
-    bytes.extend((text.len() as u32).to_le_bytes());
-    bytes.extend(text.as_bytes());
-    bytes.extend(arrays);
-    bytes
+    common::framed(serde_json::to_string(header).unwrap().as_bytes(), arrays)
 }
 
 /// Run rvr; its exit status and standard output.
@@ -135,12 +130,12 @@ fn validate_header_and_dump_read_a_pressed_file() {
     );
     // A damaged header is still shown, after a line saying what is wrong.
     let bytes = std::fs::read(&path).unwrap();
-    let start = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    let mut header: Value = serde_json::from_slice(&bytes[12..start]).unwrap();
+    let (text, arrays) = common::parts(&bytes);
+    let mut header: Value = serde_json::from_slice(text).unwrap();
     header["derived"] = 5.into();
     header["made"]["recipe"] = "not a record".into();
     let damaged = dir.0.join("damaged.rvr");
-    std::fs::write(&damaged, framed(&header, &bytes[start..])).unwrap();
+    std::fs::write(&damaged, framed(&header, arrays)).unwrap();
     let (code, said) = rvr(&["dump", damaged.to_str().unwrap()]);
     assert_eq!(code, 0, "{said}");
     assert!(
@@ -174,7 +169,7 @@ fn new_makes_a_study_that_expands_and_never_overwrites() {
     // The .gitignore leaves out exactly what SPEC 5.3.3 names.
     let ignored = std::fs::read_to_string(study.join(".gitignore")).unwrap();
     let lines: Vec<&str> = ignored.lines().filter(|l| !l.starts_with('#')).collect();
-    assert_eq!(lines, ["*.rvr", "*.rvr.partial/", "*.rvr.derive", "*.rvr.refill", "*.rvr.refilled", "*.rvr-new", "*.reproduced/"]);
+    assert_eq!(lines, ["*.rvr", "*.rvr.partial/", "*.rvr-journal", "*.rvr.anew-*", "*.rvr.empty-*", "*.rvr.refill", "*.rvr.refilled", "*.rvr-new", "*.reproduced/"]);
     let (code, said) = rvr(&[
         "samples",
         "expand",
@@ -254,10 +249,10 @@ fn diff_compares_labels_and_reading_failures_are_said_plainly() {
     let (a, b) = (dir.0.join("a.rvr"), dir.0.join("b.rvr"));
     pressed(&a, 40., 2.5);
     let bytes = std::fs::read(&a).unwrap();
-    let start = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    let mut header: Value = serde_json::from_slice(&bytes[12..start]).unwrap();
+    let (text, arrays) = common::parts(&bytes);
+    let mut header: Value = serde_json::from_slice(text).unwrap();
     header["data"]["samples"][1]["label"] = "Sample B, again".into();
-    std::fs::write(&b, framed(&header, &bytes[start..])).unwrap();
+    std::fs::write(&b, framed(&header, arrays)).unwrap();
     let (a, b) = (a.to_str().unwrap(), b.to_str().unwrap());
     let (code, out, _) = said(&["diff", a, b]);
     assert_eq!((code, out), (1, format!("sample B: its label is \"Sample B\" in {a}, \"Sample B, again\" in {b}\n")));

@@ -427,7 +427,7 @@ said with the nearest command (`rvr prss` gives `Did you mean: press?`). For `rv
 nothing.
 
 **5.1.2** A flag is `--NAME`, with its value, when it takes one, as the next argument (an argument
-that begins with `--` is not a value); `--NAME=VALUE` is not read. `-f`, for `rvr empty --force`, is
+that begins with `--` is not a value); `--NAME=VALUE` is not read. `-f`, for `--force` (`rvr empty`, `rvr tool`), is
 the only short flag. `--fill [KINDS]` takes the next argument as its KINDS exactly when every
 comma-separated part of it is a kind of hole (§7.3.1), whatever folders there are; otherwise that
 argument is a word (the study folder). An argument after `--fill` that is not kinds, but holds a
@@ -481,9 +481,10 @@ terminals; `y` or `yes`, in any case, is yes, and any other answer is no.
 | `rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns] [--all]` | the inside of a file as text | 9 |
 | `rvr header FILE` | the header as the file holds it | 9 |
 | `rvr diff A B [--rows] [--key COLUMN,…] [--sample NAME]` | where two files differ: from their headers, or (`--rows`) event by event | 9 |
-| `rvr reproduce FILE [DIR] [--study FOLDER] [--workers N]` | presses a file's own study again and compares | 9 |
+| `rvr reproduce FILE [DIR] [--study FOLDER] [--workers N] [--texts]` | presses a file's own study again and compares, or (`--texts`) writes its three texts | 9 |
 | `rvr empty FILE… [--study FOLDER] [--anyway] [--force \| -f]` | lets a file's arrays go, keeping its header | 8 |
 | `rvr refill FILE [--study FOLDER] [--workers N]` | presses an empty file's arrays again | 8 |
+| `rvr tool FILE [KEY --set DATA.json \| KEY --get [OUT.json] \| KEY --drop] [--force \| -f]` | lists a file's tool keys, or sets, writes out or drops one | 8 |
 | `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME…` | the key that signs your files, and the keys you trust | 10 |
 | `rvr proxy`, `rvr proxy init [--hours H]` | the grid proxy, shown or made | 10 |
 | `rvr --version` | `rvr VERSION (reads and writes rowver 15; commit COMMIT)` | 12 |
@@ -499,9 +500,10 @@ current folder's name). Beyond this, the three texts are the program's own.
 
 **5.3.2** It writes nothing when any of the three is already there, and says which.
 
-**5.3.3** The `.gitignore` leaves out `*.rvr`, `*.rvr.partial/`, `*.reproduced/` and rvr's staged
-files (`*.rvr.derive`, `*.rvr.refill`, `*.rvr.refilled`, and `*.rvr-new`: those of `recipe.toml`,
-`samples.toml` and `samples.lock`).
+**5.3.3** The `.gitignore` leaves out `*.rvr`, `*.rvr.partial/`, `*.reproduced/`, the journal of a
+change made in a file (`*.rvr-journal`, §8.12) and rvr's staged files (`*.rvr.anew-*`, `*.rvr.empty-*`,
+`*.rvr.refill`, `*.rvr.refilled`, and `*.rvr-new`: those of `recipe.toml`, `samples.toml` and
+`samples.lock`).
 
 ### 5.4 `rvr branches`
 
@@ -723,12 +725,18 @@ what it read, saying why. The words it says are the program's own.
 ### 7.5 Stopping and carrying on
 
 **7.5.1** A press is staged in `FILE.partial/` beside its target: a journal of the files finished,
-the spool of their kept values, and the arrays as they are packed. Nothing is put at the target
+the spool of their kept values, and the file it writes, its arrays packed into it one after another
+and its header written last, so that no array is copied once packed. Nothing is put at the target
 until every file is read or made a hole and every array is packed: the file appears whole, or not
-at all.
+at all (a press that adds columns to its target in place, §8.2, puts it back as it was if cut
+short, §8.12).
 
 **7.5.2** While a press runs, it holds a lock on its journal; another press of the same target, and
-`rvr empty` or `rvr refill` of it, is refused while it is held.
+`rvr empty` or `rvr refill` of it, is refused while it is held. From its first read of the file at
+its target until its new file is in place, it holds that file's lock too (§8.12). Every writer that
+takes both (a press, `rvr empty`, `rvr refill`) takes the file's lock first, then the journal's, so
+that two started together never each hold one: the second is refused at the file's lock, saying
+that another program is changing the file.
 
 **7.5.3** At most every 2 seconds while files finish, the spool and then the journal are made safe
 on disk (a checkpoint). A press stopped by anything (Ctrl-C, a killed process, a laptop asleep, a
@@ -753,12 +761,15 @@ makes cannot be carried on.
 ### 7.6 What a press holds
 
 **7.6.1** What a press holds in memory does not grow with the events it keeps: each file's kept
-values go to the spool as they are read, and each column is packed from the spool a piece at a
-time, one chunk of each column in flight (FORMAT.md §7), so that a larger `chunk_rows` holds more. A press needs free disk for the spool, the kept values compressed where that pays, a piece at a
-time, beside the file it writes.
+values go to the spool as they are read, and each array is packed from the spool a chunk at a
+time, at most two chunks for each worker (`--workers`) in flight and 256 MiB of them waiting to be
+written, and as many of the spool's pieces as there are workers read ahead (FORMAT.md §7), so that
+a larger `chunk_rows` holds more. A press needs free disk for the spool, the kept values compressed where that pays, beside the
+file it writes, and for that file: its arrays are written once, into it.
 
-**7.6.2** A press that builds on a file (§8) also holds 8 bytes per row of that file, and one of its
-columns at a time.
+**7.6.2** A press that builds on a file (§8) also holds 8 bytes per row of that file. The columns
+it copies into a new file go as the arrays it packs go (§7.6.1): a chunk at a time, each decoded
+and checked on a worker, and written in order.
 
 ### 7.7 What a press shows
 
@@ -814,13 +825,19 @@ and lock texts, with the same cuts, totals and event choices, and its carried re
 columns new to the recipe, or whose definition changed (their expression, their stored kind, or a
 defined name they use, however deep), are read, for the events the file kept, from the runs that
 hold one of them; a file of which the earlier file kept no event is not opened, as no input that
-gives nothing is (§8.3). Every other column is copied from the file, checked against its record as it is.
-A column dropped from the recipe is dropped from the file. While building on columns, a file that
+gives nothing is (§8.3). When columns were only added, stored or derived, none dropped or changed,
+they are added to the file itself (§8.12): their records take their places in the recipe's order,
+their arrays are written after the file's own, which stay where they are and are not read, and the
+press says it wrote the file `in place`; of the file it reads only its `sample` and `entry` arrays,
+for the events it kept, and the columns its new derived columns read. Otherwise it writes a new
+file: every other column is copied from the file, checked against its record as it is, and a column
+dropped from the recipe is dropped from the file. While building on columns, a file that
 cannot be read stops the press, as a hole would change the rows the columns are built on;
 `rvr press --full` presses everything and makes holes.
 
 **8.3 Nothing to read.** When only `[derived]` changed, or columns were only dropped, no input is
-opened: the stored columns are copied, the derived ones worked out from them.
+opened: derived columns only added are added in place, as records with no array (§8.2); otherwise
+the stored columns are copied into a new file, the derived ones worked out from them.
 
 **8.4 New samples.** When the file was made by this build with the same cuts, totals and columns, and
 every sample it holds is in the lock as it was (its files, tree, metadata and event choice), only the
@@ -828,11 +845,26 @@ new samples are read; a sample taken out, or the samples put in another order, r
 column is packed again, in the lock's order of samples; a sample it holds keeps its holes.
 
 **8.5** Any other difference (other cuts, totals, event choices or `chunk_rows`, a sample whose files changed, a
-column changed together with the samples, another build) means every column is pressed, and the
+column changed together with the samples) means every column is pressed, and the
 press says why: `Pressing every column: FILE cannot be built on, as WHY.`, WHY in the program's own
 words. `--full` always presses every column.
 
-**8.6** A build whose commit is `unknown` or ends in `-dirty` never builds on a file.
+**8.6 Another build.** A file is built on only by the build that made it (`made.toolchain`: the
+same program, version, commit, compiler and platform), and a build whose commit is `unknown` or ends
+in `-dirty` builds on none. When the file at the target could be built on (§8.1 to §8.4: judged
+from its header alone, the columns it would give of the kinds this press makes them) but for the
+build, `rvr press` says `FILE was made by rvr V1 (commit C1); this is rvr V2 (commit C2).`
+(each build's version and commit; when those agree, each also names its compiler and platform:
+`rvr V (commit C, COMPILER, PLATFORM)`), or, from a build whose commit is `unknown` or ends in
+`-dirty`, `FILE was made by rvr V1 (commit C1); this rvr's commit is unknown (it was not built from
+a git checkout), and such a build builds on no file.` (or `this rvr has uncommitted changes (its
+commit is C-dirty), and such a build builds on no file.`); then that a file is built on only by
+the build that made it, so that pressing with this build presses every column again, and asks
+`Press every column? [y/N]`
+(§5.1.7). Yes presses every column; no presses nothing and leaves the file as it is, exit 1. Where
+nobody is at a terminal it presses nothing and stops, exit 2, saying to add `--full`, which presses
+every column without asking. It asks having read only the file's header: no array of it is read
+before the answer.
 
 **8.7 `rvr press --fill [KINDS]`** reads only the holes of the file at the target (`KINDS`: a
 comma-separated list of hole kinds, every part one, to read only those) and writes the file again
@@ -852,24 +884,187 @@ checks the file's derived columns against their records; it records only what is
 recipe the file carries to match, a line at a time under its `[derived]` heading (an added column a
 line `NAME = "EXPRESSION"` after the table's last, a dropped one's line taken out, a renamed one's
 name before its `=` written anew; a `[derived]` written otherwise, as `derived = { … }`, or with an
-entry on more than one line, is refused for every change, saying so in plain words), copies the arrays byte for byte, and signs the file again with your
+entry on more than one line, is refused for every change, saying so in plain words), writes its
+new header in the file itself (§8.12), the arrays left as they are, and signs the file again with your
 key, saying whose signature it replaces (or that the file is no longer signed). The study's own
 `recipe.toml` is not changed, and it says so.
 
-**8.9 `rvr empty FILE…`** lets a file's arrays go and keeps its header byte for byte: the file then
-ends where its header does. It first checks each input the lock names is as the lock recorded it
-(unless `--anyway`), refuses a file with holes, and refuses a file made by another rvr version (the
-program and version `made.by` names; the commit is not compared) unless `--anyway`. A file of no rows has no array bytes to give back: it says so and leaves it, exit 0. At a terminal it asks first, naming the file's rows, columns and size; `--force` (`-f`)
-empties without asking, and is needed where nobody is at a terminal. Each file is its own; the exit
-status is the worst.
+**8.9 `rvr empty FILE…`** lets a file's arrays go and keeps its header byte for byte: it writes the
+file again beside it (`FILE.empty-PID-N`, §8.12) as the magic, the header, its length and the magic (FORMAT.md
+§1), and moves that over it, under the file's lock and with its permissions (§8.12). It first checks
+each input the lock names is as the lock recorded it (unless `--anyway`), refuses a file with holes,
+and refuses a file made by another rvr version (the program and version `made.by` names; the commit
+is not compared) unless `--anyway`. It lets data go only in a file you may write: a read-only one is
+refused, `FILE is read-only: rvr empty gives back the space only of a file you may write (chmod u+w
+FILE first)`, and one on a read-only filesystem `FILE lies on a read-only filesystem: … (mount it to
+be written first)`. A file of no rows has no array bytes to give back, and an empty file has none
+left: each says so and is left, exit 0. These are told before anything is staged beside the file.
+At a terminal it asks first, naming the file's rows, columns and size; `--force` (`-f`) empties
+without asking, and is needed where nobody is at a terminal. It holds the file's lock
+(§8.12) from before it reads the file until the file is emptied, the question too, so that the file
+asked about is the one emptied. Each file is its own, one that cannot be put back first (§8.12)
+too; the exit status is the worst.
 
 **8.10 `rvr refill FILE`** presses the study an empty file carries again, beside it, with the same
 event choices, and puts the arrays back once each has the checksum its record states: when every
-array's `at` and `size` are also its record's (as with this build), the file is the one it was,
-byte for byte, its signature as it was; with a build that
-compresses otherwise, the header takes the arrays' new places and is signed again with your key,
-saying whose signature it replaces. Other values are refused, naming the columns; the file stays
-empty.
+array's `size` is also its record's (as with this build), each is put at the place its record
+states, wherever the press laid it, and the file is the one it was, byte for byte, its signature as
+it was; with a build that compresses otherwise, the header takes the arrays' new places and is
+signed again with your key, saying whose signature it replaces. Other values are refused, naming
+the columns; the file stays empty.
+
+**8.11 `rvr tool FILE`** lists the file's tool keys (FORMAT.md §11), each with its size, the bytes its
+object takes in the header (`FILE has no tool keys.` when it has none). `rvr tool FILE KEY --set
+DATA.json` makes the JSON object DATA.json holds the tool key `KEY`, checked first, before anything
+is asked, by the header's own rules: DATA.json is one JSON object by FORMAT.md §1's rules (no byte-order mark, no key twice, no
+whole number written `-0`, no lone surrogate, and arrays and objects nested at most 64 deep, counted
+from the key's place in the header, where its object is 2 deep); `KEY` is a tool key's name and no
+slip of the format's own keys (§11); and the header with it is at most 2^32 − 1 bytes. A key already
+there is replaced only once you say so, the question naming both sizes as the header holds them. A
+DATA.json the rules refuse is told against it, as `DATA.json: the tool key KEY is not JSON … (line
+L, column C): …`. A file whose header does not open is listed all the same, from its header's text as it lies, the
+list then saying after the keys `FILE does not open (WHY): rvr tool FILE KEY --drop takes out the
+key that breaks it` (naming the key when the header's rules name one; `… takes out a key that breaks
+it` otherwise, and no such advice when it has no tool keys), and `--get` writes out its keys too.
+`rvr tool FILE KEY --get [OUT.json]` writes `KEY`'s object as
+the header holds it, and a newline, to `OUT.json`, or to standard output without it; an `OUT.json`
+already there is written over only once you say so, the question naming both sizes, and is replaced
+whole or not at all, with its permissions; an `OUT.json` that is `FILE` itself (named another way,
+or through a link) is refused: `OUT.json is FILE itself: write the key's object to another file`.
+`rvr tool FILE KEY --drop` drops `KEY` once you say so, the question naming it and its size: a key whose object
+breaks FORMAT.md §1's rules too, or holds what no JSON parser takes (a lone surrogate, nesting
+deeper than a parser goes), or is misnamed (a slip of the format's own keys, or no tool key's name;
+the format's own keys are refused), so that dropping it mends a file only it keeps from opening. Its object
+is found in the header's text by its brackets, outside strings, not parsed, and taken out with
+its comma; the header left must then open, checked before anything is asked. A header that breaks the rules outside the key is
+refused, as it is by every reader. The sizes `rvr tool` names, and the object `--get` writes, are
+the key's bytes as the header holds them. rvr asks at a terminal
+(§5.1.7); `--force` (`-f`) does not ask, and is needed where nobody is at a terminal. Every change of
+the tool keys is made in the file itself (§8.12), its arrays as they are, and leaves its signature as
+it is (tool keys are outside it: FORMAT.md §9). A key the file does not have, given to `--get` or
+`--drop`, is refused, naming it.
+
+**8.12 Changes in place.** A press that only adds columns (§8.2), `rvr derive` (§8.8) and `rvr tool`
+(§8.11) change a file in the file itself, so that its arrays are neither copied nor read, in four
+steps:
+
+1. the file is locked (below) and its header read;
+2. before its first byte changes, the journal `FILE-journal` is written beside it (`tiny.rvr-journal`
+   beside `tiny.rvr`): the 8 bytes `89 52 56 4A 0D 0A 1A 0A`; the file's length before the change,
+   the first byte of its tail (the old header's first byte), and the file's length after the change
+   when it writes only a header (2^64 − 1 when it adds arrays), three u64 little-endian; the
+   SHA-256 of the up to 65,536 bytes of the file ending at its tail's first byte, which a change
+   never touches, so that they name the file across reboots, remounts and copies; the tail itself
+   (the old header, its length and the magic); when the change writes only a header, the new tail
+   too (the new header, its length and the magic); then the SHA-256 of every byte before it. The
+   journal is synced, and its folder; a journal that cannot be written whole is removed, and the
+   change refused, the file as it was. A change refused before this step (a tool key or a header
+   the rules refuse) touches nothing;
+3. the new arrays are written from the old header's first byte, then the new header, its length
+   and the magic; the file is cut to its new length and synced. A press checks the rows it read to
+   be the file's, in order, before it writes anything, and every change checks the new header's
+   records to lay out exactly the bytes written before it writes the header: either failing is a
+   bug, said so, and the file is left or put back as it was. Before it is written, the new header
+   is checked as every reader checks one (FORMAT.md §12) and its length to fit the format; one
+   refused leaves or puts the file back as it was: `FILE is as it was: the header the change would
+   write would not open (…), so it was not written`;
+4. the journal is removed and the folder synced.
+
+Every writer of a file holds the operating system's exclusive advisory lock on it, from when it
+first reads what it keeps of the file (its header, its tool keys) until its change in place is
+finished or the new file it writes is moved over it: a press, in place or not (§7.5.1, §8.2),
+`rvr empty`, `rvr refill`, `rvr derive`, `rvr tool`, and the rowver functions that change a file
+(§11.9). Another writer is refused while it is held, saying that another program is changing the
+file. A press whose target is there but may not be opened stops, for what the file holds (its tool
+keys) is carried over: `FILE is not yours to read or write, and a press carries over what it holds
+(its tool keys), so it stops: chmod u+rw FILE, or remove it`. A writer given a symbolic link locks,
+changes and replaces the file it names, so the link stays a link. Once locked, the file is checked to be the one at its path still (its device and
+inode), and one replaced as it was opened is opened again. While it holds the lock, a writer reads
+and writes the file only through the one descriptor it locked, and opens no other: where the lock is
+POSIX locks (Linux NFS), closing any descriptor of the file lets the lock go, and every thread of a
+process that asks is given it. So a program knows the files it holds locked (by device and inode),
+whatever the filesystem: another of its threads that would lock or open one is refused before the
+system is asked, told `FILE is being changed by this program already (another of its threads holds
+it): wait for that change to finish`. A descriptor a reader opened before the file was locked, let
+go while the lock is held, is kept open by the lock and closed as it lets go, and so is one opened
+and refused because the file was moved to its path between looking and opening. On a filesystem that
+has no locks, a writer goes on without the lock, writing a new file for a change (below). A file
+that may not be written is opened only to be read, and where the lock is a write lock (Linux NFS)
+one is refused it: the writer goes on without the lock all the same, writing a new file because the
+file may not be written (WHY below: `you may not write it`), as `rvr status` says. A new file
+moved over a file keeps that file's permissions, and is moved only while the path still names the
+file locked (its device and inode): one another program moved there meanwhile is left as it is, and
+the change refused, `FILE was replaced by another program while rvr held it: run the command again`.
+A reader takes no lock.
+
+A change that cannot be made in the file itself, because its filesystem has no locks or because the
+file may not be written (`chmod 444` in a folder that may be, or a read-only filesystem: CVMFS, a
+read-only mount), writes a new file instead: the magic and the arrays copied byte for byte into
+`FILE.anew-PID-N` beside it, the new arrays and the new header after them, then moved over the file
+with the file's permissions, under its lock when it has one. PID is the process's ID and N counts
+the files it has staged, and the file is made only where none has that name, so that no two writers
+share one: of two writers on a filesystem with no locks, the second to move its file over is
+refused, the first's having replaced the file. A `FILE.anew-PID-N` (or `FILE.empty-PID-N`, §8.9)
+left there by a change cut short keeps its name, the `.gitignore` leaving it out (§5.3.3): it is
+never written over or removed, and never keeps a change from being made. A press's `pressed.rvr` in
+its kept `FILE.partial` (§7.5.1) left there by a press cut short, perhaps with the file's
+permissions, is rvr's own: it is removed first. A change written anew says so in one line, `FILE cannot be
+changed in place (WHY): wrote it anew and moved it over.` (WHY: `you may not write it`, `its
+filesystem is read-only`, or `its filesystem gives no lock: …`). On a read-only filesystem the new
+file cannot be written either, and the change is refused: `FILE cannot be changed: its filesystem
+is read-only, so neither it nor a new file beside it can be written: copy it to a disk you may
+write, and change the copy`; a file there is still read and pressed from. A press that would write
+such a file is refused before it stages anything, `FILE lies on a read-only filesystem: rvr press
+cannot write it or a new file beside it; copy the study to a disk you may write` (rvr status says
+that line in place of the one above; a file current has nothing to press, and is not refused). A press decides this before it
+reads anything, and then writes a new file as for any other change (§8.2), saying "in place" nowhere;
+`rvr status`, which only reads, tells it by opening the file to write and taking a shared lock for
+a moment, and a writer refused its lock tries again for a moment before it gives up.
+
+A journal beside a file means a change to it was cut short. Every rvr command, and every rowver
+function that writes a file or writes one from it, first puts back a file it opens that has one,
+under the file's lock: a journal that checks out (its SHA-256, and the tails' start and lengths
+adding up to the old and new lengths) and names the file has its tail written back at its place and
+the file cut to its old length, then synced. A journal names the file when the file's bytes before
+the tail give the journal's SHA-256 of them. A change that adds arrays is named by that SHA-256 and
+the tail's start alone (the file at least that long): its length after the change is 2^64 − 1, so
+no bound on the file's length holds for it, and a finished copy of the same change copied over the
+file beside its journal is put back to the old file, a valid one. For a change that writes only a
+header (every change to an empty or rowless file, whose arrays take no bytes, so that the bytes
+before its tail are only the magic every file begins with), the file must also still be this change
+of this file: its length between the old and the new length, and every byte from the tail's start on the old tail's byte there, the new tail's, or 0 past
+the old length (a page a crash did not keep). When its tail is the new tail exactly, the change had
+finished but for removing its journal: the journal is let go and the file left as it is, the
+command saying `Let go FILE-journal: the change to FILE had finished, so FILE is as the change made
+it.` on standard error. A journal that does not check out was
+cut short as it was written, before the file was touched, and is let go, the command saying `Let
+go FILE-journal: a change to FILE was cut short before FILE was touched, so FILE is as it was.` on
+standard error; one that checks out but names another file (another moved to its name since) is
+refused, and neither is touched: `FILE-journal is not of this FILE (FILE was replaced since a
+change to it was cut short): remove FILE-journal if FILE is the file you want`. One that checks out
+beside a file that may not be written is not put back: `FILE has the journal of a change to it cut
+short, and is read-only, so it cannot be put back: chmod u+w FILE, then run any rvr command on it.`
+(on a read-only filesystem, `… and lies on a read-only filesystem, … mount it to be written, …`).
+A journal beside no file (the file removed since) is let go, so that a file made there later does
+not meet a journal not of it: `Let go FILE-journal: FILE is not there.` on standard error.
+Through a symbolic link, the journal is beside the file it names, and these lines name that file. A
+file copied together with its journal is put back on the copy. Another empty file, or a full one,
+copied over an empty one whose change was cut short is refused, not written over. A journal put
+back is then removed, its folder synced, and the command says `Put FILE back as it was: a change to
+it was cut short.` on
+standard error. On a filesystem that has no locks, a journal that checks out and names the file was
+made where it could be locked, and is put back without the lock, the line ending `(put back without
+a lock: this filesystem gives none)`. A reader that only reads refuses the file while the journal is there
+(FORMAT.md §12): while another program holds the file's lock, saying that it is being changed now
+and to wait for it to finish; otherwise, that any rvr command on the file puts it back. A reader
+takes no lock: it reads the frame and the header, looks for the journal, and reads them again, and
+a header read twice alike is the file's (a read torn by a change cannot match one made after the
+change, and while the change is made its journal is there). When the two differ it reads them a
+third time, and when no two reads in a row agree it says `FILE changed while it was read (emptied,
+or written again): open it again`, not that the file is damaged. A change of
+the header outside its tool keys signs the file again with your key, saying whose signature it
+replaces (or that the file is no longer signed); a change of its tool keys leaves the signature as
+it is.
 
 ## 9. Inspecting files
 
@@ -877,7 +1072,9 @@ empty.
 on standard output, `FILE: valid, …` (rows, columns, derived columns, entries read of those the
 samples hold, holes by kind, emptiness, the signer) or `FILE: INVALID: WHY`. The line names those
 facts; its words are the program's own. `--complete` also fails a
-valid file that has holes or is empty. It exits 1 when any file fails.
+valid file that has holes or is empty. A file a change to which cannot be put back now (§8.12:
+another program changing it, a journal of another file) is one more `INVALID` line, and the rest
+are checked. It exits 1 when any file fails.
 
 **9.2 `rvr dump FILE`** prints the inside of a file: the header in full, the three texts, and every
 column with its kind, length and first values, a derived column worked out with its expression.
@@ -936,6 +1133,9 @@ words are the program's own.
 in the lock are read from FILE's folder, or `--study FOLDER`. A DIR that holds a `.rvr` file, or a
 `recipe.toml`, `samples.toml` or `samples.lock` other than FILE's, is refused, naming them.
 
+**9.6.1 `rvr reproduce FILE DIR --texts`** writes the three texts FILE carries into DIR and presses
+nothing, so that a study can be built on from a file alone; DIR is refused as §9.6 refuses it.
+
 ## 10. Keys and proxies
 
 **10.1** rvr's folder is `$RVR_CONFIG` when it is set and not empty, else `$XDG_CONFIG_HOME/rvr` when
@@ -980,12 +1180,14 @@ NumPy is its one requirement. It installs the `rvr` command too, which runs the 
 binary.
 
 **11.2** `rowver.open(path)` gives a `File`, checking the header (FORMAT.md §12, "on opening"); a file
-whose header fails raises `rowver.Error`, a missing path `FileNotFoundError`.
+whose header fails, or beside which is the journal of a change to it cut short (§8.12), raises
+`rowver.Error`, a missing path `FileNotFoundError`.
 
 **11.3** A `File` has `rows`, `samples`, `labels`, `columns`, `derived`, `sample_columns` (name to one
 value per sample), `recipe`, `study` (the three texts by file name), `signed_by` (the public key, or
 `None`), `holes` (`[{sample, file, entries: (first, last), kind, why}]`, `last` not included),
-`complete` and `empty`; and `path`, `header` (the JSON header), `len(f)` (its rows) and `name in f`.
+`complete`, `empty` and `tools` (each tool key's object, by its name); and `path`, `header` (the JSON
+header), `len(f)` (its rows) and `name in f`.
 
 **11.4** `f[name]` reads a column: a flat one as a read-only NumPy array (not copied), a list one as
 an Awkward array, `sample` as `int32`, `entry` as `int64`, a derived one worked out and checked
@@ -1008,6 +1210,17 @@ each checked against its chunk table (FORMAT.md §7, §12); a derived column is 
 record first, as `f[name]` checks it, once for the open file (its record is of every row, so that
 first slice works it out over every row, holding none): rows past the file, or `start` after `stop`,
 raise `rowver.Error`, an unknown name `KeyError`.
+
+**11.9** `rowver.set_tool(path, key, value)` makes `value`, a dict written as
+`json.dumps(value, allow_nan=False)` writes it (NaN and infinity, which JSON does not have, raise
+`ValueError`), the tool key `key` of the file at `path`, checked and made in the file itself as
+`rvr tool --set` does (§8.11, §8.12), a key already there replaced without asking (a value the rules
+refuse is told as `the value given for the tool key KEY …`);
+`rowver.drop_tool(path, key)` drops it, as `rvr tool --drop` does, and gives back its object, or its text
+as the header held it where `json.loads` cannot read it (nesting deeper than it goes), never raising once
+the file is changed. Each holds the file's lock while it
+changes it (§8.12), first puts back a change to the file cut short, and raises `rowver.Error` saying
+what is wrong.
 
 ## 12. Builds and releases
 

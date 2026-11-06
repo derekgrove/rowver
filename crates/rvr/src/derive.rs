@@ -3,8 +3,6 @@
 
 use crate::options::Options;
 use rowver::rvr::derived::records;
-use rowver::rvr::Reader;
-use rowver::write::Laid;
 use rvr_recipe::{parse, plain, reads, Recipe, RESERVED};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -17,14 +15,6 @@ pub(crate) const USAGE: &str = "usage:
       remove derived columns
   rvr derive FILE --rename OLD NEW
       give a derived column another name; its expression stays as it is";
-
-/// Put the records of `derived`, worked out from the arrays `laid` for a press, in its header,
-/// refused unless every reader would open it.
-pub(crate) fn attach(laid: &Laid, derived: &[(String, String)], header: &mut Value) -> Result<(), String> {
-    let records = laid.derived(header, derived).map_err(|e| e.to_string())?;
-    header["derived"] = json!({ "columns": records });
-    sealed(header, None)
-}
 
 /// Take the derived columns `names` out of a press's header, and empty the `[derived]` table of
 /// the recipe it carries: what a press read, kept when its derived columns failed.
@@ -47,11 +37,17 @@ pub(crate) fn without(header: &mut Value, names: Vec<String>) -> Result<(), Stri
     Ok(())
 }
 
-/// Sign `header` when there is a key, and refuse it unless every reader would open it.
-pub(crate) fn sealed(header: &mut Value, signer: Option<&[u8; 32]>) -> Result<(), String> {
-    if let Some(secret) = signer {
-        rowver::sign::sign(header, secret).map_err(|e| format!("the file could not be signed with your key: {e}"))?;
+/// Sign `header` when there is a key.
+pub(crate) fn signed(header: &mut Value, signer: Option<&[u8; 32]>) -> Result<(), String> {
+    match signer {
+        Some(secret) => rowver::sign::sign(header, secret).map_err(|e| format!("the file could not be signed with your key: {e}")),
+        None => Ok(()),
     }
+}
+
+/// `signed`, and refused unless every reader would open it: for a new file (a change in place checks its own).
+pub(crate) fn sealed(header: &mut Value, signer: Option<&[u8; 32]>) -> Result<(), String> {
+    signed(header, signer)?;
     let text = serde_json::to_vec(header).map_err(|e| e.to_string())?;
     rowver::rvr::checked_header(&text).map(drop).map_err(|e| format!("it would not be valid: {e}"))
 }
@@ -239,7 +235,9 @@ fn edited(text: &str, change: &Change, expected: &[(String, String)]) -> Result<
 }
 
 fn run(path: &Path, change: Asked) -> Result<(), String> {
-    let file = Reader::open(path).map_err(|e| rowver::plain(path, &e))?;
+    // Held from its first read to its last write: no other writer changes it meanwhile (SPEC §8.12).
+    let locked = crate::locked(path)?;
+    let file = locked.reader().map_err(|e| rowver::plain(path, &e))?;
     // A file is changed, and signed again, only when its derived columns are what it records.
     let secret = crate::key::secret()?;
     rowver::rvr::derived::checked(&file).map_err(|e| rowver::plain(path, &e))?;
@@ -340,9 +338,12 @@ fn run(path: &Path, change: Asked) -> Result<(), String> {
     };
     let was = root.shift_remove("signature");
     let signed = crate::key::resigned(secret.as_ref(), was.as_ref().and_then(|s| s["key"].as_str()));
-    // The file is replaced only by one every reader opens, and only once it is on disk.
-    let staged = crate::files::beside(path, ".derive");
-    crate::files::in_place(&staged, path, true, || rewritten(path, &staged, &mut header, secret.as_ref()), |at, e| rowver::plain_io(at, &e))?;
+    // Its new header, which every reader opens (the change checks it), is written in the file itself (SPEC §8.12).
+    self::signed(&mut header, secret.as_ref()).map_err(|why| format!("{} could not be written: {why}", path.display()))?;
+    // Begun from the header read under the lock above, not read again.
+    let change = rowver::change::Change::of(&locked, &file).map_err(|e| rowver::plain(path, &e))?;
+    change.finish(&header).map_err(|e| rowver::plain(path, &e))?;
+    crate::anew(path, &locked);
     println!(
         "{said} {}: it has {}; {signed}",
         path.display(),

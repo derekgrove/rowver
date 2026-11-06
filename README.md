@@ -21,22 +21,24 @@ it again.
 
 ## What a `.rvr` file looks like
 
-A file is four parts, one after another:
+A file is five parts, one after another:
 
 ```
-magic (8 bytes) | header length (4 bytes) | JSON header | compressed arrays
+magic (8 bytes) | compressed arrays | JSON header | header length (4 bytes) | magic (8 bytes)
 ```
 
-The first bytes of a real file, `higgs_tautau.rvr` from the tutorial below:
+A reader reads the first 8 bytes and the last 12, then the header, and has every fact about the
+file; since the header comes last, new columns and tool keys are added to a file in place. The first
+and last bytes of `tiny.rvr`, the running example of
+[the format](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md):
 
 ```text
-00000000: 8952 5652 0d0a 1a0a 4246 0000 7b22 726f  .RVR....BF..{"ro
-00000010: 7776 6572 223a 3135 2c22 6461 7461 223a  wver":15,"data":
-00000020: 7b22 726f 7773 223a 3232 3438 2c22 7361  {"rows":2248,"sa
+00000000: 8952 5652 0d0a 1a0a 28b5 2ffd 0438 2300  .RVR....(./..8#.
+0000239f: 6322 7d7d f11b 0000 8952 5652 0d0a 1a0a  c"}}.....RVR....
 ```
 
-The header is plain JSON (`rvr header FILE` prints it). Here is that file's header, trimmed: `…`
-marks what was cut, and checksums are shortened.
+The header is plain JSON (`rvr header FILE` prints it). Here is the header of `higgs_tautau.rvr`,
+from the tutorial below, trimmed: `…` marks what was cut, and checksums are shortened.
 
 ```json
 {

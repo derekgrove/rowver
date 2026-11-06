@@ -111,7 +111,7 @@ pub(super) fn forms(record: &Value, kind: &str, place: &str) -> Result<()> {
 }
 
 /// Require a record's facts to be `want`'s, compared as numbers, `vals` there exactly when wanted.
-pub(super) fn agree(record: &Value, want: &Map<String, Value>, kind: &str, place: &str) -> Result<()> {
+pub(crate) fn agree(record: &Value, want: &Map<String, Value>, kind: &str, place: &str) -> Result<()> {
     for key in ["lim", "nice", "vals"] {
         match (record.get(key), want.get(key)) {
             (None, None) => {}

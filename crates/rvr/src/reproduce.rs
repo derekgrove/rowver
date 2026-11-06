@@ -7,12 +7,13 @@ use rowver::study::lock::Lock;
 use std::path::{Path, PathBuf};
 
 pub const USAGE: &str = "usage:
-  rvr reproduce FILE [DIR] [--study FOLDER] [--workers N]
+  rvr reproduce FILE [DIR] [--study FOLDER] [--workers N] [--texts]
                                            write FILE's recipe.toml, samples.toml and samples.lock
                                            into DIR (FILE's name + .reproduced when not given),
                                            press them again, and rvr diff the two files; a
                                            relative path in the lock is read from FOLDER
-                                           (FILE's folder when not given)";
+                                           (FILE's folder when not given); --texts writes the
+                                           three texts and presses nothing";
 
 /// The study texts a checked header carries, and its study's name.
 pub(crate) fn study_texts(header: &serde_json::Value) -> (Texts, String) {
@@ -36,13 +37,9 @@ pub(crate) fn base(file: &Path, study: Option<&Path>) -> Result<PathBuf, String>
     }
 }
 
-/// Reproduce `file` into `dir`, reading relative inputs from `study` (FILE's folder when `None`).
-fn run(
-    file: &Path,
-    dir: Option<PathBuf>,
-    study: Option<PathBuf>,
-    workers: usize,
-) -> Result<u8, String> {
+/// Reproduce `file` into `dir`, reading relative inputs from `study` (FILE's folder when `None`);
+/// with `texts_only`, only write its texts there.
+fn run(file: &Path, dir: Option<PathBuf>, study: Option<PathBuf>, workers: usize, texts_only: bool) -> Result<u8, String> {
     let shown = file.display();
     let reader = rowver::rvr::Reader::open(file).map_err(|e| rowver::plain(file, &e))?;
     let made = &reader.header()["made"];
@@ -54,7 +51,7 @@ fn run(
     let local = local
         .filter(|f| !f.at.contains("://"))
         .map(|f| &f.at);
-    if let Some(missing) = local.into_iter().find(|at| !crate::samples::resolve::local(at, &base).exists()) {
+    if let Some(missing) = local.into_iter().filter(|_| !texts_only).find(|at| !crate::samples::resolve::local(at, &base).exists()) {
         return Err(format!("{missing}, which the lock names, is not in {}. The lock's relative paths are from the study folder: name it with --study FOLDER.", base.display()));
     }
     let dir = dir.unwrap_or_else(|| file.with_extension("reproduced"));
@@ -71,8 +68,11 @@ fn run(
         "Wrote {}/ with the recipe.toml, samples.toml and samples.lock {shown} holds.",
         dir.display()
     );
+    if texts_only {
+        return Ok(0);
+    }
     let target = dir.join(format!("{name}.rvr"));
-    let place = Place { base, study: name.to_owned(), target: target.clone(), at: At::Missing };
+    let place = Place { base, study: name.to_owned(), target: target.clone(), at: At::Missing, locked: None };
     let asked = Asked { choose: Choose::Recorded(made["files"].clone()), on: On::Once, workers, sign: true };
     let again = |why: String| format!("{why}\nTo press it again, remove {} and run rvr reproduce again.", dir.display());
     let plan = crate::plan::build(place, texts, asked).map_err(again)?;
@@ -105,5 +105,5 @@ pub fn main(options: &Options) -> u8 {
     };
     let file = PathBuf::from(&options.words[0]);
     let dir = options.words.get(1).map(PathBuf::from);
-    crate::report("reproduce", run(&file, dir, options.value("--study").map(PathBuf::from), workers))
+    crate::report("reproduce", run(&file, dir, options.value("--study").map(PathBuf::from), workers, options.has("--texts")))
 }

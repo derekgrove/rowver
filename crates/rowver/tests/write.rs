@@ -117,9 +117,8 @@ fn nice_is_lim_rounded_outward_to_two_digits_in_exact_decimal() {
 #[test]
 fn a_derived_column_is_a_record_with_no_array_that_the_header_check_takes() {
     let bytes = golden();
-    let length = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    let arrays = vec![bytes[12 + length..].to_vec()];
-    let header: Value = serde_json::from_slice(&bytes[12..12 + length]).unwrap();
+    let (header, arrays) = common::split(&bytes);
+    let arrays = vec![arrays];
     let rows: Vec<usize> = header["data"]["samples"]
         .as_array()
         .unwrap()
@@ -169,10 +168,8 @@ fn a_derived_column_is_a_record_with_no_array_that_the_header_check_takes() {
 // FORMAT 1, 10, 12
 #[test]
 fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
-    let bytes = golden();
-    let length = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    let arrays = vec![bytes[12 + length..].to_vec()];
-    let mut header: Value = serde_json::from_slice(&bytes[12..12 + length]).unwrap();
+    let (mut header, arrays) = common::split(&golden());
+    let arrays = vec![arrays];
     let text = common::recipe() + "twice = \"MET * 2\"\n";
     let text = text.as_str();
     header["made"]["recipe"]["text"] = text.into();
@@ -235,7 +232,7 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
         let stored = reader.column("MET").unwrap().is_some();
         let said = [reader.column("again").unwrap_err().to_string(), rowver::rvr::validate_file(&path).unwrap_err().to_string()];
         // Emptied, it fails as before: a function's name is checked before any column it reads.
-        rowver::write::empty(&path).unwrap();
+        rowver::write::empty(rowver::change::Locked::take(&path).unwrap()).unwrap();
         let emptied = rowver::rvr::Reader::open(&path).unwrap().column("again").unwrap_err().to_string();
         drop(path);
         assert!(stored && emptied.contains("There is no function named later") && emptied.contains("newer") == newer, "{emptied}");
@@ -306,7 +303,7 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
         // those worked out from the file.
         let derived = [("twice".to_owned(), "MET * 2".to_owned()), ("lead".to_owned(), "first(Muon_pt, -1) + nlep".to_owned())];
         let early = laid.derived(&written, &derived).unwrap();
-        write_laid(file(name), &written, laid).unwrap();
+        write_laid(&written, laid).unwrap();
         let reader = rowver::rvr::Reader::open(file(name)).unwrap();
         assert_eq!(early, rowver::rvr::derived::records(&reader, &derived, &[]).unwrap(), "{name}");
         assert_eq!(
@@ -361,24 +358,22 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
     // A damaged array is refused, not copied: the first byte of its last column's first frame.
     let mut bytes = std::fs::read(file("spooled.rvr")).unwrap();
     let last = reader.header()["data"]["cols"].as_array().unwrap().last().unwrap();
-    let start = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    bytes[start + last.get("offsets").unwrap_or(last)["at"].as_u64().unwrap() as usize] ^= 0xff;
+    // The arrays begin at byte 8 (FORMAT §1).
+    bytes[8 + last.get("offsets").unwrap_or(last)["at"].as_u64().unwrap() as usize] ^= 0xff;
     std::fs::write(file("damaged.rvr"), bytes).unwrap();
     let damaged = rowver::rvr::Reader::open(file("damaged.rvr")).unwrap();
     let last = names.last().unwrap().clone();
-    let rows = Rows {
+    let rows = |entry: &[i64]| Rows {
         samples: samples.clone(),
         files: files.clone(),
-        entry: Source::Values(Values::Flat(array(&entry))),
+        entry: Source::Values(Values::Flat(array(entry))),
         chunk_rows: 65_536,
     };
-    let refused = stream(
-        rows,
-        vec![(last.clone(), Source::Copied(&damaged, last))],
-        1,
-        &file("x.rvr"),
-    );
-    assert!(refused.unwrap_err().to_string().contains("is damaged"));
+    // On one thread, and decoded on several, each chunk written in order.
+    for workers in [1, 3] {
+        let refused = stream(rows(&entry), vec![(last.clone(), Source::Copied(&damaged, last.clone()))], workers, &file("x.rvr"));
+        assert!(refused.unwrap_err().to_string().contains("is damaged"), "{workers}");
+    }
     std::fs::remove_file(file("damaged.rvr")).unwrap();
     // A record that does not match its array is refused, though the file opens: MET's by_sample
     // is not under the data checksum.
@@ -386,18 +381,23 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
     lying["data"]["cols"][1]["by_sample"][0] = "0".repeat(64).into();
     std::fs::write(file("lying.rvr"), to_bytes(&lying, &arrays)).unwrap();
     let lying = rowver::rvr::Reader::open(file("lying.rvr")).unwrap();
-    let rows = Rows {
-        samples: samples.clone(),
-        files: files.clone(),
-        entry: Source::Values(Values::Flat(array(&entry))),
-        chunk_rows: 65_536,
-    };
     let met = vec![("MET".to_owned(), Source::Copied(&lying, "MET".into()))];
-    let refused = stream(rows, met, 1, &file("x.rvr"));
+    let refused = stream(rows(&entry), met, 1, &file("x.rvr"));
     assert!(refused
         .unwrap_err()
         .to_string()
         .contains("does not hold what its record says"));
+    // Facts that are not its values', which the file opens with, are refused once every chunk is
+    // copied: nlep holds 0, 1, 2 and 3.
+    let mut lying = header.clone();
+    lying["data"]["cols"][0]["vals"] = serde_json::json!([0, 1, 3]);
+    rowver::write::data_sealed(&mut lying["data"]).unwrap();
+    std::fs::write(file("lying.rvr"), to_bytes(&lying, &arrays)).unwrap();
+    let lying = rowver::rvr::Reader::open(file("lying.rvr")).unwrap();
+    for workers in [1, 3] {
+        let refused = stream(rows(&entry), vec![("nlep".to_owned(), Source::Copied(&lying, "nlep".into()))], workers, &file("x.rvr"));
+        assert!(refused.unwrap_err().to_string().contains("does not hold what its record says"), "{workers}");
+    }
     std::fs::remove_file(file("lying.rvr")).unwrap();
     // Nothing is left beside the files but the spool, which its maker removes.
     drop(spool);
@@ -411,6 +411,84 @@ fn a_streamed_file_is_the_one_built_whole_from_spooled_or_copied_columns() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+// FORMAT 4; SPEC 8.2
+#[test]
+fn a_copied_column_with_zeros_of_both_signs_keeps_a_whole_press_facts_however_its_chunks_finish() {
+    use rowver::write::{stream, write_laid, Rows, Source};
+    let n = 4 * 1024;
+    let dir = std::env::temp_dir().join(format!("rowver-zeros-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let rows = || Rows {
+        samples: vec![Sample { name: "A".into(), label: "A".into(), rows: n }],
+        files: vec![serde_json::json!({"sample": "A", "path": "./a.root", "rows": n})],
+        entry: Source::Values(Values::Flat(array(&(0..n as i64).collect::<Vec<_>>()))),
+        chunk_rows: 1024,
+    };
+    // A zero of each sign, at the low end and at the high end, in the first chunk and the third.
+    for (rest, first, later) in [(1.0, 0.0, -0.0), (1.0, -0.0, 0.0), (-1.0, 0.0, -0.0), (-1.0, -0.0, 0.0)] {
+        let mut values = vec![rest; n];
+        (values[5], values[2 * 1024 + 7]) = (first, later);
+        let whole = dir.join("whole.rvr");
+        let (data, laid) = stream(rows(), vec![("x".into(), Source::Values(Values::Flat(array(&values))))], 1, &whole).unwrap();
+        write_laid(&serde_json::json!({"rowver": 15, "data": data}), laid).unwrap();
+        let (reader, _) = rowver::rvr::Reader::inspect(&whole).unwrap();
+        let facts = |record: &Value| (record["lim"].to_string(), record["nice"].to_string());
+        let pressed = facts(&reader.header()["data"]["cols"][0]);
+        // Copied on one thread and on eight, its chunks finishing in any order.
+        for workers in [1, 8] {
+            for _ in 0..20 {
+                let copied = stream(rows(), vec![("x".into(), Source::Copied(&reader, "x".into()))], workers, &dir.join("copied.rvr"));
+                let (data, laid) = copied.unwrap_or_else(|e| panic!("{rest} {first} {later}, {workers} workers: {e}"));
+                drop(laid);
+                assert_eq!(facts(&data["cols"][0]), pressed);
+            }
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// SPEC 7.5.1
+#[test]
+fn a_stream_that_fails_removes_only_a_file_it_opened() {
+    use rowver::write::{stream, Rows, Source};
+    let path = common::written(b"not a file stream made", "stream-kept");
+    let sample = |name: &str, rows: usize| Sample { name: name.into(), label: name.into(), rows };
+    let rows = |samples: Vec<Sample>, entry: &[i64]| Rows {
+        samples,
+        files: vec![serde_json::json!({"sample": "A", "path": "./a.root", "rows": 2})],
+        entry: Source::Values(Values::Flat(array(entry))),
+        chunk_rows: 65_536,
+    };
+    // Refused before it opens the file (a sample named twice): what is there stays.
+    let said = stream(rows(vec![sample("A", 1), sample("A", 1)], &[0, 1]), Vec::new(), 1, &path.0).unwrap_err().to_string();
+    assert!(said.contains("given twice"), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap(), b"not a file stream made");
+    // Failing once it has (a file's entries out of order): the file it began goes.
+    let said = stream(rows(vec![sample("A", 2)], &[1, 0]), Vec::new(), 1, &path.0).unwrap_err().to_string();
+    assert!(said.contains("strictly increasing"), "{said}");
+    assert!(!path.0.exists());
+}
+
+// SPEC 7.5.1
+#[test]
+fn a_file_streamed_but_never_finished_goes_with_what_laid_it() {
+    use rowver::write::{stream, Rows, Source};
+    let path = common::Written(std::env::temp_dir().join(format!("rowver-test-{}-laid.rvr", std::process::id())));
+    let rows = || Rows {
+        samples: vec![Sample { name: "A".into(), label: "A".into(), rows: 2 }],
+        files: vec![serde_json::json!({"sample": "A", "path": "./a.root", "rows": 2})],
+        entry: Source::Values(Values::Flat(array(&[0_i64, 1]))),
+        chunk_rows: 65_536,
+    };
+    let (_, laid) = stream(rows(), Vec::new(), 1, &path.0).unwrap();
+    assert!(path.0.exists());
+    drop(laid);
+    assert!(!path.0.exists(), "a press stopped before its header goes leaves no arrays behind");
+    let (data, laid) = stream(rows(), Vec::new(), 1, &path.0).unwrap();
+    rowver::write::write_laid(&serde_json::json!({"rowver": 15, "data": data}), laid).unwrap();
+    assert!(path.0.exists(), "a file finished stays");
+}
+
 // SPEC 1.5, 8.10
 #[test]
 fn a_failed_refill_or_rewrite_names_the_file_it_is_about() {
@@ -418,13 +496,21 @@ fn a_failed_refill_or_rewrite_names_the_file_it_is_about() {
     let shell = common::written(&to_bytes(&header, &[]), "shell");
     let gone = shell.0.with_extension("gone");
     let to = shell.0.with_extension("to");
-    let said = rowver::write::refilled(&shell, &gone, &to).unwrap_err().to_string();
+    let said = rowver::write::refilled(&rowver::change::Locked::take(&shell).unwrap(), &gone, &to).unwrap_err().to_string();
     assert_eq!(said, format!("{} is not there", gone.display()));
     let full = common::written(&to_bytes(&header, &arrays), "full");
-    let said = rowver::write::refilled(&full, &shell, &to).unwrap_err().to_string();
+    let said = rowver::write::refilled(&rowver::change::Locked::take(&full).unwrap(), &shell, &to).unwrap_err().to_string();
     assert!(said.starts_with(&format!("{}: the file to refill holds its arrays", full.0.display())), "{said}");
     let said = rowver::write::rewrite(&gone, &to, &header).unwrap_err().to_string();
     assert_eq!(said, format!("{} is not there", gone.display()));
+    // Refilled from itself, named as it is or through a link: refused before it is opened again under its lock.
+    let link = shell.0.with_extension("link");
+    std::os::unix::fs::symlink(&shell.0, &link).unwrap();
+    for from in [&shell.0, &link] {
+        let said = rowver::write::refilled(&rowver::change::Locked::take(&shell).unwrap(), from, &to).unwrap_err().to_string();
+        assert_eq!(said, format!("{} is {} itself: refill it from another file, a press of its own study", from.display(), shell.0.display()));
+    }
+    std::fs::remove_file(&link).unwrap();
     let _ = std::fs::remove_file(&to);
 }
 
@@ -434,7 +520,8 @@ fn a_column_copied_from_a_file_cut_short_since_names_that_file() {
     use rowver::write::{array, stream, Rows, Source};
     let path = common::written(&golden(), "copied-from");
     let reader = rowver::rvr::Reader::open(&path).unwrap();
-    std::fs::write(&path, &golden()[..golden().len() / 2]).unwrap();
+    // Cut short into its arrays, which lie from byte 8 to its header.
+    std::fs::write(&path, &golden()[..8 + common::parts(&golden()).1.len() / 2]).unwrap();
     let samples = vec![Sample { name: "A".into(), label: "Sample A, π⁰".into(), rows: 3 }, Sample { name: "B".into(), label: "B".into(), rows: 2 }];
     let files = reader.header()["data"]["files"].as_array().unwrap().clone();
     let rows = Rows { samples, files, entry: Source::Values(Values::Flat(array(&[0_i64, 2, 4, 1, 17]))), chunk_rows: 65_536 };

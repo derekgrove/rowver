@@ -656,7 +656,7 @@ branches = ["weight", "nJet"]
     // Only [derived] changed: nothing is read, every input still gone.
     std::fs::write(dir.join("recipe.toml"), added.replace("[derived]\n", "[derived]\ntwice = \"ht * 2\"\n")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
-    assert!(code == 0 && said.contains("Nothing to read: every column is copied from it.") && said.contains("4 columns and 1 derived"), "{said}");
+    assert!(code == 0 && said.contains("Nothing to read: the new derived columns are added to it in place.") && said.contains("in place (4 rows, 4 columns and 1 derived"), "{said}");
     assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
     std::fs::write(&input, &bytes).unwrap();
     std::fs::write(
@@ -680,11 +680,9 @@ branches = ["weight", "nJet"]
     assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
 }
 
-/// A file's arrays: every byte after its header.
+/// A file's arrays: every byte from byte 8 to its header.
 fn arrays(path: &Path) -> Vec<u8> {
-    let bytes = std::fs::read(path).unwrap();
-    let header = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    bytes[12 + header..].to_vec()
+    common::parts(&std::fs::read(path).unwrap()).1.to_vec()
 }
 
 /// Press `dir`'s study in full into full.rvr with `flags`, and check the study's file is that file
@@ -1169,6 +1167,54 @@ fn stopped_after(dir: &Path, n: usize, flags: &[&str]) -> String {
     said
 }
 
+// SPEC 7.5.1, 8.12
+#[test]
+fn a_press_stopped_through_a_link_is_seen_by_status() {
+    // RVR_STOP_AFTER stops a debug build only.
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
+    let dir = twice("resume-linked", recipe);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    // The file lies elsewhere, a link to it in the study: the press is staged beside the file.
+    std::fs::create_dir(dir.join("store")).unwrap();
+    let real = dir.join("store").join(&name);
+    std::fs::rename(dir.join(&name), &real).unwrap();
+    std::os::unix::fs::symlink(&real, dir.join(&name)).unwrap();
+    stopped_after(&dir, 1, &["--full"]);
+    assert!(dir.join("store").join(format!("{name}.partial")).join("journal.jsonl").exists());
+    let said = rvr(&dir, &["status"]).1;
+    assert!(said.contains(&format!("store/{name}.partial: a press stopped there with 1 of 2 files done (journal from ")), "{said}");
+}
+
+// SPEC 7.5.1
+#[test]
+fn a_press_picked_up_where_it_stopped_writes_over_a_read_only_pressed_file_a_crash_left() {
+    // RVR_STOP_AFTER stops a debug build only.
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
+    let dir = twice("resume-read-only", recipe);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let staged = dir.join(format!("{name}.partial"));
+    stopped_after(&dir, 1, &[]);
+    // A crash after the pressed file took its permissions (0444), before it was moved over the file.
+    let left = staged.join("pressed.rvr");
+    std::fs::write(&left, b"left by a crash").unwrap();
+    std::fs::set_permissions(&left, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains(&format!("Picking up {name} where it stopped: 1 of 2 files done")), "{said}");
+    assert!(!staged.exists());
+    assert_eq!(rvr(&dir, &["validate", &name]).0, 0);
+}
+
 /// The data checksum of a study's file.
 fn data_sha256(dir: &Path) -> Value {
     let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
@@ -1523,8 +1569,8 @@ fn an_emptied_file_keeps_its_header_and_is_refilled_byte_for_byte() {
     let (code, said) = rvr(&dir, &["empty", &name, "-f"]);
     assert!(code == 0 && said.contains(&format!("Emptied {name}")) && said.contains("keeps its study, every checksum and its signature.") && said.contains("rvr refill"), "{said}");
     let shell = std::fs::read(&path).unwrap();
-    let end = 12 + u32::from_le_bytes(whole[8..12].try_into().unwrap()) as usize;
-    assert_eq!(shell, whole[..end], "the header, byte for byte, and nothing after it");
+    let (text, _) = common::parts(&whole);
+    assert_eq!(shell, common::framed(text, &[]), "the header, byte for byte, and no array: the magic, the header, its length, the magic");
     // Every command reads it as the empty file it is.
     let (code, said) = rvr(&dir, &["validate", &name]);
     assert!(code == 0 && said.contains("1 derived (worked out once refilled), read all 5 entries, empty (rvr refill presses its columns again), signed by you"), "{said}");

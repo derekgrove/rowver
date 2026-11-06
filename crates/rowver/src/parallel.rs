@@ -176,9 +176,98 @@ pub fn ordered<R: Send, E: Send + From<&'static str>>(
     })
 }
 
+/// One job of a `Pool`: it runs once, on one of the pool's threads.
+type Job<'env> = Box<dyn FnOnce() + Send + 'env>;
+
+/// A few threads of a scope that run jobs as they are handed over, each job's result waited for
+/// where it is wanted: so one thread can hand on work in order while others do it.
+pub(crate) struct Pool<'env> {
+    jobs: Option<std::sync::mpsc::Sender<Job<'env>>>,
+    workers: usize,
+}
+
+/// A job's result, there already or to come.
+pub(crate) enum Pending<T> {
+    Done(T),
+    Coming(std::sync::mpsc::Receiver<T>),
+}
+
+impl<'env> Pool<'env> {
+    /// `workers` threads in `scope`; with fewer than 2 (or in a worker of `map`), every job runs at once where it is handed over.
+    pub(crate) fn new<'scope>(scope: &'scope std::thread::Scope<'scope, 'env>, workers: usize) -> Self {
+        if workers < 2 || WORKER.get() {
+            return Self { jobs: None, workers: 1 };
+        }
+        let (jobs, taken) = std::sync::mpsc::channel::<Job<'env>>();
+        let taken = std::sync::Arc::new(Mutex::new(taken));
+        for _ in 0..workers {
+            let taken = taken.clone();
+            scope.spawn(move || {
+                WORKER.set(true);
+                loop {
+                    let job = taken.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                    // A job that panics loses its result, which is then waited for in vain, and not the thread.
+                    match job {
+                        Ok(job) => drop(std::panic::catch_unwind(std::panic::AssertUnwindSafe(job))),
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+        Self { jobs: Some(jobs), workers }
+    }
+
+    /// How many threads run its jobs: 1 when every job runs where it is handed over.
+    pub(crate) fn workers(&self) -> usize {
+        self.workers
+    }
+
+    /// Run `job` on one of the pool's threads.
+    pub(crate) fn run<T: Send + 'env>(&self, job: impl FnOnce() -> T + Send + 'env) -> Pending<T> {
+        let Some(jobs) = &self.jobs else {
+            return Pending::Done(job());
+        };
+        let (done, coming) = std::sync::mpsc::sync_channel(1);
+        let sent = jobs.send(Box::new(move || {
+            let _ = done.send(job());
+        }));
+        match sent {
+            Ok(()) => Pending::Coming(coming),
+            Err(std::sync::mpsc::SendError(job)) => {
+                job();
+                Pending::Coming(coming)
+            }
+        }
+    }
+}
+
+impl<T> Pending<T> {
+    /// The result, once the job has run; `None` when its thread stopped unexpectedly.
+    pub(crate) fn wait(self) -> Option<T> {
+        match self {
+            Pending::Done(done) => Some(done),
+            Pending::Coming(coming) => coming.recv().ok(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // FORMAT 7; SPEC 7.6.1
+    #[test]
+    fn a_pool_runs_jobs_on_its_threads_and_each_result_is_had_where_it_is_wanted() {
+        let held: Vec<u64> = (0..100).collect();
+        let sums = std::thread::scope(|scope| {
+            let pool = Pool::new(scope, 4);
+            let pending: Vec<Pending<u64>> = (0..20).map(|n| { let held = &held; pool.run(move || held.iter().map(|v| v * n).sum()) }).collect();
+            pending.into_iter().map(|p| p.wait().unwrap()).collect::<Vec<u64>>()
+        });
+        assert_eq!(sums, (0..20).map(|n| 4950 * n).collect::<Vec<u64>>());
+        let panicked = std::thread::scope(|scope| Pool::new(scope, 2).run(|| -> u64 { panic!("a bug") }).wait());
+        assert_eq!(panicked, None);
+    }
 
     // FORMAT 7; SPEC 7.2.2
     #[test]

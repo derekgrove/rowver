@@ -4,10 +4,11 @@
 //!
 //! The input is a file unpacked: a control byte, the header's length (4 bytes, little-endian) and
 //! JSON, then every chunk's byte lanes, each its length (4 bytes) and its bytes, array by array in
-//! file order, chunk by chunk, lane by lane; a lane past the input's end is empty. The control
+//! record order, chunk by chunk, lane by lane; a lane past the input's end is empty. The control
 //! byte's bits: 1, each lane cut or padded with zeros to its chunk's values; 2, each list column's
 //! content.count and data.rows made to agree with the arrays and samples; 4, each flat column's
-//! facts made again from its values; 8, the arrays let go (an empty file).
+//! facts made again from its values; 8, the arrays let go (an empty file); 16, the arrays laid in
+//! the file last record first (FORMAT §7 lets them lie in any order).
 //!
 //! Only the chunks and checksums are worked out apart from rowver: the test below holds that
 //! working to rowver's, every seed made a file full validation accepts. A flat column's facts
@@ -28,7 +29,7 @@ const MOST_VALUES: usize = 1 << 20;
 const MOST_BYTES: usize = 16 << 20;
 const LANE: usize = 64;
 
-/// A file's first eight bytes.
+/// The eight bytes a file starts and ends with.
 const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
 
 /// The bytes of a kind's values; 1 for a word that is no kind (the file is refused for it).
@@ -170,11 +171,12 @@ pub fn fixed(data: &[u8]) -> Option<(Value, Vec<u8>)> {
         return Some((header, Vec::new()));
     }
     let mut lanes = Lanes(data.get(5 + text.len()..).unwrap_or_default());
-    let (padded, counted, faced, empty) = (control & 1 != 0, control & 2 != 0, control & 4 != 0, control & 8 != 0);
+    let (padded, counted, faced, empty, reversed) = (control & 1 != 0, control & 2 != 0, control & 4 != 0, control & 8 != 0, control & 16 != 0);
     let cut = chunks(&header["data"], every)?;
     let samples = header["data"]["samples"].as_array().map_or(0, Vec::len);
     let mut room = MOST_BYTES;
     let mut arrays: Vec<u8> = Vec::new();
+    let mut laid: Vec<(String, Vec<u8>)> = Vec::new();
     let mut members: Vec<usize> = Vec::new();
     for (pointer, kind) in records(&header) {
         if !header.pointer(&pointer).is_some_and(Value::is_object) {
@@ -212,7 +214,18 @@ pub fn fixed(data: &[u8]) -> Option<(Value, Vec<u8>)> {
         if faced && !offsets && !content && pointer.starts_with("/data/cols/") {
             facts(record, &kind, &packed.values, &cut, samples, every as usize);
         }
-        arrays.extend(packed.bytes);
+        arrays.extend(&packed.bytes);
+        laid.push((pointer.clone(), packed.bytes));
+    }
+    if reversed {
+        // Laid last record first, each record's `at` where its array now lies.
+        arrays.clear();
+        for (pointer, bytes) in laid.iter().rev() {
+            if let Some(record) = header.pointer_mut(pointer).and_then(Value::as_object_mut) {
+                record.insert("at".into(), arrays.len().into());
+            }
+            arrays.extend(bytes);
+        }
     }
     if counted {
         let rows = header["data"]["samples"].as_array().into_iter().flatten().try_fold(0_u64, |sum, s| sum.checked_add(s["rows"].as_u64().unwrap_or(0)))?;
@@ -257,10 +270,10 @@ fn facts(record: &mut serde_json::Map<String, Value>, kind: &str, values: &[Vec<
     }
 }
 
-/// A file of this header and these arrays.
+/// A file of this header and these arrays (FORMAT §1): the magic, the arrays, the header, its length, the magic.
 fn framed(header: &Value, arrays: &[u8]) -> Vec<u8> {
     let text = header.to_string();
-    [&MAGIC[..], &(text.len() as u32).to_le_bytes(), text.as_bytes(), arrays].concat()
+    [&MAGIC[..], arrays, text.as_bytes(), &(text.len() as u32).to_le_bytes(), MAGIC].concat()
 }
 
 /// The file of `header` and `arrays`, written to the target's input file, its derived columns
@@ -315,17 +328,22 @@ pub fn check(data: &[u8]) {
 #[cfg(test)]
 mod tests {
     // Every seed of fuzz/seeds/rehashed (made by fuzz/seed.py from valid files) is made a file full
-    // validation accepts: this working of the format's rules agrees with rowver's.
+    // validation accepts, its arrays laid in record order and last record first: this working of
+    // the format's rules agrees with rowver's.
     #[test]
     fn every_seed_made_a_file_passes_full_validation() {
         let folder = concat!(env!("CARGO_MANIFEST_DIR"), "/seeds/rehashed");
         let seeds: Vec<_> = std::fs::read_dir(folder).map(|d| d.flatten().map(|e| e.path()).collect()).unwrap_or_default();
         assert!(!seeds.is_empty(), "{folder} holds no seeds: make them with mamba run -n rowver python fuzz/seed.py --only rehashed");
         for seed in seeds {
-            let (header, arrays) = super::fixed(&std::fs::read(&seed).unwrap()).unwrap_or_else(|| panic!("{}: the harness made no file of it", seed.display()));
-            let input = super::written(header, &arrays);
-            if let Err(why) = rowver::rvr::validate_file(input.path()) {
-                panic!("{}: the file the harness made of it fails full validation, so the harness's checksums are not rowver's: {why}", seed.display());
+            let mut input = std::fs::read(&seed).unwrap();
+            for reversed in [false, true] {
+                input[0] = (input[0] & !16) | if reversed { 16 } else { 0 };
+                let (header, arrays) = super::fixed(&input).unwrap_or_else(|| panic!("{}: the harness made no file of it", seed.display()));
+                let file = super::written(header, &arrays);
+                if let Err(why) = rowver::rvr::validate_file(file.path()) {
+                    panic!("{} (reversed: {reversed}): the file the harness made of it fails full validation, so the harness's checksums are not rowver's: {why}", seed.display());
+                }
             }
         }
     }

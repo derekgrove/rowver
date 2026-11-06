@@ -3,6 +3,7 @@
 
 #![warn(missing_docs)]
 
+pub mod change;
 pub mod choice;
 mod chunks;
 mod codec;

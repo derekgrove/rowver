@@ -14,9 +14,11 @@ import numpy as _np
 
 from ._rowver import Error
 from ._rowver import File as _File
+from ._rowver import drop_tool as _drop_tool
+from ._rowver import set_tool as _set_tool
 from ._rowver import validate as _validate
 
-__all__ = ["Error", "File", "open", "validate"]
+__all__ = ["Error", "File", "open", "validate", "set_tool", "drop_tool"]
 
 # The NumPy type of each .rvr kind; a file holds its values little-endian.
 _KINDS = {
@@ -126,6 +128,11 @@ class File:
         `entries` as the file records them, (first, last) with `last` not among them."""
         return [{"sample": sample, "file": file, "entries": (first, last), "kind": kind, "why": why}
                 for sample, file, first, last, kind, why in self._file.holes()]
+
+    @property
+    def tools(self):
+        """Each tool key of the file (docs/FORMAT.md §11), by name: its object."""
+        return {key: self.header[key] for key in self._file.tools()}
 
     @property
     def complete(self):
@@ -252,6 +259,21 @@ class File:
 def open(path):
     """Open a .rvr file."""
     return File(path)
+
+
+def set_tool(path, key, value):
+    """Make the dict `value` the tool key `key` of the file at `path` (NaN and infinity raise ValueError)."""
+    _set_tool(str(path), key, _json.dumps(value, allow_nan=False).encode())
+
+
+def drop_tool(path, key):
+    """Drop the tool key `key` of the file at `path`: its object, or its text where json.loads cannot read it."""
+    text = _drop_tool(str(path), key)
+    # The file is changed: the text, its only copy, is given back whatever json.loads makes of it.
+    try:
+        return _json.loads(text)
+    except Exception:
+        return text
 
 
 def validate(path):

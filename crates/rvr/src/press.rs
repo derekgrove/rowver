@@ -38,7 +38,7 @@ pub fn main(options: &Options) -> u8 {
         Ok(pressing) => pressing,
         Err(why) => return crate::wrong("press", &why),
     };
-    crate::report("press", run(pressing).map(|holes| if holes == 0 { 0 } else { 3 }))
+    crate::report("press", run(pressing))
 }
 
 /// The options of a press, or how they are wrong.
@@ -57,9 +57,11 @@ fn read(options: &Options) -> Result<Pressing, String> {
     Ok(Pressing { dir, out, choice, workers, on, restart: options.has("--restart") })
 }
 
-/// Press as asked: how many holes the file at the target has.
-fn run(pressing: Pressing) -> Result<usize, String> {
+/// Press as asked: the exit status, 3 when the file at the target has holes.
+fn run(pressing: Pressing) -> Result<u8, String> {
     let (dir, study, target) = crate::texts::study(pressing.dir, pressing.out)?;
+    // Through a link, the file it names is pressed, staged beside it and moved over it.
+    let target = rowver::change::resolved(&target);
     let mut texts = crate::texts::read(&dir)?;
     // Options that do not fit the samples are refused before recipe.toml is offered tables.
     if crate::at_terminal() {
@@ -74,6 +76,19 @@ fn run(pressing: Pressing) -> Result<usize, String> {
     if !matches!(pressing.on, On::Holes(_)) && crate::tables::offer(&dir, &texts.recipe, "press", "continue pressing")? {
         texts = crate::texts::read(&dir)?;
     }
+    // Held from its first read of the file there until its new file is in place (SPEC §8.12), and
+    // read through the descriptor that holds the lock; a folder there, or nothing, has no lock.
+    // The file's lock is taken before the staging folder's, as every writer takes them.
+    let locked = match std::fs::metadata(&target) {
+        Ok(there) if there.is_file() => Some(target_locked(&target)?),
+        _ => None,
+    };
+    crate::hold();
+    // Refused before its staging folder is made beside the file.
+    let unwritable = || locked.as_ref().map_or_else(|| rowver::change::probe(&target).0, rowver::change::Locked::unwritable);
+    if let Some(why) = pressing.restart.then(|| crate::plan::read_only(&target, unwritable())).flatten() {
+        return Err(why);
+    }
     if pressing.restart {
         let stopped = crate::journal::Staged::lock(&target)?;
         if stopped.keep.get() {
@@ -81,23 +96,53 @@ fn run(pressing: Pressing) -> Result<usize, String> {
         }
         stopped.keep.set(false);
     }
-    let place = Place { base: dir, study, at: crate::plan::At::open(&target), target: target.clone() };
+    let at = locked.as_ref().map_or_else(|| crate::plan::At::open(&target), crate::plan::At::held);
+    let place = Place { base: dir, study, at, target: target.clone(), locked };
     let asked = Asked { choose: Choose::Options(pressing.choice), on: pressing.on, workers: pressing.workers, sign: true };
     let plan = crate::plan::build(place, texts, asked)?;
-    if let Some(why) = &plan.why {
-        println!("Pressing every column: {} cannot be built on, as {why}.", target.display());
+    if let Some(why) = &plan.refused {
+        return Err(why.clone());
     }
-    match plan.from {
+    match (&plan.why, plan.other_build) {
+        // Only another build made it: pressing every column again is asked first (SPEC §8.6).
+        (Some(both), true) => {
+            println!("{both}\nA file is built on only by the build that made it, so pressing with this build presses every column again.");
+            if !crate::at_terminal() {
+                eprintln!("rvr press: nothing was pressed: no one is at a terminal to answer whether to press every column. Give --full to press every column without asking.");
+                return Ok(2);
+            }
+            if !crate::yes("Press every column? [y/N] ")? {
+                return Err(format!("{} is as it was: nothing was pressed.", target.display()));
+            }
+        }
+        (Some(why), false) => println!("Pressing every column: {} cannot be built on, as {why}.", target.display()),
+        (None, _) => {}
+    }
+    let holes = match plan.from {
         Base::Current(0) => {
             println!("{} is current: nothing to press.", target.display());
-            Ok(0)
+            0
         }
         Base::Current(holes) => {
             println!("{} holds this study as it is, with {}: rvr press --fill reads them again (rvr press --full presses everything again).", target.display(), some(holes, "hole", "holes"));
-            Ok(holes)
+            holes
         }
-        _ => crate::core::press(plan),
-    }
+        _ => crate::core::press(plan)?,
+    };
+    Ok(if holes == 0 { 0 } else { 3 })
+}
+
+/// The press's target locked: one it may not open stops the press, for what it holds is carried over.
+fn target_locked(target: &std::path::Path) -> Result<rowver::change::Locked, String> {
+    let locked = rowver::change::Locked::take(target).map_err(|e| match &e {
+        rowver::Error::Io(io) | rowver::Error::File(_, io) if io.kind() == std::io::ErrorKind::PermissionDenied => {
+            let shown = target.display();
+            format!("{}, and a press carries over what it holds (its tool keys), so it stops: chmod u+rw {shown}, or remove it", rowver::plain_what(target, &e))
+        }
+        _ => rowver::plain(target, &e),
+    })?;
+    crate::told(target, locked.restored());
+    Ok(locked)
 }
 
 /// What built this rvr, as `made.toolchain` records it.

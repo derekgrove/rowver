@@ -24,7 +24,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SEEDS = ROOT / "fuzz" / "seeds"
 MOST = 1 << 20
 COMMANDS = {"new", "samples", "press", "status", "branches", "try", "derive", "validate", "dump",
-            "header", "diff", "reproduce", "empty", "refill", "key", "proxy"}
+            "header", "diff", "reproduce", "empty", "refill", "tool", "key", "proxy"}
 
 
 def unzstd(data):
@@ -47,12 +47,23 @@ def unzstd(data):
         sys.exit("fuzz/seed.py: decompressing the corpus needs Python's compression.zstd (3.14) or zstandard, or the zstd command: install one")
 
 
+def framing(data):
+    """Where a .rvr file's header starts and ends (FORMAT §1: the magic, the arrays from byte 8, the
+    header, its length, the magic), or None when its last 12 bytes do not place one."""
+    try:
+        size = struct.unpack("<I", data[-12:-8])[0]
+    except struct.error:
+        return None
+    start = len(data) - 12 - size
+    return (start, len(data) - 12) if start >= 8 else None
+
+
 def header(data):
     """A .rvr file's JSON header, or None when it has none that reads."""
     try:
-        size = struct.unpack("<I", data[8:12])[0]
-        return json.loads(data[12:12 + size])
-    except (struct.error, ValueError, UnicodeDecodeError):
+        start, end = framing(data)
+        return json.loads(data[start:end])
+    except (TypeError, ValueError, UnicodeDecodeError):
         return None
 
 
@@ -78,9 +89,10 @@ WIDTH = {"f8": 8, "i8": 8, "u8": 8, "f4": 4, "i4": 4, "u4": 4, "i2": 2, "u2": 2}
 def unpacked(data):
     """A valid .rvr file as the rehashed target takes it: a control byte (its lanes padded, counts
     and facts made again; an empty file let go), its header's length and text, then every chunk's
-    byte lanes raw, each after its length (4 bytes, little-endian)."""
-    start = 12 + struct.unpack("<I", data[8:12])[0]
-    data_section = json.loads(data[12:start])["data"]
+    byte lanes raw, each after its length (4 bytes, little-endian), array by array in record order."""
+    start, end = framing(data)
+    text = data[start:end]
+    data_section = json.loads(text)["data"]
     every = data_section.get("chunk_rows", 65536)
     chunks = sum(-(-sample["rows"] // every) for sample in data_section["samples"])
     records = [(data_section["sample"], "i4"), (data_section["entry"], "i8")]
@@ -89,11 +101,11 @@ def unpacked(data):
             records += [(column["offsets"], "i8"), (column["content"], column["content"]["kind"])]
         else:
             records.append((column, column["kind"]))
-    empty = len(data) == start
-    out = bytes([15 if empty else 7]) + data[8:start]
+    empty = start == 8
+    out = bytes([15 if empty else 7]) + struct.pack("<I", len(text)) + text
     for record, kind in [] if empty else records:
         w = WIDTH.get(kind, 1)
-        array = data[start + record["at"]:start + record["at"] + record["size"]]
+        array = data[8 + record["at"]:8 + record["at"] + record["size"]]
         table, at = array[len(array) - chunks * (8 * w + 32):], 0
         for k in range(chunks):
             entry = table[k * (8 * w + 32):]

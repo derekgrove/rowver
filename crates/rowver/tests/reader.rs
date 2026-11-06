@@ -364,8 +364,9 @@ fn a_samples_totals_are_its_files_totals_summed() {
 fn a_failed_read_is_said_in_plain_words() {
     let path = written(&golden(), "plain");
     let reader = Reader::open(&path).unwrap();
-    // Cut short after it was opened: its last array, `double`'s, ends past the file's end.
-    std::fs::write(&path, &golden()[..golden().len() - 10]).unwrap();
+    // Cut short after it was opened, into its arrays: the last, `double`'s, ends past the file's end.
+    let arrays = common::parts(&golden()).1.len();
+    std::fs::write(&path, &golden()[..8 + arrays - 10]).unwrap();
     let said = rowver::plain(&path, &reader.column("double").unwrap_err());
     assert_eq!(said, format!("{} changed while it was read (emptied, or written again): open it again", path.0.display()));
     let gone = path.0.with_extension("gone");
@@ -384,7 +385,6 @@ fn the_header_text_is_the_file_opened_even_with_another_renamed_over_it() {
     let reader = Reader::open(&path).unwrap();
     let other = written(&to_bytes(&json!({"rowver": 15}), &[]), "other");
     std::fs::rename(&other, &path).unwrap();
-    let start = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    assert_eq!(reader.header_text().unwrap(), &bytes[12..start]);
+    assert_eq!(reader.header_text().unwrap(), common::parts(&bytes).0);
 }
 

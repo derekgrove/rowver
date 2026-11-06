@@ -136,14 +136,15 @@ fn announce(plan: &Plan) {
             let holes = reads.iter().flat_map(|i| i.ranges.iter().flatten()).count();
             println!("Filling {target}: reading {} of {}, {}, {at_a_time} at a time; every other row is the file's own:", some(holes, "hole", "holes"), some(reads.len(), "file", "files"), some(entries as usize, "entry", "entries"));
         }
-        Base::Columns(_) => {
+        Base::Columns(earlier) => {
             let kept: usize = plan.work.iter().map(|i| i.kept.as_ref().map_or(0, Vec::len)).sum();
             let names: Vec<&str> = plan.reading.iter().map(|at| plan.recipe.columns[*at].0.as_str()).collect();
             let columns = plan.recipe.columns.len();
             println!("{target} has the events this recipe keeps ({}) and {} of its {columns} columns.", count(kept as u64), columns - names.len());
-            match names.is_empty() {
-                true => println!("Nothing to read: every column is copied from it."),
-                false => println!("Reading only {} for those events, {}, {at_a_time} at a time:", names.join(", "), some(reads.len(), "file", "files")),
+            match (names.is_empty(), earlier.in_place) {
+                (true, true) => println!("Nothing to read: the new derived columns are added to it in place."),
+                (true, false) => println!("Nothing to read: every column is copied from it."),
+                (false, _) => println!("Reading only {} for those events, {}, {at_a_time} at a time:", names.join(", "), some(reads.len(), "file", "files")),
             }
         }
         Base::Nothing | Base::Current(_) => println!("Pressing {}, {at_a_time} at a time:", pressed(plan)),

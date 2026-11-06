@@ -4,52 +4,15 @@
 
 mod common;
 
-use common::{rvr, study, Study};
-use std::io::{Read, Write};
+use common::{at_terminal, rvr, study, Study};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 const SAMPLES: &str = "format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\n\n[eras]\n\n[[sample]]\nname = \"flat\"\nfiles = \"uproot_flat.root\"\ntree = \"analysis\"\nmetadata = { kind = \"test\" }\n";
 const RECIPE: &str = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[totals]\n\n[derived]\n";
 
 fn root() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-}
-
-/// Run rvr in `dir` at a terminal, answering `answer` to the question it asks, if it asks one.
-fn at_terminal(dir: &Path, args: &[&str], answer: &str) -> (i32, String) {
-    let rvr = env!("CARGO_BIN_EXE_rvr");
-    let mut command = Command::new("script");
-    match cfg!(target_os = "macos") {
-        true => command.args(["-q", "/dev/null", rvr]).args(args),
-        false => command.args(["-qec", &format!("{rvr} {}", args.join(" ")), "/dev/null"]),
-    };
-    let mut child = command.current_dir(dir).env("RVR_CONFIG", dir.join(".rvr-config")).env("TERM", "dumb").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-    let mut out = child.stdout.take().unwrap();
-    let said = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let reading = {
-        let said = said.clone();
-        std::thread::spawn(move || {
-            let mut buf = [0; 4096];
-            while let Ok(n @ 1..) = out.read(&mut buf) {
-                said.lock().unwrap().extend_from_slice(&buf[..n]);
-            }
-        })
-    };
-    let mut input = child.stdin.take().unwrap();
-    let asked = std::time::Instant::now();
-    while child.try_wait().unwrap().is_none() && asked.elapsed().as_secs() < 20 {
-        if String::from_utf8_lossy(&said.lock().unwrap()).contains("[y/N] ") {
-            input.write_all(format!("{answer}\n").as_bytes()).unwrap();
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    let status = child.wait().unwrap();
-    drop(input);
-    reading.join().unwrap();
-    let said = String::from_utf8_lossy(&said.lock().unwrap()).replace("\r\n", "\n");
-    (status.code().unwrap_or(-1), said)
 }
 
 // SPEC 1.4, 5.1.7, 4.1.6

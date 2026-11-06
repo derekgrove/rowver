@@ -33,6 +33,8 @@ pub struct Place {
     pub target: PathBuf,
     /// The file at the target, opened once for all the Plan takes from it.
     pub at: At,
+    /// The lock on the file at the target, for a press that writes it (SPEC §8.12).
+    pub locked: Option<rowver::change::Locked>,
 }
 
 /// The file at a press's target, as it was found.
@@ -46,11 +48,22 @@ pub enum At {
 }
 
 impl At {
-    /// The file at `target` as it is now.
+    /// The file at `target` as it is now, put back first when a change to it was cut short.
     pub fn open(target: &std::path::Path) -> At {
+        if let Err(why) = crate::restored(target) {
+            return At::Unopened(rowver::Error::Invalid(why));
+        }
         match rowver::rvr::Reader::inspect(target) {
             Ok((file, checked)) => At::Opened(Box::new(file), checked),
             Err(rowver::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => At::Missing,
+            Err(e) => At::Unopened(e),
+        }
+    }
+
+    /// The file a press holds locked, read through the descriptor that holds the lock.
+    pub fn held(locked: &rowver::change::Locked) -> At {
+        match locked.inspect() {
+            Ok((file, checked)) => At::Opened(Box::new(file), checked),
             Err(e) => At::Unopened(e),
         }
     }
@@ -188,6 +201,8 @@ pub struct Plan {
     pub from: Base,
     /// Why the file at the target gives nothing, when it is there.
     pub why: Option<String>,
+    /// Whether it gives nothing only for the build that made it (`why` then names both builds).
+    pub other_build: bool,
     /// How many files are read at once.
     pub workers: usize,
     /// What built this rvr, as the file names it.
@@ -200,6 +215,12 @@ pub struct Plan {
     pub identity: Value,
     /// The tool keys of the file it replaces at the target, which the new file carries.
     pub tools: serde_json::Map<String, Value>,
+    /// The lock on the file at the target, held until the press ends (SPEC §8.12).
+    pub locked: Option<rowver::change::Locked>,
+    /// Why the file it only adds columns to cannot be changed in place, so it is written anew.
+    pub anew: Option<String>,
+    /// Why a press that would write the file is refused before it reads: it lies on a read-only filesystem.
+    pub refused: Option<String>,
 }
 
 impl Plan {
@@ -336,7 +357,7 @@ fn among(kept: &[u64], limit: u64, chosen: Option<&[u64]>, holes: &[(u64, u64)])
 }
 
 /// Whether the file's columns `names` are of the kinds this press makes them, or the first that is not.
-fn same_kinds(file: &rowver::rvr::Reader, recipe: &Recipe, kinds: &[(Kind, bool)], names: &[&str]) -> Result<(), String> {
+pub(crate) fn same_kinds(file: &rowver::rvr::Reader, recipe: &Recipe, kinds: &[(Kind, bool)], names: &[&str]) -> Result<(), String> {
     for ((name, _), (kind, listed)) in recipe.columns.iter().zip(kinds).filter(|((n, _), _)| names.contains(&n.as_str())) {
         let Some(record) = file.record(name) else { continue };
         let jagged = record["kind"] == "jagged";
@@ -348,8 +369,9 @@ fn same_kinds(file: &rowver::rvr::Reader, recipe: &Recipe, kinds: &[(Kind, bool)
     Ok(())
 }
 
-/// What the earlier file, `at` the target, gives, and why it gives nothing when it is there.
-fn base(place: &Place, at: At, texts: &Texts, checked: &Checked, on: &On) -> Result<(Base, Option<String>), String> {
+/// What the earlier file, `at` the target, gives, and why it gives nothing when it is there (and
+/// whether only for the build that made it).
+fn base(place: &Place, at: At, texts: &Texts, checked: &Checked, on: &On) -> Result<(Base, Option<(String, bool)>), String> {
     let Checked { recipe, lock, asked, kinds, .. } = checked;
     let all: Vec<&str> = recipe.columns.iter().map(|(n, _)| n.as_str()).collect();
     match on {
@@ -363,23 +385,12 @@ fn base(place: &Place, at: At, texts: &Texts, checked: &Checked, on: &On) -> Res
             same_kinds(&fill.file, recipe, kinds, &all).map_err(|why| format!("{} cannot be filled, as {why}: rvr press presses it again", place.target.display()))?;
             Ok((Base::Holes(fill), None))
         }
-        On::Earlier => {
-            let base = at.file().map(|file| crate::reuse::read(file, texts, recipe, lock, asked));
-            // Its columns copied, or every column packed again from it, are of this press's kinds.
-            let kinds_held = match &base {
-                Some(Ok(Base::Samples(fill))) => same_kinds(&fill.file, recipe, kinds, &all),
-                Some(Ok(Base::Columns(earlier))) => {
-                    let copied: Vec<&str> = all.iter().zip(&earlier.reused).filter(|(_, r)| **r).map(|(n, _)| *n).collect();
-                    same_kinds(earlier.file(), recipe, kinds, &copied)
-                }
-                _ => Ok(()),
-            };
-            match (base, kinds_held) {
-                (None, _) => Ok((Base::Nothing, None)),
-                (Some(Err(why)), _) | (Some(Ok(_)), Err(why)) => Ok((Base::Nothing, Some(why))),
-                (Some(Ok(base)), Ok(())) => Ok((base, None)),
-            }
-        }
+        On::Earlier => match at.file().map(|file| crate::reuse::read(file, texts, recipe, lock, asked, kinds)) {
+            None => Ok((Base::Nothing, None)),
+            Some(Err(crate::reuse::Unbuilt::Build(said))) => Ok((Base::Nothing, Some((said, true)))),
+            Some(Err(crate::reuse::Unbuilt::Why(why))) => Ok((Base::Nothing, Some((why, false)))),
+            Some(Ok(base)) => Ok((base, None)),
+        },
     }
 }
 
@@ -399,7 +410,11 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
         At::Opened(file, Ok(())) => rowver::rvr::tool_keys(file.header()),
         _ => serde_json::Map::new(),
     };
-    let (mut from, mut why) = base(&place, at, &texts, &checked, &asked.on)?;
+    let (mut from, why) = base(&place, at, &texts, &checked, &asked.on)?;
+    let (mut why, other_build) = match why {
+        Some((why, build)) => (Some(why), build),
+        None => (None, false),
+    };
     let Checked { recipe, lock, asked: events, kinds, derived, read_at } = checked;
     let mut work = inputs(&lock, &events, &read_at);
     if let Base::Columns(earlier) = &mut from {
@@ -421,6 +436,25 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
             from = Base::Current(rowver::rvr::holes(earlier.file().header()).len());
         }
     }
+    // Whether the file may be written, and why a change of it would be written anew: asked of one
+    // not locked (rvr status) with one probe.
+    let (unwritable, anew_why) = match (&from, &place.locked) {
+        (Base::Current(_), _) => (None, None),
+        (_, Some(locked)) => (locked.unwritable(), locked.anew()),
+        (_, None) => rowver::change::probe(&place.target),
+    };
+    // A file that cannot be changed in place is written anew, decided before anything is read
+    // (SPEC §8.12).
+    let anew = match &mut from {
+        Base::Columns(earlier) if earlier.in_place => {
+            earlier.in_place = anew_why.is_none();
+            anew_why
+        }
+        _ => None,
+    };
+    // A file on a read-only filesystem is written neither in place nor anew beside it: a press
+    // that would write it is refused before anything is staged (SPEC §8.12).
+    let refused = read_only(&place.target, unwritable);
     let reader = match &from {
         Base::Columns(_) => {
             let names: Vec<&String> = reading.iter().map(|at| &recipe.columns[*at].0).collect();
@@ -475,13 +509,22 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
         laid,
         from,
         why,
+        other_build,
         workers: asked.workers,
         toolchain,
         carries,
         signer,
         identity,
         tools,
+        locked: place.locked,
+        anew,
+        refused,
     })
+}
+
+/// What a press of the file at `target` is told when the file lies on a read-only filesystem (`kind`, why it may not be written).
+pub(crate) fn read_only(target: &std::path::Path, kind: Option<std::io::ErrorKind>) -> Option<String> {
+    (kind == Some(std::io::ErrorKind::ReadOnlyFilesystem)).then(|| format!("{} lies on a read-only filesystem: rvr press cannot write it or a new file beside it; copy the study to a disk you may write", target.display()))
 }
 
 /// By sample, the branches of its list that its files must have as it lists them: those the

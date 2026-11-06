@@ -57,14 +57,10 @@ pub fn rewrite(path: &Path, source: &str, text: &str, then: &str, by_hand: &str)
 /// Write `text` as the file at `path` (the one a link names), whole or not at all, keeping its permissions.
 pub fn put(path: &Path, text: &str) -> std::io::Result<()> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let staged = crate::files::beside(&path, ".rvr-new");
-    let write = || {
-        std::fs::write(&staged, text).and_then(|()| match std::fs::metadata(&path) {
-            Ok(was) => std::fs::set_permissions(&staged, was.permissions()),
-            Err(_) => Ok(()),
-        })
-    };
-    crate::files::in_place(&staged, &path, true, write, |_, e| e)
+    let staged = rowver::write::beside(&path, ".rvr-new");
+    // One left by a crash, with the file's permissions (0444) perhaps, is rvr's own.
+    let _ = std::fs::remove_file(&staged);
+    crate::files::in_place(&staged, &path, true, || std::fs::write(&staged, text), || Ok(()), |_, e| e)
 }
 
 /// `source` with each of `missing` written in, empty, in its place among `order`; refused unless it reads as before plus them.

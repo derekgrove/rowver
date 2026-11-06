@@ -25,6 +25,19 @@ pub(crate) fn strict(text: &[u8]) -> Result<Value> {
     Ok(value)
 }
 
+/// Parse `text`, the object of the tool key `key`, as a header's own rules parse it (docs/FORMAT.md
+/// §1), nested from where it lies in the header: 2 deep.
+pub(crate) fn strict_tool(text: &[u8], key: &str) -> Result<Value> {
+    let broken = Cell::new(None);
+    let mut parsed = serde_json::Deserializer::from_slice(text);
+    let top = At::Top;
+    let value = Strict { depth: 2, at: At::Key(&top, key), broken: &broken }.deserialize(&mut parsed).and_then(|value| parsed.end().map(|()| value));
+    value.map_err(|e| match broken.take() {
+        Some((fact, _)) => invalid(format!("the tool key {key} breaks docs/FORMAT.md §1: {fact} (line {}, column {}): write its data as a header's rules say", e.line(), e.column())),
+        None => invalid(format!("the tool key {key} is not JSON as docs/FORMAT.md §1 reads it ({e}): write its data as one JSON object")),
+    })
+}
+
 /// Where a value is in the header, written out only when it is refused.
 #[derive(Clone, Copy)]
 enum At<'a> {
@@ -160,6 +173,98 @@ impl<'de> Visitor<'de> for Strict<'_> {
             self.deeper()?;
         }
         Ok(Value::Object(out))
+    }
+}
+
+/// A member of a JSON object's text: where its name lies (with its quotes), where its value lies,
+/// and the comma after it, when one follows.
+pub(crate) struct Member {
+    pub name: std::ops::Range<usize>,
+    pub value: std::ops::Range<usize>,
+    pub comma: Option<usize>,
+}
+
+/// The members of the JSON object `text` holds, found by counting brackets outside strings (their
+/// escapes passed over), their values not parsed; `None` when it is not an object so written.
+pub(crate) fn members(text: &[u8]) -> Option<Vec<Member>> {
+    let blank = |mut at: usize| {
+        while text.get(at).is_some_and(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r')) {
+            at += 1;
+        }
+        at
+    };
+    let mut at = blank(0);
+    (text.get(at) == Some(&b'{')).then_some(())?;
+    at = blank(at + 1);
+    let mut out = Vec::new();
+    if text.get(at) == Some(&b'}') {
+        return (blank(at + 1) == text.len()).then_some(out);
+    }
+    loop {
+        let name = at..string_end(text, at)?;
+        at = blank(name.end);
+        (text.get(at) == Some(&b':')).then_some(())?;
+        let start = blank(at + 1);
+        let value = start..value_end(text, start)?;
+        at = blank(value.end);
+        match text.get(at)? {
+            b',' => {
+                out.push(Member { name, value, comma: Some(at) });
+                at = blank(at + 1);
+            }
+            b'}' => {
+                out.push(Member { name, value, comma: None });
+                return (blank(at + 1) == text.len()).then_some(out);
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// A member's name, from its text with its quotes: as JSON reads it, or, when it does not, as it is written.
+pub(crate) fn name(text: &[u8]) -> String {
+    serde_json::from_slice(text).unwrap_or_else(|_| String::from_utf8_lossy(text.get(1..text.len().saturating_sub(1)).unwrap_or_default()).into_owned())
+}
+
+/// Where the JSON string beginning at `at` ends, just past its closing quote.
+fn string_end(text: &[u8], at: usize) -> Option<usize> {
+    (text.get(at) == Some(&b'"')).then_some(())?;
+    let mut at = at + 1;
+    loop {
+        match text.get(at)? {
+            b'\\' => at += 2,
+            b'"' => return Some(at + 1),
+            _ => at += 1,
+        }
+    }
+}
+
+/// Where the JSON value beginning at `at` ends: a string, an array or object by its brackets, or a
+/// word or number up to what ends it.
+fn value_end(text: &[u8], at: usize) -> Option<usize> {
+    match text.get(at)? {
+        b'"' => string_end(text, at),
+        b'[' | b'{' => {
+            let (mut depth, mut at) = (0_usize, at);
+            loop {
+                match text.get(at)? {
+                    b'"' => at = string_end(text, at)? - 1,
+                    b'[' | b'{' => depth += 1,
+                    b']' | b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(at + 1);
+                        }
+                    }
+                    _ => {}
+                }
+                at += 1;
+            }
+        }
+        _ => {
+            let end = at + text[at..].iter().position(|b| matches!(b, b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r')).unwrap_or(text.len() - at);
+            (end > at).then_some(end)
+        }
     }
 }
 
@@ -331,7 +436,9 @@ mod tests {
     #[test]
     fn a_header_rowver_was_about_to_write_that_breaks_section_1_says_what_put_it_there() {
         let deep = (0..DEEPEST).fold(serde_json::json!(1), |inner, _| serde_json::json!([inner]));
-        let said = |header: Value| crate::rvr::Reader::laid(std::path::Path::new("."), &[], header).err().unwrap().to_string();
+        // The header is checked before any array is read: any file stands in for the one being written.
+        let file = || std::sync::Arc::new(std::fs::File::open(std::env::current_exe().unwrap()).unwrap());
+        let said = |header: Value| crate::rvr::Reader::laid(std::path::Path::new("x.rvr"), file(), 0, header).err().unwrap().to_string();
         let tool = said(serde_json::json!({"rowver": 15, "deep-tool": {"x": deep}}));
         assert!(tool.starts_with("the header rowver was about to write breaks docs/FORMAT.md §1: [\"deep-tool\"].x"), "{tool}");
         assert!(tool.ends_with(" is nested 65 arrays and objects deep, more than 64, in the tool key deep-tool it was given: change that tool key's data to follow §1"), "{tool}");

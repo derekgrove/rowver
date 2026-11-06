@@ -79,6 +79,11 @@ impl File {
         Ok(PyBytes::new(py, &text))
     }
 
+    /// The names of the file's tool keys (docs/FORMAT.md §11), in the header's order.
+    fn tools(&self) -> Vec<String> {
+        rowver::rvr::tool_names(self.reader.header()).map(str::to_owned).collect()
+    }
+
     /// Every hole the header records, as (sample, file, first entry, entry after the last, kind, why).
     fn holes(&self) -> Vec<(String, String, u64, u64, String, String)> {
         rowver::rvr::holes(self.reader.header()).into_iter().map(|h| (h.sample, h.file, h.first, h.last, h.kind, h.why)).collect()
@@ -151,6 +156,25 @@ fn validate(py: Python<'_>, path: PathBuf) -> PyResult<(usize, usize)> {
     Ok((summary.rows, summary.columns))
 }
 
+/// Make the JSON object `text` holds the tool key `key` of the file at `path` (docs/SPEC.md §11.9).
+#[pyfunction]
+fn set_tool(py: Python<'_>, path: PathBuf, key: String, text: Vec<u8>) -> PyResult<()> {
+    // The value's own failures are its, not the file's: "the value given for the tool key k …"; a name refused is the file's.
+    let value = rowver::change::tool_data(&key, &text).map_err(|e| match rowver::rvr::tool_key(&key) {
+        Ok(()) => failed(format!("the value given for {e}")),
+        Err(_) => failed(rowver::plain(&path, &e)),
+    })?;
+    let set = || rowver::change::set_tool(&rowver::change::Locked::take(&path)?, &key, value);
+    py.detach(set).map_err(|e| failed(rowver::plain(&path, &e)))
+}
+
+/// Drop the tool key `key` of the file at `path`: its object's text, as the header held it.
+#[pyfunction]
+fn drop_tool(py: Python<'_>, path: PathBuf, key: String) -> PyResult<String> {
+    let dropped = || rowver::change::drop_tool(&rowver::change::Locked::take(&path)?, &key);
+    py.detach(dropped).map_err(|e| failed(rowver::plain(&path, &e)))
+}
+
 /// One argument to `rvr`: text, or the bytes the system gave (`os.fsencode`).
 #[derive(FromPyObject)]
 enum Arg {
@@ -190,6 +214,8 @@ fn _rowver(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<File>()?;
     module.add("Error", module.py().get_type::<Error>())?;
     module.add_function(wrap_pyfunction!(validate, module)?)?;
+    module.add_function(wrap_pyfunction!(set_tool, module)?)?;
+    module.add_function(wrap_pyfunction!(drop_tool, module)?)?;
     module.add_function(wrap_pyfunction!(run_rvr, module)?)?;
     module.add_function(wrap_pyfunction!(quiet_on_closed_pipe, module)?)?;
     Ok(())

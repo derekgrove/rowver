@@ -223,10 +223,7 @@ fn a_header_changed_in_one_place_is_refused_or_means_the_same() {
         let (header, arrays) = gen::file(&table, values);
         let text = serde_json::to_string(&header).unwrap();
         let changed = mutated(&mut rng, &text);
-        let mut bytes = b"\x89RVR\r\n\x1a\n".to_vec();
-        bytes.extend((changed.len() as u32).to_le_bytes());
-        bytes.extend(changed.as_bytes());
-        bytes.extend(arrays.concat());
+        let bytes = common::framed(changed.as_bytes(), &arrays.concat());
         let path = written(&bytes, "mutated");
         // Refused on opening, or by full validation (by_sample, say, is checked only there).
         match Reader::open(&path).and_then(|reader| validate_file(&path).map(|_| reader)) {

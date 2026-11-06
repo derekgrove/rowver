@@ -6,6 +6,7 @@
 //! the event choice need every array; `validate_file` checks those.
 
 use super::{count, text};
+use crate::change::Handle;
 use crate::chunks::{Rows, Table};
 use crate::{invalid, Result};
 use serde_json::Value;
@@ -32,10 +33,9 @@ pub struct Reader {
     tables: Mutex<HashMap<usize, Arc<Table>>>,
     /// The derived columns checked against their records.
     checked: Mutex<HashSet<String>>,
+    /// The tail it was read from, when it was read under a file's lock (`Locked::inspect`).
+    pub(crate) seen: Option<crate::change::Seen>,
 }
-
-/// What is handed each chunk read: its index, its frames as the file holds them, and its values.
-pub(crate) type Framed<'f> = dyn FnMut(usize, &[u8], Vec<u8>) -> Result<()> + 'f;
 
 /// An array read whole: its record, kind, place, and how many values each chunk holds.
 pub(crate) type Whole<'a> = (&'a Value, &'a str, String, std::borrow::Cow<'a, [usize]>);
@@ -59,17 +59,17 @@ struct Part {
 #[derive(Debug)]
 enum Reading {
     /// Through the handle opened, whatever is renamed over the file since; and its length and
-    /// time of change then, to tell it changed in place since.
-    Held(Arc<File>, (u64, Option<std::time::SystemTime>)),
-    /// Opened while one of its arrays is read: a file a press laid, of its own.
-    Laid(PathBuf),
+    /// time of change as it was opened, to tell it changed in place since.
+    Held(Handle, Stamp),
+    /// Through the handle of a file being written, its header still to come.
+    Laid(Handle),
 }
 
 impl Part {
-    /// The arrays of `file` from `start`, `length` bytes of them, read through its handle.
-    fn new(file: File, start: u64, length: u64) -> Result<Self> {
-        let seen = stamp(&file)?;
-        Ok(Self { from: Reading::Held(Arc::new(file), seen), start, length })
+    /// The arrays of `file` from `start`, `length` bytes of them, read through its handle, the
+    /// file `seen` as it was when it was opened.
+    fn new(file: Handle, seen: Stamp, start: u64, length: u64) -> Self {
+        Self { from: Reading::Held(file, seen), start, length }
     }
 
     /// Whether the file was changed in place since it was opened (emptied, cut short, written over).
@@ -81,15 +81,29 @@ impl Part {
     }
 }
 
+/// A file's length and time of change.
+pub(crate) type Stamp = (u64, Option<std::time::SystemTime>);
+
 /// A file's length and time of change, as its handle sees them.
-fn stamp(file: &File) -> Result<(u64, Option<std::time::SystemTime>)> {
+pub(crate) fn stamp(file: &File) -> Result<Stamp> {
     let held = file.metadata()?;
     Ok((held.len(), held.modified().ok()))
 }
 
 /// What a read of the file at `path`, changed in place since it was opened, fails with.
-fn changed(path: &Path) -> crate::Error {
+pub(crate) fn changed(path: &Path) -> crate::Error {
     crate::tagged(path, std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "the file changed while it was read")).into()
+}
+
+/// A debug build's note of an array about to be read, `size` bytes of the file at `path` from
+/// `at`, in the file `RVR_READ_LOG` names when it is set: so a test sees what a change reads.
+#[cfg(debug_assertions)]
+fn logged(path: &Path, at: u64, size: u64) {
+    use std::io::Write;
+    if let Some(log) = std::env::var_os("RVR_READ_LOG") {
+        let line = format!("{}\t{at}\t{size}\n", std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).display());
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(log).and_then(|mut f| f.write_all(line.as_bytes()));
+    }
 }
 
 /// One array's compressed bytes, read from where they lie in an open file; a failure names the file.
@@ -115,6 +129,34 @@ impl Read for Span {
         }
         self.at += read as u64;
         Ok(read)
+    }
+}
+
+/// A chunk read: its SHA-256, its frames as the file holds them, and its values.
+pub(crate) type ChunkRead = ([u8; 32], crate::chunks::Frames, Vec<u8>);
+
+/// One array of an open file, read a chunk at a time on any thread.
+#[derive(Clone)]
+pub(crate) struct ArrayChunks<'r> {
+    path: &'r Path,
+    part: &'r Part,
+    span: Span,
+    table: Arc<Table>,
+    label: String,
+}
+
+impl ArrayChunks<'_> {
+    /// Chunk `k`, of `n` values: its SHA-256, its frames as the file holds them, and its values
+    /// decoded and checked against its SHA-256.
+    pub(crate) fn read(&self, k: usize, n: usize) -> Result<ChunkRead> {
+        let read = || -> Result<_> {
+            let (from, to) = self.table.span(k);
+            let mut frames = vec![0; (to - from) as usize];
+            Span { at: self.span.at + from, end: self.span.at + to, ..self.span.clone() }.read_exact(&mut frames)?;
+            let values = crate::chunks::decode(&frames, &self.table, k, n, &self.label)?;
+            Ok((self.table.sum(k), crate::chunks::Frames::Together(frames, self.table.sizes(k).to_vec()), values))
+        };
+        read().map_err(|e| if self.part.changed() { changed(self.path) } else { e })
     }
 }
 
@@ -199,48 +241,55 @@ impl Reader {
 
     /// Open a file to look inside it, even one whose header fails its checks: the reader, and what checking the header found.
     pub fn inspect(path: impl AsRef<Path>) -> Result<(Self, Result<()>)> {
-        let path = path.as_ref().to_path_buf();
-        let (file, size, text) = super::head(&path)?;
-        let start = 12 + text.len();
-        let length = size - start;
-        let size = size as u64;
+        let path = path.as_ref();
+        let (file, size, text, seen) = super::head(path)?;
+        Self::looked(path, file, seen, &text, size - 20 - text.len())
+    }
+
+    /// The file at `path` read through `file`, the descriptor that holds its lock, its header
+    /// `text` from `start`: as `inspect` reads it.
+    pub(crate) fn locked(path: &Path, file: Arc<File>, text: &[u8], start: u64) -> Result<(Self, Result<()>)> {
+        let seen = stamp(&file)?;
+        Self::looked(path, file.into(), seen, text, start.saturating_sub(8) as usize)
+    }
+
+    /// The file at `path`, opened as `file` (`seen`), its header `text` after `length` bytes of
+    /// arrays: the reader, and what checking the header found.
+    fn looked(path: &Path, file: Handle, seen: Stamp, text: &[u8], length: usize) -> Result<(Self, Result<()>)> {
         // Parsed once: strictly, or, when that fails, as it is, to look inside all the same.
-        let (header, checked) = match crate::json::strict(&text) {
+        let (header, checked) = match crate::json::strict(text) {
             Ok(header) => {
                 let checked = super::checks(&header).and_then(|end| super::arrays::fill(end, length));
                 (header, checked)
             }
-            Err(e) => (serde_json::from_slice(&text)?, Err(e)),
+            Err(e) => (serde_json::from_slice(text)?, Err(e)),
         };
-        let parts = vec![Part::new(file, start as u64, size - start as u64)?];
-        Ok((Self::made(path, header, parts), checked))
+        let parts = vec![Part::new(file, seen, 8, length as u64)];
+        Ok((Self::made(path.to_path_buf(), header, parts), checked))
     }
 
-    /// The file opened at `path` whose `header`, already checked, is followed by `length` bytes of arrays from `start`.
-    pub(super) fn of(path: &Path, file: File, header: Value, start: u64, length: u64) -> Result<Self> {
-        Ok(Self::made(path.to_path_buf(), header, vec![Part::new(file, start, length)?]))
+    /// The file opened at `path` (`seen` as it was opened) whose `header`, already checked, is followed by `length` bytes of arrays from `start`.
+    pub(super) fn of(path: &Path, file: Handle, seen: Stamp, header: Value, start: u64, length: u64) -> Self {
+        Self::made(path.to_path_buf(), header, vec![Part::new(file, seen, start, length)])
     }
 
-    /// Read the arrays laid in `files` under `header`, checked as `open` checks it, before they are written.
-    pub(crate) fn laid(dir: &Path, files: &[PathBuf], header: Value) -> Result<Self> {
+    /// Read the arrays of the file at `path` that is being written, through `file`, its `end` bytes
+    /// from byte 8, under `header`, checked as `open` checks it, before the header is written.
+    pub(crate) fn laid(path: &Path, file: Arc<File>, written: u64, header: Value) -> Result<Self> {
         let (_, end) = super::checked(&serde_json::to_vec(&header)?).map_err(|e| match e {
             crate::Error::Breaks { fact, under: Some(key), .. } if !super::TOP.contains(&key.as_str()) => invalid(format!("the header rowver was about to write breaks docs/FORMAT.md §1: {fact}, in the tool key {key} it was given: change that tool key's data to follow §1")),
             crate::Error::Breaks { fact, .. } => invalid(format!("the header rowver was about to write breaks docs/FORMAT.md §1: {fact}, in what it was given to write: change that to follow §1")),
             e => e,
         })?;
-        let mut parts = Vec::new();
-        for path in files {
-            let length = std::fs::metadata(path).map_err(|e| crate::about(path, e.into()))?.len();
-            parts.push(Part { from: Reading::Laid(path.clone()), start: 0, length });
-        }
-        super::arrays::fill(end, parts.iter().map(|part| part.length as usize).sum())?;
-        Ok(Self::made(dir.to_path_buf(), header, parts))
+        super::arrays::fill(end, usize::try_from(written).map_err(|_| invalid(crate::change::LONG))?)?;
+        let parts = vec![Part { from: Reading::Laid(file.into()), start: 8, length: written }];
+        Ok(Self::made(path.to_path_buf(), header, parts))
     }
 
     /// A reader of `header`'s arrays in `parts`.
     fn made(path: PathBuf, header: Value, parts: Vec<Part>) -> Self {
         let empty = parts.iter().all(|part| part.length == 0) && super::arrays::end(&header["data"]).is_none_or(|end| end > 0);
-        let mut reader = Self { path, header, parts, empty, chunks: Default::default(), places: HashMap::new(), tables: Default::default(), checked: Default::default() };
+        let mut reader = Self { path, header, parts, empty, chunks: Default::default(), places: HashMap::new(), tables: Default::default(), checked: Default::default(), seen: None };
         // The records lie in the header's own allocations, which stay where they are as it moves.
         reader.places = super::arrays::records(&reader.header["data"]).iter().enumerate().map(|(at, (record, _, _))| (*record as *const Value as usize, at)).collect();
         reader
@@ -255,13 +304,19 @@ impl Reader {
     /// The header's text as the file opened holds it, read through the handle it was opened with.
     pub fn header_text(&self) -> Result<Vec<u8>> {
         let part = &self.parts[0];
-        let Reading::Held(file, _) = &part.from else {
+        let Reading::Held(file, (size, _)) = &part.from else {
             return Err(invalid("the file is being written: its header has no text yet"));
         };
-        let mut text = vec![0; part.start.saturating_sub(12) as usize];
-        let mut span = Span { file: file.clone(), path: self.path.clone(), at: 12, end: part.start };
-        span.read_exact(&mut text).map_err(|e| if part.changed() { changed(&self.path) } else { e.into() })?;
-        Ok(text)
+        // The header lies after the arrays and before its length and the magic (docs/FORMAT.md §1).
+        let start = part.start + part.length;
+        let mut text = vec![0; size.saturating_sub(12).saturating_sub(start) as usize];
+        let mut span = Span { file: Arc::clone(file), path: self.path.clone(), at: start, end: start + text.len() as u64 };
+        let read = span.read_exact(&mut text);
+        // A change in place since it was opened leaves other bytes there, which read without error.
+        match part.changed() {
+            true => Err(changed(&self.path)),
+            false => read.map(|()| text).map_err(Into::into),
+        }
     }
 
     /// Where the file is.
@@ -299,9 +354,10 @@ impl Reader {
         for part in &self.parts {
             if at.checked_add(size).is_some_and(|end| end <= part.length) {
                 let at = part.start + at;
+                #[cfg(debug_assertions)]
+                logged(&self.path, at, size);
                 let (file, path) = match &part.from {
-                    Reading::Held(file, _) => (file.clone(), self.path.clone()),
-                    Reading::Laid(path) => (Arc::new(File::open(path).map_err(|e| crate::about(path, e.into()))?), path.clone()),
+                    Reading::Held(file, _) | Reading::Laid(file) => (Arc::clone(file), self.path.clone()),
                 };
                 return Ok((part, Span { file, path, at, end: at + size }));
             }
@@ -312,15 +368,6 @@ impl Reader {
             }
         }
         Err(invalid(format!("{label}: its array lies past the end of the file: the file is damaged; copy it again")))
-    }
-
-    /// Bytes `from..to` of one array as it lies in the file opened.
-    pub(crate) fn array_bytes(&self, record: &Value, label: &str, from: u64, to: u64) -> Result<Vec<u8>> {
-        let (part, span) = self.part(record, label)?;
-        let mut bytes = vec![0; to.saturating_sub(from) as usize];
-        let read = Span { at: span.at + from, end: (span.at + to).min(span.end), ..span }.read_exact(&mut bytes);
-        read.map_err(|e| if part.changed() { changed(&self.path) } else { e.into() })?;
-        Ok(bytes)
     }
 
     /// The file's chunks: each one's sample, first row and end row; refused for an empty file, and
@@ -401,22 +448,19 @@ impl Reader {
         Ok(table)
     }
 
-    /// One array's chunk table, read and checked against its record.
-    pub(crate) fn chunk_table(&self, record: &Value, kind: &str, label: &str) -> Result<Arc<Table>> {
+    /// One array of `kind`, its chunk table read and checked against its record, to read a chunk
+    /// at a time on any thread.
+    pub(crate) fn array_chunks(&self, record: &Value, kind: &str, label: &str) -> Result<ArrayChunks<'_>> {
         let (part, span) = self.part(record, label)?;
-        self.table(record, kind, label, &span, false).map_err(|e| if part.changed() { changed(&self.path) } else { e })
+        let table = self.table(record, kind, label, &span, false).map_err(|e| if part.changed() { changed(&self.path) } else { e })?;
+        Ok(ArrayChunks { path: &self.path, part, span, table, label: label.into() })
     }
 
     /// Each chunk of one array of `kind` (only those `wanted`, when given), in order, `n(k)` values
-    /// in chunk `k`: decoded, checked, and handed to `each`, its table checked first (and kept for
-    /// the next read of some of its chunks).
+    /// in chunk `k`: decoded in one pool of threads a few ahead of `each`, checked, and handed to
+    /// it, its table checked first (and kept for the next read of some of its chunks); a file
+    /// changed in place since it was opened is said to be.
     pub(crate) fn each_chunk(&self, record: &Value, kind: &str, label: &str, n: &dyn Fn(usize) -> usize, wanted: Option<std::ops::Range<usize>>, each: &mut dyn FnMut(usize, Vec<u8>) -> Result<()>) -> Result<()> {
-        self.frames(record, kind, label, n, wanted, &mut |k, _, values| each(k, values))
-    }
-
-    /// `each_chunk`, each chunk handed with its frames as the file holds them, decoded in one pool
-    /// of threads a few ahead of `each`; a file changed in place since it was opened is said to be.
-    pub(crate) fn frames(&self, record: &Value, kind: &str, label: &str, n: &dyn Fn(usize) -> usize, wanted: Option<std::ops::Range<usize>>, each: &mut Framed) -> Result<()> {
         let (part, span) = self.part(record, label)?;
         let read = || -> Result<()> {
             let table = self.table(record, kind, label, &span, wanted.is_some())?;
@@ -429,8 +473,8 @@ impl Reader {
                 let mut frames = vec![0; (to - from) as usize];
                 Span { at: span.at + from, end: span.at + to, ..span.clone() }.read_exact(&mut frames)?;
                 let decoded = crate::chunks::decode(&frames, &table, k, counts[at], label)?;
-                Ok((k, frames, decoded))
-            }, |(k, frames, values)| each(k, &frames, values))
+                Ok((k, decoded))
+            }, |(k, values)| each(k, values))
         };
         read().map_err(|e| if part.changed() { changed(&self.path) } else { e })
     }

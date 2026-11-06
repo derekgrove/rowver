@@ -2,8 +2,11 @@
 *.rvr
 # What a press holds while it runs, and leaves behind if it is stopped.
 *.rvr.partial/
+# The journal of a change made in a file, there while it is made (the next rvr command puts back one cut short).
+*.rvr-journal
 # What rvr writes before it puts a file in place, and what rvr reproduce makes.
-*.rvr.derive
+*.rvr.anew-*
+*.rvr.empty-*
 *.rvr.refill
 *.rvr.refilled
 *.rvr-new

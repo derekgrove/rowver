@@ -2,12 +2,16 @@
 read back, their types, and the Arrow, pandas and Parquet forms. Run from this crate's folder,
 after `maturin develop`: `python -m unittest discover tests`."""
 
+import fcntl
+import functools
 import json
 import os
 import pathlib
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -213,13 +217,13 @@ class Pressed(unittest.TestCase):
             rowver.open(self.dir)
         self.assertEqual(rowver.Error.__module__, "rowver")
 
-    # SPEC 11.2, 11.3, 11.5, 11.6, 11.7
+    # SPEC 11.2, 11.3, 11.5, 11.6, 11.7, 11.9
     def test_the_names_it_offers_are_the_ones_it_documents(self):
         public = {n for n in dir(rowver) if not n.startswith("_")}
-        self.assertEqual(public, {"Error", "File", "open", "validate"})
+        self.assertEqual(public, {"Error", "File", "open", "validate", "set_tool", "drop_tool"})
         documented = {"path", "header", "rows", "samples", "labels", "columns", "derived", "sample_columns", "recipe",
-                      "study", "signed_by", "holes", "complete", "empty", "read", "slice", "forget", "arrays", "to_arrow",
-                      "to_pandas", "to_parquet"}
+                      "study", "signed_by", "holes", "complete", "empty", "tools", "read", "slice", "forget", "arrays",
+                      "to_arrow", "to_pandas", "to_parquet"}
         self.assertEqual({n for n in dir(self.file) if not n.startswith("_")}, documented)
         self.assertIn("sample", self.file)
 
@@ -236,14 +240,28 @@ class Pressed(unittest.TestCase):
         finally:
             copy.unlink()
 
+    # SPEC 1.5, 8.12
+    def test_a_header_read_after_a_change_in_place_says_the_file_changed(self):
+        copy = self.dir / "header-changed.rvr"
+        shutil.copy(self.path, copy)
+        try:
+            f = rowver.open(copy)
+            rowver.set_tool(copy, "my-tool", {"a": 1})
+            with self.assertRaisesRegex(rowver.Error, "header-changed.rvr changed while it was read \\(emptied, or written again\\): open it again"):
+                f._file.header_text
+        finally:
+            copy.unlink()
+
     # SPEC 1.5, 11.4; FORMAT 12
     def test_a_file_emptied_after_it_was_opened_says_so(self):
         copy = self.dir / "cut.rvr"
         shutil.copy(self.path, copy)
         try:
             f = rowver.open(copy)
+            # Its arrays let go, as rvr empty leaves it: the magic, the header, its length, the magic.
             whole = copy.read_bytes()
-            copy.write_bytes(whole[:12 + int.from_bytes(whole[8:12], "little")])
+            length = int.from_bytes(whole[-12:-8], "little")
+            copy.write_bytes(whole[:8] + whole[-12 - length:])
             with self.assertRaisesRegex(rowver.Error, "cut.rvr changed while it was read \\(emptied, or written again\\): open it again"):
                 f["weight"]
         finally:
@@ -271,6 +289,159 @@ class Pressed(unittest.TestCase):
             self.assertEqual(copy.read_bytes(), whole)
         finally:
             copy.unlink()
+
+
+    # SPEC 8.11, 11.9; FORMAT 1, 11
+    def test_a_dropped_tool_key_json_cannot_read_is_given_back_as_its_text_the_file_changed(self):
+        copy = self.dir / "dropped-text.rvr"
+        shutil.copy(self.path, copy)
+        whole = copy.read_bytes()
+        n = int.from_bytes(whole[-12:-8], "little")
+
+        def written(key, text):
+            header = whole[-12 - n:-12][:-1] + b',"' + key.encode() + b'":' + text.encode() + b"}"
+            copy.write_bytes(whole[:-12 - n] + header + len(header).to_bytes(4, "little") + whole[-8:])
+
+        # Deeper than json.loads goes (Python 3.13 reads 9,998 deep): its text; a lone surrogate it reads.
+        deep = '{"d":' + "[" * 100_000 + "]" * 100_000 + "}"
+        lone = '{"s":"\\ud800 } ] \\" {"}'
+        try:
+            for key, text, given in [("deep", deep, deep), ("lone", lone, {"s": "\ud800 } ] \" {"})]:
+                with self.subTest(key=key):
+                    written(key, text)
+                    with self.assertRaises(rowver.Error):
+                        rowver.open(copy)
+                    self.assertEqual(rowver.drop_tool(copy, key), given)
+                    self.assertEqual(copy.read_bytes(), whole)
+        finally:
+            copy.unlink()
+
+    # SPEC 8.11, 8.12, 11.9
+    def test_a_tool_key_whose_drop_leaves_a_header_that_would_not_open_is_refused_before_anything_is_written(self):
+        copy = self.dir / "drop-refused.rvr"
+        shutil.copy(self.path, copy)
+        whole = copy.read_bytes()
+        n = int.from_bytes(whole[-12:-8], "little")
+        deep = b'{"d":' + b"[" * 70 + b"]" * 70 + b"}"
+        header = whole[-12 - n:-12][:-1] + b',"one":' + deep + b',"two":' + deep + b"}"
+        broken = whole[:-12 - n] + header + len(header).to_bytes(4, "little") + whole[-8:]
+        copy.write_bytes(broken)
+        stamps = (copy.stat().st_mtime_ns, self.dir.stat().st_mtime_ns)
+        try:
+            # Without one, two keeps it from opening still: neither the file nor its folder is touched.
+            with self.assertRaisesRegex(rowver.Error, "two\\.d\\[0\\].* is nested 65 arrays and objects deep"):
+                rowver.drop_tool(copy, "one")
+            self.assertEqual(copy.read_bytes(), broken)
+            self.assertFalse(pathlib.Path(str(copy) + "-journal").exists())
+            self.assertEqual((copy.stat().st_mtime_ns, self.dir.stat().st_mtime_ns), stamps)
+        finally:
+            copy.unlink()
+
+    # SPEC 8.11, 8.12, 11.9; FORMAT 11
+    def test_tool_keys_are_set_and_dropped_in_the_file_itself(self):
+        copy = self.dir / "tools.rvr"
+        shutil.copy(self.path, copy)
+        try:
+            whole = copy.read_bytes()
+            inode = copy.stat().st_ino
+            self.assertEqual(rowver.open(copy).tools, {})
+            rowver.set_tool(copy, "my-tool", {"note": "μ", "n": [1, 2.5], "none": None})
+            self.assertEqual(copy.stat().st_ino, inode)
+            f = rowver.open(copy)
+            self.assertEqual(f.tools, {"my-tool": {"note": "μ", "n": [1, 2.5], "none": None}})
+            self.assertEqual((f.rows, f.columns), (self.file.rows, self.file.columns))
+            rowver.set_tool(copy, "my-tool", {})
+            self.assertEqual(rowver.open(copy).tools, {"my-tool": {}})
+            self.assertEqual(rowver.drop_tool(copy, "my-tool"), {})
+            self.assertEqual(copy.read_bytes(), whole)
+            with self.assertRaisesRegex(rowver.Error, "has no tool key my-tool"):
+                rowver.drop_tool(copy, "my-tool")
+            deep = {"d": functools.reduce(lambda inner, _: [inner], range(62), [])}
+            for key, value, said in [
+                ("my-tool", [1], "^the value given for the tool key my-tool must be one JSON object"),
+                ("my-tool", {"a": "\ud800"}, "^the value given for the tool key my-tool is not JSON as docs/FORMAT.md §1 reads it"),
+                ("my-tool", deep, "^the value given for the tool key my-tool breaks docs/FORMAT.md §1: .* is nested 65 arrays"),
+                ("data", {}, "data is the format's own key, not a tool key"),
+                ("my tool", {}, "\"my tool\" is not a tool key's name"),
+            ]:
+                with self.subTest(key=key, value=value), self.assertRaisesRegex(rowver.Error, said):
+                    rowver.set_tool(copy, key, value)
+            # NaN and infinity are not JSON: json.dumps refuses them, as ValueError.
+            for value in (float("nan"), float("-inf")):
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    rowver.set_tool(copy, "my-tool", {"a": value})
+            self.assertEqual(copy.read_bytes(), whole)
+        finally:
+            copy.unlink()
+
+    # SPEC 8.12
+    def test_a_file_another_program_holds_locked_with_no_journal_beside_it_is_read(self):
+        # A writer at its question, or a press planning: the file's lock held, no journal there.
+        with open(self.path, "rb") as other:
+            fcntl.flock(other, fcntl.LOCK_EX)
+            f = rowver.open(self.path)
+            self.assertEqual(f["nJet"].tolist(), self.file["nJet"].tolist())
+            self.assertEqual(rowver.validate(self.path), (4, 5))
+
+    # SPEC 8.12
+    def test_refused_opens_of_a_file_another_thread_holds_leave_no_descriptor_behind(self):
+        copy = self.dir / "no-leak.rvr"
+        shutil.copy(self.path, copy)
+        stop, refused = threading.Event(), {rowver.open: 0, rowver.validate: 0}
+
+        def writer():
+            # Each try holds the file for the 100 ms it waits for the lock another program holds, then gives up.
+            while not stop.is_set():
+                try:
+                    rowver.set_tool(copy, "k", {})
+                except rowver.Error:
+                    pass
+
+        def descriptors():
+            return len(os.listdir("/dev/fd"))
+
+        try:
+            with open(copy, "rb") as other:
+                fcntl.flock(other, fcntl.LOCK_EX)
+                before = descriptors()
+                thread = threading.Thread(target=writer)
+                thread.start()
+                try:
+                    deadline = time.monotonic() + 60
+                    while min(refused.values()) < 1000 and time.monotonic() < deadline:
+                        for call in refused:
+                            try:
+                                call(copy)
+                            except rowver.Error as e:
+                                refused[call] += "another of its threads holds it" in str(e)
+                finally:
+                    stop.set()
+                    thread.join()
+                after = descriptors()
+            self.assertGreaterEqual(min(refused.values()), 1000, refused)
+            # A leak would be a thousand more, or two.
+            self.assertLess(after, before + 50, (before, after))
+        finally:
+            copy.unlink()
+
+    # SPEC 8.12, 11.2; FORMAT 12
+    def test_a_file_a_change_to_which_was_cut_short_is_refused_until_rvr_puts_it_back(self):
+        copy = self.dir / "cut-short.rvr"
+        shutil.copy(self.path, copy)
+        beside = pathlib.Path(str(copy) + "-journal")
+        try:
+            beside.write_bytes(b"a change cut short")
+            with self.assertRaisesRegex(rowver.Error, "-journal is beside it\\): any rvr command on the file puts it back as it was"):
+                rowver.open(copy)
+            with self.assertRaisesRegex(rowver.Error, "was cut short"):
+                rowver.validate(copy)
+            # A writer puts it back first: a journal that does not check out was written before the file was touched.
+            rowver.set_tool(copy, "my-tool", {})
+            self.assertFalse(beside.exists())
+            self.assertEqual(rowver.open(copy).tools, {"my-tool": {}})
+        finally:
+            copy.unlink()
+            beside.unlink(missing_ok=True)
 
 
 class Holed(unittest.TestCase):
@@ -401,6 +572,8 @@ class Conformance(unittest.TestCase):
                 path = os.path.join(folder, f"{n}.rvr")
                 with open(path, "wb") as out:
                     out.write(packed[case["at"]:case["at"] + case["size"]])
+                if case.get("journal"):
+                    pathlib.Path(path + "-journal").write_bytes(b"a change cut short")
                 with self.subTest(case["rule"]):
                     if case["verdict"] == "opening":
                         self.assertRaises(rowver.Error, rowver.open, path)

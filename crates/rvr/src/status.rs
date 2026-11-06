@@ -30,6 +30,8 @@ pub fn main(options: &Options) -> u8 {
 
 fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) -> Result<bool, String> {
     let (dir, study, target) = crate::texts::study(dir, out)?;
+    // Through a link, the file it names, and the press staged beside it, as rvr press finds them.
+    let target = rowver::change::resolved(&target);
     let texts = crate::texts::read(&dir)?;
     let lock = rowver::study::lock::Lock::read(&texts.lock).ok();
     let names: Vec<String> = lock.iter().flat_map(|lock| lock.samples.iter().map(|s| s.name.clone())).collect();
@@ -50,7 +52,7 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
         At::Unopened(e) => return Err(rowver::plain(&target, e)),
     };
     // The Plan rvr press would make, with these options, of the file there.
-    let place = Place { base: dir, study, target: target.clone(), at };
+    let place = Place { base: dir, study, target: target.clone(), at, locked: None };
     let asked = Asked { choose: Choose::Options(choice.clone()), on: On::Earlier, workers: 1, sign: true };
     let plan = crate::plan::build(place, texts.clone(), asked);
     let pressing = plan.as_ref().is_ok_and(|plan| !matches!(plan.from, Base::Current(_)));
@@ -95,16 +97,26 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
         }
         (Base::Current(0), _) => "It is current: rvr press has nothing to read.".to_string(),
         (Base::Current(_), _) => "It holds the study as it is, but for its holes: rvr press --fill reads them.".to_string(),
+        (Base::Columns(earlier), _) if plan.reading.is_empty() && earlier.in_place => "rvr press would read nothing: it would add the new derived columns to the file in place.".into(),
         (Base::Columns(_), _) if plan.reading.is_empty() => "rvr press would read nothing: every column is copied from it into a file that holds the study as it is now.".into(),
-        (Base::Columns(_), _) => {
+        (Base::Columns(earlier), _) => {
             let reading: Vec<&str> = plan.reading.iter().map(|at| plan.recipe.columns[*at].0.as_str()).collect();
-            format!("rvr press would read only {}, for the events the file kept, and copy every other column from it.", reading.join(", "))
+            match earlier.in_place {
+                true => format!("rvr press would read only {}, for the events the file kept, and add them to the file in place.", reading.join(", ")),
+                false => format!("rvr press would read only {}, for the events the file kept, and copy every other column from it.", reading.join(", ")),
+            }
         }
+        (_, Some(both)) if plan.other_build => format!("{both} rvr press would ask whether to press every column again, as a file is built on only by the build that made it (rvr press --full presses them without asking)."),
         (_, Some(why)) if same.iter().all(|s| *s) => format!("It holds the study as it is now, but rvr press would press every column again, as {why}."),
         (_, Some(why)) => format!("rvr press would press every column, as {why}."),
         (_, None) => "rvr press would press every column.".into(),
     };
     println!("{said}");
+    match (&plan.refused, &plan.anew) {
+        (Some(why), _) => println!("{why}."),
+        (None, Some(why)) => crate::told_anew(&target, why, true),
+        (None, None) => {}
+    }
     // Whether --fill would fill it, to say so only when it would.
     let kinds = crate::fill::kinds(None);
     let fillable = crate::fill::fits(&header, &target.display().to_string(), &plan.texts, &plan.lock, &plan.asked, &kinds).map(drop);
@@ -116,7 +128,7 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
 /// With no file at the target: what rvr press would read (the Plan's reads), or why it would
 /// refuse, then that there is no file yet. Never current.
 fn missing(dir: PathBuf, study: String, target: PathBuf, texts: crate::texts::Texts, choice: Choice) -> Result<bool, String> {
-    let place = Place { base: dir, study, target: target.clone(), at: At::Missing };
+    let place = Place { base: dir, study, target: target.clone(), at: At::Missing, locked: None };
     let asked = Asked { choose: Choose::Options(choice), on: On::Earlier, workers: 1, sign: true };
     let stopped = crate::journal::folder(&target);
     match crate::plan::build(place, texts, asked) {

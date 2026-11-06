@@ -255,19 +255,6 @@ pub struct Spooled<'a> {
     listed: bool,
 }
 
-impl Spooled<'_> {
-    /// How many bytes its pieces hold, unpacked.
-    pub(super) fn weight(&self) -> usize {
-        let bytes = |span: &Span| span.bytes;
-        self.parts
-            .iter()
-            .map(|part| {
-                part.lanes.iter().map(bytes).sum::<usize>() + part.counts.as_ref().map_or(0, bytes)
-            })
-            .sum()
-    }
-}
-
 impl Pieces for Spooled<'_> {
     fn kind(&self) -> &str {
         &self.kind

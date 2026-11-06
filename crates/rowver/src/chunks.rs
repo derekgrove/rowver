@@ -104,10 +104,21 @@ impl Table {
         (self.starts[k], self.starts[k + 1])
     }
 
-    /// The bytes the table itself takes, at the end of its array.
-    pub fn bytes(&self) -> u64 {
-        (self.len() * entry(self.w)) as u64
+    /// Chunk `k`'s SHA-256.
+    pub fn sum(&self, k: usize) -> [u8; 32] {
+        self.sums[k]
     }
+
+    /// Chunk `k`'s frame sizes, one a lane.
+    pub fn sizes(&self, k: usize) -> &[u64] {
+        &self.lanes[k * self.w..(k + 1) * self.w]
+    }
+}
+
+/// A chunk's frames, one a lane: apart, or together as an array holds them, with each one's size.
+pub(crate) enum Frames {
+    Apart(Vec<Vec<u8>>),
+    Together(Vec<u8>, Vec<u64>),
 }
 
 /// What a chunk table that does not fit its array is told.

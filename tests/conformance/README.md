@@ -11,6 +11,7 @@ this folder on every test run) to check itself against. Each part is a folder wi
 | `samples/` | `samples.toml` texts | docs/SPEC.md §3 |
 | `lock/` | `samples.lock` texts | docs/FORMAT.md §6.3 |
 | `recipe/` | `recipe.toml` texts; the expressions are `crates/rvr-recipe/tests/fixtures/recipe.json` and `properties.json` | crates/rvr-recipe/README.md |
+| `tool/` | tool keys set on `rvr/valid/fixture.rvr` (`rvr tool FILE KEY --set DATA.json`) | docs/FORMAT.md §1, §11; docs/SPEC.md §8.11 |
 
 ## `rvr/manifest.json`
 
@@ -25,7 +26,16 @@ this folder on every test run) to check itself against. Each part is a folder wi
   whose SHA-256 is `sha256`. `verdict` is `valid`, `opening` (a reader refuses it on opening:
   FORMAT.md §12) or `full` (it opens, and full validation refuses it). `rule` names the rule the
   case breaks, by FORMAT.md's section; `rust_says` is the reference's refusal, for a person: another
-  implementation need not say it in those words.
+  implementation need not say it in those words. A case with `"journal": true` is read with a file
+  beside it whose name is the case's with `-journal` added, holding any bytes: a change to it cut
+  short, which a reader refuses (FORMAT.md §12).
+
+## `tool/manifest.json`
+
+`cases`, each `{"rule", "key", "text", "verdict"}`: `text` is the whole of DATA.json, set as the
+tool key `key` of `rvr/valid/fixture.rvr`; `verdict` is `valid` (the file takes it) or `refused`,
+with `rust_says`. The tool key's object lies two deep in the header, so its own nesting is counted
+from there (FORMAT.md §1).
 
 ## `samples/`, `lock/` and `recipe/`
 

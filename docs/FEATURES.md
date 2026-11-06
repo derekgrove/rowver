@@ -76,16 +76,19 @@ next summarise it.
 ### 3.1 Layout
 
 ```
-magic (8 bytes) | header length (u32, little-endian) | JSON header (UTF-8) | arrays
+magic (8 bytes) | arrays | JSON header (UTF-8) | header length (u32, little-endian) | magic (8 bytes)
 ```
 
 The magic `89 52 56 52 0D 0A 1A 0A` follows the PNG convention. Its high byte and its CR LF,
 Ctrl-Z, LF sequence mean that a transfer which strips the eighth bit or rewrites line endings
-breaks the file visibly. The header is not compressed, so one parse gives a reader every fact
-about the file. The arrays follow with no gap between them and nothing after the last. Each array
-is compressed on its own, so a reader decompresses only what it needs. Array offsets (`at`) count
-from the first byte after the header. A program that changes only the header can therefore write
-the new header and copy the arrays byte for byte.
+breaks the file visibly; it opens the file and ends it, so a file cut short is seen at once. A
+reader reads the first 8 bytes and the last 12, then the header: it is not compressed, so one parse
+gives every fact about the file. The arrays fill the space from byte 8 to the header with no gap
+between them, in any order (a press lays them in the order of their records). Each array is
+compressed on its own, so a reader decompresses only what it needs. Array offsets (`at`) count from
+byte 8. Since the header comes last, a change that adds arrays, or only writes another header (new
+columns, derived columns, tool keys), is made in the file itself: its arrays are neither copied nor
+read, and a change cut short is put back by the next rvr command (§7.3).
 
 The top level of the header holds exactly `rowver` (the version, 15), `data`, `made`, an optional
 `derived` and `signature`, and any number of tool keys.
@@ -166,8 +169,8 @@ files) 0.3% smaller; the 2.1 M-row bench, 300 copies of one file, grows from 39.
 - Every chunk carries, in its array's chunk table, the SHA-256 of its uncompressed values; every
   array carries the SHA-256 of its chunks' SHA-256s, so it is checked from the table with nothing
   decompressed.
-- `data.sha256` hashes the concatenated array checksums in file order. It fingerprints all the
-  data without decompressing anything.
+- `data.sha256` hashes the concatenated array checksums in the order of their records, wherever the
+  arrays lie. It fingerprints all the data without decompressing anything.
 - Every per-row array also carries `by_sample`: one SHA-256 per sample, of that sample's chunks'
   SHA-256s. A chunk's jagged offsets start at zero and no chunk spans two samples, so a change in
   one sample never changes another sample's checksum.
@@ -420,7 +423,8 @@ number of workers (§3.2).
 ### 7.2 Bounded memory and atomic output
 
 As each file is read, its kept values go to a spool on disk, compressed where that pays. Each
-column is then packed from the spool a piece at a time. Memory therefore does not grow with the
+array is then packed from the spool a chunk at a time, the chunks compressed on every core and
+written straight into the file, one array after another: no array is copied once packed. Memory therefore does not grow with the
 number of kept events: pressing 12 million rows of 31 columns from 1,698 files (4 workers) peaks at
 0.14 GB, and 3 million rows from 425 files at 0.10 GB. The cost is free disk space for the spool: on
 the 2.1 M-row bench it peaked at 470 MB beside a 51.2 MB file, as the bench's 300 copies of one file
@@ -433,9 +437,11 @@ appears whole or not at all.
 Suppose the output already exists, and was pressed from the same `samples.toml` and lock, with
 the same cuts, totals and event choice, by the same build of `rvr`. A new press then reads only the
 columns that are new or whose definition changed (their expression, their stored kind, or any
-defined name they use), and only for the events the file already kept. Every
-other column is copied over, and the cuts are not run again. The result is the same file a full
-press writes, as `rvr diff` confirms. Adding one jagged column to a two-sample study read 26.3 MB
+defined name they use), and only for the events the file already kept, and the cuts are not run
+again. When columns were only added, they are written into the file itself, after its arrays,
+which are neither copied nor read, under the file's lock and a journal beside it, so that a press
+cut short is put back by the next rvr command; otherwise every other column is copied into a new
+file. Either way the file holds what a full press writes, as `rvr diff` confirms. Adding one jagged column to a two-sample study read 26.3 MB
 of baskets instead of 108.0 MB, in 0.12 s instead of 0.51 s.
 
 Adding a sample works the same way. When the columns and cuts are the same, and every sample the
@@ -446,9 +452,11 @@ is compressed whole, so a sample's part of it cannot be copied as it lies. On 2.
 sample of 30 files to ten of 30 took 2.4 s, against 3.9 s for a full press; taking one out took
 2.1 s against 3.5 s. Any other change to the rows, or to the code that computed them, means a
 full press, and the press says why. Such changes include a sample whose files changed, other
-cuts, totals or events, or another build. A file that already holds the study as it is is left as
-it is (`FILE is current: nothing to press.`), and when only `[derived]` changed, or columns were
-only dropped, no input is opened at all. [SPEC §8](SPEC.md#8-building-on-a-file) gives every
+cuts, totals or events. A file is built on only by the build of rvr that made it: when another
+build made it, the press names both and asks before it presses every column again (`--full` where
+nobody is at a terminal). A file that already holds the study as it is is left as it is (`FILE is
+current: nothing to press.`), and when only `[derived]` changed, or columns were only dropped, no
+input is opened at all. [SPEC §8](SPEC.md#8-building-on-a-file) gives every
 condition.
 
 ### 7.4 Holes
@@ -549,8 +557,9 @@ holes exits 3, and a command whose output pipe closed early exits 141
 | `rvr header` | The JSON header exactly as the file holds it, without reading any array. |
 | `rvr diff A B` | Where do two files differ? From the headers alone: rows, samples, labels, columns and derived columns, kinds, expressions, each (column, sample) pair whose contents changed, and sample-column values. |
 | `rvr diff A B --rows [--key COLUMN,…]` | Do two files hold the same events? Event by event, matched by file and entry or by key columns (`run,luminosityBlock,event` across two skims): the events only one holds, and the first value that differs, per sample. |
-| `rvr reproduce` | Does the file's own study, pressed again, give the same data (§4.5)? |
+| `rvr reproduce` | Does the file's own study, pressed again, give the same data (§4.5)? `--texts` writes the study's three texts alone, to build on from the file. |
 | `rvr empty`, `rvr refill` | Give back a file's space and keep its study in its place; press its columns again, checked against its checksums (§4.5). |
+| `rvr tool` | What other tools keep in the file: its tool keys, listed, or one set from a JSON file (checked as the header's rules say), written out, or dropped, in the file itself. Python: `rowver.set_tool`, `rowver.drop_tool`, `File.tools`. |
 
 ## 9. Derived columns
 
@@ -575,9 +584,11 @@ it, and the sample's metadata. That is checked before anything is pressed. Deriv
 columns are added to a pressed file, dropped from it or renamed with `rvr derive FILE`, which
 first checks the derived columns it has, records only what is new, and keeps the recipe the file
 carries in step, so that `rvr reproduce` still makes the same file; the study's `recipe.toml` is
-left to the analyst. An expression is never changed in place: it is dropped and added again.
-Changing only `[derived]` in a study reads no ROOT file: the press copies every stored column from
-the earlier file and works the derived columns out from it.
+left to the analyst. Its new header is written in the file itself, the arrays left as they are. An
+expression is never changed in place: it is dropped and added again. Changing only `[derived]` in a
+study reads no ROOT file: derived columns only added are written into the file's header in place;
+otherwise the press copies every stored column from the earlier file and works the derived
+columns out from it.
 
 The trade is space for time, the analyst's to choose column by column. On the 2.1 M-row bench (300
 copies of the TChiWZ skim, Apple M5, 2026-11-04), seven typical computed columns take 70 bytes per

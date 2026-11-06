@@ -1,7 +1,7 @@
 //! Pressing again on the file an earlier press wrote (SPEC §8): only the columns that changed, or
 //! only the samples added, are read; the rest is the file's. The result is what a full press writes.
 
-use crate::fill::{unplanned, Fill, Plan};
+use crate::fill::{unplanned, Plan};
 use crate::plan::Base;
 use rowver::choice::Events;
 use rowver::study::lock::Lock;
@@ -17,6 +17,8 @@ pub struct Earlier {
     pub reused: Vec<bool>,
     /// The kept entries of each file read, by sample and the file's `at`.
     pub kept: HashMap<(String, String), Vec<u64>>,
+    /// Whether the recipe only adds columns, stored or derived, so they go in place (SPEC §8.2, §8.12).
+    pub in_place: bool,
 }
 
 /// The names the recipe defines that `roots` reach, directly or through others: the ones a press
@@ -130,35 +132,93 @@ pub fn identified() -> Result<(), String> {
 // new file names this build.
 pub fn same_build(made: &Value) -> Result<(), String> {
     identified()?;
-    let (program, version) = (made["toolchain"]["program"].as_str().unwrap_or("?"), made["toolchain"]["version"].as_str().unwrap_or("?"));
-    if program != "rvr" {
-        return Err(format!("it was made by {program} {version}, not rvr"));
-    }
-    if made["toolchain"] != crate::press::toolchain() {
-        return Err(format!("it was made by another build of rvr ({version} at {})", made["toolchain"]["commit"].as_str().unwrap_or("?")));
+    by_rvr(made)?;
+    let made = &made["toolchain"];
+    if !one_build(made, &crate::press::toolchain()) {
+        return Err(format!("it was made by another build of rvr ({} at {})", made["version"].as_str().unwrap_or("?"), made["commit"].as_str().unwrap_or("?")));
     }
     Ok(())
 }
 
-/// What a file at the target gives this press, or why it cannot.
-pub fn read(
-    file: rowver::Result<Reader>,
-    texts: &crate::texts::Texts,
-    recipe: &Recipe,
-    lock: &Lock,
-    asked: &[Events],
-) -> Result<Base, String> {
+/// Whether two `made.toolchain`s name one build: by the fields `builds` names, and rowver ("15" in every file that opens).
+fn one_build(made: &Value, this: &Value) -> bool {
+    ["program", "version", "commit", "compiler", "target", "rowver"].iter().all(|key| made[key] == this[key])
+}
+
+/// Refuse a file (its `made`) that another program made: `it was made by PROGRAM VERSION, not rvr`.
+fn by_rvr(made: &Value) -> Result<(), String> {
+    let text = |key: &str| made["toolchain"][key].as_str().unwrap_or("?");
+    match text("program") {
+        "rvr" => Ok(()),
+        program => Err(format!("it was made by {program} {}, not rvr", text("version"))),
+    }
+}
+
+/// Why a file at the target cannot be built on: for what it holds, or only for its build (SPEC §8.6).
+pub enum Unbuilt {
+    /// What it holds: why.
+    Why(String),
+    /// Only the build that made it, said as `builds` says it.
+    Build(String),
+}
+
+/// What a file at the target gives a press of columns of `kinds`, or why it cannot (SPEC §8.6).
+// For its build only when all else would let it be built on. Its header is judged first: its
+// arrays are read only once it will be built on.
+pub fn read(file: rowver::Result<Reader>, texts: &crate::texts::Texts, recipe: &Recipe, lock: &Lock, asked: &[Events], kinds: &[(rvr_recipe::Kind, bool)]) -> Result<Base, Unbuilt> {
     let file = file.map_err(|e| match e {
         rowver::Error::Io(e) => rowver::plain_it(&e),
         e => format!("it could not be read ({e})"),
-    })?;
+    });
+    let file = file.map_err(Unbuilt::Why)?;
+    let made = &file.header()["made"];
+    by_rvr(made).map_err(Unbuilt::Why)?;
+    let judged = judged(&file, texts, recipe, lock, asked).map_err(Unbuilt::Why)?;
+    // The columns it gives are of this press's kinds, which no build would change.
+    let given: Vec<&str> = match &judged {
+        Judged::Columns(reused, _) => recipe.columns.iter().zip(reused).filter(|(_, r)| **r).map(|((n, _), _)| n.as_str()).collect(),
+        Judged::Samples(..) => recipe.columns.iter().map(|(n, _)| n.as_str()).collect(),
+    };
+    crate::plan::same_kinds(&file, recipe, kinds, &given).map_err(Unbuilt::Why)?;
+    if same_build(made).is_err() {
+        return Err(Unbuilt::Build(builds(&file.path().display().to_string(), &made["toolchain"], &crate::press::toolchain())));
+    }
+    filled(file, judged).map_err(Unbuilt::Why)
+}
+
+/// `FILE was made by BUILD; this is BUILD.`, each build named for what differs, or what keeps
+/// this build from building on any file (SPEC §8.6).
+fn builds(path: &str, made: &Value, this: &Value) -> String {
+    let text = |build: &Value, key: &str| build[key].as_str().unwrap_or("?").to_owned();
+    let named = |build: &Value, more: bool| match more {
+        true => format!("rvr {} (commit {}, {}, {})", text(build, "version"), text(build, "commit"), text(build, "compiler"), text(build, "target")),
+        false => format!("rvr {} (commit {})", text(build, "version"), text(build, "commit")),
+    };
+    let commit = text(this, "commit");
+    let alike = ["version", "commit"].iter().all(|key| made[key] == this[key]);
+    match commit.as_str() {
+        "unknown" => format!("{path} was made by {}; this rvr's commit is unknown (it was not built from a git checkout), and such a build builds on no file.", named(made, false)),
+        dirty if dirty.ends_with("-dirty") => format!("{path} was made by {}; this rvr has uncommitted changes (its commit is {dirty}), and such a build builds on no file.", named(made, false)),
+        _ => format!("{path} was made by {}; this is {}.", named(made, alike), named(this, alike)),
+    }
+}
+
+/// What a file gives a press, judged from its header alone.
+enum Judged {
+    /// Its rows, with these of its columns copied (`reused`), and whether it is only added to.
+    Columns(Vec<bool>, bool),
+    /// Its rows of the samples the lock holds as it did, and the samples added, read whole.
+    Samples(Vec<((String, String), Plan)>, Vec<String>),
+}
+
+/// What a file at the target gives this press, its build aside, or why it cannot: from its header.
+fn judged(file: &Reader, texts: &crate::texts::Texts, recipe: &Recipe, lock: &Lock, asked: &[Events]) -> Result<Judged, String> {
     if file.empty() {
         return Err("it is empty (rvr refill gives its columns back, checked against its checksums)".into());
     }
     let header = file.header();
     let made = &header["made"];
     let text = |key: &str| made[key]["text"].as_str();
-    same_build(made)?;
     let old = Recipe::read(text("recipe").unwrap_or_default())
         .map_err(|e| format!("its recipe cannot be read ({})", e.line()))?;
     if cuts(&old) != cuts(recipe) {
@@ -179,7 +239,7 @@ pub fn read(
         })
         .collect();
     if text("samples") != Some(texts.samples.as_str()) || text("lock") != Some(texts.lock.as_str()) {
-        return samples(file, recipe, &reused, lock, asked).map(Base::Samples);
+        return samples(file, recipe, &reused, lock, asked);
     }
     same_samples(header, lock)?;
     let files = made["files"].as_object().ok_or("it records no files")?;
@@ -191,15 +251,43 @@ pub fn read(
             ));
         }
     }
-    let rows = crate::fill::rows(file, &[], &HashSet::new()).map_err(|e| format!("it could not be read ({e})"))?;
-    let kept = rows.files.iter().map(|(key, plan)| (key.clone(), rows.entries[plan.rows.clone()].iter().map(|&e| e as u64).collect())).collect();
-    Ok(Base::Columns(Earlier { file: rows.file, reused, kept }))
+    let in_place = only_added(header, recipe, &reused);
+    Ok(Judged::Columns(reused, in_place))
+}
+
+/// What a file judged to be built on gives this press, its rows read.
+fn filled(file: Reader, judged: Judged) -> Result<Base, String> {
+    match judged {
+        Judged::Columns(reused, in_place) => {
+            let rows = crate::fill::rows(file, &[], &HashSet::new()).map_err(|e| format!("it could not be read ({e})"))?;
+            let kept = rows.files.iter().map(|(key, plan)| (key.clone(), rows.entries[plan.rows.clone()].iter().map(|&e| e as u64).collect())).collect();
+            Ok(Base::Columns(Earlier { file: rows.file, reused, kept, in_place }))
+        }
+        Judged::Samples(plans, added) => {
+            let mut fill = crate::fill::rows(file, &[], &HashSet::new())?;
+            fill.files.extend(plans);
+            fill.added = Some(added);
+            Ok(Base::Samples(fill))
+        }
+    }
+}
+
+/// Whether `recipe` only adds columns to the file of this header, stored or derived: every column
+/// it has kept as it is (`reused`) and in its order, every derived column with its expression, and
+/// one more at least.
+fn only_added(header: &Value, recipe: &Recipe, reused: &[bool]) -> bool {
+    let names = |list: &Value| -> Vec<String> { list.as_array().into_iter().flatten().filter_map(|c| c["name"].as_str().map(str::to_owned)).collect() };
+    let kept: Vec<String> = recipe.columns.iter().zip(reused).filter(|(_, same)| **same).map(|((name, _), _)| name.clone()).collect();
+    let derived = header["derived"]["columns"].as_array().into_iter().flatten();
+    let derived_kept = derived.into_iter().all(|record| recipe.derived.iter().any(|(name, expression)| record["name"] == name.as_str() && record["expression"] == expression.as_str()));
+    let more = kept.len() < recipe.columns.len() || header["derived"]["columns"].as_array().map_or(0, Vec::len) < recipe.derived.len();
+    names(&header["data"]["cols"]) == kept && derived_kept && more
 }
 
 /// When the lock's samples changed since the file was pressed, its rows of the samples the lock
 /// holds as it did (the same files, tree, metadata and event choice); the others are read whole.
 /// Its columns must be the recipe's.
-fn samples(file: Reader, recipe: &Recipe, reused: &[bool], lock: &Lock, asked: &[Events]) -> Result<Fill, String> {
+fn samples(file: &Reader, recipe: &Recipe, reused: &[bool], lock: &Lock, asked: &[Events]) -> Result<Judged, String> {
     let changed: Vec<&str> = recipe.columns.iter().zip(reused).filter(|(_, same)| !**same).map(|((n, _), _)| n.as_str()).collect();
     if !changed.is_empty() {
         return Err(format!("samples.lock has changed since, and so have the columns ({} new or changed): a press builds on a file for a change of either, not of both", changed.join(", ")));
@@ -229,15 +317,45 @@ fn samples(file: Reader, recipe: &Recipe, reused: &[bool], lock: &Lock, asked: &
             return Err(format!("it chose other events of {} (another --events, --random or --seed)", sample.name));
         }
     }
-    let mut fill = crate::fill::rows(file, &[], &HashSet::new())?;
-    fill.files.extend(plans);
-    fill.added = Some(added);
-    Ok(fill)
+    Ok(Judged::Samples(plans, added))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // SPEC 8.6
+    #[test]
+    fn another_build_is_named_for_what_differs() {
+        let build = |version: &str, commit: &str, compiler: &str, target: &str| serde_json::json!({"program": "rvr", "version": version, "rowver": "15", "commit": commit, "compiler": compiler, "target": target});
+        let made = build("15.0.0", "aaa", "rustc 1.91.0", "aarch64-apple-darwin");
+        let said = |this: Value| builds("f.rvr", &made, &this);
+        assert_eq!(said(build("15.0.1", "bbb", "rustc 1.91.0", "aarch64-apple-darwin")), "f.rvr was made by rvr 15.0.0 (commit aaa); this is rvr 15.0.1 (commit bbb).");
+        assert_eq!(
+            said(build("15.0.0", "aaa", "rustc 1.92.0", "x86_64-unknown-linux-gnu")),
+            "f.rvr was made by rvr 15.0.0 (commit aaa, rustc 1.91.0, aarch64-apple-darwin); this is rvr 15.0.0 (commit aaa, rustc 1.92.0, x86_64-unknown-linux-gnu)."
+        );
+        assert_eq!(said(build("15.0.0", "unknown", "rustc 1.91.0", "aarch64-apple-darwin")), "f.rvr was made by rvr 15.0.0 (commit aaa); this rvr's commit is unknown (it was not built from a git checkout), and such a build builds on no file.");
+        assert_eq!(said(build("15.0.0", "aaa-dirty", "rustc 1.91.0", "aarch64-apple-darwin")), "f.rvr was made by rvr 15.0.0 (commit aaa); this rvr has uncommitted changes (its commit is aaa-dirty), and such a build builds on no file.");
+    }
+
+    // SPEC 8.6
+    #[test]
+    fn two_builds_told_apart_are_never_named_alike() {
+        let build = |version: &str, commit: &str, compiler: &str, target: &str| serde_json::json!({"program": "rvr", "version": version, "rowver": "15", "commit": commit, "compiler": compiler, "target": target});
+        let this = build("15.0.0", "aaa", "rustc 1.91.0", "aarch64-apple-darwin");
+        let mut alike = this.clone();
+        alike["more"] = "a field no build is named by".into();
+        assert!(one_build(&alike, &this));
+        for (key, other) in [("version", "15.0.1"), ("commit", "bbb"), ("compiler", "rustc 1.92.0"), ("target", "x86_64-unknown-linux-gnu")] {
+            let mut made = this.clone();
+            made[key] = other.into();
+            assert!(!one_build(&made, &this), "{key}");
+            let said = builds("f.rvr", &made, &this);
+            let (was, now) = said.trim_end_matches('.').split_once("; this is ").unwrap();
+            assert_ne!(was.trim_start_matches("f.rvr was made by "), now, "{key}: {said}");
+        }
+    }
 
     const BASE: &str = r#"
 format = "rvr-recipe"

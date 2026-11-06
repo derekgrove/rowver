@@ -73,6 +73,25 @@ impl Facts {
         })
     }
 
+    /// Take in the facts of the values after these, seen apart: one pass over both, in row order.
+    pub(crate) fn merge(&mut self, other: Facts) {
+        self.bytes += other.bytes;
+        // As add() does, so the first of two equal ends stays (0.0 or -0.0).
+        if other.low < self.low {
+            self.low = other.low;
+        }
+        if other.high > self.high {
+            self.high = other.high;
+        }
+        (self.lo, self.hi) = (self.lo.min(other.lo), self.hi.max(other.hi));
+        for value in other.distinct {
+            if self.distinct.len() > FEW {
+                break;
+            }
+            self.distinct.insert(value);
+        }
+    }
+
     /// The facts: `lim`, `nice`, and `vals` on a whole-number column of at most 64 values.
     pub(crate) fn finish(self) -> Map<String, Value> {
         let mut out = Map::new();
@@ -97,5 +116,33 @@ impl Facts {
             out.insert("vals".into(), self.distinct.iter().copied().map(whole).collect());
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Facts;
+
+    // FORMAT 4
+    #[test]
+    fn facts_merged_in_chunk_order_are_those_of_one_pass_in_row_order() {
+        let bytes = |values: &[f64]| values.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+        // A zero of each sign, at the low end and at the high end, in the first chunk and a later one.
+        for (rest, first, later) in [(1.0, 0.0, -0.0), (1.0, -0.0, 0.0), (-1.0, 0.0, -0.0), (-1.0, -0.0, 0.0)] {
+            let chunks = [vec![rest, first, rest], vec![rest; 3], vec![rest, later, rest]];
+            let mut once = Facts::new("f8");
+            once.add(&bytes(&chunks.concat())).unwrap();
+            let mut merged = Facts::new("f8");
+            for chunk in &chunks {
+                let mut seen = Facts::new("f8");
+                seen.add(&bytes(chunk)).unwrap();
+                merged.merge(seen);
+            }
+            let (once, merged) = (once.finish(), merged.finish());
+            assert_eq!(serde_json::to_string(&merged).unwrap(), serde_json::to_string(&once).unwrap(), "{rest} {first} {later}");
+            let zero = if first.is_sign_negative() { "-0.0" } else { "0.0" };
+            let lim = if rest > 0.0 { format!("[{zero},1.0]") } else { format!("[-1.0,{zero}]") };
+            assert_eq!(once["lim"].to_string(), lim, "the zero first seen");
+        }
     }
 }

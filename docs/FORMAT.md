@@ -5,7 +5,7 @@ and writes all of it and is the reference builder; `rvr press` writes pressed fi
 [The features](FEATURES.md) describe what the tools around the format do.
 
 **The running example.** Every example below is from one real file, `tiny.rvr`, unless it says
-otherwise. It is 7,450 bytes, pressed from two copies of a five-entry test ntuple
+otherwise. It is 9,135 bytes, pressed from two copies of a five-entry test ntuple
 (`crates/rvr/tests/fixtures/uproot_flat.root`, tree `analysis`; one sample each, `signal` and
 `background`) with this recipe, and signed with a throwaway key:
 
@@ -33,34 +33,49 @@ Checksums are cut to their first 8 hex digits here; a file holds all 64.
 ## 1. The file at a glance
 
 ```
-┌─────────────┬──────────────────┬────────────────────────────┬──────────────────────────────┐
-│ magic       │ header length    │ header                     │ arrays                       │
-│ 8 bytes     │ u32 little-endian│ UTF-8 JSON, not compressed │ each cut in row-aligned      │
-│             │                  │                            │ chunks, end to end (§7)      │
-└─────────────┴──────────────────┴────────────────────────────┴──────────────────────────────┘
- byte 0        byte 8             byte 12                      byte 12 + header length
+┌─────────┬────────────────────────────┬────────────────────────────┬───────────────────┬─────────┐
+│ magic   │ arrays                     │ header                     │ header length L   │ magic   │
+│ 8 bytes │ each cut in row-aligned    │ UTF-8 JSON, not compressed │ u32 little-endian │ 8 bytes │
+│         │ chunks, filling the space  │                            │                   │         │
+│         │ from byte 8 to the header  │                            │                   │         │
+│         │ (§7)                       │                            │                   │         │
+└─────────┴────────────────────────────┴────────────────────────────┴───────────────────┴─────────┘
+ byte 0    byte 8                       byte S − 12 − L              byte S − 12         byte S − 8
 ```
 
-The first bytes of `tiny.rvr`:
+`S` is the file's size in bytes and `L` the header's length. The first and last 16 bytes of
+`tiny.rvr` (S = 9,135):
 
 ```
-00000000: 8952 5652 0d0a 1a0a c21b 0000 7b22 726f  .RVR........{"ro
-          └──────magic──────┘ └length─┘ └─header…
+00000000: 8952 5652 0d0a 1a0a 28b5 2ffd 0438 2300  .RVR....(./..8#.
+          └──────magic──────┘ └arrays…
+0000239f: 6322 7d7d f11b 0000 8952 5652 0d0a 1a0a  c"}}.....RVR....
+          …header┘ └length─┘ └──────magic──────┘
 ```
 
 - **The magic** is `89 52 56 52 0D 0A 1A 0A` (`\x89RVR\r\n\x1a\n`): a high byte, the letters
   `RVR`, then CR LF, Ctrl-Z and LF. A transfer that strips the eighth bit or rewrites line endings
-  therefore breaks the file visibly.
-- **The header length** is `C2 1B 00 00`, that is 0x1BC2 = 7,106 bytes. A reader parses that many
-  bytes of JSON and has every fact about the file without touching any array.
-- **The arrays** start at byte 12 + 7,106 = 7,118 and fill the rest of the file: 1,962 bytes here.
-  Each is cut in chunks of rows that line up across every array, each chunk compressed on its own
-  (§7), so a reader decompresses only the arrays, and only the rows, it needs, in parallel. A
-  program that changes only the header writes the new header and copies the arrays byte for byte.
+  therefore breaks the file visibly. It opens the file and ends it.
+- **The arrays** start at byte 8 and fill the space up to the header exactly: 1,962 bytes here,
+  bytes 8 to 1,969. Each is cut in chunks of rows that line up across every array, each chunk
+  compressed on its own (§7), so a reader decompresses only the arrays, and only the rows, it needs,
+  in parallel.
+- **The header length** is the four bytes before the last 8: `F1 1B 00 00`, that is 0x1BF1 = 7,153
+  bytes. The header is the `L` bytes before them, from byte S − 12 − L: here bytes 1,970 to 9,122.
+  (A header's length is its writer's: this one holds what built it, `made.toolchain`, whose
+  commit and compiler another build writes otherwise.)
 
-A reader refuses a file whose first 8 bytes are not the magic, whose `rowver` is not 15, or whose
-arrays do not fill the rest of the file exactly (the header's array records say where each lies, so
-this is checked on opening, with no array read).
+A reader reads the first 8 bytes and the last 12, then the header, and has every fact about the file
+without touching any array. Since the header comes last, a change that only adds arrays, or only
+writes another header, can be made in the file itself: the new arrays from the old header's first
+byte, then the new header, its length and the magic (SPEC.md §8.12 says how a writer makes such a
+change safe from being cut short).
+
+A reader refuses a file of fewer than 20 bytes, or whose first 8 bytes are not the magic, as not an
+`.rvr` file; a file whose last 8 bytes are not the magic, as cut short (or a change to it cut short);
+a file whose header length is more than its S − 20 bytes leave room for; and a file whose `rowver` is
+not 15, or whose arrays do not fill the space from byte 8 to the header exactly (the header's array
+records say where each lies, so this is checked on opening, with no array read: §7).
 
 **The header's JSON** is one JSON value (RFC 8259) in UTF-8, an object, with these rules:
 
@@ -83,16 +98,17 @@ number (a count's above, a total's with a `.` or an exponent, a whole number tol
 being written without either), its spelling is the writer's own: a reader takes `1.5e-7`,
 `1.5e-07` and `0.00000015` as one number.
 
-**An empty file** is a file's header, byte for byte, with nothing after it: the file ends at byte
-12 + header length, while its records still name every array, its checksums and its signature as
-they were. It keeps the study it was pressed from, which can press the same arrays again, so it gives
-back a file's space and keeps its place (`rvr empty`; `rvr refill` presses the arrays again and puts
-them back once each has the `sha256` its record states). Its array records are laid out as a whole
-file's are (§7: from `at` 0, end to end), only the bytes they name are gone. A reader opens it and
-checks its header as for any file, says it is empty, and refuses to read a column of it; nothing
-else in the format marks it. Full validation of it runs every check but those of the arrays' bytes
-(§12). A file of no rows has no chunks, so its arrays hold no bytes: it is whole, not empty. A file
-is empty exactly when it ends at its header while its arrays' records name bytes after it.
+**An empty file** is a file whose arrays are gone, its header kept byte for byte: the magic, the
+header, its length and the magic, S = 20 + L, while its records still name every array, its
+checksums and its signature as they were. It keeps the study it was pressed from, which can press
+the same arrays again, so it gives back a file's space and keeps its place (`rvr empty`; `rvr refill`
+presses the arrays again and puts them back once each has the `sha256` its record states). Its array
+records are laid out as a whole file's are (§7: filling the bytes from `at` 0 with no gap and no
+overlap), only the bytes they name are gone. A reader opens it and checks its header as for any
+file, says it is empty, and refuses to read a column of it; nothing else in the format marks it.
+Full validation of it runs every check but those of the arrays' bytes (§12). A file of no rows has
+no chunks, so its arrays hold no bytes: it is whole, not empty. A file is empty exactly when its
+arrays take no bytes (S = 20 + L) while its arrays' records name bytes.
 
 ## 2. The header at a glance
 
@@ -114,8 +130,9 @@ is empty exactly when it ends at its header while its arrays' records name bytes
 ```
 
 The top level has exactly `rowver` (the whole number 15), `data`, `made`, an optional `derived`, an
-optional `signature`, and zero or more tool keys (§11). Nothing else. No program rewrites `data`
-once the press has written it.
+optional `signature`, and zero or more tool keys (§11). Nothing else. Once the press has written
+`data`, only a press that builds on the file adds to it: the records of new columns, whose arrays
+lie after the file's own (SPEC.md §8.2), and `data.sha256` again; nothing else changes it.
 
 ## 3. Rows: `data`
 
@@ -737,8 +754,8 @@ each chunk's SHA-256. Chunks decode independently, in parallel.
 An array reference is `{"at", "size", "sha256"}`, with `by_sample` on every array but `sample`
 (§8).
 
-- `at` counts bytes from the start of the arrays (the byte after the header), so a header of
-  another length leaves every `at` unchanged.
+- `at` counts bytes from byte 8, the first after the magic, so a header of another length leaves
+  every `at` unchanged.
 - `size` is the bytes the array takes, frames and table.
 - The array's values, in chunk order, are its whole values: `rows` values for `sample`, `entry` and
   flat columns, `count` for jagged content; for jagged offsets, the whole `offsets` (`rows + 1`
@@ -746,9 +763,16 @@ An array reference is `{"at", "size", "sha256"}`, with `by_sample` on every arra
   chunks' last values, and each chunk's leading 0 but the first's dropped; a file of no rows (no
   chunks) has the whole offsets `[0]`.
 
-The arrays are written in file order, one after another from `at` 0, with no gap between them and
-nothing after the last: `sample`, `entry`, then each column in `cols` order, a jagged column as
-its offsets then its content. In `tiny.rvr`:
+The records are in **record order**: `sample`, `entry`, then each column in `cols` order, a jagged
+column as its offsets then its content. The arrays may lie in any order: together they fill the
+space from byte 8 to the header's first byte exactly, each of its bytes in exactly one array, so
+that, taken in the order of their `at`, each array begins where the one before it ends, the first at
+`at` 0 and the last ending at the header (an array of no bytes, as every array of a file of no rows,
+lies at `at` 0). A reader checks this on opening from the records alone (§12), and refuses a gap
+between two arrays, an array that overlaps another, and an array past the header. A press lays the
+arrays in record order, one after another from `at` 0; a press that adds columns to a file it builds
+on writes their arrays after the file's own, so they lie after arrays whose records come after
+theirs (SPEC.md §8.2). In `tiny.rvr`, pressed whole:
 
 | array | `at` | `size` |
 |---|---|---|
@@ -758,7 +782,7 @@ its offsets then its content. In `tiny.rvr`:
 | `Jet_pt` offsets | 924 | 432 |
 | `Jet_pt` content | 1356 | 324 |
 | `ht` | 1680 | 282 |
-| | 1962 | the end of the file |
+| | 1962 | the end of the arrays: the header's first byte is byte 8 + 1,962 = 1,970 |
 
 Each array of `tiny.rvr` is two chunks, one a sample: `nJet`'s 254 bytes are each chunk's four lane
 frames, of 21, 14, 14 and 14 bytes, then its table of two entries of 64 bytes (each lane's size as
@@ -787,7 +811,7 @@ signature. `data.chunk_rows` is the recipe's `chunk_rows`, or 65,536 when it giv
 |---|---|---|
 | chunk SHA-256 | the chunk's values as little-endian bytes (§7's table of what a chunk holds) | every chunk of every array, in its chunk table |
 | array `sha256` | the ASCII text of the array's chunk SHA-256s (64 hex characters each) joined, in chunk order; for an array of no chunks, the SHA-256 of nothing | every array |
-| `data.sha256` | the ASCII text of every array's `sha256` joined, with nothing between them, in file order | `data` |
+| `data.sha256` | the ASCII text of every array's `sha256` joined, with nothing between them, in record order (§7), wherever the arrays lie | `data` |
 | `by_sample` | one SHA-256 per sample, of that sample's part of the array (below) | `entry`, every flat column, both arrays of every jagged column |
 | `made.sha256` | the canonical JSON (below) of `made` without its own `sha256`, as UTF-8 | `made` |
 | a derived column's `sha256` and `by_sample` | its values as they are worked out, cut at the file's chunks as a stored column's array is: its chunk SHA-256s give its `sha256` and `by_sample` as for an array | each derived column |
@@ -800,7 +824,8 @@ every checksum when it builds a file. Reading and writing preserve them without 
 and readers check them. Tool keys are outside every checksum, and outside the signature.
 
 **`data.sha256`** fingerprints all the data without decompressing any of it. It does not cover the
-`data` JSON describing the arrays. In `tiny.rvr` it is the SHA-256 of
+`data` JSON describing the arrays, nor where they lie: arrays laid in another order give the same
+`data.sha256`. In `tiny.rvr` it is the SHA-256 of
 `"0b8e189d…" + "d618105e…" + "d9237950…" + "af72e3c9…" + "69fa98c7…" + "e5fc4c13…"` (the full 64
 characters of each), which is `d943535f`.
 
@@ -932,7 +957,8 @@ letters, digits, `_`, `-` and `.`), holding whatever JSON the tool likes, within
 `signature`) is refused as a misspelling, naming the key it is near: compared ignoring case, at most
 one edit from one of them, an edit being a character inserted, deleted or replaced, or two
 neighbouring characters swapped (so `Data`, `mde`, `signatur`, `rowvr` and `dervied` are refused;
-`dash`, `view`, `router` and `driver` are tool keys). `rvr press` never adds one. Any program that saves a `.rvr` file writes back
+`dash`, `view`, `router` and `driver` are tool keys). `rvr press` never adds one; `rvr tool` sets
+and drops them, in the file itself (SPEC.md §8.11). Any program that saves a `.rvr` file writes back
 every tool key it found: `rvr press` those of the file it replaces at its target, when that file
 opens. Tool keys are outside every checksum and the signature, so a tool can
 change its own key without breaking either.
@@ -946,11 +972,17 @@ steps, each refusing the file at the first problem, on one line that says which 
 **On opening**, a reader checks everything the header says without reading an array or parsing the
 study's texts:
 
-- §1: the magic, the header's JSON rules, `rowver: 15`, and the arrays filling the rest of the file
-  exactly, from their records (laid out from `at` 0, end to end, in an empty file too); each array's
-  `size` at least its chunk table's `chunks × (8w + 32)` bytes plus 13 bytes a lane per chunk (the
-  least a frame §7 allows takes: its magic 4, a frame header of 2, one block header 3 and the
-  content checksum 4);
+- §1: the file at least 20 bytes, the magic at its start and its end, the header's length within the
+  file, the header's JSON rules, `rowver: 15`, and the arrays filling the space from byte 8 to the
+  header exactly, from their records (§7: in any order, no gap and no overlap; in an empty file,
+  laid out as a whole file's are, the space they would fill gone); each array's `size` at least its
+  chunk table's `chunks × (8w + 32)` bytes plus 13 bytes a lane per chunk (the least a frame §7
+  allows takes: its magic 4, a frame header of 2, one block header 3 and the content checksum 4);
+- that no change to the file was cut short: a file `FILE-journal` beside the file `FILE` (its name
+  with `-journal` added: `tiny.rvr-journal` beside `tiny.rvr`) is the journal of a change to it
+  (SPEC.md §8.12) that did not finish, and a reader that only reads refuses the file while it is
+  there: saying that it is being changed now while another program holds the file's lock (SPEC.md
+  §8.12), and otherwise that any rvr command on the file puts it back as it was;
 - §2 and §11: the top level, and the tool keys' names;
 - §3: every field of `data`, `chunk_rows` within its bounds, the samples and files in order, rows
   adding up; the samples' names nonempty and unique, their labels nonempty (the names' form, and

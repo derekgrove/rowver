@@ -180,14 +180,19 @@ fn the_running_example_of_format_md_is_what_a_press_writes() {
     let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\njets = \"nJet >= 1\"\n\n[columns]\nbranches = [\"nJet\", \"Jet_pt\"]\nht = \"sum(Jet_pt)\"\n\n[totals]\n\n[derived]\nmean_jet_pt = \"ht / nJet\"\n";
     std::fs::write(dir.join("samples.toml"), samples).unwrap();
     std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
+    // Signed with a throwaway key, as FORMAT.md says.
+    assert_eq!(rvr(&dir, &["key", "new", "Throwaway"]).0, 0);
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     assert_eq!(rvr(&dir, &["press"]).0, 0);
     let bytes = std::fs::read(dir.join("tiny.rvr")).unwrap();
-    assert_eq!(&bytes[..8], b"\x89RVR\r\n\x1a\n");
-    let length = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    let h: Value = serde_json::from_slice(&bytes[12..12 + length]).unwrap();
-    let arrays = &bytes[12 + length..];
-    assert_eq!(arrays.len(), 1962);
+    // The magic, the arrays from byte 8, the header, its length, and the magic again.
+    let n = bytes.len();
+    assert_eq!((&bytes[..8], &bytes[n - 8..]), (&common::MAGIC[..], &common::MAGIC[..]));
+    let (text, arrays) = common::parts(&bytes);
+    let h: Value = serde_json::from_slice(text).unwrap();
+    // The header's length is the build's own (its commit and compiler are in it): FORMAT.md quotes one.
+    assert_eq!((arrays.len(), n), (1962, 8 + 1962 + text.len() + 12));
+    assert_eq!(&bytes[n - 12..n - 8], (text.len() as u32).to_le_bytes());
     let d = &h["data"];
     let cut = |v: &Value| v.as_str().unwrap()[..8].to_owned();
     let at = |v: &Value| (v["at"].as_u64().unwrap(), v["size"].as_u64().unwrap());

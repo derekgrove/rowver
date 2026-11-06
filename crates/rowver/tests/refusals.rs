@@ -24,6 +24,11 @@ enum Change {
     Arrays(fn(&mut Value, &mut Vec<Vec<u8>>)),
     /// The header's JSON text.
     Text(fn(&mut String)),
+    /// The arrays, laid end to end in record order and `data.sha256` made again, then laid as `f`
+    /// says: it sets their `at`s and gives the bytes from byte 8 to the header; then sealed.
+    Placed(fn(&mut Value, &[Vec<u8>]) -> Vec<u8>),
+    /// The fixture with a journal beside it (`FILE.rvr-journal`, FORMAT §12): a change cut short.
+    Journaled,
     /// The file's bytes.
     Bytes(fn(&mut Vec<u8>)),
     /// The header, sealed, of the file emptied.
@@ -274,12 +279,14 @@ fn bytes_of(base: (Value, Vec<Vec<u8>>), change: Change) -> Vec<u8> {
         Text(f) => {
             let mut text = serde_json::to_string(&header).unwrap();
             f(&mut text);
-            let mut out = b"\x89RVR\r\n\x1a\n".to_vec();
-            out.extend((text.len() as u32).to_le_bytes());
-            out.extend(text.as_bytes());
-            out.extend(arrays.concat());
-            return out;
+            return common::framed(text.as_bytes(), &arrays.concat());
         }
+        Placed(f) => {
+            relaid(&mut header, &arrays);
+            let region = f(&mut header, &arrays);
+            return common::framed(serde_json::to_string(&sealed(header)).unwrap().as_bytes(), &region);
+        }
+        Journaled => {}
         Bytes(f) => {
             let mut out = to_bytes(&header, &arrays);
             f(&mut out);
@@ -337,7 +344,17 @@ fn bytes_of(base: (Value, Vec<Vec<u8>>), change: Change) -> Vec<u8> {
 
 /// Whether the file of these bytes opens, and whether it validates in full: each refusal said.
 fn checked(bytes: &[u8]) -> (Result<(), String>, Result<(), String>) {
+    checked_with(bytes, false)
+}
+
+/// The same, with a journal beside the file when `journal`: a change to it cut short (FORMAT §12).
+fn checked_with(bytes: &[u8], journal: bool) -> (Result<(), String>, Result<(), String>) {
     let path = written(bytes, "refusal");
+    let beside = common::journal(&path);
+    if journal {
+        std::fs::write(&beside, b"a change cut short").unwrap();
+    }
+    let _gone = common::Written(beside);
     // A refusal that names the file names it as FILE.rvr, the same wherever the test runs.
     let said = |e: rowver::Error| e.to_string().replace(&*path.0.to_string_lossy(), "FILE.rvr");
     let opened = Reader::open(&path).map(drop).map_err(said);
@@ -364,7 +381,7 @@ fn refused_of(base: impl Fn() -> (Value, Vec<Vec<u8>>), rows: Vec<Row>, opening:
             false => said.split('|').next().unwrap_or(said).to_owned(),
         };
         let said = said.as_str();
-        let (opened, validated) = checked(&bytes_of(base(), change));
+        let (opened, validated) = checked_with(&bytes_of(base(), change), matches!(change, Journaled));
         let problem = match (&opened, &validated) {
             (_, Ok(())) => Some("accepted".to_owned()),
             (Ok(()), _) if opening => Some("opened".to_owned()),
@@ -377,6 +394,23 @@ fn refused_of(base: impl Fn() -> (Value, Vec<Vec<u8>>), rows: Vec<Row>, opening:
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Where a file's header starts, as its last 12 bytes say (FORMAT §1).
+fn header_start(bytes: &[u8]) -> usize {
+    let n = bytes.len();
+    n - 12 - u32::from_le_bytes(bytes[n - 12..n - 8].try_into().unwrap()) as usize
+}
+
+/// The arrays laid in `order` (indices in record order), each record's `at` where it then lies.
+fn reordered(header: &mut Value, arrays: &[Vec<u8>], order: &[usize]) -> Vec<u8> {
+    assert_eq!(order.len(), arrays.len());
+    let mut region = Vec::new();
+    for &index in order {
+        record(header, index)["at"] = region.len().into();
+        region.extend(&arrays[index]);
+    }
+    region
 }
 
 /// Nested arrays `depth` deep.
@@ -449,6 +483,8 @@ fn what_the_format_allows_is_valid() {
 fn allowed() -> Vec<(&'static str, Change)> {
     vec![
         ("§1 nesting to 64 deep", Raw(|h| h["fixture_tool"]["deep"] = nested(62))),
+        ("§7 arrays in any order: the last record's first", Placed(|h, a| reordered(h, a, &(0..a.len()).rev().collect::<Vec<_>>()))),
+        ("§7 arrays in any order: a list column's content before its offsets", Placed(|h, a| reordered(h, a, &(0..a.len()).map(|i| match i { 4 => 5, 5 => 4, i => i }).collect::<Vec<_>>()))),
         ("§5 a sample column's numbers compared as numbers: in an f8 one, as the doubles they read as", Raw(|h| {
             let cols = h["data"]["sample_cols"].as_array_mut().unwrap();
             let seed = cols.iter_mut().find(|c| c["name"] == "seed_like").unwrap();
@@ -536,11 +572,35 @@ fn opening() -> Vec<Row> {
             a[3] = laid(&[chunk(&values, 4)]);
             h["data"]["cols"][1]["sha256"] = joined(&[Sha256::digest(&values).as_slice()]).into();
         }), "data.cols[\"MET\"].size is 136, and its 2 chunks take at least 232 bytes"),
-        ("§1", "the header length within the file", Bytes(|b| b[8..12].copy_from_slice(&u32::MAX.to_le_bytes())), "the header's length (bytes 8 to 11)"),
+        ("§1", "the header's length within the file", Bytes(|b| { let n = b.len(); b[n - 12..n - 8].copy_from_slice(&u32::MAX.to_le_bytes()) }), "the header's length (the 4 bytes before the last 8) is more than the file holds"),
+        ("§1", "the file ends in the magic", Bytes(|b| { let n = b.len(); b[n - 1] ^= 1 }), "it does not end in the .rvr magic (its last 8 bytes): the file was cut short, or a change to it was"),
+        ("§1", "the file ends in the magic: nothing after it", Bytes(|b| b.push(0)), "it does not end in the .rvr magic (its last 8 bytes)"),
+        ("§1", "the file at least the magic twice and a length", Bytes(|b| b.truncate(19)), "it is not an .rvr file: it holds 19 bytes, and an .rvr file holds at least 20"),
+        ("§12", "no journal beside the file", Journaled, "FILE.rvr: a change to it was cut short (FILE.rvr-journal is beside it): any rvr command on the file puts it back as it was"),
         ("§1", "rowver is 15", Raw(|h| h["rowver"] = 14.into()), "This file is rowver 14"),
         ("§1", "rowver is the whole number 15", Raw(|h| h["rowver"] = json!(15.0)), "rowver must be the whole number 15"),
-        ("§1", "the arrays fill the file: no byte after", Bytes(|b| b.extend([0, 0, 0])), "the arrays' records end at byte"),
-        ("§1", "the arrays fill the file: none missing", Bytes(|b| b.truncate(b.len() - 1)), "the arrays' records end at byte"),
+        ("§1 §7", "the arrays fill the space before the header: no byte left", Bytes(|b| { let at = header_start(b); b.splice(at..at, [0, 0, 0]); }), "the arrays' records end at byte"),
+        ("§1 §7", "the arrays fill the space before the header: none missing", Bytes(|b| { let at = header_start(b); b.remove(at - 1); }), "the arrays' records end at byte"),
+        ("§7", "no gap between arrays", Placed(|h, a| {
+            // One byte more after the sample array, every array after it a byte further on.
+            let mut region = a.concat();
+            region.insert(a[0].len(), 0);
+            for index in 1..a.len() {
+                let held = record(h, index);
+                held["at"] = (held["at"].as_u64().unwrap() + 1).into();
+            }
+            region
+        }), "data.entry.at is 241, but the arrays before it end at 240: the arrays fill the bytes from 8 to the header with no gap and no overlap"),
+        ("§7", "no arrays overlapping", Placed(|h, a| {
+            // The sample array's last byte gone, every array after it a byte nearer: it overlaps the next.
+            let mut region = a.concat();
+            region.remove(a[0].len() - 1);
+            for index in 1..a.len() {
+                let held = record(h, index);
+                held["at"] = (held["at"].as_u64().unwrap() - 1).into();
+            }
+            region
+        }), "data.entry.at is 239, but the arrays before it end at 240: the arrays fill the bytes from 8 to the header with no gap and no overlap"),
         ("§1", "no byte-order mark", Text(|t| t.insert(0, '\u{feff}')), "the header is not JSON as docs/FORMAT.md §1 reads it"),
         ("§1", "one JSON object", Text(|t| *t = format!("[{t}]")), "the header must be one JSON object"),
         ("§1", "no key twice", Text(|t| *t = t.replacen("{\"rows\":", "{\"rows\":5,\"rows\":", 1)), "the header breaks docs/FORMAT.md §1: data.rows is written twice (line 1, column "),
@@ -1099,8 +1159,8 @@ fn the_conformance_corpus_holds_what_this_reader_says() {
     }
     // Every case, one file after another in cases.bin: the files the format allows, and each rule broken alone.
     let (mut cases, mut packed) = (Vec::new(), Vec::new());
-    let mut case = |rule: String, verdict: &str, bytes: Vec<u8>| {
-        let (opened, validated) = checked(&bytes);
+    let mut case = |rule: String, verdict: &str, bytes: Vec<u8>, journal: bool| {
+        let (opened, validated) = checked_with(&bytes, journal);
         let said = opened.clone().err().or(validated.clone().err());
         let when = match (&opened, &validated) {
             (Ok(()), Ok(())) => "",
@@ -1108,15 +1168,19 @@ fn the_conformance_corpus_holds_what_this_reader_says() {
             _ => "full",
         };
         let sha: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
-        cases.push(json!({"rule": rule, "verdict": verdict, "refused": when, "at": packed.len(), "size": bytes.len(), "sha256": sha, "rust_says": said}));
+        let mut entry = json!({"rule": rule, "verdict": verdict, "refused": when, "at": packed.len(), "size": bytes.len(), "sha256": sha, "rust_says": said});
+        if journal {
+            entry["journal"] = true.into();
+        }
+        cases.push(entry);
         packed.extend(bytes);
     };
     for (rule, change) in allowed() {
-        case(format!("FORMAT {rule}"), "valid", bytes(change));
+        case(format!("FORMAT {rule}"), "valid", bytes(change), false);
     }
     for (rows, when) in [(opening(), "opening"), (in_full(), "full")] {
         for (section, rule, change, _) in rows {
-            case(format!("FORMAT {section} {rule}"), when, bytes(change));
+            case(format!("FORMAT {section} {rule}"), when, bytes(change), matches!(change, Journaled));
         }
     }
     for entry in &cases {

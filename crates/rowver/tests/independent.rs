@@ -1156,11 +1156,13 @@ fn sign(header: &mut Value, key: &SigningKey) {
     });
 }
 
+/// FORMAT §1: the magic, the arrays from byte 8, the header, its length, and the magic again.
 fn assemble(header_text: &str, arrays: &[u8]) -> Vec<u8> {
     let mut out = MAGIC.to_vec();
-    out.extend((header_text.len() as u32).to_le_bytes());
-    out.extend(header_text.as_bytes());
     out.extend(arrays);
+    out.extend(header_text.as_bytes());
+    out.extend((header_text.len() as u32).to_le_bytes());
+    out.extend(MAGIC);
     out
 }
 

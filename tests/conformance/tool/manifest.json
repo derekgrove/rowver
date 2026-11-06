@@ -1,0 +1,100 @@
+{
+  "about": "tool-key imports (rvr tool FILE KEY --set DATA.json, docs/SPEC.md §8.11): each KEY and the text of DATA.json, set on rvr/valid/fixture.rvr, with its verdict; see README.md",
+  "cases": [
+    {
+      "key": "my-tool",
+      "rule": "FORMAT §11 a tool key's object",
+      "text": "{\"a\": [1, 2.5, \"x\"], \"b\": {\"c\": null}}",
+      "verdict": "valid"
+    },
+    {
+      "key": "deep",
+      "rule": "FORMAT §1 §11 nesting to 64 deep, counted from its place",
+      "text": "{\"d\": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}",
+      "verdict": "valid"
+    },
+    {
+      "key": "my.tool_2-b",
+      "rule": "FORMAT §11 a name of letters, digits, _, - and .",
+      "text": "{}",
+      "verdict": "valid"
+    },
+    {
+      "key": "my-tool",
+      "rule": "FORMAT §11 one JSON object",
+      "rust_says": "the tool key my-tool must be one JSON object (docs/FORMAT.md §11): write its data as one object, { … }",
+      "text": "[1]",
+      "verdict": "refused"
+    },
+    {
+      "key": "my-tool",
+      "rule": "FORMAT §1 JSON",
+      "rust_says": "the tool key my-tool is not JSON as docs/FORMAT.md §1 reads it (EOF while parsing a value at line 1 column 6): write its data as one JSON object",
+      "text": "{\"a\": ",
+      "verdict": "refused"
+    },
+    {
+      "key": "my-tool",
+      "rule": "FORMAT §1 no byte-order mark",
+      "rust_says": "the tool key my-tool is not JSON as docs/FORMAT.md §1 reads it (expected value at line 1 column 1): write its data as one JSON object",
+      "text": "﻿{}",
+      "verdict": "refused"
+    },
+    {
+      "key": "my-tool",
+      "rule": "FORMAT §1 no key twice",
+      "rust_says": "the tool key my-tool breaks docs/FORMAT.md §1: [\"my-tool\"].a is written twice (line 1, column 12): write its data as a header's rules say",
+      "text": "{\"a\": 1, \"a\": 2}",
+      "verdict": "refused"
+    },
+    {
+      "key": "my-tool",
+      "rule": "FORMAT §1 no whole number written -0",
+      "rust_says": "the tool key my-tool breaks docs/FORMAT.md §1: [\"my-tool\"].a[0] is written -0 (line 1, column 9): write its data as a header's rules say",
+      "text": "{\"a\": [-0]}",
+      "verdict": "refused"
+    },
+    {
+      "key": "my-tool",
+      "rule": "FORMAT §1 no lone surrogate",
+      "rust_says": "the tool key my-tool is not JSON as docs/FORMAT.md §1 reads it (unexpected end of hex escape at line 1 column 14): write its data as one JSON object",
+      "text": "{\"a\": \"\\ud800\"}",
+      "verdict": "refused"
+    },
+    {
+      "key": "my-tool",
+      "rule": "FORMAT §1 §11 nesting at most 64, counted from its place",
+      "rust_says": "the tool key my-tool breaks docs/FORMAT.md §1: [\"my-tool\"].d[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0] is nested 65 arrays and objects deep, more than 64 (line 1, column 70): write its data as a header's rules say",
+      "text": "{\"d\": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}",
+      "verdict": "refused"
+    },
+    {
+      "key": "my tool",
+      "rule": "FORMAT §11 a tool key's name",
+      "rust_says": "\"my tool\" is not a tool key's name, which is one or more ASCII letters, digits, _, - and . (docs/FORMAT.md §11): rename the tool key",
+      "text": "{}",
+      "verdict": "refused"
+    },
+    {
+      "key": "",
+      "rule": "FORMAT §11 a tool key's name: not empty",
+      "rust_says": "\"\" is not a tool key's name, which is one or more ASCII letters, digits, _, - and . (docs/FORMAT.md §11): rename the tool key",
+      "text": "{}",
+      "verdict": "refused"
+    },
+    {
+      "key": "Data",
+      "rule": "FORMAT §11 not a slip of the format's own keys",
+      "rust_says": "the top-level key \"Data\" is a slip of data, one of the format's own keys, not a tool key (docs/FORMAT.md §11): give the tool key a name further from it",
+      "text": "{}",
+      "verdict": "refused"
+    },
+    {
+      "key": "made",
+      "rule": "FORMAT §2 §11 not the format's own key",
+      "rust_says": "made is the format's own key, not a tool key (docs/FORMAT.md §2, §11): give the tool key a name of its own",
+      "text": "{}",
+      "verdict": "refused"
+    }
+  ]
+}

@@ -19,15 +19,23 @@ pub struct Piece {
     pub entry: Vec<i64>,
 }
 
-/// The bytes of one `.rvr` file: the magic, the header's length and text, then the arrays.
+/// The bytes of one `.rvr` file (FORMAT §1): the magic, the arrays, the header's text, its length, the magic.
 pub fn to_bytes(header: &Value, arrays: &[Vec<u8>]) -> Vec<u8> {
-    let text = serde_json::to_string(header).unwrap();
-    let mut bytes = b"\x89RVR\r\n\x1a\n".to_vec();
+    framed(serde_json::to_string(header).unwrap().as_bytes(), &arrays.concat())
+}
+
+/// A file of these arrays' bytes and this header text, framed as FORMAT §1 says.
+pub fn framed(text: &[u8], arrays: &[u8]) -> Vec<u8> {
+    let mut bytes = MAGIC.to_vec();
+    bytes.extend(arrays);
+    bytes.extend(text);
     bytes.extend((text.len() as u32).to_le_bytes());
-    bytes.extend(text.as_bytes());
-    bytes.extend(arrays.concat());
+    bytes.extend(MAGIC);
     bytes
 }
+
+/// The eight bytes a `.rvr` file starts and ends with.
+pub const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
 
 /// The data section of these pieces joined, in their order, as the writer streams it, and each
 /// array's compressed bytes, in file order.
@@ -73,22 +81,20 @@ pub fn pack(pieces: Vec<Piece>, files: Vec<Value>) -> rowver::Result<(Value, Vec
     let rows = Rows { samples, files, entry: Source::Values(Values::Flat(array(&entry))), chunk_rows: 65_536 };
     let columns = columns.into_iter().map(|(name, values)| (name, Source::Values(values))).collect();
     let (data, laid) = stream(rows, columns, 2, &path)?;
-    write_laid(&path, &json!({}), laid)?;
+    write_laid(&json!({}), laid)?;
     let bytes = std::fs::read(&path)?;
     std::fs::remove_file(&path)?;
-    let (_, mut rest) = split(&bytes);
-    let mut sizes = vec![&data["sample"]["size"], &data["entry"]["size"]];
+    let (_, rest) = split(&bytes);
+    let mut records = vec![&data["sample"], &data["entry"]];
     for column in data["cols"].as_array().unwrap() {
         match column["kind"] == "jagged" {
-            true => sizes.extend([&column["offsets"]["size"], &column["content"]["size"]]),
-            false => sizes.push(&column["size"]),
+            true => records.extend([&column["offsets"], &column["content"]]),
+            false => records.push(column),
         }
     }
-    let mut arrays = Vec::new();
-    for size in sizes {
-        let more = rest.split_off(size.as_u64().unwrap() as usize);
-        arrays.push(std::mem::replace(&mut rest, more));
-    }
+    // Each array's bytes where its record lays it (FORMAT §7), in record order.
+    let at = |record: &Value, key: &str| record[key].as_u64().unwrap() as usize;
+    let arrays = records.into_iter().map(|r| rest[at(r, "at")..at(r, "at") + at(r, "size")].to_vec()).collect();
     Ok((data, arrays))
 }
 
@@ -375,6 +381,13 @@ pub fn sealed(mut header: Value) -> Value {
 /// Write bytes to a fresh file in the temporary directory, deleted when dropped.
 pub struct Written(pub std::path::PathBuf);
 
+/// The journal of a change to the file at `path` (FORMAT §12): its name with `-journal` added.
+pub fn journal(path: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+    let mut name = path.as_ref().as_os_str().to_owned();
+    name.push("-journal");
+    name.into()
+}
+
 impl Drop for Written {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
@@ -397,12 +410,17 @@ pub fn written(bytes: &[u8], name: &str) -> Written {
     Written(path)
 }
 
-/// A file's header and the bytes of its arrays.
+/// A file's header and the bytes of its arrays (FORMAT §1: from byte 8 to the header).
 pub fn split(bytes: &[u8]) -> (Value, Vec<u8>) {
-    let start = 12 + u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-    (
-        serde_json::from_slice(&bytes[12..start]).unwrap(),
-        bytes[start..].to_vec(),
-    )
+    let (text, arrays) = parts(bytes);
+    (serde_json::from_slice(text).unwrap(), arrays.to_vec())
+}
+
+/// A file's header text and the bytes of its arrays, as its last 12 bytes place them.
+pub fn parts(bytes: &[u8]) -> (&[u8], &[u8]) {
+    let n = bytes.len();
+    let length = u32::from_le_bytes(bytes[n - 12..n - 8].try_into().unwrap()) as usize;
+    let start = n - 12 - length;
+    (&bytes[start..n - 12], &bytes[8..start])
 }
 

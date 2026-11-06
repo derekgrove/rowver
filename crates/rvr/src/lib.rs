@@ -30,10 +30,12 @@ mod status;
 mod tables;
 mod take;
 mod texts;
+mod tool;
 mod trying;
 mod written;
 
 use options::{Command, Options, Takes::{Kinds, No, Value}};
+use std::path::Path;
 
 /// The recipe a press runs, read from its text, or what is wrong with it.
 pub use texts::read_recipe;
@@ -65,12 +67,16 @@ const USAGE: &str = "usage:
   rvr diff A B --rows [--key COLUMN,…] [--sample NAME]
                                            event by event: the events only one holds, the first
                                            value that differs (matched by file and entry, or --key)
-  rvr reproduce FILE [DIR] [--study FOLDER] [--workers N]
-                                           press FILE's own study again and diff the two
+  rvr reproduce FILE [DIR] [--study FOLDER] [--workers N] [--texts]
+                                           press FILE's own study again and diff the two;
+                                           --texts writes its three texts into DIR, pressing none
   rvr empty FILE... [--study FOLDER] [--anyway] [--force | -f]
                                            let a file's columns go, keeping its header to refill
   rvr refill FILE [--study FOLDER] [--workers N]
                                            press an empty file's columns again from its study
+  rvr tool FILE [KEY --set DATA.json | KEY --get [OUT.json] | KEY --drop] [--force | -f]
+                                           a file's tool keys: listed, or one set, written out or
+                                           dropped, in the file itself
   rvr key new [NAME]                       make the key that signs your files
   rvr key show                             your public key
   rvr key trust KEY NAME...                trust files signed by KEY, as NAME's
@@ -102,9 +108,10 @@ const COMMANDS: &[Command] = &[
     Command { name: "dump", flags: &[("--files", No, None), ("--recipe", No, None), ("--samples", No, None), ("--lock", No, None), ("--columns", No, None), ("--all", No, None)], words: (1, 1, "one file"), dashes: false, usage: DUMP },
     Command { name: "header", flags: &[], words: (1, 1, "one file"), dashes: false, usage: HEADER },
     Command { name: "diff", flags: &[("--rows", No, None), ("--key", Value, None), ("--sample", Value, None)], words: (2, 2, "two files, A and B"), dashes: false, usage: DIFF },
-    Command { name: "reproduce", flags: &[("--study", Value, None), ("--workers", Value, None)], words: (1, 2, "a file and at most one folder"), dashes: false, usage: reproduce::USAGE },
+    Command { name: "reproduce", flags: &[("--study", Value, None), ("--workers", Value, None), ("--texts", No, None)], words: (1, 2, "a file and at most one folder"), dashes: false, usage: reproduce::USAGE },
     Command { name: "empty", flags: &[("--study", Value, None), ("--anyway", No, None), ("--force", No, Some("-f"))], words: (1, usize::MAX, "the files to empty"), dashes: false, usage: empty::USAGE },
     Command { name: "refill", flags: &[("--study", Value, None), ("--workers", Value, None)], words: (1, 1, "one file"), dashes: false, usage: empty::USAGE },
+    Command { name: "tool", flags: &[("--set", Value, None), ("--get", No, None), ("--drop", No, None), ("--force", No, Some("-f"))], words: (1, 3, "a file, then a tool key and what to do with it"), dashes: false, usage: tool::USAGE },
     Command { name: "key new", flags: &[], words: (0, 1, "at most one name"), dashes: false, usage: key::USAGE },
     Command { name: "key show", flags: &[], words: (0, 0, "no words"), dashes: false, usage: key::USAGE },
     Command { name: "key trust", flags: &[], words: (2, usize::MAX, "a key and its owner's name"), dashes: false, usage: key::USAGE },
@@ -112,6 +119,12 @@ const COMMANDS: &[Command] = &[
     Command { name: "proxy init", flags: &[("--hours", Value, None)], words: (0, 0, "no words"), dashes: false, usage: proxy::USAGE },
     Command { name: "help", flags: &[], words: (0, 0, "no words"), dashes: false, usage: USAGE },
 ];
+
+/// Each command's name and the words it takes, for the tests.
+#[doc(hidden)]
+pub fn commands() -> impl Iterator<Item = (&'static str, &'static str)> {
+    COMMANDS.iter().map(|c| (c.name, c.words.2))
+}
 
 /// The commands whose next word names what they do, and those words.
 const SUBCOMMANDS: [(&str, &[&str]); 3] = [("samples", &["expand", "resolve", "check", "plan"]), ("key", &["new", "show", "trust"]), ("proxy", &["init"])];
@@ -263,9 +276,85 @@ fn bare(args: &[&str]) -> u8 {
     }
 }
 
+/// The words of the command `name` that name files it opens: each put back first when a change to
+/// it was cut short (SPEC §8.12). validate and empty put back each of theirs as they come to it, so
+/// that one that cannot be is one failure among the rest.
+fn opened<'a>(name: &str, words: &[&'a str]) -> Vec<&'a str> {
+    match name {
+        "diff" => words.iter().take(2).copied().collect(),
+        "derive" | "dump" | "header" | "reproduce" | "refill" | "tool" => words.iter().take(1).copied().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Put back the file at `file` as it was when a change to it was cut short, saying so on standard
+/// error; what failed, when it could not be.
+pub(crate) fn restored(file: &Path) -> Result<(), String> {
+    rowver::change::restore(file).map(|restored| told(file, restored)).map_err(|e| rowver::plain(file, &e))
+}
+
+/// The file at `file` locked for this one writer (SPEC §8.12), put back first when a change to it
+/// was cut short, saying so on standard error; what failed, when it could not be.
+pub(crate) fn locked(file: &Path) -> Result<rowver::change::Locked, String> {
+    let locked = rowver::change::Locked::take(file).map_err(|e| rowver::plain(file, &e))?;
+    told(file, locked.restored());
+    Ok(locked)
+}
+
+/// Say on standard error what became of a change to `file` cut short (SPEC §8.12): of the file
+/// it names, through a link, which the journal lies beside.
+fn told(file: &Path, restored: rowver::change::Restored) {
+    let real = rowver::change::resolved(file);
+    let shown = real.display();
+    match restored {
+        rowver::change::Restored::PutBack => eprintln!("Put {shown} back as it was: a change to it was cut short."),
+        rowver::change::Restored::PutBackWithoutLock => eprintln!("Put {shown} back as it was: a change to it was cut short (put back without a lock: this filesystem gives none)."),
+        rowver::change::Restored::LetGo => eprintln!("Let go {shown}-journal: a change to {shown} was cut short before {shown} was touched, so {shown} is as it was."),
+        rowver::change::Restored::Finished => eprintln!("Let go {shown}-journal: the change to {shown} had finished, so {shown} is as the change made it."),
+        rowver::change::Restored::NoFile => eprintln!("Let go {shown}-journal: {shown} is not there."),
+        rowver::change::Restored::Nothing => {}
+    }
+}
+
+/// Say that `file` was written anew and moved over, when a change could not be made in place
+/// (SPEC §8.12).
+pub(crate) fn anew(file: &Path, locked: &rowver::change::Locked) {
+    if let Some(why) = locked.anew() {
+        told_anew(file, &why, false);
+    }
+}
+
+/// Say that `file` cannot be changed in place (`why`), so it was written anew and moved over, or,
+/// as rvr status says it, `would` be.
+pub(crate) fn told_anew(file: &Path, why: &str, would: bool) {
+    let done = match would {
+        true => "rvr press would write it anew and move it over",
+        false => "wrote it anew and moved it over",
+    };
+    println!("{} cannot be changed in place ({why}): {done}.", file.display());
+}
+
+/// In a debug build, wait while the file `RVR_HOLD` names is there, saying so first: so that a
+/// test starts another writer while this one holds the first of its two locks (SPEC §8.12).
+pub(crate) fn hold() {
+    #[cfg(debug_assertions)]
+    if let Some(hold) = std::env::var_os("RVR_HOLD") {
+        eprintln!("Holding the first of its locks, as RVR_HOLD asks.");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while Path::new(&hold).exists() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}
+
 /// Run a command whose options are read.
 fn command_run(name: &str, options: &Options) -> u8 {
     let words = options.plain();
+    for file in opened(name, &words) {
+        if let Err(why) = restored(Path::new(file)) {
+            return report(name, Err(why));
+        }
+    }
     match name {
         "new" => report("new", new::main(words[0]).map(|()| 0)),
         "samples expand" | "samples resolve" | "samples check" | "samples plan" => samples::main(name, options),
@@ -289,6 +378,7 @@ fn command_run(name: &str, options: &Options) -> u8 {
         "reproduce" => reproduce::main(options),
         "empty" => empty::empty_main(options),
         "refill" => empty::refill_main(options),
+        "tool" => tool::main(options),
         "key new" | "key show" | "key trust" => key::main(name, &words),
         "proxy" | "proxy init" => proxy::main(name, options),
         _ => {
@@ -344,7 +434,8 @@ fn header(file: &str) -> u8 {
 fn validate(words: &[&str], complete: bool) -> u8 {
     let mut ok = true;
     for file in words {
-        let checked = rowver::rvr::validate_file(file).map_err(|e| match e {
+        let restored = rowver::change::restore(file).map(|restored| told(Path::new(file), restored));
+        let checked = restored.and_then(|()| rowver::rvr::validate_file(file)).map_err(|e| match e {
             rowver::Error::Io(e) => rowver::plain_it(&e),
             e => e.to_string(),
         });

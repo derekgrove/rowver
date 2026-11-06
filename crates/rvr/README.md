@@ -152,9 +152,10 @@ The headers show no difference in rows, samples, labels, columns, derived column
 | `rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns] [--all]` | the inside of a file as text | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
 | `rvr header FILE` | the header as the file holds it | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
 | `rvr diff A B [--rows] [--key COLUMN,…] [--sample NAME]` | where two files differ: from their headers, or (`--rows`) event by event | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
-| `rvr reproduce FILE [DIR] [--study FOLDER] [--workers N]` | presses a file's own study again and compares | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
+| `rvr reproduce FILE [DIR] [--study FOLDER] [--workers N] [--texts]` | presses a file's own study again and compares, or (`--texts`) writes its three texts | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
 | `rvr empty FILE… [--study FOLDER] [--anyway] [--force \| -f]` | lets a file's arrays go, keeping its header | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
 | `rvr refill FILE [--study FOLDER] [--workers N]` | presses an empty file's arrays again | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
+| `rvr tool FILE [KEY --set DATA.json \| KEY --get [OUT.json] \| KEY --drop] [--force \| -f]` | lists a file's tool keys, or sets, writes out or drops one, in the file itself | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
 | `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME…` | the key that signs your files, and the keys you trust | [10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#10-keys-and-proxies) |
 | `rvr proxy`, `rvr proxy init [--hours H]` | the grid proxy, shown or made | [10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#10-keys-and-proxies) |
 | `rvr --version` | `rvr VERSION (reads and writes rowver 15; commit COMMIT)` | [12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#12-builds-and-releases) |
@@ -338,8 +339,13 @@ higgs_tautau.rvr is current: nothing to press.
 **A column you forgot.** Add it to `recipe.toml` and press again. When the file was made by this
 build from the same `samples.toml` and lock, with the same cuts, totals and event choices, only the
 columns new to the recipe, or whose definition changed (their expression, their stored kind, or a
-defined name they use), are read, for the events the file kept; every other column is copied from
-the file. The file written is the one a full press writes.
+defined name they use), are read, for the events the file kept. When columns were only added, none
+dropped or changed, they are added to the file itself: their arrays are written after its own,
+which are neither copied nor read, and its header after them, under the file's lock and a journal
+beside it, so that a press cut short is put back by the next rvr command
+([SPEC §8.12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file)). Otherwise, or when the file may not be written or
+its filesystem has no locks (rvr then says so), every other column is copied from the file into a
+new one. Either way the file holds what a full press writes.
 
 ```text
 $ rvr press --events 50000
@@ -347,7 +353,7 @@ higgs_tautau.rvr has the events this recipe keeps (2,248) and 11 of its 12 colum
 Reading only Jet_eta for those events, 2 files, 2 at a time:
   1/2       50,000 entries        948 kept   GluGluToHToTauTau.root
   2/2       50,000 entries      1,300 kept   VBF_HToTauTau.root
-Wrote higgs_tautau.rvr (2,248 rows, 12 columns, 0.3 MB) in 2.4 s.
+Wrote higgs_tautau.rvr in place (2,248 rows, 12 columns, 0.3 MB) in 2.4 s.
 ```
 
 On local copies of the same two files, every event, a press that reads only `Jet_pt` read at most
@@ -375,17 +381,30 @@ On 2.1 M rows (ten samples of 30 links to the TChiWZ skim), adding an eleventh o
 packing again (medians of 9, Apple M5, 2026-11-03).
 
 **Nothing to read.** When only `[derived]` changed, or columns were only dropped, no input is
-opened: the stored columns are copied from the file, and the derived ones worked out from them.
+opened: derived columns only added are added in place, as records with no array; otherwise the
+stored columns are copied from the file into a new one, and the derived ones worked out from them.
 
 ```text
 $ rvr press
 flat.rvr has the events this recipe keeps (10) and 4 of its 4 columns.
-Nothing to read: every column is copied from it.
-Wrote flat.rvr (10 rows, 4 columns and 2 derived, 0.0 MB) in 0.0 s.
+Nothing to read: the new derived columns are added to it in place.
+Wrote flat.rvr in place (10 rows, 4 columns and 2 derived, 0.0 MB) in 0.0 s.
+```
+
+**Another build.** A file is built on only by the build of rvr that made it. When the file could be
+built on but for that, `rvr press` names both builds and asks before it presses every column again;
+a no presses nothing (exit 1), and where nobody is at a terminal it presses nothing and says to give
+`--full` (exit 2), which presses every column without asking:
+
+```text
+$ rvr press
+flat.rvr was made by rvr 15.0.0 (commit 0123456789abcdef0123456789abcdef01234567); this is rvr 15.0.1 (commit 89abcdef0123456789abcdef0123456789abcdef).
+A file is built on only by the build that made it, so pressing with this build presses every column again.
+Press every column? [y/N]
 ```
 
 **Anything else** (other cuts, totals or event choices, a sample whose files changed, a column
-changed together with the samples, another build of rvr) presses every column, and says why:
+changed together with the samples) presses every column, and says why:
 
 ```text
 $ rvr press
@@ -395,8 +414,8 @@ Pressing 2 samples, 3 files, 15 entries, 3 at a time:
 ```
 
 An rvr whose commit is `unknown` or ends in `-dirty`
-([SPEC §12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#12-builds-and-releases)) never builds on a file and keeps no
-journal: it presses whole files only.
+([SPEC §12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#12-builds-and-releases)) builds on no file (it asks, as for another
+build) and keeps no journal: it presses whole files only.
 
 #### A value the recipe cannot take
 
@@ -696,8 +715,9 @@ nothing else in the file), drops them (a derived column another uses only with i
 renames one no other uses. An expression is never changed in place: drop the column, then add it
 again. It first checks the file's derived columns against their records, works out only what is
 new, changes the recipe the file carries to match (so `rvr reproduce` still presses the same file),
-copies the arrays byte for byte, and signs the file again with your key, saying whose signature it
-replaces (or that the file is no longer signed). The study's own `recipe.toml` is not changed, and
+writes its new header in the file itself (its arrays as they are, under its lock and a journal
+beside it), and signs the file again with your key, saying whose signature it replaces (or that the
+file is no longer signed). The study's own `recipe.toml` is not changed, and
 it says so ([SPEC §8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file)).
 
 ```text
@@ -823,7 +843,8 @@ Writes the recipe.toml, samples.toml and samples.lock FILE carries into DIR (FIL
 `DIR/<the file's study>.rvr`, and runs `rvr diff` on the two, exiting with its status (see the five
 minutes above). Relative paths in the lock are read from FILE's folder, or `--study FOLDER`. A DIR
 that holds a `.rvr` file, or a recipe.toml, samples.toml or samples.lock other than FILE's, is
-refused, naming them.
+refused, naming them. With `--texts` it writes the three texts and presses nothing: a study to build
+on, from the file alone.
 
 ### `rvr empty FILE... [--study FOLDER] [--anyway] [--force | -f]`, `rvr refill FILE [--study FOLDER] [--workers N]`
 
@@ -833,9 +854,9 @@ header byte for byte, with the study it was pressed from, every checksum and its
 the Python package read an empty file's header as ever and say it is empty. A refill reads the
 inputs again, so `rvr empty` first checks that each one the lock names is as the lock recorded it,
 and refuses a file made by another rvr version; `--anyway` empties it all the same. A file with
-holes is not emptied. At a terminal it asks first, naming the file's rows, columns and size;
-`--force` (`-f`) empties without asking, and is needed where nobody is at a terminal. Each file is
-its own; the exit status is the worst.
+holes is not emptied, nor a file you may not write (`chmod u+w` it first). At a terminal it asks
+first, naming the file's rows, columns and size; `--force` (`-f`) empties without asking, and is
+needed where nobody is at a terminal. Each file is its own; the exit status is the worst.
 
 `rvr refill` presses the study an empty file carries again, beside it, with the same event
 choices, and puts the arrays back once each has the checksum its record states: with this build,
@@ -860,13 +881,47 @@ Refilled flat.rvr: every column is back, byte for byte as it was, and its signat
 ```
 
 `rvr press` does not build on an empty file: it presses every column. `rvr status` says a file is
-empty, with exit status 1.
+empty, with exit status 1. An empty file is the magic, its header, the header's length and the magic
+again: `rvr empty` writes it beside the file (as `FILE.empty-PID-N`, a name no other writer shares) and moves it over the file.
 
 `rvr derive`, `rvr empty` and `rvr refill` keep every tool key a file has (a top-level key of
 another tool's, [FORMAT §11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#11-tool-keys)) as it was, and so does a press
 that replaces the file at its target (a fill, a build on its columns or samples, a full press): the
 new file carries them. A file at the target that does not open has none to keep, and a press adds
 none of its own.
+
+
+### `rvr tool FILE`, `rvr tool FILE KEY --set DATA.json | --get [OUT.json] | --drop [--force | -f]`
+
+A tool key is a top-level key of the header that another tool keeps there, outside every checksum
+and the signature ([FORMAT §11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#11-tool-keys)). `rvr tool FILE` lists
+them with their sizes; `--set DATA.json` makes the JSON object in DATA.json the key KEY, checked
+first as the header's own rules check it (one JSON object, no key twice, no `-0`, no lone
+surrogate, nested at most 64 deep counted from its place in the header; a tool key's name, no slip
+of the format's own keys); `--get` writes KEY's object out, to OUT.json (replaced whole, and never FILE
+itself) or standard output; `--drop` drops it, even one whose object or name breaks those rules, so that a file only it keeps
+from opening opens again (the list and `--get` read such a file too, the list saying why it does not
+open and which key to drop). Replacing a key that is there, dropping one, and writing over an OUT.json that is there
+ask first at a terminal, naming the sizes; `--force` (`-f`) does not ask, and is needed where nobody
+is at a terminal. Every change is made in the file itself, under its lock, its header written again
+after its arrays, which stay as they are; while it is made, another rvr that would write the file
+is refused. A file that may not be written, or on a filesystem with no locks, is written anew beside
+itself and moved over, keeping its permissions, and rvr says so. Its signature stays as it is ([SPEC §8.11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file)).
+
+```text
+$ rvr tool flat.rvr
+flat.rvr has no tool keys.
+$ rvr tool flat.rvr my-plots --set plots.json
+Set the tool key my-plots of flat.rvr (25 bytes).
+$ rvr tool flat.rvr my-plots --get
+{"note":"μ","n":[1,2.5]}
+$ rvr tool flat.rvr my-plots --drop
+Drop the tool key my-plots of flat.rvr (25 bytes)? [y/N] y
+Dropped the tool key my-plots of flat.rvr (25 bytes).
+```
+
+The Python package sets and drops them too: `rowver.set_tool(path, key, value)`,
+`rowver.drop_tool(path, key)` and `File.tools`.
 
 ### `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME...`
 
