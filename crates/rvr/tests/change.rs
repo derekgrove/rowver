@@ -1104,6 +1104,13 @@ fn a_column_added_to_the_recipe_is_written_in_place_reading_only_what_it_uses() 
     assert!(code == 0 && !said.contains("in place"), "{said}");
     assert_ne!(inode(&path), ino, "a column dropped: a new file, moved over it");
     assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    // A column added while those kept change order is not only added: a new file again.
+    let ino = inode(&path);
+    std::fs::write(dir.join("recipe.toml"), recipe("branches = [\"Jet_pt\", \"weight\", \"nJet\"]\nht = \"sum(Jet_pt)\"", "")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && !said.contains("in place") && said.contains("Reading only nJet for those events"), "{said}");
+    assert_ne!(inode(&path), ino, "columns in another order: a new file, moved over it");
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
 }
 
 // SPEC 8.2, 8.12

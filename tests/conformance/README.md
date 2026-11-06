@@ -28,7 +28,8 @@ this folder on every test run) to check itself against. Each part is a folder wi
   case breaks, by FORMAT.md's section; `rust_says` is the reference's refusal, for a person: another
   implementation need not say it in those words. A case with `"journal": true` is read with a file
   beside it whose name is the case's with `-journal` added, holding any bytes: a change to it cut
-  short, which a reader refuses (FORMAT.md §12).
+  short, which a reader that only reads refuses (FORMAT.md §12). A writer, and so every rvr command,
+  first lets go a journal that does not check out (SPEC.md §8.12), and then reads the file as it is.
 
 ## `tool/manifest.json`
 

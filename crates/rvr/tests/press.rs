@@ -1108,6 +1108,24 @@ fn a_fill_takes_the_choice_it_was_pressed_with_and_the_file_put_back() {
     let (code, said) = rvr(&dir, &["press", "--fill"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("fill it with the --events, --random and --seed it was pressed with"), "{said}");
+    // Only the build that made a file fills it: another build's is refused, and left as it is.
+    let path = dir.join(&name);
+    let before = std::fs::read(&path).unwrap();
+    common::reheadered(&path, &path, |h| {
+        h["made"]["toolchain"]["commit"] = "0123456789abcdef0123456789abcdef01234567".into();
+        h["made"]["sha256"] = rowver::write::made_checksum(&h["made"]).unwrap().into();
+    });
+    let other = std::fs::read(&path).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--fill", "--events", "8"]);
+    assert!(code == 1 && said.contains(&format!("{name} cannot be filled, as it was made by another build of rvr (")) && said.contains("rvr press presses it again"), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap(), other);
+    common::reheadered(&path, &path, |h| {
+        h["made"]["toolchain"]["program"] = "rvrcpp".into();
+        h["made"]["sha256"] = rowver::write::made_checksum(&h["made"]).unwrap().into();
+    });
+    let (code, said) = rvr(&dir, &["press", "--fill", "--events", "8"]);
+    assert!(code == 1 && said.contains(&format!("{name} cannot be filled, as it was made by rvrcpp {}, not rvr: rvr press presses it again", env!("CARGO_PKG_VERSION"))), "{said}");
+    std::fs::write(&path, &before).unwrap();
     let (code, said) = rvr(&dir, &["press", "--fill", "--events", "8"]);
     assert_eq!(code, 0, "{said}");
     let filled: Value = serde_json::from_str(&rvr(&dir, &["header", &name]).1).unwrap();

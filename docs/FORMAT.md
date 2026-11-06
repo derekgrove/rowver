@@ -75,7 +75,8 @@ A reader refuses a file of fewer than 20 bytes, or whose first 8 bytes are not t
 `.rvr` file; a file whose last 8 bytes are not the magic, as cut short (or a change to it cut short);
 a file whose header length is more than its S − 20 bytes leave room for; and a file whose `rowver` is
 not 15, or whose arrays do not fill the space from byte 8 to the header exactly (the header's array
-records say where each lies, so this is checked on opening, with no array read: §7).
+records say where each lies, so this is checked on opening, with no array read: §7). A file with
+more than one of these faults may be refused for any one of them.
 
 **The header's JSON** is one JSON value (RFC 8259) in UTF-8, an object, with these rules:
 

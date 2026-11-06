@@ -776,7 +776,8 @@ and checked on a worker, and written in order.
 **7.7.1** It first says what it presses: `Pressing S samples, F files, E entries, W at a time:`.
 A press that builds on columns says `FILE has the events this recipe keeps (K) and C of its N
 columns.`, then `Reading only NAMES for those events, F files, W at a time:` (or `Nothing to read:
-every column is copied from it.`); one that builds on samples, `FILE holds the rows of H of the S
+every column is copied from it.`, or, when only derived columns are added in place, `Nothing to read:
+the new derived columns are added to it in place.`); one that builds on samples, `FILE holds the rows of H of the S
 samples as samples.lock has them.`, then `Reading only the new samples NAMES, F files, E entries,
 W at a time:`; a fill, `Filling FILE: reading H holes of F files, E entries, W at a time; every
 other row is the file's own:`.
@@ -794,8 +795,12 @@ measured, are the program's own. Elsewhere it prints one line per file as it fin
 the list after the file is written (§7.7.3) gives them all again, in the lock's order.
 
 **7.7.3** Then the cutflow, `Read E entries; kept after each cut:` and one line per cut, or `with no
-cuts, every one is kept.`; then, when the file is signed, `Signed with your key K…`; then
-`Wrote FILE (R rows, C columns[ and D derived], S MB) in T s.`, with its holes listed when it has
+cuts, every one is kept.`; then, when the file is signed, `Signed with your key K…` (a press in
+place, of a file signed before or by one who has a key, says what became of its signature instead:
+`Signed with your key K…, which replaces the signature of WHOSE.`, `Signed with your key K…; it was
+not signed before.`, or `No longer signed: it was signed by WHOSE, and you have no key to sign it
+again (rvr key new makes one).`); then `Wrote FILE (R rows, C columns[ and D derived], S MB) in T s.` (`Wrote FILE in place (…)`
+for a press in place), with its holes listed when it has
 any, in the lock's order (by sample, then file, then entries), so the list is the same every time.
 A press that builds on columns, or on samples with none new, prints no cutflow, as it runs no cut.
 
@@ -829,8 +834,8 @@ gives nothing is (§8.3). When columns were only added, stored or derived, none 
 they are added to the file itself (§8.12): their records take their places in the recipe's order,
 their arrays are written after the file's own, which stay where they are and are not read, and the
 press says it wrote the file `in place`; of the file it reads only its `sample` and `entry` arrays,
-for the events it kept, and the columns its new derived columns read. Otherwise it writes a new
-file: every other column is copied from the file, checked against its record as it is, and a column
+for the events it kept, and the columns its new derived columns read. Stored columns it has kept
+but in another order are not only added (derived columns, which have no arrays, may move). Otherwise it writes a new file: every other column is copied from the file, checked against its record as it is, and a column
 dropped from the recipe is dropped from the file. While building on columns, a file that
 cannot be read stops the press, as a hole would change the rows the columns are built on;
 `rvr press --full` presses everything and makes holes.
@@ -851,7 +856,9 @@ words. `--full` always presses every column.
 
 **8.6 Another build.** A file is built on only by the build that made it (`made.toolchain`: the
 same program, version, commit, compiler and platform), and a build whose commit is `unknown` or ends
-in `-dirty` builds on none. When the file at the target could be built on (§8.1 to §8.4: judged
+in `-dirty` builds on none. A file another program made (its `program` not `rvr`) is not judged: it
+is pressed whole as §8.5 says, `… cannot be built on, as it was made by PROGRAM VERSION, not rvr`,
+without asking. When the file at the target could be built on (§8.1 to §8.4: judged
 from its header alone, the columns it would give of the kinds this press makes them) but for the
 build, `rvr press` says `FILE was made by rvr V1 (commit C1); this is rvr V2 (commit C2).`
 (each build's version and commit; when those agree, each also names its compiler and platform:
@@ -866,7 +873,10 @@ nobody is at a terminal it presses nothing and stops, exit 2, saying to add `--f
 every column without asking. It asks having read only the file's header: no array of it is read
 before the answer.
 
-**8.7 `rvr press --fill [KINDS]`** reads only the holes of the file at the target (`KINDS`: a
+**8.7 `rvr press --fill [KINDS]`** reads only the holes of the file at the target, made by this
+build from the study as it is (§8.6; any other is refused, exit 1: `FILE cannot be filled, as WHY:
+rvr press presses it again`, WHY in the program's own words, as `samples.toml has changed since`,
+`it was made by another build of rvr (V at C)` or `it was made by PROGRAM VERSION, not rvr`), (`KINDS`: a
 comma-separated list of hole kinds, every part one, to read only those) and writes the file again
 with their rows in place, merged by entry within each file. The study's `recipe.toml` and
 `samples.toml`, and the options' event choices, must be the ones the file carries, so that the
@@ -877,7 +887,7 @@ none can be read, the file is left as it was. A file's totals gain the sum over 
 **8.8 `rvr derive FILE`** changes a file's derived columns: `'NAME = EXPRESSION'` adds one (the name a
 plain name, used by no column, derived column, defined name, total, metadata key, or `sample`,
 `entry`, `file`); `--drop NAME…` drops them (a derived column another uses only with it, or after
-it); `--rename OLD NEW` renames one no other uses. An expression is never changed in place. It
+it; `--drop` takes no value, here as in `rvr tool`: the names are words); `--rename OLD NEW` renames one no other uses. An expression is never changed in place. It
 refuses an empty file (§8.9), and a file whose carried recipe this rvr cannot read, its problems on
 one line. It first
 checks the file's derived columns against their records; it records only what is new; it changes the
@@ -909,7 +919,8 @@ asked about is the one emptied. Each file is its own, one that cannot be put bac
 too; the exit status is the worst.
 
 **8.10 `rvr refill FILE`** presses the study an empty file carries again, beside it, with the same
-event choices, and puts the arrays back once each has the checksum its record states: when every
+event choices, and puts the arrays back once each has the checksum its record states, in a new file
+beside it (`FILE.refilled`) moved over it under its lock: when every
 array's `size` is also its record's (as with this build), each is put at the place its record
 states, wherever the press laid it, and the file is the one it was, byte for byte, its signature as
 it was; with a build that compresses otherwise, the header takes the arrays' new places and is
@@ -922,7 +933,9 @@ DATA.json` makes the JSON object DATA.json holds the tool key `KEY`, checked fir
 is asked, by the header's own rules: DATA.json is one JSON object by FORMAT.md §1's rules (no byte-order mark, no key twice, no
 whole number written `-0`, no lone surrogate, and arrays and objects nested at most 64 deep, counted
 from the key's place in the header, where its object is 2 deep); `KEY` is a tool key's name and no
-slip of the format's own keys (§11); and the header with it is at most 2^32 − 1 bytes. A key already
+slip of the format's own keys (§11); and the header with it is at most 2^32 − 1 bytes. The object is
+written compactly, each number as DATA.json writes it; a new key goes after the header's last one,
+and a key replaced stays where it lay. A key already
 there is replaced only once you say so, the question naming both sizes as the header holds them. A
 DATA.json the rules refuse is told against it, as `DATA.json: the tool key KEY is not JSON … (line
 L, column C): …`. A file whose header does not open is listed all the same, from its header's text as it lies, the
@@ -931,10 +944,12 @@ key that breaks it`, naming the first key whose drop alone lets the header open;
 several of them would, `FILE does not open (WHY): more
 than one of its tool keys breaks it, and rvr tool FILE KEY --drop takes out each`; and only `FILE does
 not open (WHY)` when no drop of tool keys would mend it (a break under the format's own keys, a
-signature that does not hold); `--get` writes out its keys too.
+signature that does not hold); the list exits 0 all the same (`rvr validate` says whether a file
+is valid), and `--get` writes out its keys too. A file refused for anything but its header (its
+frame, where its arrays lie, a journal beside it) is refused as every reader refuses it, exit 1.
 `--set` replaces a key whose object breaks §1 too, in one step and in its place: the header is read
 with that key taken out, unparsed, and the new object put where it lay.
-`rvr tool FILE KEY --get [OUT.json]` writes `KEY`'s object as
+`rvr tool FILE KEY --get [OUT.json]` (`OUT.json` a third word; `--get` takes no value) writes `KEY`'s object as
 the header holds it, and a newline, to `OUT.json`, or to standard output without it; an `OUT.json`
 already there is written over only once you say so, the question naming both sizes, and is replaced
 whole or not at all, with its permissions; an `OUT.json` that is `FILE` itself (named another way,
@@ -961,7 +976,7 @@ steps:
    beside `tiny.rvr`): the 8 bytes `89 52 56 4A 0D 0A 1A 0A`; the file's length before the change,
    the first byte of its tail (the old header's first byte), and the file's length after the change
    when it writes only a header (2^64 − 1 when it adds arrays), three u64 little-endian; the
-   SHA-256 of the up to 65,536 bytes of the file ending at its tail's first byte, which a change
+   SHA-256 (its 32 bytes, as every SHA-256 in the journal) of the up to 65,536 bytes of the file ending at its tail's first byte, which a change
    never touches, so that they name the file across reboots, remounts and copies; the tail itself
    (the old header, its length and the magic); when the change writes only a header, the new tail
    too (the new header, its length and the magic); then the SHA-256 of every byte before it. The
@@ -977,6 +992,9 @@ steps:
    refused leaves or puts the file back as it was: `FILE is as it was: the header the change would
    write would not open (…), so it was not written`;
 4. the journal is removed and the folder synced.
+
+The file and its journal are synced with `fsync` (on macOS `F_FULLFSYNC`, which also empties the
+drive's cache); a folder's sync is asked for, and one a filesystem refuses is let be.
 
 Every writer of a file holds the operating system's exclusive advisory lock on it, from when it
 first reads what it keeps of the file (its header, its tool keys) until its change in place is
@@ -1027,7 +1045,8 @@ cannot write it or a new file beside it; copy the study to a disk you may write`
 that line in place of the one above; a file current has nothing to press, and is not refused). A press decides this before it
 reads anything, and then writes a new file as for any other change (§8.2), saying "in place" nowhere;
 `rvr status`, which only reads, tells it by opening the file to write and taking a shared lock for
-a moment, and a writer refused its lock tries again for a moment before it gives up.
+a moment, and a writer refused its lock tries again for about 100 ms (five tries, 20 ms apart)
+before it gives up.
 
 A journal beside a file means a change to it was cut short. Every rvr command, and every rowver
 function that writes a file or writes one from it, first puts back a file it opens that has one,
