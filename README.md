@@ -34,7 +34,7 @@ and last bytes of `tiny.rvr`, the running example of
 
 ```text
 00000000: 8952 5652 0d0a 1a0a 28b5 2ffd 0438 2300  .RVR....(./..8#.
-0000239f: 6322 7d7d f11b 0000 8952 5652 0d0a 1a0a  c"}}.....RVR....
+0000238c: 3722 7d7d de1b 0000 8952 5652 0d0a 1a0a  7"}}.....RVR....
 ```
 
 The header is plain JSON (`rvr header FILE` prints it). Here is the header of `higgs_tautau.rvr`,

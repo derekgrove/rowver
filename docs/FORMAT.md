@@ -5,7 +5,7 @@ and writes all of it and is the reference builder; `rvr press` writes pressed fi
 [The features](FEATURES.md) describe what the tools around the format do.
 
 **The running example.** Every example below is from one real file, `tiny.rvr`, unless it says
-otherwise. It is 9,135 bytes, pressed from two copies of a five-entry test ntuple
+otherwise. It is 9,116 bytes, pressed from two copies of a five-entry test ntuple
 (`crates/rvr/tests/fixtures/uproot_flat.root`, tree `analysis`; one sample each, `signal` and
 `background`) with this recipe, and signed with a throwaway key:
 
@@ -44,12 +44,12 @@ Checksums are cut to their first 8 hex digits here; a file holds all 64.
 ```
 
 `S` is the file's size in bytes and `L` the header's length. The first and last 16 bytes of
-`tiny.rvr` (S = 9,135):
+`tiny.rvr` (S = 9,116):
 
 ```
 00000000: 8952 5652 0d0a 1a0a 28b5 2ffd 0438 2300  .RVR....(./..8#.
           └──────magic──────┘ └arrays…
-0000239f: 6322 7d7d f11b 0000 8952 5652 0d0a 1a0a  c"}}.....RVR....
+0000238c: 3722 7d7d de1b 0000 8952 5652 0d0a 1a0a  7"}}.....RVR....
           …header┘ └length─┘ └──────magic──────┘
 ```
 
@@ -60,8 +60,8 @@ Checksums are cut to their first 8 hex digits here; a file holds all 64.
   bytes 8 to 1,969. Each is cut in chunks of rows that line up across every array, each chunk
   compressed on its own (§7), so a reader decompresses only the arrays, and only the rows, it needs,
   in parallel.
-- **The header length** is the four bytes before the last 8: `F1 1B 00 00`, that is 0x1BF1 = 7,153
-  bytes. The header is the `L` bytes before them, from byte S − 12 − L: here bytes 1,970 to 9,122.
+- **The header length** is the four bytes before the last 8: `DE 1B 00 00`, that is 0x1BDE = 7,134
+  bytes. The header is the `L` bytes before them, from byte S − 12 − L: here bytes 1,970 to 9,103.
   (A header's length is its writer's: this one holds what built it, `made.toolchain`, whose
   commit and compiler another build writes otherwise.)
 
@@ -364,14 +364,14 @@ metadata has any of these names (SPEC.md §3.5.10, §2.3).
 ```json
 "made": {
   "study": "tiny",
-  "built": "2026-11-04T17:13:06Z",
+  "built": "2026-11-06T18:06:45Z",
   "by": "rvr 15.0.0",
-  "toolchain": {"program": "rvr", "version": "15.0.0", "rowver": "15", "commit": "f925e1eb…",
+  "toolchain": {"program": "rvr", "version": "15.0.0", "rowver": "15", "commit": "9bc8f01e…",
                 "compiler": "rustc 1.91.0 (f8297e351 2025-10-28)", "target": "aarch64-apple-darwin"},
   "recipe":  {"sha256": "937f05be", "text": "…the whole recipe.toml…", "format": "rvr-recipe",
               "columns": ["nJet", "Jet_pt", "ht"]},
   "samples": {"sha256": "a960276a", "text": "…the whole samples.toml…"},
-  "lock":    {"sha256": "fa383cf4", "text": "…the whole samples.lock…"},
+  "lock":    {"sha256": "d98e2f3e", "text": "…the whole samples.lock…"},
   "files": {
     "signal": {
       "events": {"choose": "all"},
@@ -381,7 +381,7 @@ metadata has any of these names (SPEC.md §3.5.10, §2.3).
     },
     "background": { … }
   },
-  "sha256": "e030dfda"
+  "sha256": "f6350c2e"
 }
 ```
 
@@ -565,7 +565,7 @@ The lock of `tiny.rvr`, cut short:
 
 format = "rvr-samples-lock"
 version = 1
-resolved = "2026-11-04T17:13:06Z"
+resolved = "2026-11-06T18:06:45Z"
 samples_toml_sha256 = "a960276a…"
 
 [[sample]]
@@ -881,7 +881,7 @@ A press signs the file when the person pressing it has a key. A file without a `
 unsigned, and still valid.
 
 ```json
-"signature": {"ed25519": "31de3bdc…", "key": "da2babb0…", "sha256": "82d4594a…"}
+"signature": {"ed25519": "f98735df…", "key": "61eaab12…", "sha256": "5f30078d…"}
 ```
 
 It has exactly these three members:
