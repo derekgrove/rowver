@@ -119,7 +119,7 @@ pub struct Rows<'a> {
     pub chunk_rows: usize,
 }
 
-/// Pack these rows and columns on `workers` threads into a new file at `path`: its data section, and the file.
+/// Pack these rows and columns on `workers` threads into `path`, created or truncated, and removed if packing fails: its data section, and the file.
 // The arrays lie from byte 8 on, one after another in record order; the header is `write_laid`'s.
 pub fn stream(rows: Rows, columns: Vec<(String, Source)>, workers: usize, path: &Path) -> Result<(Value, Laid)> {
     let mut opened = false;

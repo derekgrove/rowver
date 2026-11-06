@@ -85,11 +85,18 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result
             return Err(format!("{shown} was not emptied: rvr refill reads its inputs again, and {} as its lock recorded:{lines}\nWith --anyway it is emptied all the same, and cannot be refilled until they are back.", some(changed.len(), "is not", "are not")));
         }
     }
+    // Written anew and moved over it, the file gives its bytes back only once no other link holds them.
+    let others = links(locked.path()).saturating_sub(1);
+    let (linked, until) = match others {
+        0 => (String::new(), String::new()),
+        1 => (" Its other hard link keeps its columns until it is removed.".to_owned(), " once its other hard link is removed".to_owned()),
+        n => (format!(" Its {n} other hard links keep its columns until they are removed."), format!(" once its {n} other hard links are removed")),
+    };
     if !force {
         let rows = reader.rows().map_err(|e| rowver::plain(file, &e))?;
         let columns = reader.header()["data"]["cols"].as_array().map_or(0, Vec::len);
         let size = std::fs::metadata(file).map_or(0, |m| m.len());
-        let question = format!("Empty {shown} ({}, {}, {})? Its columns go and its header stays; rvr refill presses them again from the study it carries, reading its inputs again. [y/N] ", some(rows, "row", "rows"), some(columns, "column", "columns"), amount(size));
+        let question = format!("Empty {shown} ({}, {}, {})? Its columns go and its header stays; rvr refill presses them again from the study it carries, reading its inputs again.{linked} [y/N] ", some(rows, "row", "rows"), some(columns, "column", "columns"), amount(size));
         let yes = crate::yes(&question).map_err(|why| format!("{shown} is as it was: {why}. Give --force (or -f) to empty it without asking."))?;
         if !yes {
             return Err(format!("{shown} is as it was: not emptied."));
@@ -104,8 +111,16 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result
         true => ", every checksum and its signature",
         false => " and every checksum (it is not signed)",
     };
-    println!("Emptied {shown}: {} given back; its header ({}) keeps its study{signature}. rvr refill {shown} presses its columns again.", amount(freed), amount(kept));
+    println!("Emptied {shown}: {} given back{until}; its header ({}) keeps its study{signature}. rvr refill {shown} presses its columns again.", amount(freed), amount(kept));
     Ok(())
+}
+
+/// How many hard links the file at `path` has (1 where that cannot be told).
+fn links(path: &Path) -> u64 {
+    #[cfg(unix)]
+    return std::fs::metadata(path).map_or(1, |m| std::os::unix::fs::MetadataExt::nlink(&m));
+    #[cfg(not(unix))]
+    1
 }
 
 /// Why `rvr empty` refuses the file at `file`, which opening to be written met `kind`.

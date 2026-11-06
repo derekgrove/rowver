@@ -856,7 +856,8 @@ inputs again, so `rvr empty` first checks that each one the lock names is as the
 and refuses a file made by another rvr version; `--anyway` empties it all the same. A file with
 holes is not emptied, nor a file you may not write (`chmod u+w` it first). At a terminal it asks
 first, naming the file's rows, columns and size; `--force` (`-f`) empties without asking, and is
-needed where nobody is at a terminal. Each file is its own; the exit status is the worst.
+needed where nobody is at a terminal. A file with other hard links gives its bytes back once they go,
+and rvr says so. Each file is its own; the exit status is the worst.
 
 `rvr refill` presses the study an empty file carries again, beside it, with the same event
 choices, and puts the arrays back once each has the checksum its record states: with this build,
@@ -901,7 +902,7 @@ surrogate, nested at most 64 deep counted from its place in the header; a tool k
 of the format's own keys); `--get` writes KEY's object out, to OUT.json (replaced whole, and never FILE
 itself) or standard output; `--drop` drops it, even one whose object or name breaks those rules, so that a file only it keeps
 from opening opens again (the list and `--get` read such a file too, the list saying why it does not
-open and which key to drop). Replacing a key that is there, dropping one, and writing over an OUT.json that is there
+open and which key to drop; `--set` replaces a key whose object breaks those rules in one step). Replacing a key that is there, dropping one, and writing over an OUT.json that is there
 ask first at a terminal, naming the sizes; `--force` (`-f`) does not ask, and is needed where nobody
 is at a terminal. Every change is made in the file itself, under its lock, its header written again
 after its arrays, which stay as they are; while it is made, another rvr that would write the file

@@ -316,6 +316,24 @@ class Pressed(unittest.TestCase):
         finally:
             copy.unlink()
 
+    # SPEC 8.11, 11.9
+    def test_set_tool_replaces_a_key_that_keeps_the_file_from_opening_where_it_lies(self):
+        copy = self.dir / "set-over.rvr"
+        shutil.copy(self.path, copy)
+        whole = copy.read_bytes()
+        n = int.from_bytes(whole[-12:-8], "little")
+        deep = b'{"d":' + b"[" * 70 + b"]" * 70 + b"}"
+        header = whole[-12 - n:-12][:-1] + b',"one":' + deep + b',"two":{}}'
+        copy.write_bytes(whole[:-12 - n] + header + len(header).to_bytes(4, "little") + whole[-8:])
+        try:
+            with self.assertRaises(rowver.Error):
+                rowver.open(copy)
+            rowver.set_tool(copy, "one", {"a": 1})
+            self.assertEqual(list(rowver.open(copy).tools.items()), [("one", {"a": 1}), ("two", {})])
+            self.assertEqual(rowver.drop_tool(copy, "one"), {"a": 1})
+        finally:
+            copy.unlink()
+
     # SPEC 8.11, 8.12, 11.9
     def test_a_tool_key_whose_drop_leaves_a_header_that_would_not_open_is_refused_before_anything_is_written(self):
         copy = self.dir / "drop-refused.rvr"
@@ -413,7 +431,7 @@ class Pressed(unittest.TestCase):
                             try:
                                 call(copy)
                             except rowver.Error as e:
-                                refused[call] += "another of its threads holds it" in str(e)
+                                refused[call] += "another of its threads holds its lock" in str(e)
                 finally:
                     stop.set()
                     thread.join()

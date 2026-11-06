@@ -118,10 +118,59 @@ fn a_file_a_tool_key_keeps_from_opening_has_its_keys_listed_and_written_out_and_
     assert!(code == 0 && said.starts_with(&format!("{file} has 1 tool key:\n  deep ({} bytes)\n{file} does not open (", deep.len())), "{said}");
     assert!(said.trim_end().ends_with(&format!("): rvr tool {file} deep --drop takes out the key that breaks it")), "{said}");
     assert_eq!(rvr(&dir, &["tool", &file, "deep", "--get"]), (0, format!("{deep}\n")));
+    // Set over, the key that breaks it is replaced in one step, in a copy.
+    std::fs::copy(&path, dir.join("copy.rvr")).unwrap();
+    std::fs::write(dir.join("fixed.json"), r#"{"d": []}"#).unwrap();
+    let (code, said) = rvr(&dir, &["tool", "copy.rvr", "deep", "--set", "fixed.json", "-f"]);
+    assert!(code == 0 && said.contains(&format!("Replaced the tool key deep of copy.rvr ({} bytes; it held {}).", r#"{"d":[]}"#.len(), deep.len())), "{said}");
+    assert_eq!(rvr(&dir, &["validate", "copy.rvr"]).0, 0);
     let (code, said) = rvr(&dir, &["tool", &file, "deep", "--drop", "-f"]);
     assert!(code == 0 && said.contains(&format!("Dropped the tool key deep of {file} ({} bytes).", deep.len())), "{said}");
     assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
     assert_eq!(rvr(&dir, &["tool", &file]), (0, format!("{file} has no tool keys.\n")));
+    // A file kept from opening by what no tool key holds names no key to drop.
+    std::fs::write(dir.join("k.json"), "{}").unwrap();
+    assert_eq!(rvr(&dir, &["tool", &file, "k", "--set", "k.json"]).0, 0);
+    reheadered(&path, &path, |header| header["made"]["study"] = json!("another"));
+    let (code, said) = rvr(&dir, &["tool", &file]);
+    assert!(code == 0 && said.contains(&format!("{file} does not open (")) && !said.contains("--drop"), "{said}");
+}
+
+// SPEC 8.11
+#[test]
+fn the_list_names_the_tool_key_that_keeps_a_file_from_opening_and_a_set_replaces_it_in_its_place() {
+    let (dir, file) = pressed("which-key", &recipe("branches = [\"nJet\"]", ""));
+    let path = dir.join(&file);
+    let whole = std::fs::read(&path).unwrap();
+    let (text, arrays) = parts(&whole);
+    let text = std::str::from_utf8(text).unwrap();
+    let with = |text: &str, member: &str| std::fs::write(&path, framed(format!("{},{member}}}", &text[..text.len() - 1]).as_bytes(), arrays)).unwrap();
+    // Written by another program: a lone surrogate, and an object that is not one.
+    for member in [r#""k":"\ud800""#, r#""k":5"#] {
+        with(text, member);
+        let (code, said) = rvr(&dir, &["tool", &file]);
+        assert!(code == 0 && said.trim_end().ends_with(&format!("): rvr tool {file} k --drop takes out the key that breaks it")), "{member}: {said}");
+    }
+    // Two keys that each keep it from opening: neither is named, and dropping each is said.
+    for members in [r#""a":5,"b":5"#, r#""k":"\ud800","b":5"#] {
+        with(text, members);
+        let (code, said) = rvr(&dir, &["tool", &file]);
+        assert!(code == 0 && said.trim_end().ends_with(&format!("): more than one of its tool keys breaks it, and rvr tool {file} KEY --drop takes out each")), "{members}: {said}");
+    }
+    // Set over, a key that does not parse is replaced where it lies.
+    with(text, r#""k":"\ud800","z":{}"#);
+    std::fs::write(dir.join("k.json"), "{}").unwrap();
+    assert_eq!(rvr(&dir, &["tool", &file, "k", "--set", "k.json", "-f"]).0, 0);
+    assert_eq!(rvr(&dir, &["tool", &file]), (0, format!("{file} has 2 tool keys:\n  k (2 bytes)\n  z (2 bytes)\n")));
+    // A break under the format's own keys is no tool key's, though a misnamed key, or one that is no object, is there too.
+    let minus = text.replacen(r#""at":0,"#, r#""at":-0,"#, 1);
+    let lone = text.replacen(r#""study":""#, r#""study":"\ud800"#, 1);
+    for (broken, member) in [(&minus, r#""Made":{}"#), (&lone, r#""k":5"#)] {
+        assert_ne!(broken, text);
+        with(broken, member);
+        let (code, said) = rvr(&dir, &["tool", &file]);
+        assert!(code == 0 && said.contains(&format!("{file} does not open (")) && !said.contains("--drop"), "{member}: {said}");
+    }
 }
 
 // SPEC 8.11
@@ -424,7 +473,15 @@ fn a_read_only_file_whose_change_was_cut_short_is_told_how_to_be_put_back() {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
     let (code, said) = rvr(&dir, &["header", &file]);
     assert!(code == 0 && said.contains(&format!("Put {file} back as it was")), "{said}");
-    assert_eq!((std::fs::read(&path).unwrap(), journal(&path).exists()), (before, false));
+    assert_eq!((std::fs::read(&path).unwrap(), journal(&path).exists()), (before.clone(), false));
+    // The journal of a change adding arrays, beside a read-only file it is not of, is said to be so first.
+    std::fs::write(dir.join("recipe.toml"), recipe("branches = [\"nJet\", \"Jet_pt\"]", "")).unwrap();
+    assert_eq!(rvr_with(&dir, &[("RVR_STOP_CHANGE", "2")], &["press"]).0, 99);
+    std::fs::write(&path, vec![7; 2 * before.len()]).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let (code, said) = rvr(&dir, &["header", &file]);
+    assert!(code == 1 && said.contains(&format!("{file}-journal is not of this {file}")), "{said}");
+    std::fs::remove_file(journal(&path)).unwrap();
 }
 
 // SPEC 8.12

@@ -781,8 +781,8 @@ fn refused_opens_of_a_file_another_thread_holds_leave_no_descriptor_behind() {
     std::thread::scope(|threads| {
         threads.spawn(|| {
             for _ in 0..1000 {
-                assert!(Reader::open(&path).unwrap_err().to_string().contains("another of its threads holds it"));
-                assert!(validate_file(&path).unwrap_err().to_string().contains("another of its threads holds it"));
+                assert!(Reader::open(&path).unwrap_err().to_string().contains("another of its threads holds its lock"));
+                assert!(validate_file(&path).unwrap_err().to_string().contains("another of its threads holds its lock"));
             }
         });
     });
@@ -806,7 +806,7 @@ fn a_release_build_refuses_a_file_opened_again_while_it_is_locked_as_a_bug() {
 fn a_file_one_thread_of_a_program_holds_locked_is_refused_to_its_others_before_the_system_is_asked() {
     let path = written(&golden(), "two-threads");
     let locked = Locked::take(&path).unwrap();
-    let told = format!("{} is being changed by this program already (another of its threads holds it): wait for that change to finish", path.0.display());
+    let told = format!("{} is being changed by this program already (another of its threads holds its lock, or is waiting for it): wait for that change to finish", path.0.display());
     // Where the system would give the lock to both (POSIX locks), the second is refused all the
     // same; opened to be read, too, which would let the lock go when it closed.
     std::thread::scope(|threads| {

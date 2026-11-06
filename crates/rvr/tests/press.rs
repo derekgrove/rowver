@@ -1566,8 +1566,15 @@ fn an_emptied_file_keeps_its_header_and_is_refilled_byte_for_byte() {
     let (code, said) = rvr(&dir, &["empty", &name, "-y"]);
     assert!(code == 2 && said.contains("-y is not one of its flags"), "{said}");
     assert_eq!(std::fs::read(&path).unwrap(), whole);
+    // A file with another hard link gives its bytes back only once that link goes, and says so.
+    std::fs::hard_link(&path, dir.join("linked.rvr")).unwrap();
+    let (code, said) = common::at_terminal(&dir, &["empty", &name], "n");
+    assert!(code == 1 && said.contains("reading its inputs again. Its other hard link keeps its columns until it is removed. [y/N] "), "{said}");
     let (code, said) = rvr(&dir, &["empty", &name, "-f"]);
     assert!(code == 0 && said.contains(&format!("Emptied {name}")) && said.contains("keeps its study, every checksum and its signature.") && said.contains("rvr refill"), "{said}");
+    assert!(said.contains("given back once its other hard link is removed;"), "{said}");
+    assert_eq!(std::fs::read(dir.join("linked.rvr")).unwrap(), whole);
+    std::fs::remove_file(dir.join("linked.rvr")).unwrap();
     let shell = std::fs::read(&path).unwrap();
     let (text, _) = common::parts(&whole);
     assert_eq!(shell, common::framed(text, &[]), "the header, byte for byte, and no array: the magic, the header, its length, the magic");

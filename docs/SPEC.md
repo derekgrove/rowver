@@ -899,6 +899,9 @@ refused, `FILE is read-only: rvr empty gives back the space only of a file you m
 FILE first)`, and one on a read-only filesystem `FILE lies on a read-only filesystem: … (mount it to
 be written first)`. A file of no rows has no array bytes to give back, and an empty file has none
 left: each says so and is left, exit 0. These are told before anything is staged beside the file.
+A file with other hard links gives its bytes back only once they go: the question says so (`Its
+other hard link keeps its columns until it is removed.`), and so does the line after (`… given back
+once its other hard link is removed`, or `its N other hard links are`).
 At a terminal it asks first, naming the file's rows, columns and size; `--force` (`-f`) empties
 without asking, and is needed where nobody is at a terminal. It holds the file's lock
 (§8.12) from before it reads the file until the file is emptied, the question too, so that the file
@@ -924,8 +927,13 @@ there is replaced only once you say so, the question naming both sizes as the he
 DATA.json the rules refuse is told against it, as `DATA.json: the tool key KEY is not JSON … (line
 L, column C): …`. A file whose header does not open is listed all the same, from its header's text as it lies, the
 list then saying after the keys `FILE does not open (WHY): rvr tool FILE KEY --drop takes out the
-key that breaks it` (naming the key when the header's rules name one; `… takes out a key that breaks
-it` otherwise, and no such advice when it has no tool keys), and `--get` writes out its keys too.
+key that breaks it`, naming the first key whose drop alone lets the header open; when only dropping
+several of them would, `FILE does not open (WHY): more
+than one of its tool keys breaks it, and rvr tool FILE KEY --drop takes out each`; and only `FILE does
+not open (WHY)` when no drop of tool keys would mend it (a break under the format's own keys, a
+signature that does not hold); `--get` writes out its keys too.
+`--set` replaces a key whose object breaks §1 too, in one step and in its place: the header is read
+with that key taken out, unparsed, and the new object put where it lay.
 `rvr tool FILE KEY --get [OUT.json]` writes `KEY`'s object as
 the header holds it, and a newline, to `OUT.json`, or to standard output without it; an `OUT.json`
 already there is written over only once you say so, the question naming both sizes, and is replaced
@@ -985,7 +993,7 @@ POSIX locks (Linux NFS), closing any descriptor of the file lets the lock go, an
 process that asks is given it. So a program knows the files it holds locked (by device and inode),
 whatever the filesystem: another of its threads that would lock or open one is refused before the
 system is asked, told `FILE is being changed by this program already (another of its threads holds
-it): wait for that change to finish`. A descriptor a reader opened before the file was locked, let
+its lock, or is waiting for it): wait for that change to finish`. A descriptor a reader opened before the file was locked, let
 go while the lock is held, is kept open by the lock and closed as it lets go, and so is one opened
 and refused because the file was moved to its path between looking and opening. On a filesystem that
 has no locks, a writer goes on without the lock, writing a new file for a change (below). A file
@@ -1214,7 +1222,7 @@ raise `rowver.Error`, an unknown name `KeyError`.
 **11.9** `rowver.set_tool(path, key, value)` makes `value`, a dict written as
 `json.dumps(value, allow_nan=False)` writes it (NaN and infinity, which JSON does not have, raise
 `ValueError`), the tool key `key` of the file at `path`, checked and made in the file itself as
-`rvr tool --set` does (§8.11, §8.12), a key already there replaced without asking (a value the rules
+`rvr tool --set` does (§8.11, §8.12), a key already there replaced without asking, even one breaking FORMAT.md §1 (a value the rules
 refuse is told as `the value given for the tool key KEY …`);
 `rowver.drop_tool(path, key)` drops it, as `rvr tool --drop` does, and gives back its object, or its text
 as the header held it where `json.loads` cannot read it (nesting deeper than it goes), never raising once

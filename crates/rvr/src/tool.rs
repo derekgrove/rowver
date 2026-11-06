@@ -78,18 +78,24 @@ fn list(file: &Path) -> Result<(), String> {
             }
         }
     }
-    // A header that does not open, said after its keys, with the key that breaks it when it is one.
+    // A header that does not open, said after its keys, with the key whose drop alone lets it open,
+    // else whether dropping its keys would; a §1 break under the format's own keys is no key's.
     let Some(why) = broken else {
         return Ok(());
     };
     let (said, under) = match &why {
-        rowver::Error::Breaks { fact, under, .. } => (fact.clone(), under.clone().filter(|key| keys.iter().any(|(name, _)| name == key))),
+        rowver::Error::Breaks { fact, under, .. } => (fact.clone(), under.clone()),
         other => (other.to_string(), None),
     };
-    match (under, keys.is_empty()) {
-        (Some(key), _) => println!("{shown} does not open ({said}): rvr tool {shown} {key} --drop takes out the key that breaks it"),
-        (None, false) => println!("{shown} does not open ({said}): rvr tool {shown} KEY --drop takes out a key that breaks it"),
-        (None, true) => println!("{shown} does not open ({said})"),
+    let names: Vec<&str> = keys.iter().map(|(name, _)| name.as_str()).collect();
+    let elsewhere = under.is_some_and(|key| !names.contains(&key.as_str()));
+    let opens = |without: &[&str]| !elsewhere && rowver::change::opens_without(&text, without);
+    match names.iter().find(|name| opens(&[name])) {
+        Some(key) => println!("{shown} does not open ({said}): rvr tool {shown} {key} --drop takes out the key that breaks it"),
+        None if names.len() > 1 && opens(&names) => {
+            println!("{shown} does not open ({said}): more than one of its tool keys breaks it, and rvr tool {shown} KEY --drop takes out each")
+        }
+        None => println!("{shown} does not open ({said})"),
     }
     Ok(())
 }
@@ -112,9 +118,10 @@ fn set(file: &Path, key: &str, data: &Path, force: bool) -> Result<(), String> {
     let new = size(&value);
     let locked = crate::locked(file)?;
     // Its header read once, under the lock, for the change and for the question; the new one checked before it.
-    let change = Change::begin(&locked).map_err(|e| rowver::plain(file, &e))?;
-    let header = change.with_tool(key, value).map_err(|e| rowver::plain(file, &e))?;
-    let was = keys(file, change.text())?.into_iter().find(|(name, _)| name == key).map(|(_, bytes)| bytes.len());
+    let (change, header) = Change::setting(&locked, key, value).map_err(|e| rowver::plain(file, &e))?;
+    // A key held twice (written by another program) is replaced whole: every copy counted.
+    let held: Vec<usize> = keys(file, change.text())?.into_iter().filter(|(name, _)| name == key).map(|(_, bytes)| bytes.len()).collect();
+    let was = (!held.is_empty()).then(|| held.iter().sum::<usize>());
     let shown = file.display();
     if let Some(was) = was {
         let question = format!("Replace the tool key {key} of {shown} ({was} bytes) with {} ({new} bytes)? [y/N] ", data.display());
