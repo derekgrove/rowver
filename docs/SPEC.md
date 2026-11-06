@@ -857,8 +857,8 @@ words. `--full` always presses every column.
 **8.6 Another build.** A file is built on only by the build that made it (`made.toolchain`: the
 same program, version, commit, compiler and platform), and a build whose commit is `unknown` or ends
 in `-dirty` builds on none. A file another program made (its `program` not `rvr`) is not judged: it
-is pressed whole as §8.5 says, `… cannot be built on, as it was made by PROGRAM VERSION, not rvr`,
-without asking. When the file at the target could be built on (§8.1 to §8.4: judged
+is pressed whole as §8.5 says, `… cannot be built on, as it was made by PROGRAM VERSION, not rvr`
+(each program naming itself), without asking. When the file at the target could be built on (§8.1 to §8.4: judged
 from its header alone, the columns it would give of the kinds this press makes them) but for the
 build, `rvr press` says `FILE was made by rvr V1 (commit C1); this is rvr V2 (commit C2).`
 (each build's version and commit; when those agree, each also names its compiler and platform:
@@ -873,12 +873,13 @@ nobody is at a terminal it presses nothing and stops, exit 2, saying to add `--f
 every column without asking. It asks having read only the file's header: no array of it is read
 before the answer.
 
-**8.7 `rvr press --fill [KINDS]`** reads only the holes of the file at the target, made by this
-build from the study as it is (§8.6; any other is refused, exit 1: `FILE cannot be filled, as WHY:
-rvr press presses it again`, WHY in the program's own words, as `samples.toml has changed since`,
-`it was made by another build of rvr (V at C)` or `it was made by PROGRAM VERSION, not rvr`), (`KINDS`: a
+**8.7 `rvr press --fill [KINDS]`** reads only the holes of the file at the target (`KINDS`: a
 comma-separated list of hole kinds, every part one, to read only those) and writes the file again
-with their rows in place, merged by entry within each file. The study's `recipe.toml` and
+with their rows in place, merged by entry within each file. Only a file this build made from the
+study as it is is filled (§8.6); any other is refused, exit 1: `FILE cannot be filled, as WHY: rvr
+press presses it again`, WHY in the program's own words, as `samples.toml has changed since`, `it
+was made by another build of rvr (V at C)` or `it was made by PROGRAM VERSION, not rvr` (each
+program naming itself). The study's `recipe.toml` and
 `samples.toml`, and the options' event choices, must be the ones the file carries, so that the
 recipe it presses is the file's own; it says which differs otherwise. The lock may have been resolved again for the files it fills (put back, or
 another copy in their place). A hole that fails again stays a hole, with its new kind and why; when
@@ -946,7 +947,9 @@ than one of its tool keys breaks it, and rvr tool FILE KEY --drop takes out each
 not open (WHY)` when no drop of tool keys would mend it (a break under the format's own keys, a
 signature that does not hold); the list exits 0 all the same (`rvr validate` says whether a file
 is valid), and `--get` writes out its keys too. A file refused for anything but its header (its
-frame, where its arrays lie, a journal beside it) is refused as every reader refuses it, exit 1.
+frame, arrays that do not fill byte 8 up to the header, a journal beside it) is refused as every
+reader refuses it, exit 1; records that leave a gap or overlap between them are a fault of the
+header, and listed.
 `--set` replaces a key whose object breaks §1 too, in one step and in its place: the header is read
 with that key taken out, unparsed, and the new object put where it lay.
 `rvr tool FILE KEY --get [OUT.json]` (`OUT.json` a third word; `--get` takes no value) writes `KEY`'s object as
@@ -1043,7 +1046,8 @@ write, and change the copy`; a file there is still read and pressed from. A pres
 such a file is refused before it stages anything, `FILE lies on a read-only filesystem: rvr press
 cannot write it or a new file beside it; copy the study to a disk you may write` (rvr status says
 that line in place of the one above; a file current has nothing to press, and is not refused). A press decides this before it
-reads anything, and then writes a new file as for any other change (§8.2), saying "in place" nowhere;
+reads anything, and then writes a new file as for any other change (§8.2), saying `FILE cannot be
+changed in place (WHY): wrote it anew and moved it over.`, its `Wrote` line without `in place`;
 `rvr status`, which only reads, tells it by opening the file to write and taking a shared lock for
 a moment, and a writer refused its lock tries again for about 100 ms (five tries, 20 ms apart)
 before it gives up.
