@@ -574,7 +574,8 @@ one; `rvr diff` compares it from the headers alone, and a plot gets its axis fro
 computing anything. The reference reader does the work (`Reader::column` in `rowver`), and every
 function of the recipe language gives the same bits on every platform: its exponentials,
 logarithms, trigonometry, roundings, `hypot` and `**` come from the `libm` crate, as the platforms'
-own math libraries do not agree. On the 2.1 M-row bench, twelve columns of these functions over its
+own math libraries do not agree, and every NaN a column works out is the one quiet NaN, as the
+machines do not agree on that either (arm64 makes `0/0` +NaN, x86-64 −NaN). On the 2.1 M-row bench, twelve columns of these functions over its
 branches came out different with Apple's than with the `libm` crate (musl's), each in 0.2 to 21% of
 its values, by one to three units in the last place; the `libm` crate costs nothing measurable (a
 press of all twelve took 3.09 s with it, 3.11 s with Apple's).

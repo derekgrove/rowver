@@ -83,6 +83,8 @@ fn run(options: &Options, wanted: usize) -> Result<(), String> {
         let (keeps, results): (Vec<Vec<bool>>, Vec<Array>) = runs.into_iter().unzip();
         let keep = keeps.concat();
         let result = Array::joined(results).map_err(|e| within((e, 0..entries)))?;
+        // Shown as a column of it would hold them: a branch alone as read, any other each NaN the one quiet NaN.
+        let result = if recipe.alone(&expression) { result } else { result.settled() };
         if kind.is_none() {
             let described = described(&result);
             println!("{}: {shown_name}, tree {} ({described})", sample.name, sample.tree);

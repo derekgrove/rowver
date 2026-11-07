@@ -15,7 +15,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Check the three texts and the file against each other; `reads` is what each file's choice read.
-pub(super) fn validate(header: &Value, reads: &Reads) -> Result<()> {
+/// Gives whether each stored column is worked out, every NaN it holds the one quiet NaN.
+pub(super) fn validate(header: &Value, reads: &Reads) -> Result<Vec<bool>> {
     let (data, made) = (&header["data"], &header["made"]);
     let source = made["recipe"]["text"].as_str().unwrap_or_default();
     let recipe = Recipe::read(source).map_err(|e| {
@@ -41,7 +42,8 @@ pub(super) fn validate(header: &Value, reads: &Reads) -> Result<()> {
     let lock = Lock::read(lock_text).map_err(|p| invalid(format!("made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: {}. {MEND}", one_line(p))))?;
     lock::agree(toml_text, &lock).map_err(|p| invalid(format!("made.lock.text was not resolved from made.samples.text: {}. {MEND}", one_line(p))))?;
     samples(header, &lock, &recipe, reads)?;
-    columns(data, &lock, &recipe)
+    columns(data, &lock, &recipe)?;
+    Ok(recipe.columns.iter().map(|(name, expression)| !recipe.keeps_bits(name, expression)).collect())
 }
 
 /// Check `data` and `made.files` against the lock, sample by sample.

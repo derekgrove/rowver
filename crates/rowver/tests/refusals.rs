@@ -497,6 +497,10 @@ fn allowed() -> Vec<(&'static str, Change)> {
             let raw: Vec<u8> = [f32::NAN, 0., f32::INFINITY, 40., f32::NEG_INFINITY].iter().flat_map(|v| v.to_le_bytes()).collect();
             put(h, a, 3, &raw, 4);
         })),
+        ("§4 a branch stored alone keeps its NaNs' bits", Arrays(|h, a| {
+            let raw: Vec<u8> = [0xffc0_0000, 0, 0x4220_0000, 0x7fc0_0001, 0x4120_0000].iter().flat_map(|b: &u32| b.to_le_bytes()).collect();
+            put(h, a, 3, &raw, 4);
+        })),
         ("§3 §7 a file of no rows, its arrays of no bytes", Rowless(|_| {})),
         ("§6 a total no file holds, 0.0 on every sample", Rowless(|h| holed_with_total(h, json!(0.0), json!(0.0)))),
         ("§7 a frame declaring its content size", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0] = sized(&c[0].0[0], 3)))),
@@ -826,6 +830,16 @@ fn in_full() -> Vec<Row> {
             drop(h["data"]["cols"][0].as_object_mut().unwrap().shift_remove("vals"));
         }), "data.cols[\"nlep\"].lim is [-150000000000000000000000000000000000000,150000000000000000000000000000000000000], and its values give [0,3]"),
         ("§4", "a b1 value is 0 or 1", Arrays(|h, a| put(h, a, 13, &[0, 1, 2, 1, 1], 1)), "data.cols[\"flag\"]: a b1 value is 2"),
+        ("§4", "each NaN of a worked-out column the one quiet NaN", Arrays(|h, a| {
+            // Every column named on its own line, in the same order, MET worked out.
+            let text = h["made"]["recipe"]["text"].as_str().unwrap().to_owned();
+            let line = text.lines().find(|l| l.starts_with("branches = [")).unwrap().to_owned();
+            let names = line["branches = [".len()..line.len() - 1].split(", ").map(|n| n.trim_matches('"'));
+            let named: Vec<String> = names.map(|n| format!("\"{n}\" = \"{}\"", if n == "MET" { "MET * 1" } else { n })).collect();
+            set_text(h, "recipe", &text.replace(&line, &named.join("\n")));
+            let raw: Vec<u8> = [0xffc0_0000, 0, 0x4220_0000, 0x41f0_0000, 0x4120_0000].iter().flat_map(|b: &u32| b.to_le_bytes()).collect();
+            put(h, a, 3, &raw, 4);
+        }), "data.cols[\"MET\"]: a NaN it holds has the bits 0xffc00000, and a NaN a column works out is 0x7fc00000, the one quiet NaN (docs/FORMAT.md §4)"),
         // §5 Sample columns: the counts
         ("§5 F7", "events_read exact", Header(|h| h["made"]["files"]["A"]["metadata"]["events_read"] = 24.into()), "made.files[\"A\"].metadata.events_read is 24, and the sample's event choice chose 25 entries"),
         ("§5 F7", "events_total exact", Header(|h| h["made"]["files"]["A"]["metadata"]["events_total"] = 31.into()), "made.files[\"A\"].metadata.events_total is 31, and it is the entries of all the sample's files in the lock, 30"),

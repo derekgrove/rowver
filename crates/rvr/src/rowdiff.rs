@@ -36,7 +36,7 @@ impl Col {
         out
     }
 
-    /// Row `r`'s values as the hex of their bits, for two whose words are alike (as NaNs).
+    /// Row `r`'s values as the hex of their bits, for two whose words are alike (as `b1` bytes past 1).
     fn bits(&self, r: usize) -> String {
         let hex: Vec<String> = self.value(r).chunks(self.w).map(|b| b.iter().rev().fold("0x".to_owned(), |t, x| t + &format!("{x:02x}"))).collect();
         match self.held.offsets {

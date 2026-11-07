@@ -69,7 +69,7 @@ pub fn evaluate(expression: &Expression, columns: &dyn Columns, metadata: &BTree
     let mut work = |run: &dyn Columns, from: usize, to: usize| {
         Scope::new(run, metadata, &defines).evaluate(expression).and_then(|value| per_event(value, to - from))
     };
-    rvr_recipe::over_runs(columns, rows, &mut work).map_err(|(e, _)| e).and_then(Array::joined)
+    rvr_recipe::over_runs(columns, rows, &mut work).map_err(|(e, _)| e).and_then(Array::joined).map(Array::settled)
 }
 
 /// Add one run's values, of the kind and shape of those before, to a column over every row.

@@ -206,7 +206,10 @@ A column is **flat** (one value per row) or **jagged** (a list per row).
 A copied column keeps its branch's kind (the kind the lock lists, §6.3) unless the recipe stores it
 as another. A computed column has the kind its expression gives. There is no promotion rule. A
 float, flat or in a list, stored or derived (§10), may be any IEEE value: NaN and infinities
-included.
+included. A column that stores a branch alone (named in `branches`, or `NAME = "BRANCH"` or
+`branch(…)`, with no `stored` kind) keeps its values' bits, a NaN's sign and payload with them. In
+any other float column, stored or derived, a `stored` kind given included, each NaN is the one quiet
+NaN, `0x7FF8000000000000` in `f8` and `0x7FC00000` in `f4`, whatever the machine makes of `0/0`.
 
 A column's `name` is the name the recipe gives it (`made.recipe.columns`): nonempty, no two columns
 alike, and none `sample`, `entry` or `file`, nor the name of a derived column.
@@ -923,7 +926,7 @@ choice. It is listed in `derived.columns`, in the order the recipe's `[derived]`
 The checksums and facts are of the column's values over every row, as a stored column's are of its
 array (§8): the press works each derived column out once, to record them. Its facts are compared as
 numbers, as a stored column's are (§4), and its float values, like any float, may be NaN or
-infinite. In `tiny.rvr`, `mean_jet_pt` is `ht / nJet` on each row, `[33.901041666666664,
+infinite, each NaN the one quiet NaN (§4). In `tiny.rvr`, `mean_jet_pt` is `ht / nJet` on each row, `[33.901041666666664,
 38.51171875, 34.822916666666664, 120.5, …]`, cut at the file's two chunks of four rows: `9e715cef`
 is the SHA-256 of the two chunks' SHA-256s joined.
 
@@ -934,8 +937,8 @@ path of the row's file in the lock). It is worked out over each file's rows apar
 `sample.KEY` and `sample.file` are fixed values. Its values do not depend on how many rows are worked out at
 once, and every function of the recipe language computes the same bits on every platform (its
 exponentials, logarithms, trigonometry, roundings, `hypot` and `**` come from the `libm` crate, and
-`sqrt` and the remainders of `%` and `delta_phi` are exact in IEEE arithmetic), so it has the same
-values whoever works it out. A reader
+`sqrt` and the remainders of `%` and `delta_phi` are exact in IEEE arithmetic, and each NaN it
+gives is the one quiet NaN, §4), so it has the same values whoever works it out. A reader
 that works one out checks its values against the record, and refuses the column when they differ,
 or when it is not one kind, flat or a list, in every sample and file.
 A later rvr may add functions to the language; a reader that meets one it does not know, in a
@@ -1028,8 +1031,8 @@ all the same checks) does all of the above and:
   entries strictly increasing, each chosen, none in a hole;
 - §8, unless the file is empty: every `sha256` and `by_sample` from the chunk tables;
 - §4, unless the file is empty: jagged offsets starting at 0, never decreasing, ending at `count`;
-  `b1` values 0 or 1; `lim`, `nice` and `vals` made again from the values, and equal to the
-  record's;
+  `b1` values 0 or 1; each NaN of a worked-out float column the one quiet NaN; `lim`, `nice` and
+  `vals` made again from the values, and equal to the record's;
 - §10: every derived column worked out, its checksums and facts equal to its record's; in an empty
   file, worked out over no rows, each of its record's kind and shape;
 - and it says who signed the file.

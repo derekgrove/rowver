@@ -172,7 +172,6 @@ pub fn read(file: rowver::Result<Reader>, texts: &crate::texts::Texts, recipe: &
     });
     let file = file.map_err(Unbuilt::Why)?;
     let made = &file.header()["made"];
-    by_rvr(made).map_err(Unbuilt::Why)?;
     let judged = judged(&file, texts, recipe, lock, asked).map_err(Unbuilt::Why)?;
     // The columns it gives are of this press's kinds, which no build would change.
     let given: Vec<&str> = match &judged {
@@ -191,11 +190,11 @@ pub fn read(file: rowver::Result<Reader>, texts: &crate::texts::Texts, recipe: &
 fn builds(path: &str, made: &Value, this: &Value) -> String {
     let text = |build: &Value, key: &str| build[key].as_str().unwrap_or("?").to_owned();
     let named = |build: &Value, more: bool| match more {
-        true => format!("rvr {} (commit {}, {}, {})", text(build, "version"), text(build, "commit"), text(build, "compiler"), text(build, "target")),
-        false => format!("rvr {} (commit {})", text(build, "version"), text(build, "commit")),
+        true => format!("{} {} (commit {}, {}, {})", text(build, "program"), text(build, "version"), text(build, "commit"), text(build, "compiler"), text(build, "target")),
+        false => format!("{} {} (commit {})", text(build, "program"), text(build, "version"), text(build, "commit")),
     };
     let commit = text(this, "commit");
-    let alike = ["version", "commit"].iter().all(|key| made[key] == this[key]);
+    let alike = ["program", "version", "commit"].iter().all(|key| made[key] == this[key]);
     match commit.as_str() {
         "unknown" => format!("{path} was made by {}; this rvr's commit is unknown (it was not built from a git checkout), and such a build builds on no file.", named(made, false)),
         dirty if dirty.ends_with("-dirty") => format!("{path} was made by {}; this rvr has uncommitted changes (its commit is {dirty}), and such a build builds on no file.", named(made, false)),

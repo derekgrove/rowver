@@ -97,11 +97,11 @@ pub fn validate_file(path: impl AsRef<Path>) -> Result<Validated> {
     let (header, end) = checked(&text).and_then(|(header, end)| arrays::fill(end, length).map(|()| (header, end)))?;
     let empty = length == 0 && end > 0;
     let reads = identity::choices(&header)?;
-    texts::validate(&header, &reads)?;
+    let worked = texts::validate(&header, &reads)?;
     // The arrays and derived columns are read through the handle the file was checked through.
     let file = Reader::of(path, file, seen, header.clone(), 8, length as u64);
     if !empty {
-        read_body(&file, &reads)?;
+        read_body(&file, &reads, &worked)?;
     }
     let derived = match (listed_derived(&header), empty) {
         (0, _) => 0,
@@ -402,7 +402,7 @@ fn checks(header: &Value) -> Result<u64> {
 /// its table, the sample index and entries against the samples and files, list offsets, `b1`
 /// values, and every flat column's facts made again from its values; every array but the list
 /// columns' content in one pool of threads, then the content, whose chunks' members the offsets give.
-fn read_body(file: &Reader, reads: &identity::Reads) -> Result<()> {
+fn read_body(file: &Reader, reads: &identity::Reads, worked: &[bool]) -> Result<()> {
     let header = file.header();
     let data = &header["data"];
     let rows = file.chunks()?;
@@ -432,23 +432,48 @@ fn read_body(file: &Reader, reads: &identity::Reads) -> Result<()> {
         a => match &mut made[a - 2] {
             Ok(facts) => {
                 truth(&values, columns[a - 2].2, &columns[a - 2].1)?;
+                if worked[a - 2] {
+                    quiet(&values, columns[a - 2].2, &columns[a - 2].1)?;
+                }
                 facts.add(&values)
             }
             Err(stitched) => stitched.add(&values, &first[a].2),
         },
     })?;
-    let mut contents: Vec<reader::Whole> = Vec::new();
-    for ((record, place, kind), made) in columns.iter().zip(made) {
+    let (mut contents, mut quieted): (Vec<reader::Whole>, Vec<bool>) = (Vec::new(), Vec::new());
+    for (((record, place, kind), made), worked) in columns.iter().zip(made).zip(worked) {
         match made {
             Ok(facts) => facts::agree(record, &facts.finish(), kind, place)?,
             Err(stitched) => {
                 let content = &record["content"];
                 reader::ends(stitched.end, content, place)?;
                 contents.push((content, text(content, place, "kind")?, format!("{place}.content"), stitched.members.into()));
+                quieted.push(*worked);
             }
         }
     }
-    file.each_chunks(&contents, &mut |a, _, values, _| truth(&values, contents[a].1, &contents[a].2))
+    file.each_chunks(&contents, &mut |a, _, values, _| {
+        truth(&values, contents[a].1, &contents[a].2)?;
+        match quieted[a] {
+            true => quiet(&values, contents[a].1, &contents[a].2),
+            false => Ok(()),
+        }
+    })
+}
+
+/// Refuse a NaN other than the one quiet NaN in a worked-out float column.
+fn quiet(values: &[u8], kind: &str, place: &str) -> Result<()> {
+    let Some((w, one)) = crate::numeric::quiet_nan(kind) else {
+        return Ok(());
+    };
+    let other = match w {
+        8 => values.as_chunks::<8>().0.iter().map(|v| u64::from_le_bytes(*v)).find(|&b| f64::from_bits(b).is_nan() && b != one),
+        _ => values.as_chunks::<4>().0.iter().map(|v| u64::from(u32::from_le_bytes(*v))).find(|&b| f32::from_bits(b as u32).is_nan() && b != one),
+    };
+    match other {
+        Some(bits) => Err(invalid(format!("{place}: a NaN it holds has the bits {bits:#0width$x}, and a NaN a column works out is {one:#0width$x}, the one quiet NaN (docs/FORMAT.md §4): {MEND}", width = 2 + 2 * w))),
+        None => Ok(()),
+    }
 }
 
 /// Refuse a `b1` value that is not 0 or 1.

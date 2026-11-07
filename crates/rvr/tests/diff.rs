@@ -79,13 +79,11 @@ fn the_first_differing_value_is_named_with_how_many_events_differ() {
     let (code, said) = diff(&root, &a, &one, &[]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("; 1 event differs") && !said.contains(" 1 events"), "{said}");
-    // Two values whose words are alike (NaNs of two signs) are told apart by their bits.
+    // A NaN worked out is the one NaN, whatever its sign would be (NaNs told apart by their bits: tests/press.rs).
     let nan = pressed(&root, "values-nan", SAMPLES, "1", "if(nJet == 5, inf - inf, sum(Jet_pt))");
     let negated = pressed(&root, "values-negated", SAMPLES, "1", "if(nJet == 5, -(inf - inf), sum(Jet_pt))");
     let (code, said) = diff(&root, &nan, &negated, &[]);
-    assert_eq!(code, 1, "{said}");
-    let bits: Vec<&str> = said.match_indices("NaN (bits 0x").map(|(at, _)| said[at..].split(')').next().unwrap()).collect();
-    assert!(said.contains(", column ht: NaN (bits 0x") && bits.len() == 4 && bits[0] != bits[1], "{said}");
+    assert!(code == 0 && !said.contains("column ht"), "{said}");
 }
 
 // SPEC 9.4.1

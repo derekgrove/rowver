@@ -17,7 +17,25 @@ pub(crate) fn whole_kind(kind: &str) -> bool {
     !Kind::named(kind).is_ok_and(Kind::float)
 }
 
-/// Each value of a kind's little-endian `bytes` written to `out` as exact text, `, ` between them.
+/// The width of a float kind and the bits of its one quiet NaN (docs/FORMAT.md §4); `None` for a whole kind.
+pub(crate) fn quiet_nan(kind: &str) -> Option<(usize, u64)> {
+    match kind {
+        "f8" => Some((8, rvr_recipe::QUIET_NAN_F8)),
+        "f4" => Some((4, u64::from(rvr_recipe::QUIET_NAN_F4))),
+        _ => None,
+    }
+}
+
+/// Whether the bits of a value of a kind are a NaN other than the one quiet NaN.
+pub(crate) fn other_nan(kind: &str, bits: u64) -> bool {
+    let nan = match kind {
+        "f8" => f64::from_bits(bits).is_nan(),
+        _ => f32::from_bits(bits as u32).is_nan(),
+    };
+    nan && quiet_nan(kind).is_some_and(|(_, one)| bits != one)
+}
+
+/// Each value of a kind's little-endian `bytes` written to `out` as exact text, `, ` between them, another NaN than the quiet one with its bits.
 pub fn push_shown(kind: &str, bytes: &[u8], out: &mut String) -> Result<()> {
     use std::fmt::Write;
     let w = width(kind)?;
@@ -29,6 +47,7 @@ pub fn push_shown(kind: &str, bytes: &[u8], out: &mut String) -> Result<()> {
         v[..w].copy_from_slice(b);
         let four = [v[0], v[1], v[2], v[3]];
         let _ = match kind {
+            "f8" | "f4" if other_nan(kind, u64::from_le_bytes(v)) => write!(out, "NaN (bits {:#0w$x})", u64::from_le_bytes(v), w = 2 + 2 * w),
             "f8" => write!(out, "{}", f64::from_le_bytes(v)),
             "f4" => write!(out, "{}", f32::from_le_bytes(four)),
             "i8" => write!(out, "{}", i64::from_le_bytes(v)),

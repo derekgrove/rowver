@@ -118,7 +118,43 @@ impl Operator {
     }
 }
 
+/// The bits of the one NaN a worked-out `f8` value is written as: quiet and positive, its payload zero.
+pub const QUIET_NAN_F8: u64 = 0x7ff8_0000_0000_0000;
+/// The bits of the same NaN in an `f4`.
+pub const QUIET_NAN_F4: u32 = 0x7fc0_0000;
+const QUIET_NAN: f64 = f64::from_bits(QUIET_NAN_F8);
+
+/// An `f4` value as a double, a NaN's sign and payload kept bit for bit, as no machine's conversion need keep them.
+fn widened(value: f32) -> f64 {
+    let bits = value.to_bits();
+    match value.is_nan() {
+        true => f64::from_bits(u64::from(bits >> 31) << 63 | 0x7ff << 52 | u64::from(bits & 0x007f_ffff) << 29),
+        false => f64::from(value),
+    }
+}
+
+/// A double held for an `f4` as its `f4`: a NaN's sign and payload as `widened` made them.
+fn narrowed(value: f64) -> f32 {
+    let bits = value.to_bits();
+    let payload = (bits >> 29) as u32 & 0x007f_ffff;
+    match value.is_nan() {
+        // A payload below what an f4 holds keeps it a NaN as the quiet one.
+        true => f32::from_bits(((bits >> 63) as u32) << 31 | 0xff << 23 | if payload == 0 { 0x0040_0000 } else { payload }),
+        false => value as f32,
+    }
+}
+
 impl Values {
+    /// The same values, each NaN among them made `QUIET_NAN`.
+    fn settled(mut self) -> Values {
+        if let Store::Float(values) = &mut self.store {
+            if let Some(first) = values.iter().position(|v| v.is_nan()) {
+                Arc::make_mut(values)[first..].iter_mut().filter(|v| v.is_nan()).for_each(|v| *v = QUIET_NAN);
+            }
+        }
+        self
+    }
+
     /// Hold whole numbers of a kind.
     pub fn whole(kind: Kind, values: Vec<i64>) -> Self {
         Self {
@@ -147,7 +183,7 @@ impl Values {
             }};
         }
         match kind {
-            Kind::F4 => Self::float(kind, read!(f32, f64)),
+            Kind::F4 => Self::float(kind, bytes.as_chunks::<4>().0.iter().map(|part| widened(f32::from_le_bytes(*part))).collect()),
             Kind::F8 => Self::float(kind, read!(f64, f64)),
             Kind::B1 => Self::whole(kind, bytes.iter().map(|byte| (*byte != 0) as i64).collect()),
             Kind::I1 => Self::whole(kind, read!(i8, i64)),
@@ -168,7 +204,7 @@ impl Values {
         match &self.store {
             Store::Float(values) if w == 4 => {
                 for value in values.iter() {
-                    bytes.extend_from_slice(&(*value as f32).to_le_bytes());
+                    bytes.extend_from_slice(&narrowed(*value).to_le_bytes());
                 }
             }
             Store::Float(values) => {
@@ -518,6 +554,15 @@ fn listed(offsets: &Arc<Vec<usize>>, values: Result<Values>) -> Result<Array> {
 }
 
 impl Array {
+    /// The same array, each NaN it holds made `QUIET_NAN`: what a machine makes of 0/0 is not the same everywhere.
+    pub fn settled(self) -> Array {
+        match self {
+            Array::Event(values) => Array::Event(values.settled()),
+            Array::Object { offsets, values } => Array::Object { offsets, values: values.settled() },
+            constant => constant,
+        }
+    }
+
     /// The number of events an array covers, when it is not a constant.
     pub fn events(&self) -> Option<usize> {
         match self {

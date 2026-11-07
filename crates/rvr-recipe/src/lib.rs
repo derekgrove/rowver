@@ -13,7 +13,7 @@ mod kind;
 mod nearest;
 mod parse;
 
-pub use array::{Array, Constant, Operator, Store, Values};
+pub use array::{Array, Constant, Operator, Store, Values, QUIET_NAN_F4, QUIET_NAN_F8};
 pub use document::{branch_names, fields_of, names, plain, reads, uses, Cut, Recipe, Total, ADDED, CHUNK_BOUNDS, CHUNK_ROWS, RESERVED, TABLES};
 pub use evaluate::{over_runs, per_event, Columns, Picked, Scope, FUNCTIONS};
 pub use kind::Kind;

@@ -320,9 +320,9 @@ fn a_file_of_many_chunks_holds_and_slices_the_values_of_one_of_one_chunk() {
     assert!(code == 1 && said.contains("chunk_rows: the files are cut in chunks of 1,024 and 65,536 rows: their per-sample checksums cannot be compared; rvr diff --rows compares the events") && !said.contains("differs in sample"), "{said}");
 }
 
-// SPEC 8.5
+// SPEC 8.6
 #[test]
-fn a_file_another_program_made_is_not_built_on_and_its_program_is_named() {
+fn a_file_another_program_made_is_asked_about_as_another_builds_and_its_program_is_named() {
     let dir = copies("other-program", 0, &recipe("", "branches = [\"nJet\"]\n", ""));
     assert_eq!(rvr(&dir, &["press"]).0, 0);
     let path = dir.join(name(&dir));
@@ -333,9 +333,13 @@ fn a_file_another_program_made_is_not_built_on_and_its_program_is_named() {
     let other = dir.join("other.rvr");
     rowver::write::rewrite(&path, &other, &header).unwrap();
     std::fs::rename(&other, &path).unwrap();
+    let commit = header["made"]["toolchain"]["commit"].as_str().unwrap().to_owned();
     let (code, said) = rvr(&dir, &["press"]);
-    assert_eq!(code, 0, "{said}");
-    assert!(said.contains(&format!("Pressing every column: {} cannot be built on, as it was made by rvrcpp 15.1.0, not rvr", name(&dir))), "{said}");
+    let both = format!("{} was made by rvrcpp 15.1.0 (commit {commit}); this is rvr {} (commit {commit}).", name(&dir), env!("CARGO_PKG_VERSION"));
+    assert!(code == 2 && said.contains(&both) && said.contains("Give --full to press every column without asking."), "{said}");
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert!(code == 0 && !said.contains("[y/N]"), "{said}");
+    assert_eq!(common::header(&dir)["made"]["toolchain"]["program"], "rvr");
 }
 
 // SPEC 4.2.1, 4.2.2, 7.2.1, 7.2.2, 4.5.1, 4.5.3; RECIPE functions-exactly, pairs-within-a-list; FORMAT 10

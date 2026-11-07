@@ -98,10 +98,11 @@ pub(crate) fn stored(recipe: &Recipe, scope: &Scope, (column, expression): &(Str
         false => e.at(&format!("[columns] {column}")),
     };
     let array = scope.evaluate(expression).and_then(|value| rvr_recipe::per_event(value, events)).map_err(named)?;
-    match recipe.stored.get(column) {
-        Some(kind) => array.convert(*kind).map_err(|e| e.at(&format!("[columns] {column}"))),
-        None => Ok(array),
-    }
+    let array = match recipe.stored.get(column) {
+        Some(kind) => array.convert(*kind).map_err(|e| e.at(&format!("[columns] {column}")))?,
+        None => array,
+    };
+    Ok(if recipe.keeps_bits(column, expression) { array } else { array.settled() })
 }
 
 /// Add every event of a column's values to what the file has gathered; one of another kind than the Plan's is a bug.

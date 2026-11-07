@@ -114,7 +114,8 @@ checked. It reads the entries the Plan names, evaluates the cuts and columns, an
 
 Floats may be NaN or infinite anywhere, stored and derived alike; a float stops the core only as
 the row above says (a total that is not finite, or a NaN or infinite value converted to a whole
-kind). The words of a stop are the program's own.
+kind). A NaN the core works out is written as the one quiet NaN, and a branch stored alone keeps
+its bits (docs/FORMAT.md §4). The words of a stop are the program's own.
 
 **2.7** Before the file is put in place, its header passes the file validator; full
 validation, every array decompressed, is `rvr validate`.
@@ -866,22 +867,21 @@ words. `--full` always presses every column.
 
 **8.6 Another build.** A file is built on only by the build that made it (`made.toolchain`: the
 same program, version, commit, compiler and platform), and a build whose commit is `unknown` or ends
-in `-dirty` builds on none. A file another program made (its `program` not `rvr`) is not judged: it
-is pressed whole as §8.5 says, `… cannot be built on, as it was made by PROGRAM VERSION, not rvr`
-(each program naming itself), without asking. When the file at the target could be built on (§8.1 to §8.4: judged
-from its header alone, the columns it would give of the kinds this press makes them) but for the
-build, `rvr press` says `FILE was made by rvr V1 (commit C1); this is rvr V2 (commit C2).`
-(each build's version and commit; when those agree, each also names its compiler and platform:
-`rvr V (commit C, COMPILER, PLATFORM)`), or, from a build whose commit is `unknown` or ends in
-`-dirty`, `FILE was made by rvr V1 (commit C1); this rvr's commit is unknown (it was not built from
-a git checkout), and such a build builds on no file.` (or `this rvr has uncommitted changes (its
-commit is C-dirty), and such a build builds on no file.`); then that a file is built on only by
-the build that made it, so that pressing with this build presses every column again, and asks
-`Press every column? [y/N]`
-(§5.1.7). Yes presses every column; no presses nothing and leaves the file as it is, exit 1. Where
-nobody is at a terminal it presses nothing and stops, exit 2, saying to add `--full`, which presses
-every column without asking. It asks having read only the file's header: no array of it is read
-before the answer.
+in `-dirty` builds on none. A file another program made (its `program` not `rvr`) is another
+build's. When the file at the target could be built on (§8.1 to §8.4: judged from its header alone,
+the columns it would give of the kinds this press makes them) but for the build, `rvr press` says
+`FILE was made by P1 V1 (commit C1); this is rvr V2 (commit C2).` (each build's program, version
+and commit, P1 `rvr` for RowVer's own and each program naming itself after `this is`; when those
+agree, each also names its compiler and platform: `rvr V (commit C, COMPILER, PLATFORM)`), or, from
+a build whose commit is `unknown` or ends in `-dirty`, `FILE was made by P1 V1 (commit C1); this
+rvr's commit is unknown (it was not built from a git checkout), and such a build builds on no
+file.` (or `this rvr has uncommitted changes (its commit is C-dirty), and such a build builds on no
+file.`); then that a file is built on only by the build that made it, so that pressing with this
+build presses every column again, and asks `Press every column? [y/N]` (§5.1.7). Yes presses every
+column; no presses nothing and leaves the file as it is, exit 1. Where nobody is at a terminal it
+presses nothing and stops, exit 2, saying to add `--full`, which presses every column without
+asking. It asks having read only the file's header: no array of it is read before the answer. A
+file of any build that could not be built on for anything else is pressed whole as §8.5 says.
 
 **8.7 `rvr press --fill [KINDS]`** reads only the holes of the file at the target (`KINDS`: a
 comma-separated list of hole kinds, every part one, to read only those) and writes the file again

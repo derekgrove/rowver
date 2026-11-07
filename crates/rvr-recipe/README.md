@@ -511,7 +511,8 @@ expression out: the press stops there, naming the file, the entry, the column an
 - a total whose sum is not a finite number.
 
 NaN and the infinities are values, never mistakes: a float column may hold them, and every function
-says what it gives for them.
+says what it gives for them. Every NaN a column works out is stored as the one quiet NaN, whatever
+the machine; a branch stored alone keeps the NaNs it holds as they are (FORMAT.md §4).
 
 ## From Python to rvr
 
@@ -796,7 +797,8 @@ it, which is exactly IEEE single arithmetic for `+ - * /` and `sqrt`. `%` is Pyt
 exact `fmod(x, y)`; a nonzero r whose sign is not y's has y added; a zero r takes y's sign; y = 0
 gives NaN. `x ** y` is `x * x` for y exactly 2, else libm's `pow(x, y)`. NaN is not equal to
 anything, itself included (`!=` is true), nor less or greater than anything; arithmetic on it gives
-NaN.
+NaN. No function tells one NaN from another, and the one a column stores is the quiet NaN
+(FORMAT.md §4).
 
 ### Conversions
 

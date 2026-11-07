@@ -264,6 +264,20 @@ impl Reading {
 }
 
 impl Recipe {
+    /// Whether an expression is a branch alone: a name the recipe does not define, or `branch(…)`.
+    pub fn alone(&self, expression: &Expression) -> bool {
+        match expression {
+            Expression::Name(name) => !self.defines.contains_key(name),
+            Expression::Call(function, _) => function == "branch",
+            _ => false,
+        }
+    }
+
+    /// Whether a `[columns]` column keeps its NaNs' bits, a branch alone with no `stored` kind (FORMAT.md §4).
+    pub fn keeps_bits(&self, column: &str, expression: &Expression) -> bool {
+        self.alone(expression) && !self.stored.contains_key(column)
+    }
+
     /// The rows of one chunk of the file's arrays: `chunk_rows`, or `CHUNK_ROWS`.
     pub fn chunk_rows(&self) -> usize {
         self.chunk_rows.unwrap_or(CHUNK_ROWS)

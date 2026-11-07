@@ -1979,3 +1979,57 @@ fn status_counts_the_files_the_file_read_of_each_sample() {
     let (_, said) = rvr(&dir, &["status", "--events", "1", "--random"]);
     assert!(said.contains("100%   1 file\n"), "{said}");
 }
+
+/// The bits of a float column of the file in `dir`, stored or derived, each widened to 64.
+fn float_bits(dir: &Path, column: &str) -> Vec<u64> {
+    let file = rowver::rvr::Reader::open(dir.join(common::name(dir))).unwrap();
+    let held = file.column(column).unwrap().unwrap();
+    match held.kind.as_str() {
+        "f8" => held.bytes.as_chunks::<8>().0.iter().map(|b| u64::from_le_bytes(*b)).collect(),
+        "f4" => held.bytes.as_chunks::<4>().0.iter().map(|b| u64::from(u32::from_le_bytes(*b))).collect(),
+        kind => panic!("{column} is {kind}, not a float"),
+    }
+}
+
+// FORMAT 4, 10; SPEC 9.4.1
+#[test]
+fn every_nan_a_press_works_out_is_the_one_quiet_nan_and_a_branch_stored_alone_keeps_its_bits() {
+    let samples = common::samples("[[sample]]\nname = \"nan\"\nfiles = \"nan.root\"\ntree = \"Events\"\n");
+    let columns = "branches = [\"x\", \"y\", \"v\"]\nnamed = \"branch('x')\"\nsum = \"x + 0\"\nsquare = \"y * y\"\ntwice = \"v * 2\"\nnegated = \"-x\"\nnarrowed = { value = \"x\", stored = \"f4\" }\nrestated = { value = \"x\", stored = \"f8\" }\naliased = \"same\"";
+    let recipe = format!("format = \"rvr-recipe\"\nversion = 1\n\n[define]\nsame = \"x\"\n\n[keep]\n\n[columns]\n{columns}\n\n[totals]\n\n[derived]\nworked = \"x\"\nlisted = \"v + 0\"\n");
+    let dir = study("nan-bits", &samples, &recipe);
+    std::fs::copy(common::fixture("nan.root"), dir.join("nan.root")).unwrap();
+    pressed(&dir, &[]);
+    // nan.root's x: 1.5, then NaN, -NaN, NaN with a payload, a signalling NaN; y the same in f4.
+    let x = [0x3ff8_0000_0000_0000, 0x7ff8_0000_0000_0000, 0xfff8_0000_0000_0000, 0x7ff8_0000_0000_0001, 0x7ff0_0000_0000_0001];
+    assert_eq!(float_bits(&dir, "x"), x);
+    assert_eq!(float_bits(&dir, "named"), x);
+    assert_eq!(float_bits(&dir, "y"), [0x3fc0_0000, 0x7fc0_0000, 0xffc0_0000, 0x7fc0_0001, 0x7f80_0001]);
+    assert_eq!(float_bits(&dir, "v"), [0x3ff8_0000_0000_0000, 0xfff8_0000_0000_0000, 0xfff8_0000_0000_0000, 0x3ff8_0000_0000_0000, 0x7ff8_0000_0000_0001]);
+    let one = 0x7ff8_0000_0000_0000;
+    assert_eq!(float_bits(&dir, "sum"), [0x3ff8_0000_0000_0000, one, one, one, one]);
+    assert_eq!(float_bits(&dir, "negated"), [0xbff8_0000_0000_0000, one, one, one, one]);
+    assert_eq!(float_bits(&dir, "aliased"), [0x3ff8_0000_0000_0000, one, one, one, one]);
+    assert_eq!(float_bits(&dir, "worked"), [0x3ff8_0000_0000_0000, one, one, one, one]);
+    assert_eq!(float_bits(&dir, "square"), [0x4010_0000, 0x7fc0_0000, 0x7fc0_0000, 0x7fc0_0000, 0x7fc0_0000]);
+    assert_eq!(float_bits(&dir, "restated"), [0x3ff8_0000_0000_0000, one, one, one, one], "a stored kind is worked out, its own too");
+    assert_eq!(float_bits(&dir, "narrowed"), [0x3fc0_0000, 0x7fc0_0000, 0x7fc0_0000, 0x7fc0_0000, 0x7fc0_0000]);
+    assert_eq!(float_bits(&dir, "twice"), [0x4008_0000_0000_0000, one, one, 0x4008_0000_0000_0000, one]);
+    assert_eq!(float_bits(&dir, "listed"), [0x3ff8_0000_0000_0000, one, one, 0x3ff8_0000_0000_0000, one]);
+    // rvr dump shows a NaN other than the quiet one with its bits.
+    let file = common::name(&dir);
+    let (code, said) = rvr(&dir, &["dump", &file, "--columns", "--all"]);
+    let row = said.lines().find(|line| line.starts_with("nan\t2\t")).unwrap_or_default().to_owned();
+    assert!(code == 0 && row.starts_with("nan\t2\tNaN (bits 0xfff8000000000000)\tNaN (bits 0xffc00000)\t[]\tNaN (bits 0xfff8000000000000)\tNaN\t"), "{said}");
+    // rvr try shows a branch alone as a column of it keeps it, and anything worked out with the one NaN.
+    let (code, said) = rvr(&dir, &["try", "x"]);
+    assert!(code == 0 && said.contains("NaN (bits 0xfff8000000000000)"), "{said}");
+    let (code, said) = rvr(&dir, &["try", "x + 0"]);
+    assert!(code == 0 && said.contains("NaN") && !said.contains("(bits"), "{said}");
+    // Two NaNs whose words are alike are told apart by their bits: x as read against x worked out.
+    let other = study("nan-bits-worked", &samples, &recipe.replace("branches = [\"x\", \"y\", \"v\"]", "x = \"x * 1\"\ny = \"y\"\nv = \"v\""));
+    std::fs::copy(common::fixture("nan.root"), other.join("nan.root")).unwrap();
+    pressed(&other, &[]);
+    let (code, said) = rvr(&dir, &["diff", &file, other.join(common::name(&other)).to_str().unwrap(), "--rows"]);
+    assert!(code == 1 && said.contains(", column x: NaN (bits 0xfff8000000000000) in A, NaN in B; 3 events differ"), "{said}");
+}

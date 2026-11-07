@@ -772,6 +772,8 @@ length and first values, a derived column worked out with its expression:
 per_jet        f8[10]  derived = "weight / nJet"  [0.3333333333333333, 0.125, 0.75, inf, 0.75, ...]
 ```
 
+A NaN other than the one quiet NaN a press works out (a branch's, stored as it is) is shown with its
+bits, as `NaN (bits 0xfff8000000000000)`.
 `--files`, `--recipe`, `--samples`, `--lock` and `--columns` print only those parts, in the order
 given. `--all` prints every value of every column: a line naming them, then one line a row, the
 values apart by tabs (its sample's name, its entry, then each stored column and each derived column
@@ -822,8 +824,8 @@ columns, which both files hold with one kind (`--key run,luminosityBlock,event` 
 copy in another skim; two events of one key in one file are refused). Per sample it says how many
 events only A holds, how many only B holds, and, of those both hold, the first whose values differ
 in a stored or derived column both hold (floats bit for bit), with how many differ; values are
-written as `rvr dump --all` writes them, with their bits in hex when two that differ read alike (as
-NaNs). `--sample NAME` compares one sample. A file of more than 2^32 − 1 rows is refused. A column
+written as `rvr dump --all` writes them (a NaN other than the one quiet NaN with its bits), and
+with their bits in hex when two that differ read alike all the same. `--sample NAME` compares one sample. A file of more than 2^32 − 1 rows is refused. A column
 held with two kinds, or as a list in one file only, is named and not compared, as is a column only
 one file holds. It holds the key columns of both files, two row numbers per event both hold, and one
 column of each file at a time (a derived one worked out alone, a chunk of the columns it uses at a
