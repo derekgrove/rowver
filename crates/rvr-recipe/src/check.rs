@@ -95,7 +95,19 @@ impl Checks<'_> {
                     self.said.push("A pick needs a list per event to pick from, not a fixed value".into());
                 }
                 let sort = self.sort(mask);
-                self.said.extend(untrue(sort, "A mask"));
+                let position = match &**mask {
+                    Expression::Constant(Constant::Whole(n)) => Some(*n),
+                    Expression::Negate(inner) => match &**inner {
+                        Expression::Constant(Constant::Whole(n)) => Some(-n),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                match position {
+                    Some(n) if n >= 0 => self.said.push(format!("A mask keeps the members where it is true, and takes no position: nth(…, {n}, OTHERWISE) takes the member at position {n}, and first(…, OTHERWISE) the first")),
+                    Some(_) => self.said.push("A mask keeps the members where it is true, and takes no position: nth(…, N, OTHERWISE) takes the member at position N, counting from 0".into()),
+                    _ => self.said.extend(untrue(sort, "A mask")),
+                }
                 self.sort(values)
             }
             In(left, list) => {
@@ -162,7 +174,17 @@ impl Checks<'_> {
             },
             _ => None,
         };
+        // A direction or a kind written bare, as a name no [define] gives, is meant as text.
+        let bare = match arguments.get(1) {
+            Some(Expression::Name(word)) if !self.sorts.contains_key(word.as_str()) => Some(word.clone()),
+            _ => None,
+        };
         let mut say = |said: String| self.said.push(said);
+        match (name, bare) {
+            ("order" | "sorted", Some(word)) if word == "ascending" || word == "descending" => say(format!("{name} takes its direction as text, in quotes: {name}(…, '{word}')")),
+            ("stored", Some(word)) if crate::Kind::named(&word).is_ok() => say(format!("stored takes its kind as text, in quotes: stored(…, '{word}')")),
+            _ => {}
+        }
         match (name, literal(1)) {
             ("nth", Some(Constant::Whole(n))) if n < 0 => say("nth counts positions from 0, so its position is 0 or more".into()),
             ("nth", Some(Constant::Float(_) | Constant::Truth(_) | Constant::Text(_))) => say("nth needs a whole number for the position, counting from 0, such as nth(Jet_pt, 1, -1)".into()),

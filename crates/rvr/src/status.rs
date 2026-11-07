@@ -144,29 +144,39 @@ fn anew(dir: PathBuf, study: String, target: PathBuf, texts: crate::texts::Texts
     let place = Place { base: dir, study, target: target.clone(), at, locked: None, found: None };
     let asked = Asked { choose: Choose::Options(choice), on: On::Earlier, workers: 1, sign: true };
     let stopped = crate::journal::folder(&target);
+    // Only the staging folder is made, as press makes it: said before any plan is made.
+    if !crate::journal::parent(&target).is_dir() {
+        refused(&crate::journal::no_folder(&target));
+        return Ok(false);
+    }
     match crate::plan::build(place, texts, asked) {
-        Ok(plan) => match crate::journal::read(&stopped, &plan.identity) {
-            // The press stopped there is this one: what is left of it, in one statement.
-            crate::journal::Found::Same(done) if !done.inputs.is_empty() => {
-                let left: Vec<&crate::plan::Input> = plan.reads().iter().enumerate().filter(|(at, _)| !done.inputs.contains_key(at)).map(|(_, input)| input).collect();
-                let entries: u64 = left.iter().map(|input| crate::take::chosen_of(input)).sum();
-                println!(
-                    "{}: a press stopped there with {} of {} done (journal from {}); rvr press carries it on, reading the {} left, {}.",
-                    stopped.display(),
-                    done.inputs.len(),
-                    some(plan.reads().len(), "file", "files"),
-                    done.when,
-                    some(left.len(), "file", "files"),
-                    some(entries as usize, "entry", "entries")
-                );
-            }
-            _ => {
-                if let Some(note) = stopped_note(&stopped, &target, None, true) {
-                    println!("{note}");
+        Ok(plan) => {
+            match crate::journal::read(&stopped, &plan.identity) {
+                // The press stopped there is this one: what is left of it, in one statement.
+                crate::journal::Found::Same(done) if !done.inputs.is_empty() => {
+                    let left: Vec<&crate::plan::Input> = plan.reads().iter().enumerate().filter(|(at, _)| !done.inputs.contains_key(at)).map(|(_, input)| input).collect();
+                    let entries: u64 = left.iter().map(|input| crate::take::chosen_of(input)).sum();
+                    println!(
+                        "{}: a press stopped there with {} of {} done (journal from {}); rvr press carries it on, reading the {} left, {}.",
+                        stopped.display(),
+                        done.inputs.len(),
+                        some(plan.reads().len(), "file", "files"),
+                        done.when,
+                        some(left.len(), "file", "files"),
+                        some(entries as usize, "entry", "entries")
+                    );
                 }
-                println!("rvr press would press every column: {}.", crate::core::pressed(&plan));
+                _ => {
+                    if let Some(note) = stopped_note(&stopped, &target, None, true) {
+                        println!("{note}");
+                    }
+                    println!("rvr press would press every column: {}.", crate::core::pressed(&plan));
+                }
             }
-        },
+            if let Some(why) = &plan.refused {
+                println!("{why}.");
+            }
+        }
         Err(why) => {
             if let Some(note) = stopped_note(&stopped, &target, None, false) {
                 println!("{note}");

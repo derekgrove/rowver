@@ -316,7 +316,7 @@ impl<'a> Scope<'a> {
                 let position = match &arrays[1] {
                     Array::Constant(crate::Constant::Whole(position)) => position,
                     Array::Constant(crate::Constant::Missing(key)) => return Err(lacking(key, "the position in nth")),
-                    _ => return Err(problem("nth needs a whole number for the position, counting from 0, such as nth(Jet_pt, 1, -1)")),
+                    _ => return Err(problem("nth needs a fixed whole number for the position, the same for every event, counting from 0, such as nth(Jet_pt, 1, -1)")),
                 };
                 let position = usize::try_from(*position).map_err(|_| problem("nth counts positions from 0, so its position is 0 or more"))?;
                 f::nth(&arrays[0], position, &arrays[2], "nth")?

@@ -68,20 +68,26 @@ fn empty_asks_at_a_terminal_naming_the_files_rows_columns_and_size() {
 #[test]
 fn keys_live_in_rvr_config_else_xdg_config_home_else_dot_config() {
     let dir = Study::new("config");
-    let run = |set: &[(&str, &Path)]| {
+    let made = |set: &[(&str, &Path)]| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
         command.args(["key", "new"]).current_dir(&*dir).env_remove("RVR_CONFIG").env_remove("XDG_CONFIG_HOME").env("HOME", dir.join("home"));
         for (name, value) in set {
             command.env(name, value);
         }
-        assert!(command.output().unwrap().status.success());
+        command.output().unwrap()
     };
+    let run = |set: &[(&str, &Path)]| assert!(made(set).status.success());
     run(&[("XDG_CONFIG_HOME", &dir.join("xdg"))]);
     assert!(dir.join("xdg/rvr/key").exists());
     run(&[("RVR_CONFIG", &dir.join("own")), ("XDG_CONFIG_HOME", &dir.join("xdg2"))]);
     assert!(dir.join("own/key").exists() && !dir.join("xdg2").exists());
-    run(&[]);
-    assert!(dir.join("home/.config/rvr/key").exists());
+    // An XDG_CONFIG_HOME that is not a full path is passed over.
+    run(&[("XDG_CONFIG_HOME", Path::new("xdg3"))]);
+    assert!(dir.join("home/.config/rvr/key").exists() && !dir.join("xdg3").exists());
+    // A HOME that is not a full path is refused, never read from where rvr runs.
+    let out = made(&[("HOME", Path::new("home"))]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && said.contains("HOME is not set to a full path, so rvr cannot find ~/.config/rvr"), "{said}");
 }
 
 // SPEC 6.4.1, 2.8

@@ -26,15 +26,16 @@ pub fn folder(target: &Path) -> PathBuf {
 }
 
 /// The mode of a folder staging `target`: no wider open than the file there, as what it holds may be
-/// a copy of it (each who may read it may open the folder, each who may write it write there).
+/// a copy of it (each who may read it may open the folder), and written by its owner alone, as a
+/// link another put there would be written through.
 #[cfg(unix)]
 fn folder_mode(target: &Path) -> u32 {
     match std::fs::metadata(target) {
         Ok(there) => {
-            let mode = std::os::unix::fs::PermissionsExt::mode(&there.permissions()) & 0o666;
-            mode | (mode & 0o444) >> 2 | 0o700
+            let read = std::os::unix::fs::PermissionsExt::mode(&there.permissions()) & 0o444;
+            read | read >> 2 | 0o700
         }
-        Err(_) => 0o777,
+        Err(_) => 0o755,
     }
 }
 
@@ -82,10 +83,15 @@ fn own(folder: &Path, target: &Path) -> Result<(), String> {
     match narrow(folder, target, &there) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
             let (shown, file) = (folder.display(), target.display());
-            Err(format!("{shown} is wider open than {file}, and rvr stages a copy of it there, but it cannot be narrowed ({}): remove {shown}, or make it no wider open than the file, then try again.", rowver::described(&e)))
+            Err(format!("{shown} is open wider than rvr stages {file} in (written by its owner alone, read by those who may read the file), and it cannot be narrowed ({}): remove {shown}, or ask its owner to, then try again.", rowver::described(&e)))
         }
         _ => Ok(()),
     }
+}
+
+/// Why `target` cannot be written when the folder it is in is not there.
+pub fn no_folder(target: &Path) -> String {
+    format!("{} cannot be written: the folder {} is not there. Make it, or give --out a path in a folder that is.", target.display(), parent(target).display())
 }
 
 /// The folder `target` is in.
@@ -135,23 +141,26 @@ impl Staged {
             // Only the staging folder is made: a target in a folder that is not there is a mistake.
             // No wider open than the file there, as what it holds may be a copy of it.
             match private_folder(&folder, target) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    return Err(format!("{} cannot be written: the folder {} is not there. Make it, or give --out a path in a folder that is.", target.display(), parent(target).display()));
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(no_folder(target)),
                 Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(failed(e)),
                 Ok(()) => {}
                 Err(_) => own(&folder, target)?,
             }
+            let at = folder.join(JOURNAL);
+            if std::fs::symlink_metadata(&at).is_ok_and(|there| !there.is_file()) {
+                let (at, target, folder) = (at.display(), target.display(), folder.display());
+                return Err(format!("{at} is a link or a folder, not a plain file, and rvr writes the journal of a press of {target} there: remove {folder}, then try again."));
+            }
             let mut options = File::options();
             let journal = options.read(true).write(true).create(true).truncate(false);
-            let journal = match journal.open(folder.join(JOURNAL)) {
+            let journal = match journal.open(&at) {
                 // The folder went as it was opened (a press ending): asked again.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 opened => opened.map_err(failed)?,
             };
             // A filesystem that has no locks is pressed on without one.
             let locked = !matches!(journal.try_lock(), Err(std::fs::TryLockError::WouldBlock));
-            if locked && still_there(&journal, &folder.join(JOURNAL)) {
+            if locked && still_there(&journal, &at) {
                 // A press that ends before it is staged leaves a journal it found, and no folder it made.
                 let keep = journal.metadata().map_err(failed)?.len() > 0;
                 return Ok(Staged { folder, journal: Arc::new(journal), keep: Cell::new(keep) });
@@ -166,12 +175,12 @@ impl Staged {
     }
 }
 
-/// Whether `file` is the file at `path` still (not one removed while it was opened).
+/// Whether `file` is the file at `path` still (not one removed while it was opened, nor a link put in its place).
 fn still_there(file: &File, path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let (Ok(open), Ok(there)) = (file.metadata(), std::fs::metadata(path)) else {
+        let (Ok(open), Ok(there)) = (file.metadata(), std::fs::symlink_metadata(path)) else {
             return false;
         };
         open.dev() == there.dev() && open.ino() == there.ino()
@@ -221,7 +230,11 @@ pub fn pick_up(staged: &Staged, press: &Value, carries: bool) -> Option<Picked> 
             let held: Vec<&Value> = done.inputs.values().map(|line| &line["held"]).collect();
             match taken.map(|taken| (taken, Spool::reopen(&folder.join(SPOOL), &held))) {
                 Some((taken, Ok(spool))) => Some(Picked { done, taken, spool }),
-                _ => {
+                Some((_, Err(why))) => {
+                    over(&format!("cannot be picked up: its spool is not as its journal says ({why})"));
+                    None
+                }
+                None => {
                     over("cannot be picked up: its journal and its spool do not agree");
                     None
                 }
@@ -241,7 +254,18 @@ pub fn stage(target: &Path, staged: &Staged, press: &Value, picked: Option<Picke
         format!("{} could not be staged in {}: {e}. Make it writable, or free disk space there.", target.display(), folder.display())
     };
     let file = staged.journal.clone();
+    // Everything but the journal, held locked, and a spool picked up goes.
+    let clear = |keep: &[&str]| -> Result<(), String> {
+        for entry in std::fs::read_dir(folder).map_err(|e| failed(&e))? {
+            let path = entry.map_err(|e| failed(&e))?.path();
+            if !keep.iter().any(|name| path.file_name() == Some(name.as_ref())) {
+                remove(&path).map_err(|e| failed(&e))?;
+            }
+        }
+        Ok(())
+    };
     if let Some(Picked { done, spool, .. }) = picked {
+        clear(&[JOURNAL, SPOOL])?;
         let journal = Journal::on(file, folder.join(JOURNAL), press, Some(&done)).map_err(|e| failed(&e))?;
         staged.keep.set(false);
         let inputs = press["inputs"].as_u64().unwrap_or(0) as usize;
@@ -255,16 +279,11 @@ pub fn stage(target: &Path, staged: &Staged, press: &Value, picked: Option<Picke
         return Ok((spool, journal));
     }
     // An old journal is emptied on disk before its spool goes, so its checkpoints never come back
-    // beside another press's values; then everything but the journal, which is held locked, goes.
+    // beside another press's values.
     if staged.keep.get() {
         file.set_len(0).and_then(|()| file.sync_data()).map_err(|e| failed(&e))?;
     }
-    for entry in std::fs::read_dir(folder).map_err(|e| failed(&e))? {
-        let path = entry.map_err(|e| failed(&e))?.path();
-        if path.file_name() != Some(JOURNAL.as_ref()) {
-            remove(&path).map_err(|e| failed(&e))?;
-        }
-    }
+    clear(&[JOURNAL])?;
     let spool = Spool::create(&folder.join(SPOOL)).map_err(|e| failed(&e))?;
     let journal = Journal::on(file, folder.join(JOURNAL), press, None).map_err(|e| failed(&e))?;
     staged.keep.set(false);
@@ -350,16 +369,15 @@ pub fn unfinished(folder: &Path) -> Option<(Value, Done)> {
 
 /// Why the press whose journal is read through `file` left its folder for nothing, if it did: it
 /// was stopped once its file was in place (its last line names the file now at `target`), or it
-/// finished every file and would make what is there (`current`, the Plan of a file current).
+/// would make what is there (`current`, the Plan of a file current), however far it got.
 fn left_in(file: &File, target: &Path, current: Option<&Value>) -> Option<String> {
     let shown = target.display();
     let placed = last_line(file).and_then(|line| line.get("placed").cloned());
     if placed.is_some() && placed == identity(target) {
         return Some(format!("a press left it, stopped after it put {shown} in place"));
     }
-    let (now, (was, done)) = (current?, unfinished_in(file)?);
-    let all = was["inputs"].as_u64() == Some(done.inputs.len() as u64);
-    let makes = all && ["recipe", "samples", "lock", "events", "toolchain"].iter().all(|key| was.get(key) == now.get(key));
+    let (now, (was, _)) = (current?, unfinished_in(file)?);
+    let makes = ["recipe", "samples", "lock", "events", "toolchain"].iter().all(|key| was.get(key) == now.get(key));
     makes.then(|| format!("the press stopped there would make {shown} as it is"))
 }
 
@@ -642,6 +660,18 @@ mod tests {
         let staged = Staged::lock(&target).unwrap();
         assert_eq!(std::fs::metadata(&staged.folder).unwrap().permissions().mode() & 0o777, 0o700);
         drop(staged);
+        // Written by its owner alone, even for a file others may write.
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o664)).unwrap();
+        std::fs::create_dir(folder(&target)).unwrap();
+        std::fs::set_permissions(folder(&target), std::fs::Permissions::from_mode(0o777)).unwrap();
+        let staged = Staged::lock(&target).unwrap();
+        assert_eq!(std::fs::metadata(&staged.folder).unwrap().permissions().mode() & 0o777, 0o755);
+        drop(staged);
+        // A link in the journal's place is refused, and what it leads to is kept.
+        std::fs::create_dir(folder(&target)).unwrap();
+        std::os::unix::fs::symlink(dir.join("elsewhere/kept.txt"), folder(&target).join(JOURNAL)).unwrap();
+        assert!(Staged::lock(&target).is_err_and(|why| why.contains("is a link or a folder, not a plain file")));
+        assert_eq!(std::fs::read(dir.join("elsewhere/kept.txt")).unwrap(), b"kept");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -681,9 +711,15 @@ mod tests {
         assert_eq!(why, "recipe.toml changed");
         // Written on from its checkpoint, what followed it is gone; a line waits for a checkpoint
         // no longer than `every`, with no input finishing after it.
+        // Picked up, what else the folder holds goes, a link with what it leads to kept.
+        std::fs::write(dir.join("kept.txt"), b"kept").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(dir.join("kept.txt"), folder(&target).join("pressed.rvr")).unwrap();
         let staged = Staged::lock(&target).unwrap();
         let picked = pick_up(&staged, &press, true).unwrap();
         let (spool, journal) = stage(&target, &staged, &press, Some(picked)).unwrap();
+        assert!(std::fs::symlink_metadata(staged.folder.join("pressed.rvr")).is_err());
+        assert_eq!(std::fs::read(dir.join("kept.txt")).unwrap(), b"kept");
         journal.finished(&line(1, &taken(6), json!([])));
         let (ticking, ended) = std::sync::mpsc::channel();
         std::thread::scope(|scope| {

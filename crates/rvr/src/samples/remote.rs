@@ -97,11 +97,8 @@ fn entries(xml: &str) -> Vec<Entry> {
         if element(block, "resourcetype").is_some_and(|t| t.contains("collection")) {
             continue;
         }
-        let name = href
-            .trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or(href);
+        let href = unescaped(href);
+        let name = href.trim_end_matches('/').rsplit('/').next().unwrap_or(&href);
         let bytes = element(block, "getcontentlength")
             .or_else(|| element(block, "size"))
             .and_then(|s| s.trim().parse().ok())
@@ -113,6 +110,41 @@ fn entries(xml: &str) -> Vec<Entry> {
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     entries
+}
+
+/// XML text with its entities and character references (`&amp;`, `&#38;`, `&#x26;`) decoded.
+fn unescaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let reference = |name: &str| match name {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            // Digits alone, of a character XML allows (never 0).
+            _ => match name.strip_prefix("#x") {
+                Some(hex) => hex.bytes().all(|b| b.is_ascii_hexdigit()).then(|| u32::from_str_radix(hex, 16).ok()).flatten(),
+                None => name.strip_prefix('#').filter(|digits| digits.bytes().all(|b| b.is_ascii_digit())).and_then(|digits| digits.parse().ok()),
+            }
+            .and_then(char::from_u32)
+            .filter(|c| *c != '\0'),
+        };
+        match rest.find(';').and_then(|end| Some((reference(&rest[1..end])?, end))) {
+            Some((decoded, end)) => {
+                out.push(decoded);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out + rest
 }
 
 /// A URL's percent-encoded name decoded, if it decodes to UTF-8.
@@ -1415,11 +1447,12 @@ mod tests {
 <D:response><D:href>/store/collections/</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat></D:response>
 <D:response><D:href>/store/collections/sub/</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat></D:response>
 <D:response><D:href>/store/collections/collection_2024.root</D:href><D:propstat><D:prop><D:resourcetype/><D:getcontentlength>12</D:getcontentlength></D:prop></D:propstat></D:response>
+<D:response><D:href>/store/collections/x&amp;y&#38;z&#x26;&amp.root&#0;&#+38;</D:href><D:propstat><D:prop><D:resourcetype/><D:getcontentlength>1</D:getcontentlength></D:prop></D:propstat></D:response>
 <D:response><D:href>/store/collections/a%2Bb%20c.root</D:href><D:propstat><D:prop><D:resourcetype></D:resourcetype><D:getcontentlength>7</D:getcontentlength><D:getlastmodified>Thu, 25 Jun 2026 23:05:06 GMT</D:getlastmodified></D:prop></D:propstat></D:response>
 </D:multistatus>"#;
         let found = entries(xml);
         let names: Vec<&str> = found.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, ["a%2Bb%20c.root", "collection_2024.root"]);
+        assert_eq!(names, ["a%2Bb%20c.root", "collection_2024.root", "x&y&z&&amp.root&#0;&#+38;"]);
         assert_eq!((decoded("%e2%82%ac.root").as_deref(), decoded("50%.root"), decoded("%ff.root"), decoded("x%+1.root")), (Some("€.root"), None, None, None));
         assert_eq!(found[0].bytes, 7);
         assert_eq!(adler32_of("md5=x, adler32=3DA0195").as_deref(), Some("03da0195"));

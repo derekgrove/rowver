@@ -473,7 +473,15 @@ fn list_operations_place_nan_as_awkward_does_and_refuse_mistakes() {
     assert!(message("bit_and(x > 1, 1)").contains("not true-or-false"));
     assert!(message("shift_right(n, -1)").contains("negative"));
     assert!(message("bit_and(x, 1)").contains("whole numbers"));
-    assert!(message("bit_and(n, n)").contains("whole number as its second value"));
+    assert!(message("bit_and(n, n)").contains("needs a fixed whole number, the same for every event, as its second value"));
+    // Words that say how to mend what was meant.
+    assert!(message("count(false and x > 1)").contains("is given a fixed value, the same for every event: a sample's metadata, say, or an and or or a fixed value decides"));
+    assert!(message("nth(x, n, 0)").contains("nth needs a fixed whole number for the position, the same for every event"));
+    assert!(message("np.sqrt(n)").contains("such as sqrt(…), not np.sqrt(…)"));
+    // in works out every member, as or does not past a fixed true.
+    assert!(matches!(run("1 in [1, x]").unwrap(), Array::Object { .. }));
+    assert!(matches!(run("1 == 1 or 1 == x").unwrap(), Array::Constant(_)));
+    assert!(message("x.sum()").contains("such as sum(…), not x.sum(…)"));
     assert!(message("order(x, 'up')").contains("'ascending' or 'descending'"));
     assert!(message("take(x, x, 0)").contains("whole-number positions"));
     assert!(message("least_index(x, 0.5)").contains("whole number"));

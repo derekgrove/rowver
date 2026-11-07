@@ -845,7 +845,8 @@ sample two: 998 events in both, 93 only in A, 0 only in B
 Writes the recipe.toml, samples.toml and samples.lock FILE carries into DIR (FILE's name with
 `.reproduced` when not given), presses them with the same event choices into
 `DIR/<the file's study>.rvr`, and runs `rvr diff` on the two, exiting with its status (see the five
-minutes above). Relative paths in the lock are read from FILE's folder, or `--study FOLDER`. A DIR
+minutes above). Relative paths in the lock are read from FILE's folder (a link's own, or the named
+file's when only that one holds them), or `--study FOLDER`. A DIR
 that holds a `.rvr` file, or a recipe.toml, samples.toml or samples.lock other than FILE's, is
 refused, naming them. With `--texts` it writes the three texts and presses nothing: a study to build
 on, from the file alone.
@@ -869,7 +870,7 @@ the file is the one it was, byte for byte, its signature as it was; with a build
 otherwise, the header takes the arrays' new places and is signed again with your key, saying whose
 signature it replaces. Other values are refused, naming the columns, and the file stays empty
 ([SPEC §8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file)). Relative paths in the lock are read from
-FILE's folder, or `--study FOLDER`.
+FILE's folder (a link's own, or the named file's when only that one holds them), or `--study FOLDER`.
 
 ```text
 $ rvr empty flat.rvr
@@ -934,7 +935,7 @@ The Python package sets and drops them too: `rowver.set_tool(path, key, value)`,
 ### `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME...`
 
 rvr's folder is `$RVR_CONFIG` when it is set and not empty, else `$XDG_CONFIG_HOME/rvr` when that
-is set and not empty, else `~/.config/rvr`. `rvr key new` makes your Ed25519 key, `key` in that
+is set to a full path, else `~/.config/rvr`. `rvr key new` makes your Ed25519 key, `key` in that
 folder (keep it private): 64 lowercase hexadecimal characters and a newline, readable by you alone,
 never written over. Every file you press is signed with it from then on, so a reader can tell who
 pressed it and that its header has not changed since. It prints your public key, and the

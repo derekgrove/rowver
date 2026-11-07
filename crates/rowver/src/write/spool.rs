@@ -62,10 +62,20 @@ impl Spool {
         })
     }
 
-    /// The spool at `path` holding only the pieces `held` gave, cut after the last; kept when dropped.
+    /// The spool at `path`, a plain file, holding only the pieces `held` gave, cut after the last; kept when dropped.
     pub fn reopen(path: &Path, held: &[&Value]) -> Result<Self> {
+        let plain = || std::fs::symlink_metadata(path).ok().filter(std::fs::Metadata::is_file);
+        let not_plain = || crate::invalid(format!("{} is a link or a folder, not a plain file", path.display()));
+        if !std::fs::symlink_metadata(path)?.is_file() {
+            return Err(not_plain());
+        }
         let file = std::fs::File::options().read(true).write(true).open(path)?;
-        let end = file.metadata()?.len();
+        let opened = file.metadata()?;
+        // Not one put in its place as it was opened.
+        if plain().map(|there| crate::change::ids(&there)) != Some(crate::change::ids(&opened)) {
+            return Err(not_plain());
+        }
+        let end = opened.len();
         let span = |value: &Value| -> Option<Span> {
             let [at, size, bytes, packed] = value.as_array()?.as_slice() else {
                 return None;
@@ -388,6 +398,16 @@ mod tests {
         short[0][5].as_array_mut().unwrap().pop();
         assert!(Spool::reopen(&path, &[&short]).is_err(), "an i2 piece with one lane");
         assert!(Spool::reopen(&path, &[&Value::Null]).is_err(), "a line naming no pieces");
+        // A link in its place is not written through.
+        #[cfg(unix)]
+        {
+            let kept = dir.join("kept");
+            std::fs::rename(&path, &kept).unwrap();
+            std::os::unix::fs::symlink(&kept, &path).unwrap();
+            let length = std::fs::metadata(&kept).unwrap().len();
+            assert!(Spool::reopen(&path, &[&first]).is_err_and(|e| e.to_string().contains("is a link or a folder, not a plain file")));
+            assert_eq!(std::fs::metadata(&kept).unwrap().len(), length);
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

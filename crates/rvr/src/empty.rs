@@ -76,7 +76,7 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result
     if !anyway {
         let text = reader.header()["made"]["lock"]["text"].as_str().unwrap_or_default();
         let lock = Lock::read(text).map_err(|p| format!("{shown} was not emptied: the samples.lock it carries does not check out ({p}). Press its study again with rvr press --full, then empty that file."))?;
-        let (changed, unasked) = crate::samples::differing(&lock, &base(file, study)?);
+        let (changed, unasked) = crate::samples::differing(&lock, &base(file, study, text)?);
         if let Some(why) = unasked.first() {
             return Err(format!("{shown} was not emptied: its inputs could not all be checked ({why}). With --anyway it is emptied all the same."));
         }
@@ -154,7 +154,7 @@ fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), Strin
         return Err(format!("{shown} holds its columns: there is nothing to refill."));
     }
     let (texts, name) = study_texts(shell.header());
-    let base = base(file, study)?;
+    let base = base(file, study, &texts.lock)?;
     let (staged, out) = (rowver::write::beside(&real, ".refill"), rowver::write::beside(&real, ".refilled"));
     if let Some(there) = [&staged, &out].into_iter().find(|p| std::fs::symlink_metadata(p).is_ok()) {
         return Err(format!("{} is in the way: remove it, and refill again.", there.display()));

@@ -33,7 +33,7 @@ pub const HOLE_KINDS: [&str; 5] = ["unreachable", "damaged", "gone", "changed", 
 pub(crate) const MEND: &str = "press its study again with rvr press, which writes it as docs/FORMAT.md says";
 
 /// What mends a file whose [derived] this rvr press would not take.
-pub(crate) const DERIVED_MEND: &str = "This rvr press refuses such a [derived]: mend [derived] in the file's study (rvr reproduce FILE DIR --texts writes it out), then press that";
+pub(crate) const DERIVED_MEND: &str = "This rvr press refuses such a [derived]: mend [derived] in the recipe.toml of the study the file was pressed from, then press that study again";
 
 /// Entries `[first, last)` of one file's tree that a press chose but could not read.
 #[derive(Clone, Debug, PartialEq, Serialize)]

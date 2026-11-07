@@ -226,7 +226,7 @@ used for every member: `Jet_pt - MET_pt` subtracts the event's MET from each of 
 
 The comparisons are `==`, `!=`, `<`, `<=`, `>` and `>=`; one compares two values, and they do not
 chain (`a < b < c` is refused: write `a < b and b < c`). `x in [a, b, …]` is
-`(x == a) or (x == b) or …`, and `x in []` is false; a list, like a call's values, may end with a
+`(x == a) or (x == b) or …` with every member worked out, and `x in []` is false; a list, like a call's values, may end with a
 comma. `not`, `and` and `or` take only true-or-false values: a number is refused (write `x != 0`).
 `and` whose left side is a fixed `false` (written, a sample's field, or worked out from fixed
 values), or `or` whose left side is a fixed `true`, gives it without working out its right side. `not` comes at the start of what it turns over, never straight after an operator

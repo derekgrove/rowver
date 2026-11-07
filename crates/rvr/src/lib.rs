@@ -352,7 +352,9 @@ fn command_run(name: &str, options: &Options) -> u8 {
     let words = options.plain();
     for file in opened(name, &words) {
         if let Err(why) = restored(Path::new(file)) {
-            return report(name, Err(why));
+            report(name, Err(why));
+            // rvr diff's 1 says the files differ: a file it cannot read is 2.
+            return if name == "diff" { 2 } else { 1 };
         }
     }
     match name {

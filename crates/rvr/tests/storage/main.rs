@@ -535,7 +535,7 @@ fn a_listing_on_a_kept_connection_waits_120_s_for_its_answer() {
     assert!((120..135).contains(&took), "{took} s: {said}");
 }
 
-// SPEC 9.5
+// SPEC 7.5.7, 9.5
 #[test]
 fn a_press_stopped_before_it_finished_a_file_is_shown_by_status() {
     let (dir, server) = remote("stopped-early", |s| format!("{:?}", s.url("/store/flat.root")));
@@ -564,7 +564,7 @@ fn a_press_stopped_before_it_finished_a_file_is_shown_by_status() {
     let (_, said) = rvr(&dir, None, &["status"]);
     assert!(said.contains("before it finished a file (journal from ") && said.contains("rvr press would refuse") && !said.contains("starts it over"), "{said}");
     std::fs::write(dir.join("recipe.toml"), &recipe).unwrap();
-    // Nor beside a file that is current, when rvr press has nothing to do.
+    // Beside a file that is current, it would make that file as it is: rvr press removes it (SPEC 7.5.7).
     let stopped = std::fs::read(&journal).unwrap();
     server.script(|_| Answer::Serve);
     let (code, said) = rvr(&dir, None, &["press"]);
@@ -573,7 +573,7 @@ fn a_press_stopped_before_it_finished_a_file_is_shown_by_status() {
     std::fs::write(&journal, stopped).unwrap();
     let (code, said) = rvr(&dir, None, &["status"]);
     assert_eq!(code, 0, "{said}");
-    assert!(said.contains("before it finished a file (journal from ") && said.contains("It is current") && !said.contains("starts it over"), "{said}");
+    assert!(said.contains(".rvr.partial: the press stopped there would make ") && said.contains("rvr press removes it.") && said.contains("It is current") && !said.contains("starts it over"), "{said}");
 }
 
 // SPEC 7.2.4

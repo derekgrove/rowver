@@ -747,8 +747,9 @@ the spool of their kept values, and the file it writes, its arrays packed into i
 and its header written last, so that no array is copied once packed. Nothing is put at the target
 until every file is read or made a hole and every array is packed: the file appears whole, or not
 at all (a press that adds columns to its target in place, §8.2, puts it back as it was if cut
-short, §8.12). The folder is no wider open than the target, and a `FILE.partial` that is a link or
-a file is refused, as a press empties the folder it stages in.
+short, §8.12). The folder is no wider open than the target and written by its owner alone, and a
+`FILE.partial` that is a link or a file is refused, as a press empties the folder it stages in; so
+is a journal in it that is a link or a folder, and a spool so is not picked up.
 
 **7.5.2** While a press runs, it holds a lock on its journal; another press of the same target, and
 `rvr empty` or `rvr refill` of it, is refused while it is held. From its first read of the file at
@@ -782,8 +783,8 @@ over: the press that stopped in FOLDER is not carried on: this press keeps no jo
 **7.5.7** The staging folder goes once the file is in place. A press stopped after that, before
 its folder went, leaves the folder: the next press of the file removes it and says so, and
 `rvr status` says it will. So does a press that finds the file current, of a folder whose press
-finished every file it read, as its journal records, and would make that file as it is (the same
-three texts, event choices and toolchain). Any other folder stays, even beside a current file,
+would make that file as it is (the same three texts, event choices and toolchain), however far it
+got. Any other folder stays, even beside a current file,
 until a press that presses carries on from it (§7.5.4) or starts over (§7.5.5).
 
 ### 7.6 What a press holds
@@ -1218,7 +1219,8 @@ words are the program's own.
 **9.6 `rvr reproduce FILE [DIR]`** writes the three texts FILE carries into DIR (`FILE`'s name with
 `.reproduced` when not given), presses them with the same event choices into
 `DIR/<the file's study>.rvr`, and runs `rvr diff` on the two, exiting with its status. Relative paths
-in the lock are read from FILE's folder, or `--study FOLDER`. A DIR that holds a `.rvr` file, or a
+in the lock are read from FILE's folder (a link's own, or the named file's when only that one holds
+them), or `--study FOLDER`. A DIR that holds a `.rvr` file, or a
 `recipe.toml`, `samples.toml` or `samples.lock` other than FILE's, is refused, naming them.
 
 **9.6.1 `rvr reproduce FILE DIR --texts`** writes the three texts FILE carries into DIR and presses
@@ -1227,7 +1229,7 @@ nothing, so that a study can be built on from a file alone; DIR is refused as §
 ## 10. Keys and proxies
 
 **10.1** rvr's folder is `$RVR_CONFIG` when it is set and not empty, else `$XDG_CONFIG_HOME/rvr` when
-that is set and not empty, else `~/.config/rvr`.
+that is set to a full path, else `~/.config/rvr`, refused when HOME is not set to a full path.
 
 **10.2 `rvr key new [NAME]`** makes your Ed25519 key, `key` in that folder: 64 lowercase hexadecimal
 characters and a newline, readable by you alone, never written over. Every file you press is signed

@@ -23,18 +23,22 @@ pub(crate) fn study_texts(header: &serde_json::Value) -> (Texts, String) {
     (texts, made["study"].as_str().unwrap_or_default().to_owned())
 }
 
-/// The folder a file's lock's relative paths are from: `study`, or else where press wrote the
-/// file, unless it has moved since.
-pub(crate) fn base(file: &Path, study: Option<&Path>) -> Result<PathBuf, String> {
-    match study {
-        Some(folder) => Ok(folder.to_path_buf()),
-        None => Ok(file
-            .canonicalize()
-            .map_err(|e| rowver::plain_io(file, &e))?
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf()),
+/// The folder a file's lock (`lock`, its text) has its relative paths from: `study`, or else the
+/// folder FILE is in, or, through a link, the folder of the file it names when only that one holds
+/// every relative input (press keeps a link in its study to a file on another disk).
+pub(crate) fn base(file: &Path, study: Option<&Path>, lock: &str) -> Result<PathBuf, String> {
+    if let Some(folder) = study {
+        return Ok(folder.to_path_buf());
     }
+    let own = crate::journal::parent(file).canonicalize().map_err(|e| rowver::plain_io(file, &e))?;
+    let named = file.canonicalize().ok().and_then(|real| real.parent().map(Path::to_path_buf));
+    let files = Lock::read(lock).map(|lock| lock.samples.into_iter().flat_map(|s| s.files).map(|f| f.at).collect()).unwrap_or_else(|_| Vec::new());
+    let relative: Vec<String> = files.into_iter().filter(|at| !at.contains("://") && Path::new(at).is_relative() && !crate::samples::resolve::in_home(at)).collect();
+    let holds = |folder: &Path| relative.iter().all(|at| folder.join(at).exists());
+    Ok(match named {
+        Some(named) if named != own && !holds(&own) && holds(&named) => named,
+        _ => own,
+    })
 }
 
 /// Reproduce `file` into `dir`, reading relative inputs from `study` (FILE's folder when `None`);
@@ -45,15 +49,20 @@ fn run(file: &Path, dir: Option<PathBuf>, study: Option<PathBuf>, workers: usize
     let made = &reader.header()["made"];
     let (texts, name) = study_texts(reader.header());
     let name = name.as_str();
-    let base = base(file, study.as_deref())?;
+    let base = base(file, study.as_deref(), &texts.lock)?;
     let lock = Lock::read(&texts.lock).map_err(|p| format!("{shown}: its samples.lock does not check out: {p}"))?;
     let local = lock.samples.iter().flat_map(|s| &s.files);
     let local = local
         .filter(|f| !f.at.contains("://"))
         .map(|f| &f.at);
     for missing in local.filter(|_| !texts_only) {
-        if !crate::samples::resolve::local(missing, &base)?.exists() {
-            return Err(format!("{missing}, which the lock names, is not in {}. The lock's relative paths are from the study folder: name it with --study FOLDER.", base.display()));
+        let at = crate::samples::resolve::local(missing, &base)?;
+        if !at.exists() {
+            // Only a relative path is read from the study folder.
+            return Err(match Path::new(missing).is_relative() && !crate::samples::resolve::in_home(missing) {
+                true => format!("{missing}, which the lock names, is not in {}. The lock's relative paths are from the study folder: name it with --study FOLDER.", base.display()),
+                false => format!("{missing}, which the lock names, is not there ({}): put it back where the lock recorded it.", at.display()),
+            });
         }
     }
     let dir = dir.unwrap_or_else(|| file.with_extension("reproduced"));

@@ -797,6 +797,11 @@ fn a_full_file_copied_over_an_empty_one_a_change_to_which_was_cut_short_is_not_p
         assert_eq!(inode(&path), ino);
         let (code, said) = rvr(&dir, &["header", &file]);
         assert!(code == 1 && said.contains(&format!("{file}-journal is not of this {file}")), "{step}: {said}");
+        // rvr diff says 2 of a file it cannot read, as 1 says they differ (SPEC 9.4).
+        for rows in [&[][..], &["--rows"]] {
+            let (code, said) = rvr(&dir, &[&["diff", &file, &file][..], rows].concat());
+            assert!(code == 2 && said.contains(&format!("{file}-journal is not of this {file}")), "{step} {rows:?}: {said}");
+        }
         assert_eq!((std::fs::read(&path).unwrap(), journal(&path).exists()), (full.clone(), true), "{step}");
         std::fs::remove_file(journal(&path)).unwrap();
     }

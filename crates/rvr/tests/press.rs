@@ -594,10 +594,7 @@ per_jet = "ht / nJet"
     looped["derived"]["columns"][0]["expression"] = "per_jet + 1".into();
     rowver::write::rewrite(dir.join(&file), dir.join("looped.rvr"), &looped).unwrap();
     let (_, said) = rvr(&dir, &["dump", "looped.rvr", "--columns"]);
-    assert!(said.contains("uses itself, directly or through other derived columns. This rvr press refuses such a [derived]"), "{said}");
-    // Its study can be written out, as the words say, to mend and press.
-    let (code, said) = rvr(&dir, &["reproduce", "looped.rvr", "looped", "--texts"]);
-    assert!(code == 0 && dir.join("looped/recipe.toml").exists(), "{said}");
+    assert!(said.contains("uses itself, directly or through other derived columns. This rvr press refuses such a [derived]: mend [derived] in the recipe.toml of the study the file was pressed from"), "{said}");
     // A header without the derived columns its recipe lists is refused.
     let mut stripped = header.clone();
     stripped.as_object_mut().unwrap().shift_remove("derived");
@@ -1315,10 +1312,37 @@ fn a_press_stopped_through_a_link_is_seen_by_status() {
     let real = dir.join("store").join(&name);
     std::fs::rename(dir.join(&name), &real).unwrap();
     std::os::unix::fs::symlink(&real, dir.join(&name)).unwrap();
+    // A press of the study changed since, which would not make the file as it is.
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("[\"weight\"]", "[\"weight\", \"nJet\"]")).unwrap();
     stopped_after(&dir, 1, &["--full"]);
     assert!(dir.join("store").join(format!("{name}.partial")).join("journal.jsonl").exists());
     let said = rvr(&dir, &["status"]).1;
     assert!(said.contains(&format!("store/{name}.partial: a press stopped there with 1 of 2 files done (journal from ")), "{said}");
+}
+
+// SPEC 8.10, 9.6
+#[test]
+fn through_a_link_in_its_study_a_file_reads_its_relative_inputs_from_the_study() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
+    let dir = twice("linked-inputs", recipe);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    assert_eq!(rvr(&dir, &["press"]).0, 0);
+    // A link elsewhere to the file in the study reads them from the study too.
+    std::fs::create_dir(dir.join("links")).unwrap();
+    std::os::unix::fs::symlink(dir.join(&name), dir.join("links/f.rvr")).unwrap();
+    let (code, said) = rvr(&dir, &["reproduce", "links/f.rvr"]);
+    assert_eq!(code, 0, "{said}");
+    // The file on another disk, a link to it in the study.
+    std::fs::create_dir(dir.join("store")).unwrap();
+    std::fs::rename(dir.join(&name), dir.join("store").join(&name)).unwrap();
+    std::os::unix::fs::symlink(dir.join("store").join(&name), dir.join(&name)).unwrap();
+    let (code, said) = rvr(&dir, &["reproduce", &name, "again"]);
+    assert_eq!(code, 0, "{said}");
+    for args in [&["empty", &name, "-f"][..], &["refill", &name]] {
+        let (code, said) = rvr(&dir, args);
+        assert_eq!(code, 0, "{args:?}: {said}");
+    }
 }
 
 // SPEC 7.5.1
@@ -1370,7 +1394,10 @@ fn a_staging_folder_left_once_its_file_was_in_place_is_removed_by_the_next_press
     assert!(code == 0 && said.contains("is current: nothing to press.") && said.contains(&format!("Removed {name}.partial: a press left it, stopped after it put {name} in place.")), "{said}");
     assert!(!staged.exists());
     assert_eq!(std::fs::read(dir.join(&name)).unwrap(), pressed);
-    // One stopped there that would make the file as it is goes too.
+    // One stopped there that would make the file as it is goes too, however far it got.
+    stopped_after(&dir, 1, &["--full"]);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains(&format!("Removed {name}.partial: the press stopped there would make {name} as it is.")), "{said}");
     stopped_after(&dir, 2, &["--full"]);
     assert!(rvr(&dir, &["status"]).1.contains(&format!("{name}.partial: the press stopped there would make {name} as it is; rvr press removes it.")));
     let (code, said) = rvr(&dir, &["press"]);
@@ -1524,7 +1551,16 @@ fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
     std::fs::write(dir.join("magic.rvr"), b"\x89RVR\r\n\x1a\n").unwrap();
     let (code, said) = rvr(&dir, &["status", "--out", "magic.rvr"]);
     assert!(code == 1 && said.contains("rvr press would press every column"), "{said}");
+    // On a read-only disk (a debug build meets one where RVR_READ_ONLY_DISK says), status says the press's refusal.
+    if cfg!(debug_assertions) {
+        let disk = dir.join("magic.rvr");
+        let (code, said) = rvr_with(&dir, &[("RVR_READ_ONLY_DISK", disk.to_str().unwrap())], &["status", "--out", "magic.rvr"]);
+        assert!(code == 1 && said.contains("magic.rvr lies on a read-only filesystem"), "{said}");
+    }
     std::fs::remove_file(dir.join("magic.rvr")).unwrap();
+    // In a folder that is not there, status says the press's refusal.
+    let (code, said) = rvr(&dir, &["status", "--out", "nofolder/x.rvr"]);
+    assert!(code == 1 && said.contains("rvr press would refuse:\n  nofolder/x.rvr cannot be written: the folder nofolder is not there") && !said.contains("would press"), "{said}");
     // One that cannot be read stops a press, and status says so.
     use std::os::unix::fs::PermissionsExt;
     std::fs::write(dir.join("shut.rvr"), b"").unwrap();
@@ -1999,6 +2035,11 @@ fn a_file_under_the_home_folder_is_pinned_and_read_as_samples_toml_writes_it() {
     assert_eq!(code, 0, "{said}");
     let (code, said) = rvr_with(&dir, &[("HOME", "")], &["samples", "resolve", "samples.toml"]);
     assert!(code == 1 && said.contains("~//data: HOME is not set to a full path, so rvr cannot tell which folder ~ is"), "{said}");
+    // Gone from the home folder, it is not looked for in the study: --study would not help.
+    std::fs::remove_file(home.join("data/uproot_flat.root")).unwrap();
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let (code, said) = rvr_at_home(&dir, &home, &["reproduce", &name]);
+    assert!(code == 1 && said.contains("~/data/uproot_flat.root, which the lock names, is not there (") && !said.contains("--study"), "{said}");
 }
 
 // SPEC 2.6, 4.4.2, 4.5.2, 4.5.4; RECIPE values-the-recipe-cannot-take

@@ -12,6 +12,7 @@ use std::sync::Arc;
 fn lists<'a>(array: &'a Array, what: &str) -> Result<(&'a Arc<Vec<usize>>, &'a Values)> {
     match array {
         Array::Object { offsets, values } => Ok((offsets, values)),
+        Array::Constant(_) => Err(problem(format!("{what} needs a list per event, and is given a fixed value, the same for every event: a sample's metadata, say, or an and or or a fixed value decides (false and X is false, whatever X is)"))),
         _ => Err(problem(format!("{what} needs a list per event"))),
     }
 }
@@ -290,7 +291,7 @@ fn positions_or(picks: &[Option<usize>], otherwise: &Array, what: &str) -> Resul
     let fallback = match otherwise {
         Array::Constant(Constant::Whole(fallback)) => fallback,
         Array::Constant(Constant::Missing(key)) => return Err(lacking(key, &format!("the whole number {what} uses when there is no member"))),
-        _ => return Err(problem(format!("{what} needs a whole number to use when there is no member"))),
+        _ => return Err(problem(format!("{what} needs a fixed whole number, the same for every event, to use when there is no member"))),
     };
     let positions = picks
         .iter()
@@ -714,7 +715,7 @@ pub(crate) fn bits(
     let amount = match amount {
         Array::Constant(Constant::Whole(amount)) => amount,
         Array::Constant(Constant::Missing(key)) => return Err(lacking(key, &format!("the second value of {what}"))),
-        _ => return Err(problem(format!("{what} needs a whole number as its second value"))),
+        _ => return Err(problem(format!("{what} needs a fixed whole number, the same for every event, as its second value"))),
     };
     let apply = |values: &Values| match &values.store {
         Store::Whole(_) if values.kind == Kind::B1 => Err(problem(format!(

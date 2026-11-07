@@ -3,7 +3,6 @@
 //! tool installed: it asks the VOMS server for your attributes and writes the proxy where grid
 //! tools look (`$X509_USER_PROXY`, else `/tmp/x509up_u<uid>`).
 
-use std::path::PathBuf;
 use voms_proxy::user::Source;
 use voms_proxy::{make, Credentials, Places};
 
@@ -88,8 +87,8 @@ fn show() -> Result<bool, String> {
 /// Make a proxy valid `hours` with the attributes of the VO cms, write it, and show it.
 fn init(hours: u32) -> Result<bool, String> {
     let vo = "cms";
-    let home = std::env::var_os("HOME").ok_or("HOME is not set, so ~/.globus cannot be found")?;
-    let globus = PathBuf::from(home).join(".globus");
+    let home = crate::samples::resolve::home().ok_or("HOME is not set to a full path, so ~/.globus cannot be found: set HOME")?;
+    let globus = home.join(".globus");
     let named = |name: &str| std::env::var(name).ok();
     let source = Source::find(&globus, named("X509_USER_CERT"), named("X509_USER_KEY"))?;
     source.private()?;

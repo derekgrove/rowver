@@ -214,6 +214,20 @@ impl Parser<'_> {
     }
 
     /// The dotted name that begins at the next token, `obj.m_state.fPt` of `….obj.m_state.fPt`.
+    /// Why `left.` and the names after it, the dot `at`, are refused: a branch named in part, or a
+    /// function called as another language calls it (np.sqrt(x), x.sum()).
+    // Kept out of postfix, which every nested expression goes through, so as not to deepen its frame.
+    #[inline(never)]
+    fn dotted_name(&self, left: &str, at: &str) -> crate::Error {
+        let dotted = self.dotted();
+        let after = self.at + 2 * dotted.split('.').count() - 1;
+        if matches!(self.tokens.get(after), Some((Token::Symbol("("), _))) {
+            let function = dotted.rsplit('.').next().unwrap_or_default();
+            return problem(format!("Only sample has a field after a dot, as in sample.era (the dot at {at}): a function is called by its name alone, with what it works on inside its brackets, such as {function}(…), not {left}.{dotted}(…)"));
+        }
+        problem(format!("Only sample has a field after a dot, as in sample.era (the dot at {at}). Name a branch in full, such as Jet_pt, and keep some members of it with a mask, such as Jet_pt[good_jet]; a branch whose name holds a dot is written branch('{left}.{dotted}')"))
+    }
+
     fn dotted(&self) -> String {
         let mut parts = Vec::new();
         let mut at = self.at;
@@ -348,7 +362,7 @@ impl Parser<'_> {
                     (Expression::Name(sample), _) if sample == "sample" => {
                         return Err(problem(format!("Expected a name after sample. at {}", self.place())))
                     }
-                    (Expression::Name(left), Some((Token::Name(_), _))) => return Err(problem(format!("Only sample has a field after a dot, as in sample.era (the dot at {dot}). Name a branch in full, such as Jet_pt, and keep some members of it with a mask, such as Jet_pt[good_jet]; a branch whose name holds a dot is written branch('{left}.{}')", self.dotted()))),
+                    (Expression::Name(left), Some((Token::Name(_), _))) => return Err(self.dotted_name(left, &dot)),
                     _ => return Err(problem(format!("Only sample has a field after a dot, as in sample.era (the dot at {dot}): name a branch in full, such as Muon_pt"))),
                 };
                 value = Expression::Sample(field);

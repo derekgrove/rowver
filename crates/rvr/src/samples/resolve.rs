@@ -63,14 +63,23 @@ fn adler32(sum: u32, data: &[u8]) -> u32 {
     ((b << 16) | a) as u32
 }
 
+/// Whether a local path of samples.toml or the lock is under the home folder: `~` or `~/…` (`~x` is relative).
+pub fn in_home(text: &str) -> bool {
+    text == "~" || text.starts_with("~/")
+}
+
+/// Your home folder: HOME, when it is set to a full path.
+pub fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from).filter(|home| home.is_absolute())
+}
+
 /// Where a local path of samples.toml or the lock is: under `~/`, absolute, or relative to `base`.
 pub fn local(text: &str, base: &Path) -> Result<PathBuf, String> {
-    let rest = match text.strip_prefix("~/") {
-        Some(rest) => rest.trim_start_matches('/'),
-        None if text == "~" => "",
-        None => return Ok(base.join(text)),
-    };
-    match std::env::var_os("HOME").map(PathBuf::from).filter(|home| home.is_absolute()) {
+    if !in_home(text) {
+        return Ok(base.join(text));
+    }
+    let rest = text.trim_start_matches('~').trim_start_matches('/');
+    match home() {
         Some(home) => Ok(home.join(rest)),
         None => Err(format!("{text}: HOME is not set to a full path, so rvr cannot tell which folder ~ is: set HOME, or name the file by its full path")),
     }
@@ -307,6 +316,8 @@ impl Context {
 /// Each file one path, URL or pattern of `files` matches, pinned and given to `each` in turn; the
 /// first with its branch list when `listed`. A run stopped ends before the next file.
 fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool, each: &mut dyn FnMut(File, Option<Branches>) -> Result<(), String>) -> Result<(), String> {
+    // Asked to stop (a listing for branches has its first file), no next folder is listed.
+    ctx.going()?;
     let (folder, name) = split(asked);
     let join = |n: &str| join(folder, n);
     if pattern(folder) {

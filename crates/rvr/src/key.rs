@@ -12,18 +12,18 @@ pub const USAGE: &str = "usage:
   rvr key show                             your public key, to give to whoever reads your files
   rvr key trust KEY NAME...                trust files signed by KEY, as NAME's (its words joined)";
 
-/// The folder rvr keeps its key and trusted keys in; a variable set but empty counts as not set.
+/// The folder rvr keeps its key and trusted keys in; a variable set but empty counts as not set,
+/// as does an XDG_CONFIG_HOME that is not a full path.
 fn folder() -> Result<PathBuf, String> {
-    let set = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    let set = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty()).map(PathBuf::from);
     if let Some(dir) = set("RVR_CONFIG") {
-        return Ok(PathBuf::from(dir));
+        return Ok(dir);
     }
-    if let Some(dir) = set("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(dir).join("rvr"));
+    if let Some(dir) = set("XDG_CONFIG_HOME").filter(|dir| dir.is_absolute()) {
+        return Ok(dir.join("rvr"));
     }
-    let home =
-        std::env::var_os("HOME").ok_or("HOME is not set, so rvr cannot find ~/.config/rvr")?;
-    Ok(PathBuf::from(home).join(".config/rvr"))
+    let home = crate::samples::resolve::home().ok_or("HOME is not set to a full path, so rvr cannot find ~/.config/rvr: set HOME, or RVR_CONFIG to the folder to keep your key in")?;
+    Ok(home.join(".config/rvr"))
 }
 
 /// Your secret key, or `None` when you have made none.

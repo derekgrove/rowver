@@ -244,7 +244,7 @@ impl Locked {
             let (is, fix) = unwritable_said(kind, &self.path);
             Err(invalid(format!("{shown} has the journal of a change to it cut short, and {is}, so it cannot be put back: {fix}, then run any rvr command on it.")))
         };
-        let restored = put_back(&self.file, &self.path, can)?;
+        let restored = put_back(&self.file, &self.path, can, false)?;
         Ok(match (restored, &self.lockless) {
             (Restored::PutBack, Some(_)) => Restored::PutBackWithoutLock,
             (restored, _) => restored,
@@ -750,7 +750,11 @@ impl<'a> Change<'a> {
                 self.locked.moved.store(true, Ordering::Relaxed);
             }
             None => {
-                std::fs::remove_file(journal(&path)).map_err(|e| crate::about(&journal(&path), e.into()))?;
+                // A journal that cannot go would put the change back as the file is next opened
+                // (one that adds arrays is never known finished): put back now, and said.
+                let journaled = journal(&path);
+                // One gone already (a delete NFS retried) is removed.
+                std::fs::remove_file(&journaled).or_else(|e| if e.kind() == ErrorKind::NotFound { Ok(()) } else { Err(e) }).map_err(|e| invalid(format!("{} is as it was: the change was made, but its journal {} could not be removed ({}), so the change is put back: let files be removed from its folder, then try again", path.display(), journaled.display(), crate::described(&e))))?;
                 synced(&path);
             }
         }
@@ -837,7 +841,7 @@ impl Drop for Change<'_> {
         if self.prepared && !self.finished {
             let _ = match &self.staged {
                 Some((at, _)) => std::fs::remove_file(at).map_err(crate::Error::from),
-                None => put_back(&self.locked.file, &self.locked.path, || Ok(())).map(drop),
+                None => put_back(&self.locked.file, &self.locked.path, || Ok(()), true).map(drop),
             };
         }
     }
@@ -871,8 +875,10 @@ pub(crate) fn staging(path: &Path, suffix: &str, like: Option<std::fs::Metadata>
 /// Put the file back from the journal beside it, when there is one and `can` lets it be written:
 /// its old tail written back and the file cut to its old length. A journal that does not check out
 /// was cut short before the file was touched, and is let go; one of a change that finished is let
-/// go, the file untouched; one of another file is refused. What became of it.
-fn put_back(file: &File, path: &Path, can: impl Fn() -> Result<()>) -> Result<Restored> {
+/// go once the file is synced, the file untouched; one of another file is refused. A change of
+/// this program's that did not finish (`unfinished`) is put back even when its new tail is
+/// written, as it may not be kept. What became of it.
+fn put_back(file: &File, path: &Path, can: impl Fn() -> Result<()>, unfinished: bool) -> Result<Restored> {
     let journaled = journal(path);
     let kept = match std::fs::read(&journaled) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Restored::Nothing),
@@ -880,7 +886,13 @@ fn put_back(file: &File, path: &Path, can: impl Fn() -> Result<()>) -> Result<Re
     };
     let restored = match parsed(&kept) {
         Some(journaled) => {
-            let restored = settled(file, path, &journaled, can)?;
+            let restored = match settled(file, path, &journaled, &can)? {
+                Restored::Finished if unfinished => can().map(|()| Restored::PutBack)?,
+                restored => restored,
+            };
+            if restored == Restored::Finished {
+                file.sync_all().map_err(|e| crate::about(path, e.into()))?;
+            }
             if restored == Restored::PutBack {
                 let (_, size, start, _, tail, _) = journaled;
                 let put = write_at(file, tail, start).and_then(|()| file.set_len(size)).and_then(|()| file.sync_all());
@@ -1267,5 +1279,48 @@ mod tests {
         assert_eq!(locked.put_back().unwrap(), Restored::PutBackWithoutLock);
         assert_eq!((std::fs::read(&path).unwrap(), super::journal(&path).exists()), (before, false));
         std::fs::remove_file(&path).unwrap();
+    }
+    // SPEC 8.12
+    #[test]
+    fn a_change_that_wrote_its_new_header_but_did_not_finish_is_put_back() {
+        let (path, _) = lockless("unfinished");
+        let before = std::fs::read(&path).unwrap();
+        let held = Locked::take(&path).unwrap();
+        let mut change = Change::begin(&held).unwrap();
+        let mut header = change.header().clone();
+        header["k"] = serde_json::json!({});
+        let (bytes, at) = (super::opening(&header, crate::write::FEWER).unwrap(), 8 + change.end);
+        change.prepare(at + bytes.len() as u64, &bytes).unwrap();
+        // The new header written whole, as finish writes it, and the sync that would keep it failed.
+        super::write_at(change.file(), &bytes, at).and_then(|()| change.file().set_len(at + bytes.len() as u64)).unwrap();
+        drop(change);
+        assert_eq!((std::fs::read(&path).unwrap(), super::journal(&path).exists()), (before, false));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    // SPEC 8.12
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_change_whose_journal_cannot_go_is_put_back_and_said() {
+        let folder = std::env::temp_dir().join(format!("rowver-unit-{}-appended", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("f.rvr");
+        std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/conformance/rvr/valid/fixture.rvr"), &path).unwrap();
+        // A folder entries may be added to but not taken from.
+        let flag = |on: &str| assert!(std::process::Command::new("chflags").arg(on).arg(&folder).status().unwrap().success());
+        let before = std::fs::read(&path).unwrap();
+        flag("uappnd");
+        // Nothing that may panic until the flag is cleared, or the folder could not be removed.
+        let made = Locked::take(&path).and_then(|locked| super::set_tool(&locked, "k", serde_json::json!({})));
+        let (left, now) = (super::journal(&path).exists(), std::fs::read(&path));
+        flag("nouappnd");
+        let said = made.unwrap_err().to_string();
+        assert!(said.contains("is as it was: the change was made, but its journal") && said.contains("so the change is put back"), "{said}");
+        assert!(left, "the journal could not go");
+        assert_eq!(now.unwrap(), before);
+        assert_eq!(Locked::take(&path).unwrap().restored, Restored::PutBack);
+        assert!(!super::journal(&path).exists());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 }
