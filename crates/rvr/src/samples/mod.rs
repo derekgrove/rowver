@@ -435,9 +435,19 @@ pub(crate) fn differing(lock: &Lock, base: &Path) -> (Vec<String>, Vec<String>) 
 fn check(path: &Path) -> Result<bool, String> {
     let lock = read_lock(path)?;
     let mut same = true;
-    if let Ok(now) = std::fs::read_to_string(path.with_file_name("samples.toml")) {
-        if crate::agree::stale(&now, &lock) {
+    match std::fs::read_to_string(path.with_file_name("samples.toml")) {
+        Ok(now) if crate::agree::stale(&now, &lock) => {
             println!("samples.toml has changed since the lock was written ({}): run rvr samples resolve to see what it now asks for.", lock.resolved);
+            same = false;
+        }
+        Ok(_) => {}
+        // The lock is checked against the samples.toml beside it (SPEC §6.3.1), which a press needs too.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("There is no samples.toml beside the lock: a press needs both, so put it back (git checkout samples.toml).");
+            same = false;
+        }
+        Err(e) => {
+            println!("samples.toml beside the lock could not be read: {}.", rowver::plain_it(&e));
             same = false;
         }
     }

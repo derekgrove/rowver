@@ -74,9 +74,9 @@ const USAGE: &str = "usage:
                                            let a file's columns go, keeping its header to refill
   rvr refill FILE [--study FOLDER] [--workers N]
                                            press an empty file's columns again from its study
-  rvr tool FILE [KEY --set DATA.json | KEY --get [OUT.json] | KEY --drop] [--force | -f]
-                                           a file's tool keys: listed, or one set, written out or
-                                           dropped, in the file itself
+  rvr tool FILE [KEY --set DATA.json | KEY --get [OUT.json] | KEY... --drop] [--force | -f]
+                                           a file's tool keys: listed, or one set or written out,
+                                           or some dropped, in the file itself
   rvr key new [NAME]                       make the key that signs your files
   rvr key show                             your public key
   rvr key trust KEY NAME...                trust files signed by KEY, as NAME's

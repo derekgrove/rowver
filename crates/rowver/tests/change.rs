@@ -19,7 +19,7 @@ fn set(path: impl AsRef<Path>, key: &str, text: &[u8]) -> rowver::Result<()> {
 
 /// Drop the tool key `key` of the file at `path`, under its lock: its object's text.
 fn dropped(path: impl AsRef<Path>, key: &str) -> rowver::Result<String> {
-    drop_tool(&Locked::take(path)?, &[key]).map(|mut texts| texts.remove(0))
+    drop_tool(&Locked::take(path)?, &[key]).map(|copies| String::from_utf8(copies[0][0].clone()).unwrap())
 }
 
 /// The journal a change that adds arrays writes before it touches a file whose bytes were
@@ -245,7 +245,7 @@ fn a_second_writer_is_refused_while_one_holds_the_file() {
     assert!(matches!(std::fs::File::open(&path).unwrap().try_lock(), Err(std::fs::TryLockError::WouldBlock)));
     set_tool(&locked, "my-tool", json!({})).unwrap();
     set_tool(&locked, "other", json!({"n": 1})).unwrap();
-    assert_eq!(drop_tool(&locked, &["other", "my-tool"]).unwrap(), [r#"{"n":1}"#, "{}"]);
+    assert_eq!(drop_tool(&locked, &["other", "my-tool"]).unwrap(), [[br#"{"n":1}"#.to_vec()], [b"{}".to_vec()]]);
     assert_eq!(drop_tool(&locked, &[]).unwrap_err().to_string(), "no tool key was named to drop: name one or more");
     let freed = rowver::write::empty(locked).unwrap();
     assert_eq!(freed as usize, parts(&before).1.len());
@@ -667,9 +667,9 @@ fn a_header_that_would_not_open_is_refused_by_finish_and_the_file_put_back() {
 // SPEC 8.12; FORMAT 1, 7
 #[test]
 fn a_header_of_a_rowless_or_empty_file_laying_out_other_bytes_is_refused() {
-    // Its last array 100 bytes longer: in a rowless file, bytes no change wrote; in an empty one,
-    // other bytes than its records laid out before.
-    for name in ["fixture-rowless.rvr", "fixture-empty.rvr"] {
+    // Its last array 100 bytes longer: in a rowless file, an array of no chunks naming bytes, which
+    // no header holds; in an empty one, other bytes than its records laid out before.
+    for (name, why) in [("fixture-rowless.rvr", "an array of no chunks (a file of no rows) holds no bytes"), ("fixture-empty.rvr", "a bug in rowver")] {
         let before = valid(name);
         let path = written(&before, name);
         let locked = Locked::take(&path).unwrap();
@@ -678,7 +678,7 @@ fn a_header_of_a_rowless_or_empty_file_laying_out_other_bytes_is_refused() {
         let last = header["data"]["cols"].as_array_mut().unwrap().last_mut().unwrap();
         last["size"] = (last["size"].as_u64().unwrap() + 100).into();
         let said = change.finish(&header).unwrap_err().to_string();
-        assert!(said.contains("a bug in rowver") && said.contains("please report it"), "{name}: {said}");
+        assert!(said.contains(why), "{name}: {said}");
         assert_eq!((std::fs::read(&path).unwrap(), journal(&path).exists()), (before, false), "{name}");
     }
 }

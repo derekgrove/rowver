@@ -1768,6 +1768,15 @@
     },
     {
       "at": 3051955,
+      "refused": "opening",
+      "rule": "FORMAT §7 §12 a file of no rows: an array of no chunks holds no bytes, so its records name none",
+      "rust_says": "data.sample.size is 1000, and an array of no chunks (a file of no rows) holds no bytes: size 0 (docs/FORMAT.md §7): press its study again with rvr press, which writes it as docs/FORMAT.md says",
+      "sha256": "738c17c26347c61b9df3c3aff4ca9c3204e08e434f994375447a149e26faf1cf",
+      "size": 11065,
+      "verdict": "opening"
+    },
+    {
+      "at": 3063020,
       "refused": "full",
       "rule": "FORMAT §3 §6.3 samples are the lock's, with its labels",
       "rust_says": "data.samples holds A (Sample A, π⁰), B (Bee), and it holds the lock's samples, in its order, with their names and labels: A (Sample A, π⁰), B (B) (docs/FORMAT.md §3): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1776,7 +1785,7 @@
       "verdict": "full"
     },
     {
-      "at": 3067719,
+      "at": 3078784,
       "refused": "full",
       "rule": "FORMAT §3 the sample index runs through the samples",
       "rust_says": "data.sample: row 2 holds 1, and the rows of data.samples[0] hold 0 (docs/FORMAT.md §3): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1785,7 +1794,7 @@
       "verdict": "full"
     },
     {
-      "at": 3083487,
+      "at": 3094552,
       "refused": "full",
       "rule": "FORMAT §3 R15 entries strictly increasing within a file",
       "rust_says": "data.entry: row 1 holds entry 0 of data.files[0] after entry 2, and within a file rows are in strictly increasing order of their entries (docs/FORMAT.md §3): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1794,7 +1803,7 @@
       "verdict": "full"
     },
     {
-      "at": 3099249,
+      "at": 3110314,
       "refused": "full",
       "rule": "FORMAT §3 §6.1 each entry chosen",
       "rust_says": "data.entry: row 2 holds entry 6 of data.files[2] (./fixture-a2.root), which the event choice did not choose or a hole holds (docs/FORMAT.md §3, §6.1, §6.2): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1803,7 +1812,7 @@
       "verdict": "full"
     },
     {
-      "at": 3115011,
+      "at": 3126076,
       "refused": "full",
       "rule": "FORMAT §3 §6.1 a random choice made again",
       "rust_says": "data.entry: row 3 holds entry 1 of data.files[3] (./fixture-b.root), which the event choice did not choose or a hole holds (docs/FORMAT.md §3, §6.1, §6.2): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1812,7 +1821,7 @@
       "verdict": "full"
     },
     {
-      "at": 3130773,
+      "at": 3141838,
       "refused": "full",
       "rule": "FORMAT §6.3 each file's random take its share, the choice the file made again",
       "rust_says": "made.lock.text: sample B's file ./fixture-b.root has take 1, and its random choice takes 3 of it (docs/FORMAT.md §6.3): the lock was edited, or written by something other than rvr samples resolve; resolve again",
@@ -1821,7 +1830,7 @@
       "verdict": "full"
     },
     {
-      "at": 3146896,
+      "at": 3157961,
       "refused": "full",
       "rule": "FORMAT §6.3 each file's random take its share, the lock's own choice made again",
       "rust_says": "made.lock.text: sample B's file ./fixture-b.root has take 1, and its random choice takes 3 of it (docs/FORMAT.md §6.3): the lock was edited, or written by something other than rvr samples resolve; resolve again",
@@ -1830,7 +1839,7 @@
       "verdict": "full"
     },
     {
-      "at": 3163021,
+      "at": 3174086,
       "refused": "full",
       "rule": "FORMAT §3 §7 entry is i8[rows]",
       "rust_says": "data.entry: its zstd frame decodes to 1 bytes, and its chunk's lane holds 2 (docs/FORMAT.md §7): the file is damaged, or was not written as the format says; copy it again, or press its study again",
@@ -1839,7 +1848,7 @@
       "verdict": "full"
     },
     {
-      "at": 3178778,
+      "at": 3189843,
       "refused": "full",
       "rule": "FORMAT §4 a copied column keeps its branch's kind",
       "rust_says": "data.cols[\"MET\"] is f4, and the recipe makes it f8 from the branches the lock lists: a copied branch keeps its kind, a computed column has its expression's, unless the recipe stores it as another (docs/FORMAT.md §4): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1848,7 +1857,7 @@
       "verdict": "full"
     },
     {
-      "at": 3194540,
+      "at": 3205605,
       "refused": "full",
       "rule": "FORMAT §4 offsets never decrease",
       "rust_says": "data.cols[\"Muon_pt\"].offsets: a chunk's offsets must start at 0 and never decrease (docs/FORMAT.md §4, §7), and one gives 1 at its value 2: the file is damaged; copy it again, or press its study again",
@@ -1857,7 +1866,7 @@
       "verdict": "full"
     },
     {
-      "at": 3210302,
+      "at": 3221367,
       "refused": "full",
       "rule": "FORMAT §4 F9 lim made again from the values",
       "rust_says": "data.cols[\"MET\"].lim is [0,50], and its values give [0.0,40.0] (docs/FORMAT.md §4): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1866,7 +1875,7 @@
       "verdict": "full"
     },
     {
-      "at": 3226056,
+      "at": 3237121,
       "refused": "full",
       "rule": "FORMAT §4 vals made again from the values",
       "rust_says": "data.cols[\"nlep\"].vals is [0,2,3], and its values give [0,1,2,3] (docs/FORMAT.md §4): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1875,7 +1884,7 @@
       "verdict": "full"
     },
     {
-      "at": 3241816,
+      "at": 3252881,
       "refused": "full",
       "rule": "FORMAT §4 a lim of 38 digits, wider than a span holds",
       "rust_says": "data.cols[\"nlep\"].lim is [-150000000000000000000000000000000000000,150000000000000000000000000000000000000], and its values give [0,3] (docs/FORMAT.md §4): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1884,7 +1893,7 @@
       "verdict": "full"
     },
     {
-      "at": 3257715,
+      "at": 3268780,
       "refused": "full",
       "rule": "FORMAT §4 a b1 value is 0 or 1",
       "rust_says": "data.cols[\"flag\"]: a b1 value is 2, and a b1 value is 0 or 1 (docs/FORMAT.md §4): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1893,7 +1902,7 @@
       "verdict": "full"
     },
     {
-      "at": 3273477,
+      "at": 3284542,
       "refused": "full",
       "rule": "FORMAT §4 each NaN of a worked-out column the one quiet NaN",
       "rust_says": "data.cols[\"MET\"]: a NaN it holds has the bits 0xffc00000, and a NaN a column works out is 0x7fc00000, the one quiet NaN (docs/FORMAT.md §4): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1902,7 +1911,7 @@
       "verdict": "full"
     },
     {
-      "at": 3289409,
+      "at": 3300474,
       "refused": "full",
       "rule": "FORMAT §5 F7 events_read exact",
       "rust_says": "made.files[\"A\"].metadata.events_read is 24, and the sample's event choice chose 25 entries, 0 of them in holes, so it is 25 (docs/FORMAT.md §5): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1911,7 +1920,7 @@
       "verdict": "full"
     },
     {
-      "at": 3305171,
+      "at": 3316236,
       "refused": "full",
       "rule": "FORMAT §5 F7 events_total exact",
       "rust_says": "made.files[\"A\"].metadata.events_total is 31, and it is the entries of all the sample's files in the lock, 30 (docs/FORMAT.md §5): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1920,7 +1929,7 @@
       "verdict": "full"
     },
     {
-      "at": 3320933,
+      "at": 3331998,
       "refused": "full",
       "rule": "FORMAT §5 §6.2 events_missing exact",
       "rust_says": "made.files[\"A\"].metadata.events_missing is 3, and 4 entries the sample's event choice chose lie in its holes (docs/FORMAT.md §5): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1929,7 +1938,7 @@
       "verdict": "full"
     },
     {
-      "at": 3336944,
+      "at": 3348009,
       "refused": "full",
       "rule": "FORMAT §5 §3.5.10 no samples.toml metadata key is one rvr gives",
       "rust_says": "made.samples.text is not a samples.toml docs/SPEC.md §3 accepts: sample \"B\" metadata: events_read is given by rvr to every sample: name yours otherwise. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1938,7 +1947,7 @@
       "verdict": "full"
     },
     {
-      "at": 3352723,
+      "at": 3363788,
       "refused": "full",
       "rule": "FORMAT §5 no samples.toml metadata key is a total's name",
       "rust_says": "the recipe's total xsec has the name of a key of sample A's metadata, and no key of samples.toml's metadata has a total's name (docs/FORMAT.md §5): rename the total or the key, resolve and press again",
@@ -1947,7 +1956,7 @@
       "verdict": "full"
     },
     {
-      "at": 3368501,
+      "at": 3379566,
       "refused": "full",
       "rule": "FORMAT §6 title present exactly when the recipe sets one",
       "rust_says": "made.title is null, and it is the recipe's title, there exactly when the recipe sets one (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1956,7 +1965,7 @@
       "verdict": "full"
     },
     {
-      "at": 3384220,
+      "at": 3395285,
       "refused": "full",
       "rule": "FORMAT §6 the recipe is one the reference accepts",
       "rust_says": "made.recipe.text cannot be read as a recipe the recipe reference accepts (The recipe is not valid TOML, line 15: a name has no value after its =). Press its study again.",
@@ -1965,7 +1974,7 @@
       "verdict": "full"
     },
     {
-      "at": 3399986,
+      "at": 3411051,
       "refused": "full",
       "rule": "FORMAT §6 the recipe has all five tables",
       "rust_says": "made.recipe.text cannot be read as a recipe the recipe reference accepts (A recipe has no [define] table: every recipe has its five tables, [define], [keep], [columns], [totals] and [derived], each written even when it is empty. Add the line [define].). Press its study again.",
@@ -1974,7 +1983,7 @@
       "verdict": "full"
     },
     {
-      "at": 3415738,
+      "at": 3426803,
       "refused": "full",
       "rule": "FORMAT §6 its [columns] stores recipe.columns",
       "rust_says": "made.recipe.columns is [\"nlep\",\"MET\",\"Muon_pt\",\"signed_i1\",\"signed_i2\",\"signed_i8\",\"unsigned_u1\",\"unsigned_u2\",\"unsigned_u4\",\"unsigned_u8\",\"flag\",\"double\"], and the recipe's [columns] stores [\"nlep\", \"MET\", \"Muon_pt\", \"signed_i1\", \"signed_i2\", \"signed_i8\", \"unsigned_u1\", \"unsigned_u2\", \"unsigned_u4\", \"unsigned_u8\", \"flag\"], in that order (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -1983,7 +1992,7 @@
       "verdict": "full"
     },
     {
-      "at": 3431488,
+      "at": 3442553,
       "refused": "full",
       "rule": "FORMAT §6 §10 its [derived] lists the derived columns",
       "rust_says": "the [derived] table of made.recipe.text does not list the derived columns its header records, by the same names and expressions in the same order (docs/FORMAT.md §10): one of the two was edited after it was written. Press its study again.",
@@ -1992,7 +2001,7 @@
       "verdict": "full"
     },
     {
-      "at": 3447271,
+      "at": 3458336,
       "refused": "full",
       "rule": "FORMAT §6 samples.toml accepted",
       "rust_says": "made.samples.text is not a samples.toml docs/SPEC.md §3 accepts: samples.toml's version is 1: write version = 1. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2001,7 +2010,7 @@
       "verdict": "full"
     },
     {
-      "at": 3463033,
+      "at": 3474098,
       "refused": "full",
       "rule": "FORMAT §6 §6.3 the lock resolved from that samples.toml",
       "rust_says": "made.lock.text was not resolved from made.samples.text: samples.lock was not resolved from this samples.toml (its samples_toml_sha256 differs): run rvr samples resolve and review the new lock. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2010,7 +2019,7 @@
       "verdict": "full"
     },
     {
-      "at": 3478795,
+      "at": 3489860,
       "refused": "full",
       "rule": "FORMAT §6 tree: the lock's",
       "rust_says": "made.files[\"A\"].files[\"./fixture-a.root\"].tree is \"Other\", and it is the lock's tree for the sample, \"Events\" (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2019,7 +2028,7 @@
       "verdict": "full"
     },
     {
-      "at": 3494556,
+      "at": 3505621,
       "refused": "full",
       "rule": "FORMAT §6 uuid: the lock's",
       "rust_says": "made.files[\"A\"].files[\"./fixture-a.root\"].uuid is \"31e851e4-b994-11f1-ba5c-0000000000ff\", and it is the UUID the lock gives the file, \"31e851e4-b994-11f1-ba5c-000000000001\" (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2028,7 +2037,7 @@
       "verdict": "full"
     },
     {
-      "at": 3510318,
+      "at": 3521383,
       "refused": "full",
       "rule": "FORMAT §6 entries: the lock's",
       "rust_says": "made.files[\"B\"].files[\"./fixture-b.root\"].entries is 21, and it is the entries the lock gives the file, 20 (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2037,7 +2046,7 @@
       "verdict": "full"
     },
     {
-      "at": 3526080,
+      "at": 3537145,
       "refused": "full",
       "rule": "FORMAT §6 metadata: the lock's values",
       "rust_says": "made.files[\"A\"].metadata.xsec is 87.4, and it is the lock's value, 87.3 (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2046,7 +2055,7 @@
       "verdict": "full"
     },
     {
-      "at": 3541842,
+      "at": 3552907,
       "refused": "full",
       "rule": "FORMAT §6 metadata: the lock's keys and rvr's",
       "rust_says": "made.files[\"A\"].metadata holds the keys [\"events_read\", \"events_total\", \"floats\", \"kind\", \"note\", \"xsec\"], and it holds the lock's metadata of the sample, events_read, events_total, events_missing when the file has holes, and each total: [\"events_read\", \"events_total\", \"floats\", \"kind\", \"xsec\"] (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2055,7 +2064,7 @@
       "verdict": "full"
     },
     {
-      "at": 3557741,
+      "at": 3568806,
       "refused": "full",
       "rule": "FORMAT §6 a total no file holds is 0.0 on every sample",
       "rust_says": "made.files[\"A\"].metadata.sumw is 5.0, and no file of the sample holds that total (the press read none of them), so it is 0.0 (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2064,7 +2073,7 @@
       "verdict": "full"
     },
     {
-      "at": 3569420,
+      "at": 3580485,
       "refused": "full",
       "rule": "FORMAT §6 R16 a total no file holds is written as a double",
       "rust_says": "made.files[\"B\"].metadata.sumw is 0, and a total is a finite double, written with a . or an exponent (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2073,7 +2082,7 @@
       "verdict": "full"
     },
     {
-      "at": 3581095,
+      "at": 3592160,
       "refused": "full",
       "rule": "FORMAT §6 R16 totals on every file read",
       "rust_says": "made.files[\"A\"].files[\"./fixture-a.root\"].totals holds [], and a file the press read holds each total of the recipe's [totals], and one it did not read none: [\"sumw\"] (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2082,7 +2091,7 @@
       "verdict": "full"
     },
     {
-      "at": 3596873,
+      "at": 3607938,
       "refused": "full",
       "rule": "FORMAT §6 R16 totals only when the recipe has one, every sample holding them",
       "rust_says": "made.files[\"A\"].files[\"./fixture-a.root\"].totals holds [\"sumw\"], and a file the press read holds each total of the recipe's [totals], and one it did not read none: [] (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2091,7 +2100,7 @@
       "verdict": "full"
     },
     {
-      "at": 3612802,
+      "at": 3623867,
       "refused": "full",
       "rule": "FORMAT §6 R16 no totals on a file read none of, every sample holding them",
       "rust_says": "made.files[\"A\"].files[\"./fixture-empty.root\"] has totals, and the press did not read the file (it took none of its entries, or every one it chose lies in a hole), so it has none (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2100,7 +2109,7 @@
       "verdict": "full"
     },
     {
-      "at": 3628983,
+      "at": 3640048,
       "refused": "full",
       "rule": "FORMAT §6.2 a hole holds a chosen entry",
       "rust_says": "made.files[\"B\"].files[\"./fixture-b.root\"].holes[0] holds entry 0, none of which the event choice chose, and a hole holds at least one (docs/FORMAT.md §6.2): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2109,7 +2118,7 @@
       "verdict": "full"
     },
     {
-      "at": 3644994,
+      "at": 3656059,
       "refused": "full",
       "rule": "FORMAT §6.2 no row's entry in a hole",
       "rust_says": "data.entry: row 0 holds entry 0 of data.files[0] (./fixture-a.root), which the event choice did not choose or a hole holds (docs/FORMAT.md §3, §6.1, §6.2): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2118,7 +2127,7 @@
       "verdict": "full"
     },
     {
-      "at": 3661005,
+      "at": 3672070,
       "refused": "full",
       "rule": "FORMAT §6.3 L1 TOML",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock is not TOML: TOML parse error at line 79, column 3;    |; 79 | [[[;    |   ^; invalid key; . press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2127,7 +2136,7 @@
       "verdict": "full"
     },
     {
-      "at": 3676770,
+      "at": 3687835,
       "refused": "full",
       "rule": "FORMAT §6.3 L2 format and version",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock's version is not 1, the one this reader knows. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2136,7 +2145,7 @@
       "verdict": "full"
     },
     {
-      "at": 3692532,
+      "at": 3703597,
       "refused": "full",
       "rule": "FORMAT §6.3 L3 resolved: YYYY-MM-DDTHH:MM:SSZ",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock's resolved \"yesterday\" is not YYYY-MM-DDTHH:MM:SSZ. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2145,7 +2154,7 @@
       "verdict": "full"
     },
     {
-      "at": 3708283,
+      "at": 3719348,
       "refused": "full",
       "rule": "FORMAT §6.3 L4 one sample or more",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock has no sample. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2154,7 +2163,7 @@
       "verdict": "full"
     },
     {
-      "at": 3722303,
+      "at": 3733368,
       "refused": "full",
       "rule": "FORMAT §6.3 L5 a sample exactly its fields",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample 1 has no key \"x\"; it takes name, label, asked, tree, branches, events, events_total, events_read, metadata, file.. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2163,7 +2172,7 @@
       "verdict": "full"
     },
     {
-      "at": 3738072,
+      "at": 3749137,
       "refused": "full",
       "rule": "FORMAT §6.3 L6 the samples samples.toml makes",
       "rust_says": "made.lock.text was not resolved from made.samples.text: samples.lock sample \"B\" is not the sample samples.toml makes (its name, label, tree, event choice, files asked or metadata). press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2172,7 +2181,7 @@
       "verdict": "full"
     },
     {
-      "at": 3753836,
+      "at": 3764901,
       "refused": "full",
       "rule": "FORMAT §6.3 L7 events_total the sum of entries",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"A\": events_total is not the sum of its files' entries. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2181,7 +2190,7 @@
       "verdict": "full"
     },
     {
-      "at": 3769598,
+      "at": 3780663,
       "refused": "full",
       "rule": "FORMAT §6.3 L8 branches names one of the lists",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"A\": its branches names no branch list of the lock. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2190,7 +2199,7 @@
       "verdict": "full"
     },
     {
-      "at": 3785360,
+      "at": 3796425,
       "refused": "full",
       "rule": "FORMAT §6.3 L9 a file exactly its fields",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample 1 file 1 has no key \"modified\"; it takes at, bytes, uuid, entries, adler32, stop.. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2199,7 +2208,7 @@
       "verdict": "full"
     },
     {
-      "at": 3801136,
+      "at": 3812201,
       "refused": "full",
       "rule": "FORMAT §6.3 L10 stop exactly when first N reads fewer",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"A\": ./fixture-a2.root's stop and take are not what its event choice reads. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2208,7 +2217,7 @@
       "verdict": "full"
     },
     {
-      "at": 3816888,
+      "at": 3827953,
       "refused": "full",
       "rule": "FORMAT §6.3 L11 files in SPEC §3.8's order",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"A\": ./fixture-a.root is not where the lock lists it: its files are the matches of asked, entry after entry, each entry's in byte order of name, written as the entry writes its folder (a bare name as ./NAME). press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2217,7 +2226,7 @@
       "verdict": "full"
     },
     {
-      "at": 3832650,
+      "at": 3843715,
       "refused": "full",
       "rule": "FORMAT §6.3 L12 no two files with the same at",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"A\" names ./fixture-a.root twice; samples.lock sample \"A\": ./fixture-a.root is not where the lock lists it: its files are the matches of asked, entry after entry, each entry's in byte order of name, written as the entry writes its folder (a bare name as ./NAME). press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2226,7 +2235,7 @@
       "verdict": "full"
     },
     {
-      "at": 3848408,
+      "at": 3859473,
       "refused": "full",
       "rule": "FORMAT §6.3 L13 at: a bare name as ./NAME",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"B\": fixture-b.root is not where the lock lists it: its files are the matches of asked, entry after entry, each entry's in byte order of name, written as the entry writes its folder (a bare name as ./NAME). press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2235,7 +2244,7 @@
       "verdict": "full"
     },
     {
-      "at": 3864168,
+      "at": 3875233,
       "refused": "full",
       "rule": "FORMAT §6.3 L14 bytes from 1",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"A\": ./fixture-a.root has bytes 0: a lock knows every file's size. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2244,7 +2253,7 @@
       "verdict": "full"
     },
     {
-      "at": 3879927,
+      "at": 3890992,
       "refused": "full",
       "rule": "FORMAT §6.3 L15 adler32 for a local file",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"A\": ./fixture-a.root has no adler32: a lock gives one for every file on this computer. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2253,7 +2262,7 @@
       "verdict": "full"
     },
     {
-      "at": 3895665,
+      "at": 3906730,
       "refused": "full",
       "rule": "FORMAT §6.3 L16 uuid 8-4-4-4-12 lowercase hex",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"A\": ./fixture-a.root's uuid is not a ROOT UUID (8-4-4-4-12 lowercase hex). press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2262,7 +2271,7 @@
       "verdict": "full"
     },
     {
-      "at": 3911392,
+      "at": 3922457,
       "refused": "full",
       "rule": "FORMAT §6.3 L17 a branch's kind",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock branches 1 branch 1: kind is a .rvr kind (f4, f8, i1 … u8, b1), or none. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2271,7 +2280,7 @@
       "verdict": "full"
     },
     {
-      "at": 3927155,
+      "at": 3938220,
       "refused": "full",
       "rule": "FORMAT §6.3 L18 no list twice",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock writes one branch list twice. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2280,7 +2289,7 @@
       "verdict": "full"
     },
     {
-      "at": 3943758,
+      "at": 3954823,
       "refused": "full",
       "rule": "FORMAT §6.3 L19 2^40 entries a sample",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"B\": ./fixture-b9.root is not where the lock lists it: its files are the matches of asked, entry after entry, each entry's in byte order of name, written as the entry writes its folder (a bare name as ./NAME); samples.lock sample \"B\": its files hold more than 2^40 entries in all, more than a sample of a .rvr file may: split them among samples of fewer files, then resolve again. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2289,7 +2298,7 @@
       "verdict": "full"
     },
     {
-      "at": 3959688,
+      "at": 3970753,
       "refused": "full",
       "rule": "FORMAT §6.3 L19 2^40 entries a sample: 2^40 + 1 in one file refused",
       "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"B\": one of its files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones and split them among samples, then resolve again. press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2298,7 +2307,7 @@
       "verdict": "full"
     },
     {
-      "at": 3975461,
+      "at": 3986526,
       "refused": "full",
       "rule": "FORMAT §3 §7 chunk_rows the recipe's",
       "rust_says": "data.chunk_rows is 1024, and it is the recipe's chunk_rows, 65,536 (65,536 when the recipe gives none; docs/FORMAT.md §3, §7): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2307,7 +2316,7 @@
       "verdict": "full"
     },
     {
-      "at": 3991222,
+      "at": 4002287,
       "refused": "full",
       "rule": "FORMAT §7 lane sizes adding up to the frames",
       "rust_says": "data.cols[\"MET\"]: its chunk table gives its frames 130 bytes, and with the table's own 128 they do not fill the array's 257 (docs/FORMAT.md §7): the file is damaged; copy it again, or press its study again",
@@ -2316,7 +2325,7 @@
       "verdict": "full"
     },
     {
-      "at": 4006984,
+      "at": 4018049,
       "refused": "full",
       "rule": "FORMAT §7 byte lanes in order",
       "rust_says": "data.cols[\"MET\"]: a chunk's values are not the SHA-256 its chunk table states (docs/FORMAT.md §8): the file is damaged; copy it again, or press its study again",
@@ -2325,7 +2334,7 @@
       "verdict": "full"
     },
     {
-      "at": 4022746,
+      "at": 4033811,
       "refused": "full",
       "rule": "FORMAT §7 §8 a chunk's SHA-256 its values'",
       "rust_says": "data.cols[\"MET\"]: a chunk's values are not the SHA-256 its chunk table states (docs/FORMAT.md §8): the file is damaged; copy it again, or press its study again",
@@ -2334,7 +2343,7 @@
       "verdict": "full"
     },
     {
-      "at": 4038508,
+      "at": 4049573,
       "refused": "full",
       "rule": "FORMAT §7 a lane decodes to the chunk's values",
       "rust_says": "data.cols[\"MET\"]: its zstd frame decodes to 4 bytes, and its chunk's lane holds 3 (docs/FORMAT.md §7): the file is damaged, or was not written as the format says; copy it again, or press its study again",
@@ -2343,7 +2352,7 @@
       "verdict": "full"
     },
     {
-      "at": 4054270,
+      "at": 4065335,
       "refused": "full",
       "rule": "FORMAT §7 F5 exactly one frame a lane",
       "rust_says": "data.cols[\"MET\"]: its zstd frame ends 14 bytes before its chunk's lane does: it is exactly one frame (docs/FORMAT.md §7): the file is damaged, or was not written as the format says; copy it again, or press its study again",
@@ -2352,7 +2361,7 @@
       "verdict": "full"
     },
     {
-      "at": 4070046,
+      "at": 4081111,
       "refused": "full",
       "rule": "FORMAT §7 F5 no skippable frame",
       "rust_says": "data.cols[\"MET\"]: its zstd frame does not begin with the zstd magic 28 b5 2f fd (no skippable frame or other data comes first) (docs/FORMAT.md §7): the file is damaged, or was not written as the format says; copy it again, or press its study again",
@@ -2361,7 +2370,7 @@
       "verdict": "full"
     },
     {
-      "at": 4085816,
+      "at": 4096881,
       "refused": "full",
       "rule": "FORMAT §7 F5 no dictionary",
       "rust_says": "data.cols[\"MET\"]: its zstd frame has a dictionary ID (its dictionary ID flag is not 0), and an array uses no dictionary (docs/FORMAT.md §7): the file is damaged, or was not written as the format says; copy it again, or press its study again",
@@ -2370,7 +2379,7 @@
       "verdict": "full"
     },
     {
-      "at": 4101578,
+      "at": 4112643,
       "refused": "full",
       "rule": "FORMAT §7 F5 a content checksum",
       "rust_says": "data.cols[\"MET\"]: its zstd frame has no content checksum (its checksum flag is 0) (docs/FORMAT.md §7): the file is damaged, or was not written as the format says; copy it again, or press its study again",
@@ -2379,7 +2388,7 @@
       "verdict": "full"
     },
     {
-      "at": 4117340,
+      "at": 4128405,
       "refused": "full",
       "rule": "FORMAT §7 F5 the content checksum right",
       "rust_says": "data.cols[\"MET\"]: its zstd frame has a content checksum that is not that of its content (docs/FORMAT.md §7): the file is damaged, or was not written as the format says; copy it again, or press its study again",
@@ -2388,7 +2397,7 @@
       "verdict": "full"
     },
     {
-      "at": 4133102,
+      "at": 4144167,
       "refused": "full",
       "rule": "FORMAT §7 F5 a declared content size exact",
       "rust_says": "data.cols[\"MET\"]: its zstd frame declares 4 bytes of content, and its chunk's lane holds 3 (docs/FORMAT.md §7): the file is damaged, or was not written as the format says; copy it again, or press its study again",
@@ -2397,7 +2406,7 @@
       "verdict": "full"
     },
     {
-      "at": 4148864,
+      "at": 4159929,
       "refused": "full",
       "rule": "FORMAT §7 a window of at most 2^27",
       "rust_says": "data.cols[\"MET\"]: its zstd frame asks for a window of 268435456 bytes, more than 2^27 (docs/FORMAT.md §7): the file is damaged, or was not written as the format says; copy it again, or press its study again",
@@ -2406,7 +2415,7 @@
       "verdict": "full"
     },
     {
-      "at": 4164626,
+      "at": 4175691,
       "refused": "full",
       "rule": "FORMAT §7 §8 a file of no rows: each array's sha256 that of no chunks",
       "rust_says": "data.entry: its chunk table does not give the array's sha256 (the SHA-256 of its chunks' SHA-256s joined, docs/FORMAT.md §8) (docs/FORMAT.md §7): the file is damaged; copy it again, or press its study again",
@@ -2415,7 +2424,7 @@
       "verdict": "full"
     },
     {
-      "at": 4175646,
+      "at": 4186711,
       "refused": "full",
       "rule": "FORMAT §7 §8 a file of no rows: each array's by_sample that of no chunks",
       "rust_says": "data.cols[\"MET\"]: its chunk table does not give by_sample[1] (the SHA-256 of that sample's chunks' SHA-256s joined, docs/FORMAT.md §8) (docs/FORMAT.md §7): the file is damaged; copy it again, or press its study again",
@@ -2424,7 +2433,7 @@
       "verdict": "full"
     },
     {
-      "at": 4186666,
+      "at": 4197731,
       "refused": "full",
       "rule": "FORMAT §8 an array's sha256",
       "rust_says": "data.cols[\"MET\"]: its chunk table does not give the array's sha256 (the SHA-256 of its chunks' SHA-256s joined, docs/FORMAT.md §8) (docs/FORMAT.md §7): the file is damaged; copy it again, or press its study again",
@@ -2433,7 +2442,7 @@
       "verdict": "full"
     },
     {
-      "at": 4202428,
+      "at": 4213493,
       "refused": "full",
       "rule": "FORMAT §8 by_sample",
       "rust_says": "data.cols[\"MET\"]: its chunk table does not give by_sample[0] (the SHA-256 of that sample's chunks' SHA-256s joined, docs/FORMAT.md §8) (docs/FORMAT.md §7): the file is damaged; copy it again, or press its study again",
@@ -2442,7 +2451,7 @@
       "verdict": "full"
     },
     {
-      "at": 4218190,
+      "at": 4229255,
       "refused": "full",
       "rule": "FORMAT §8 jagged content's by_sample",
       "rust_says": "data.cols[\"Muon_pt\"].content: its chunk table does not give by_sample[1] (the SHA-256 of that sample's chunks' SHA-256s joined, docs/FORMAT.md §8) (docs/FORMAT.md §7): the file is damaged; copy it again, or press its study again",
@@ -2451,25 +2460,25 @@
       "verdict": "full"
     },
     {
-      "at": 4233952,
+      "at": 4245017,
       "refused": "full",
       "rule": "FORMAT §10 F6 facts made again, compared as numbers",
-      "rust_says": "derived.columns[\"twice\"], worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr derive FILE.rvr --drop twice (with any derived column that uses it), then rvr derive FILE.rvr 'twice = MET * 2', records it as this rowver works it out.",
+      "rust_says": "derived.columns[\"twice\"], worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr reproduce FILE.rvr DIR --texts writes the study it carries into DIR, where rvr press presses it again, reading its inputs again, and records it as this rowver works it out.",
       "sha256": "802138ed598319fe491ee924a97fc1445f06afe1adc1c98e6ca900f8cd7ed491",
       "size": 16689,
       "verdict": "full"
     },
     {
-      "at": 4250641,
+      "at": 4261706,
       "refused": "full",
       "rule": "FORMAT §10 §8 checksums made again",
-      "rust_says": "derived.columns[\"muons\"], worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr derive FILE.rvr --drop muons (with any derived column that uses it), then rvr derive FILE.rvr 'muons = Muon_pt * 2', records it as this rowver works it out.",
+      "rust_says": "derived.columns[\"muons\"], worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr reproduce FILE.rvr DIR --texts writes the study it carries into DIR, where rvr press presses it again, reading its inputs again, and records it as this rowver works it out.",
       "sha256": "cb853a6fa3b3e4bee70dab6cce2ade31534dc88c05c8fa655ea8460b419d745e",
       "size": 16697,
       "verdict": "full"
     },
     {
-      "at": 4267338,
+      "at": 4278403,
       "refused": "full",
       "rule": "FORMAT §10 an expression of the file's own columns",
       "rust_says": "made.recipe.text cannot be read as a recipe the recipe reference accepts ([derived] twice uses nothing, but the file does not store nothing: a derived column uses only the columns the file stores, under [columns], and the derived columns above it). Press its study again.",
@@ -2478,7 +2487,7 @@
       "verdict": "full"
     },
     {
-      "at": 4284043,
+      "at": 4295108,
       "refused": "full",
       "rule": "FORMAT §12 R18 an empty file: events_read exact",
       "rust_says": "made.files[\"A\"].metadata.events_read is 24, and the sample's event choice chose 25 entries, 0 of them in holes, so it is 25 (docs/FORMAT.md §5): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2487,7 +2496,16 @@
       "verdict": "full"
     },
     {
-      "at": 4295551,
+      "at": 4306616,
+      "refused": "full",
+      "rule": "FORMAT §3 §12 R18 an empty file: a file's rows at most the entries read of it",
+      "rust_says": "data.files' \"./fixture-b.root\" of sample \"B\" has 1000 rows, and the press read 4 of its entries (4 chosen, 0 of them in holes), each a row at most (docs/FORMAT.md §3): press its study again with rvr press, which writes it as docs/FORMAT.md says",
+      "sha256": "d7b5fde8fb29b0059cd816090315f94447e73aec606f649fae1d5bb60d018414",
+      "size": 11517,
+      "verdict": "full"
+    },
+    {
+      "at": 4318133,
       "refused": "full",
       "rule": "FORMAT §12 R18 an empty file: the lock",
       "rust_says": "made.files[\"A\"].files[\"./fixture-a.root\"].tree is \"Other\", and it is the lock's tree for the sample, \"Events\" (docs/FORMAT.md §6): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2496,7 +2514,7 @@
       "verdict": "full"
     },
     {
-      "at": 4307058,
+      "at": 4329640,
       "refused": "full",
       "rule": "FORMAT §12 R18 an empty file: holes hold chosen entries",
       "rust_says": "made.files[\"B\"].files[\"./fixture-b.root\"].holes[0] holds entry 0, none of which the event choice chose, and a hole holds at least one (docs/FORMAT.md §6.2): press its study again with rvr press, which writes it as docs/FORMAT.md says",
@@ -2505,7 +2523,7 @@
       "verdict": "full"
     },
     {
-      "at": 4318815,
+      "at": 4341397,
       "refused": "full",
       "rule": "FORMAT §12 R18 an empty file: derived columns worked out over no rows",
       "rust_says": "derived.columns[\"twice\"] is f8, and its expression, worked out over no rows, gives f4 (docs/FORMAT.md §10): press its study again with rvr press, which writes it as docs/FORMAT.md says",

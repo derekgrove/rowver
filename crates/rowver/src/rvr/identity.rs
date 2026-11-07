@@ -81,11 +81,15 @@ fn holes(record: &Value, place: &str, limit: u64) -> Result<Vec<(u64, u64)>> {
 /// A sample's files in row order, as `data.files` names them, with each one's record.
 fn ordered<'a>(data: &'a Value, made: &'a Value, sample: &str) -> Vec<(&'a str, &'a Value)> {
     let records = &made["files"][sample]["files"];
-    let files = data["files"].as_array().into_iter().flatten();
-    files.filter(|file| file["sample"] == sample).map(|file| {
+    entries(data, sample).into_iter().map(|file| {
         let path = file["path"].as_str().unwrap_or_default();
         (path, &records[path])
     }).collect()
+}
+
+/// The entries of `data.files` of the sample `sample`, in order.
+fn entries<'a>(data: &'a Value, sample: &str) -> Vec<&'a Value> {
+    data["files"].as_array().into_iter().flatten().filter(|file| file["sample"] == sample).collect()
 }
 
 /// What a sample's event choice says a press read: each file's first entries, or a random choice
@@ -315,8 +319,10 @@ pub(super) fn choices(header: &Value) -> Result<Reads<'_>> {
         let name = sample["name"].as_str().unwrap_or_default();
         let place = format!("made.files[{name:?}]");
         let files = ordered(data, made, name);
+        // Each file's rows, of the entries `ordered` takes: no more than the entries read of it, an empty file's too.
+        let rows: Vec<u64> = entries(data, name).iter().map(|file| file["rows"].as_u64().unwrap_or(0)).collect();
         let (mut chosen, mut missing) = (0_u64, 0_u64);
-        for ((path, record), read) in files.iter().zip(reads(&files, &made["files"][name]["events"], &format!("{place}.events"))?) {
+        for (((path, record), read), rows) in files.iter().zip(reads(&files, &made["files"][name]["events"], &format!("{place}.events"))?).zip(rows) {
             let at = format!("{place}.files[{path:?}]");
             let holes = holes(record, &at, u64::MAX)?;
             let all = read.within(0, u64::MAX);
@@ -329,6 +335,9 @@ pub(super) fn choices(header: &Value) -> Result<Reads<'_>> {
             }
             if record.get("totals").is_some() && !read_file(&read, &holes) {
                 return Err(invalid(format!("{at} has totals, and the press did not read the file (it took none of its entries, or every one it chose lies in a hole), so it has none (docs/FORMAT.md §6): {MEND}")));
+            }
+            if rows > all.saturating_sub(lost) {
+                return Err(invalid(format!("data.files' {path:?} of sample {name:?} has {rows} rows, and the press read {} of its entries ({all} chosen, {lost} of them in holes), each a row at most (docs/FORMAT.md §3): {MEND}", all.saturating_sub(lost))));
             }
             chosen += all;
             missing += lost;

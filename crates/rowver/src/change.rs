@@ -278,6 +278,13 @@ impl Locked {
         })
     }
 
+    /// The file's first bytes (up to 8), read through the descriptor that holds the lock.
+    pub fn head(&self) -> Result<Vec<u8>> {
+        let mut head = vec![0; self.file.metadata()?.len().min(8) as usize];
+        read_at(&self.file, &mut head, 0)?;
+        Ok(head)
+    }
+
     /// Refused when another program moved a file over the one locked since it was locked.
     pub fn there(&self) -> Result<()> {
         unreplaced(&self.file, &self.path)
@@ -524,29 +531,32 @@ pub fn shut_by_tools(text: &[u8]) -> bool {
     !names.is_empty() && crate::rvr::checked_header(text).is_err() && opens_without(text, &names.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
-/// Drop the tool keys `keys` of the file `locked` in one change, whatever their objects hold: each object's text.
-pub fn drop_tool(locked: &Locked, keys: &[&str]) -> Result<Vec<String>> {
+/// Drop the tool keys `keys` of the file `locked` in one change: each key's copies, as bytes.
+pub fn drop_tool(locked: &Locked, keys: &[&str]) -> Result<Vec<Vec<Vec<u8>>>> {
     let change = Change::dropping(locked, keys)?;
-    let dropped = change.dropped().into_iter().map(|bytes| String::from_utf8_lossy(bytes).into_owned()).collect();
+    let dropped = change.dropped().into_iter().map(|copies| copies.into_iter().map(<[u8]>::to_vec).collect()).collect();
     let header = change.header().clone();
     change.finish(&header)?;
     Ok(dropped)
 }
 
+/// Where each tool key's objects lie in a header: every copy of one held more than once.
+type Cuts = Vec<Vec<std::ops::Range<usize>>>;
+
 /// A header's text with tool keys taken out, where their objects lay, and the first one's place.
-type Without = (Vec<u8>, Vec<std::ops::Range<usize>>, usize);
+type Without = (Vec<u8>, Cuts, usize);
 
 /// The header `text` with every top-level member named one of `keys` blanked out, its newlines kept
-/// so that what is left lies at its lines and columns still; where each key's first value lies, and
-/// the first key's place among the members; or the first key it does not hold (none: no object).
+/// so that what is left lies at its lines and columns still; where each key's values lie, and the
+/// first key's place among the members; or the first key it does not hold (none: no object).
 // Its bytes are not parsed: a key holding what no parser reads (a lone surrogate, depth past
 // serde_json's 128) is dropped all the same.
 fn without<'k>(text: &[u8], keys: &[&'k str]) -> std::result::Result<Without, Option<&'k str>> {
     let members = crate::json::members(text).ok_or(None)?;
     let names: Vec<String> = members.iter().map(|m| crate::json::name(&text[m.name.clone()])).collect();
-    let found = keys.iter().map(|&key| names.iter().position(|name| name == key).ok_or(Some(key))).collect::<std::result::Result<Vec<usize>, _>>()?;
-    let cuts = found.iter().map(|&at| members[at].value.clone()).collect();
-    let at = found.first().copied().unwrap_or_default();
+    let held = |key: &str| members.iter().zip(&names).filter(|(_, name)| *name == key).map(|(m, _)| m.value.clone()).collect::<Vec<_>>();
+    let cuts: Cuts = keys.iter().map(|&key| Some(held(key)).filter(|cut| !cut.is_empty()).ok_or(Some(key))).collect::<std::result::Result<_, _>>()?;
+    let at = keys.first().and_then(|key| names.iter().position(|name| name == key)).unwrap_or_default();
     let named: Vec<bool> = names.iter().map(|name| keys.contains(&name.as_str())).collect();
     let mut out = text.to_vec();
     for (m, _) in members.iter().zip(&named).filter(|(_, named)| **named) {
@@ -570,7 +580,7 @@ pub struct Change<'a> {
     start: u64,
     tail: Vec<u8>,
     /// Where the objects of the tool keys it drops lie in the old header (none for another change).
-    cut: Vec<std::ops::Range<usize>>,
+    cut: Cuts,
     /// The end of the arrays, counted from byte 8 (docs/FORMAT.md §7): where new ones go.
     end: u64,
     /// Whether it is empty: its records name bytes it does not hold.
@@ -641,7 +651,7 @@ impl<'a> Change<'a> {
     }
 
     /// `begin`, the header read from its text by `read`: its value, and where the objects of the tool keys it drops lie.
-    fn begun(locked: &'a Locked, read: impl FnOnce(&[u8]) -> Result<(Value, Vec<std::ops::Range<usize>>)>) -> Result<Self> {
+    fn begun(locked: &'a Locked, read: impl FnOnce(&[u8]) -> Result<(Value, Cuts)>) -> Result<Self> {
         let path = &locked.path;
         stop(1);
         let (size, start, tail) = locked.tail().map_err(|e| crate::about(path, e))?;
@@ -651,7 +661,7 @@ impl<'a> Change<'a> {
 
     /// The change of the file `locked` from its tail (its length, where the tail starts, and the
     /// tail) and the header it holds, parsed; `cut`, the objects of the tool keys it drops.
-    fn from(locked: &'a Locked, (size, start, tail): (u64, u64, Vec<u8>), header: Value, cut: Vec<std::ops::Range<usize>>) -> Result<Self> {
+    fn from(locked: &'a Locked, (size, start, tail): (u64, u64, Vec<u8>), header: Value, cut: Cuts) -> Result<Self> {
         let end = crate::rvr::placed(&header, start as usize - 8).map_err(|e| crate::about(&locked.path, e))?;
         Ok(Self { locked, header, size, start, tail, cut, end: start - 8, empty: start == 8 && end > 0, staged: None, prepared: false, finished: false })
     }
@@ -666,9 +676,9 @@ impl<'a> Change<'a> {
         &self.tail[..self.tail.len() - 12]
     }
 
-    /// The bytes of the objects of the tool keys the change takes out, as the header held them, in their order (none for another change).
-    pub fn dropped(&self) -> Vec<&[u8]> {
-        self.cut.iter().map(|cut| &self.text()[cut.clone()]).collect()
+    /// The bytes of each tool key the change takes out, every copy, as the header held them.
+    pub fn dropped(&self) -> Vec<Vec<&[u8]>> {
+        self.cut.iter().map(|copies| copies.iter().map(|cut| &self.text()[cut.clone()]).collect()).collect()
     }
 
     /// The file written: the file itself, or the new one it is written anew in.
@@ -760,7 +770,7 @@ impl<'a> Change<'a> {
             None => self.journal(after, new)?,
             Some(_) => {
                 let path = &self.locked.path;
-                let (at, mut out) = staged(path, ".anew")?;
+                let (at, mut out) = staged(self.locked, ".anew")?;
                 if let Err(e) = crate::write::copied(&self.locked.file, 0, self.start, path, &mut out, &at) {
                     let _ = std::fs::remove_file(&at);
                     return Err(e);
@@ -787,7 +797,7 @@ impl<'a> Change<'a> {
         let at = journal(&self.locked.path);
         // A file in the way at the journal's place is said, not the folder.
         let there = at.symlink_metadata().is_ok();
-        let made = File::create(&at);
+        let made = private(File::options().write(true).create(true).truncate(true), self.locked.file.metadata().ok()).open(&at);
         let ours = made.is_ok();
         let written = made.and_then(|mut out| std::io::Write::write_all(&mut out, &kept).and_then(|()| out.sync_all()));
         if let Err(e) = written {
@@ -805,9 +815,10 @@ impl<'a> Change<'a> {
     }
 }
 
-/// `staging`, refused for the file at `path` as one that cannot be changed where nothing may be written beside it.
-pub(crate) fn staged(path: &Path, suffix: &str) -> Result<(PathBuf, File)> {
-    staging(path, suffix).map_err(|e| match e.kind() {
+/// `staging` beside the file `locked`, its mode from the file locked, refused as one that cannot be changed where nothing may be written beside it.
+pub(crate) fn staged(locked: &Locked, suffix: &str) -> Result<(PathBuf, File)> {
+    let path = locked.path();
+    staging(path, suffix, locked.file.metadata().ok()).map_err(|e| match e.kind() {
         ErrorKind::ReadOnlyFilesystem => invalid(format!("{} cannot be changed: its filesystem is read-only, so neither it nor a new file beside it can be written: copy it to a disk you may write, and change the copy", path.display())),
         ErrorKind::PermissionDenied => invalid(shut(path, "the new file that replaces it")),
         _ => crate::about(path, e.into()),
@@ -832,15 +843,24 @@ impl Drop for Change<'_> {
     }
 }
 
+/// `options` making a file no wider open than the file `like` (only its owner's without one): a staged file or a journal holds a copy of it.
+fn private(options: &mut std::fs::OpenOptions, like: Option<std::fs::Metadata>) -> &mut std::fs::OpenOptions {
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(options, like.map_or(0, |m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o666) | 0o600);
+    #[cfg(not(unix))]
+    let _ = like;
+    options
+}
+
 /// How many files this program has staged: the N of `FILE.anew-PID-N` and `FILE.empty-PID-N`.
 static STAGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// A new file beside `path` that no other writer shares, `FILE{suffix}-PID-N`, and its path; a name
 /// taken (left by a crash of a program of this process ID) is passed over, never written over.
-pub(crate) fn staging(path: &Path, suffix: &str) -> std::io::Result<(PathBuf, File)> {
+pub(crate) fn staging(path: &Path, suffix: &str, like: Option<std::fs::Metadata>) -> std::io::Result<(PathBuf, File)> {
     loop {
         let at = crate::write::beside(path, &format!("{suffix}-{}-{}", std::process::id(), STAGED.fetch_add(1, Ordering::Relaxed)));
-        match File::options().read(true).write(true).create_new(true).open(&at) {
+        match private(File::options().read(true).write(true).create_new(true), like.clone()).open(&at) {
             Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(crate::tagged(&at, e)),
             Ok(file) => return Ok((at, file)),

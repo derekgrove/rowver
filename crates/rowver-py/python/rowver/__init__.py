@@ -73,6 +73,16 @@ def _whole(text):
         return decimal.Decimal(text)
 
 
+def _real(text):
+    """A JSON number with a fraction or exponent: a float, or a Decimal where a float would be infinite, or 0 of one that is not."""
+    value = float(text)
+    if value in (float("inf"), float("-inf")) or (value == 0 and text.lower().split("e")[0].strip("-0.")):
+        import decimal
+
+        return decimal.Decimal(text)
+    return value
+
+
 def _once(pairs):
     """A JSON object's members as a dict, refused when it holds a name twice (a dict keeps one)."""
     held = dict(pairs)
@@ -88,11 +98,8 @@ class File:
     def __init__(self, path):
         self.path = str(path)
         self._file = _File(self.path)
-        try:
-            self.header = _json.loads(self._file.header_text)
-        except ValueError:
-            # A whole number of more digits than Python turns into an int (a tool key may hold one).
-            self.header = _json.loads(self._file.header_text, parse_int=_whole)
+        # A tool key may hold a whole number past the digits Python turns into an int, or a number past a float.
+        self.header = _json.loads(self._file.header_text, parse_int=_whole, parse_float=_real)
         self._held = {}
 
     @property
@@ -311,14 +318,22 @@ def set_tool(path, key, value):
 
 def drop_tool(path, key, *keys):
     """Drop the tool keys named from the file at `path` in one change: each object (or text), alone or as a tuple."""
-    texts = _drop_tool(str(path), [key, *keys])
-    # The file is changed: each text, its only copy, is given back whatever json.loads makes of it.
-    def loaded(text):
+    held = _drop_tool(str(path), [key, *keys])
+
+    # The file is changed: each copy, its only one, is given back whatever json.loads makes of it,
+    # its text where it reads no object, its bytes where they are not UTF-8.
+    def loaded(data):
         try:
-            return _json.loads(text, parse_int=_whole, object_pairs_hook=_once)
+            text = data.decode()
+        except UnicodeDecodeError:
+            return data
+        try:
+            return _json.loads(text, parse_int=_whole, parse_float=_real, object_pairs_hook=_once)
         except Exception:
             return text
-    objects = tuple(loaded(text) for text in texts)
+
+    # A key held more than once gives a tuple of its copies, which json.loads never makes.
+    objects = tuple(loaded(c[0]) if len(c) == 1 else tuple(loaded(each) for each in c) for c in held)
     return objects if keys else objects[0]
 
 

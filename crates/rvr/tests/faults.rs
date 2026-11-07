@@ -472,6 +472,34 @@ fn a_file_its_storage_will_not_give_is_not_called_no_root_file() {
     assert!(code == 1 && said.contains("/st/f.root could not be read: ") && !said.contains("is not a ROOT file"), "{said}");
 }
 
+// SPEC 6.2.1, 6.3.1
+#[test]
+fn an_empty_storage_file_is_said_empty_and_a_lock_without_its_samples_toml_does_not_check_out() {
+    let server = Server::start();
+    server.put("/st/a.root", std::fs::read(common::fixture("uproot_flat.root")).unwrap());
+    server.put("/st/b.root", Vec::new());
+    let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n[[sample]]\nname = \"far\"\nfiles = {:?}\n", server.url("/st/*.root"));
+    let dir = common::study("empty-remote", &samples, RECIPE);
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains("/st/b.root is empty (0 bytes), so it is no ROOT file: remove it, or name the files so that this one is not among them"), "{said}");
+    // A HEAD that says 0 bytes of a file its listing sizes is not taken for an empty file.
+    std::fs::write(dir.join("samples.toml"), samples.replace("*.root", "a*.root")).unwrap();
+    server.script(|request| match request.method.as_str() {
+        "HEAD" => Answer::Status(200),
+        _ => Answer::Serve,
+    });
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains("/st/a.root: its storage answers that it holds 0 bytes, but lists it with 39262, so the lock cannot pin its size"), "{said}");
+    server.script(|_| Answer::Serve);
+    std::fs::write(dir.join("samples.toml"), samples.replace("*.root", "a.root")).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    std::fs::rename(dir.join("samples.toml"), dir.join("away.toml")).unwrap();
+    let (code, said) = rvr(&dir, &["samples", "check", "samples.lock"]);
+    assert!(code == 1 && said.contains("There is no samples.toml beside the lock: a press needs both"), "{said}");
+    let (code, said) = rvr(&dir, &["branches"]);
+    assert!(code == 0 && said.contains("There is no samples.toml beside samples.lock to read"), "{said}");
+}
+
 // SPEC 6.2.3
 #[test]
 fn a_storage_name_percent_encoded_is_matched_as_listed_and_said_so() {

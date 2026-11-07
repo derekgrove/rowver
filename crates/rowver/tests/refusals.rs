@@ -52,6 +52,8 @@ enum Change {
     SwappedTakes(bool),
     /// The fixture of no rows (`rowless`), its header changed and `data.sha256` made again, sealed.
     Rowless(fn(&mut Value)),
+    /// The fixture of no rows, its arrays laid out, then its header changed, sealed.
+    RowlessLaid(fn(&mut Value)),
 }
 
 use Change::*;
@@ -330,6 +332,12 @@ fn bytes_of(base: (Value, Vec<Vec<u8>>), change: Change) -> Vec<u8> {
             let (mut none, arrays) = common::rowless();
             f(&mut none);
             relaid(&mut none, &arrays);
+            return to_bytes(&sealed(none), &arrays);
+        }
+        RowlessLaid(f) => {
+            let (mut none, arrays) = common::rowless();
+            relaid(&mut none, &arrays);
+            f(&mut none);
             return to_bytes(&sealed(none), &arrays);
         }
         Derived(f) | EmptyDerived(f) => {
@@ -801,6 +809,20 @@ fn opening() -> Vec<Row> {
         ("§12 R18", "an empty file: kinds", Empty(|h| h["data"]["cols"][1]["kind"] = "f16".into()), "data.cols[\"MET\"].kind is \"f16\""),
         ("§12 R18", "an empty file: facts", Empty(|h| h["data"]["cols"][0]["lim"] = json!([5, 1])), "data.cols[\"nlep\"].lim is [5,1], and its first end is its least value"),
         ("§12 R18", "an empty file: the arrays' records laid out", Empty(|h| h["data"]["sample"]["size"] = 0.into()), "data.sample.size is 0"),
+        ("§7 §12", "a file of no rows: an array of no chunks holds no bytes, so its records name none", RowlessLaid(|h| {
+            h["data"]["sample"]["size"] = 1000.into();
+            h["data"]["entry"]["at"] = 1000.into();
+            for col in h["data"]["cols"].as_array_mut().unwrap() {
+                for part in ["offsets", "content"] {
+                    if let Some(part) = col.get_mut(part) {
+                        part["at"] = 1000.into();
+                    }
+                }
+                if let Some(at) = col.get_mut("at") {
+                    *at = 1000.into();
+                }
+            }
+        }), "data.sample.size is 1000, and an array of no chunks (a file of no rows) holds no bytes"),
     ]
 }
 
@@ -953,6 +975,12 @@ fn in_full() -> Vec<Row> {
         }), "[derived] twice uses nothing, but the file does not store nothing"),
         // §12 Full validation of an empty file: every check but the arrays'
         ("§12 R18", "an empty file: events_read exact", Empty(|h| h["made"]["files"]["A"]["metadata"]["events_read"] = 24.into()), "made.files[\"A\"].metadata.events_read is 24"),
+        ("§3 §12 R18", "an empty file: a file's rows at most the entries read of it", Empty(|h| {
+            let others = h["data"]["rows"].as_u64().unwrap() - h["data"]["files"][3]["rows"].as_u64().unwrap();
+            h["data"]["files"][3]["rows"] = 1000.into();
+            h["data"]["samples"][1]["rows"] = 1000.into();
+            h["data"]["rows"] = (others + 1000).into();
+        }), "data.files' \"./fixture-b.root\" of sample \"B\" has 1000 rows, and the press read"),
         ("§12 R18", "an empty file: the lock", Empty(|h| h["made"]["files"]["A"]["files"]["./fixture-a.root"]["tree"] = "Other".into()), "tree is \"Other\", and it is the lock's tree"),
         ("§12 R18", "an empty file: holes hold chosen entries", Empty(|h| {
             h["made"]["files"]["B"]["files"]["./fixture-b.root"]["holes"] = json!([hole(0, 1)]);
@@ -1032,7 +1060,7 @@ fn a_file_of_no_entries_is_listed_and_read_and_one_never_reached_is_not() {
 
 // FORMAT 1, 3, 10, 12
 #[test]
-fn a_file_that_validates_whole_validates_emptied() {
+fn a_file_is_judged_alike_whole_and_emptied() {
     // B keeps none of its rows, and has no xsec, which a derived column reads.
     let (mut header, _) = rebuilt(10.);
     let piece = |name: &str, from, to, entry: Vec<i64>| common::Piece { name: name.into(), label: header["data"]["samples"][usize::from(name == "B")]["label"].as_str().unwrap().into(), columns: common::columns(from, to, 10.), entry };
@@ -1049,8 +1077,13 @@ fn a_file_that_validates_whole_validates_emptied() {
     let records = rowver::rvr::derived::records(&Reader::open(&path).unwrap(), &wanted, &[]).unwrap();
     let mut header = header;
     header["derived"] = json!({ "columns": records });
-    assert_eq!(checked(&to_bytes(&header, &arrays)), (Ok(()), Ok(())));
-    assert_eq!(checked(&to_bytes(&header, &[])), (Ok(()), Ok(())));
+    // Its records hold over the rows, but a press of its study is refused, so full validation
+    // refuses it too (FORMAT 6, 10), whole and emptied alike.
+    let said = "[derived] w: sample.xsec is used as a number, but this sample has no xsec";
+    for arrays in [&arrays[..], &[]] {
+        let (opened, validated) = checked(&to_bytes(&header, arrays));
+        assert!(opened.is_ok() && validated.as_ref().is_err_and(|e| e.contains(said)), "{validated:?}");
+    }
 }
 
 // SPEC 1.5; FORMAT 1

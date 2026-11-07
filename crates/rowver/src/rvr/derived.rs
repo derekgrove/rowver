@@ -511,9 +511,10 @@ fn agrees(store: &Store, name: &str, expression: &str, again: &Map<String, Value
         };
         return Err(invalid(format!("{differs}: its header was changed, or {other} works the expression out otherwise. {hint}")));
     }
-    // Quoted for a shell: an expression may hold quotes of its own, as branch('Jet.pt').
-    let (path, line) = (crate::shell(&file.path().display().to_string()), crate::shell(&format!("{name} = {expression}")));
-    Err(invalid(format!("{differs}: its header was changed, or the rowver that wrote it works the expression out differently. rvr derive {path} --drop {name} (with any derived column that uses it), then rvr derive {path} {line}, records it as this rowver works it out.")))
+    // rvr derive changes only a file whose derived columns are what it records: a press of the study
+    // the file carries (with the derived columns rvr derive added to it) makes it again.
+    let path = crate::shell(&file.path().display().to_string());
+    Err(invalid(format!("{differs}: its header was changed, or the rowver that wrote it works the expression out differently. rvr reproduce {path} DIR --texts writes the study it carries into DIR, where rvr press presses it again, reading its inputs again, and records it as this rowver works it out.")))
 }
 
 /// Rows `from..to` of derived columns `names` of a file, each checked against its record first (once an open file).

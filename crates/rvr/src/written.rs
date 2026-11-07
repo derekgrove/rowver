@@ -265,31 +265,32 @@ pub(crate) fn write(plan: &Plan, mut done: Done) -> Result<usize, String> {
     let mut header = json!({"rowver": rowver::VERSION, "data": data, "made": made});
     let signer = plan.signer;
     // The derived columns are worked out once, from the arrays laid for the file, for their
-    // records. One that fails leaves what was read: the file, without its derived columns; in
-    // place, with those it held, of the same expressions.
+    // records. One that fails leaves what was read: the file, without its derived columns; when
+    // it only adds columns (in place, or anew for want of a lock or the right to write), with
+    // those it held, of the same expressions.
     let mut underived = None;
+    let adding = matches!(into, Target::InPlace(_)) || (plan.anew.is_some() && matches!(plan.from, Base::Columns(_)));
     if !plan.recipe.derived.is_empty() {
         if let Err(why) = into.derived(&header, &plan.recipe.derived).and_then(|records| {
             header["derived"] = json!({ "columns": records });
             crate::derive::sealed(&mut header, None)
         }) {
-            let old = match &into {
-                Target::InPlace(change) => change.header()["derived"]["columns"].as_array().cloned().unwrap_or_default(),
-                Target::New(_) => Vec::new(),
+            let old = match (&into, &plan.from) {
+                (Target::InPlace(change), _) => change.header()["derived"]["columns"].as_array().cloned().unwrap_or_default(),
+                (Target::New(_), Base::Columns(earlier)) if adding => earlier.file().header()["derived"]["columns"].as_array().cloned().unwrap_or_default(),
+                _ => Vec::new(),
             };
             let had = |(name, expression): &(String, String)| old.iter().find(|r| r["name"] == name.as_str() && r["expression"] == expression.as_str()).cloned();
             let held: Vec<Value> = plan.recipe.derived.iter().filter_map(had).collect();
             let gone: Vec<String> = plan.recipe.derived.iter().map(|(name, _)| name.clone()).filter(|name| !held.iter().any(|r| r["name"] == name.as_str())).collect();
-            // In place every derived column it held is the recipe's (SPEC §8.2): with none new, what
+            // Adding, every derived column it held is the recipe's (SPEC §8.2): with none new, what
             // failed is not one of them, and the press keeps what it read.
-            if matches!(into, Target::InPlace(_)) {
-                if gone.is_empty() {
-                    return Err(stuck(format!("{} could not be written: {why}", target.display())));
-                }
-                // With only derived columns new, nothing was read that writing would keep: the file is left as it was.
-                if plan.reads().is_empty() {
-                    return Err(format!("{why}. {} is as it was: put right what is said above and press again.", target.display()));
-                }
+            if adding && gone.is_empty() {
+                return Err(stuck(format!("{} could not be written: {why}", target.display())));
+            }
+            // Built on the file with nothing read, writing would keep nothing: it is left as it was.
+            if matches!(plan.from, Base::Columns(_)) && plan.reads().is_empty() {
+                return Err(format!("{why}. {} is as it was: put right what is said above and press again.", target.display()));
             }
             header["derived"] = json!({ "columns": held });
             crate::derive::without(&mut header, gone.clone()).map_err(|e| stuck(format!("{} could not be written: {why}; and its [derived] lines could not be taken out of the recipe it carries, to write it without them: {e}", target.display())))?;
@@ -342,11 +343,11 @@ pub(crate) fn write(plan: &Plan, mut done: Done) -> Result<usize, String> {
     // In place, whose signature it replaces is said, when it had one or has one now.
     let signed = (in_place && (signer.is_some() || was.is_some())).then(|| crate::key::resigned(signer.as_ref(), was.as_deref()));
     match underived {
-        Some((why, gone)) if in_place => {
+        Some((why, gone)) if adding => {
             let signature = signed.map_or_else(String::new, |signed| format!(" It is {signed}."));
-            return Err(format!("{why}. {} is written without the new derived columns {}, keeping those it held and what was read: put right what is said above and press again, which adds them in place and reads no input.{signature}", target.display(), gone.join(", ")));
+            return Err(format!("{why}. {} is written without the new derived columns {}, keeping those it held and what was read: put right what is said above and press again, which adds them and reads no input.{signature}", target.display(), gone.join(", ")));
         }
-        Some((why, _)) => return Err(format!("{why}. {} is written without its derived columns, so that what was read is kept: put right what is said above and press again, which, by the same rvr, adds them in place and reads no input.", target.display())),
+        Some((why, _)) => return Err(format!("{why}. {} is written without its derived columns, so that what was read is kept: put right what is said above and press again, which, by the same rvr, adds them and reads no input.", target.display())),
         None => {}
     }
     said(plan, &tally, &missing, signer.as_ref(), (rows, in_place, signed), done.started);

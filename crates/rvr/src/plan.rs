@@ -411,6 +411,12 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
     // of one whose header opens though its arrays do not too; it stops over one that only its tool
     // keys keep from opening, for they would go with it (SPEC §8.12).
     let at = std::mem::replace(&mut place.at, At::Missing);
+    // Checked again on the file locked: another program's file moved there since is not written over.
+    if let (Some(locked), At::Unopened(_)) = (&place.locked, &at) {
+        let shown = place.target.display();
+        let head = locked.head().map_err(|e| format!("{shown}: its first bytes could not be read ({e}), so rvr press cannot tell it is an .rvr file, and it writes only over one: put right what keeps it from being read, or move it away, then press again"))?;
+        an_rvr(&place.target, &head)?;
+    }
     let tools = match &at {
         At::Missing => serde_json::Map::new(),
         At::Opened(file, Ok(())) => rowver::rvr::tool_keys(file.header()),
@@ -553,20 +559,28 @@ pub fn a_file_or_none(target: &std::path::Path) -> Result<(), String> {
     let what = match std::fs::metadata(target) {
         Ok(there) if there.is_dir() => "a folder",
         Ok(there) if !there.is_file() => "a pipe, socket or device",
-        Ok(there) => {
-            // One that cannot be read is said by what reads it next; an empty one holds nothing to lose.
-            let mut head = [0_u8; 8];
-            return match std::fs::File::open(target).map(|mut file| std::io::Read::read_exact(&mut file, &mut head)) {
-                Ok(Ok(())) if &head == rowver::rvr::MAGIC => Ok(()),
-                _ if there.len() == 0 => Ok(()),
-                Ok(Ok(())) => Err(format!("{} is not an .rvr file (it does not begin as one does), and rvr press writes only over an .rvr file: move it away, or name another file with --out", target.display())),
-                Ok(Err(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => Err(format!("{} is not an .rvr file (it is shorter than one's first bytes), and rvr press writes only over an .rvr file: move it away, or name another file with --out", target.display())),
+        Ok(_) => {
+            // One that cannot be read is said by what reads it next.
+            let mut head = Vec::new();
+            return match std::fs::File::open(target).map(|file| std::io::Read::read_to_end(&mut std::io::Read::take(file, 8), &mut head)) {
+                Ok(Ok(_)) => an_rvr(target, &head),
                 Ok(Err(_)) | Err(_) => Ok(()),
             };
         }
         Err(_) => return Ok(()),
     };
     Err(format!("{} is {what}, not a file: move it away, or name a file with --out", target.display()))
+}
+
+/// Refuse the file `target` beginning `head` (up to 8 of its bytes), when it is no .rvr file: an
+/// empty one holds nothing to lose.
+fn an_rvr(target: &std::path::Path, head: &[u8]) -> Result<(), String> {
+    let why = match head {
+        _ if head.is_empty() || head == rowver::rvr::MAGIC => return Ok(()),
+        _ if head.len() < 8 => "it is shorter than one's first bytes",
+        _ => "it does not begin as one does",
+    };
+    Err(format!("{} is not an .rvr file ({why}), and rvr press writes only over an .rvr file: move it away, or name another file with --out", target.display()))
 }
 
 /// What stands at a path, links not followed: its kind, device and inode (none where the system has no inodes).

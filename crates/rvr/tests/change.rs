@@ -315,6 +315,21 @@ fn a_change_stopped_after_each_step_is_put_back_by_the_next_command() {
     // Not stopped, the change is made, and the journal is gone.
     assert_eq!(rvr(&dir, &["tool", &file, "k", "--set", "data.json"]).0, 0);
     assert_eq!((header(&dir, &file)["k"].clone(), journal(&path).exists()), (json!({"n": 1}), false));
+    // A journal, and a new file written anew that a stop leaves, are no wider open than the file,
+    // and open to its owner: a private file's are private, a group's the group's to read.
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    for (file_mode, journal_mode) in [(0o600, 0o600), (0o640, 0o640)] {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(file_mode)).unwrap();
+        assert_eq!(rvr_with(&dir, &[("RVR_STOP_CHANGE", "2")], &["tool", &file, "k", "--drop", "-f"]).0, 99);
+        assert_eq!(mode(&journal(&path)), journal_mode);
+        assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    }
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o440)).unwrap();
+    assert_eq!(rvr_with(&dir, &[("RVR_STOP_CHANGE", "3")], &["tool", &file, "k", "--drop", "-f"]).0, 99);
+    let staged: Vec<_> = std::fs::read_dir(&*dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.to_string_lossy().contains(".anew-")).collect();
+    assert!(staged.len() == 1 && mode(&staged[0]) == 0o640, "{staged:?}");
+    std::fs::remove_file(&staged[0]).unwrap();
 }
 
 // SPEC 8.9, 8.10, 8.12
@@ -999,6 +1014,36 @@ fn a_tool_key_is_written_out_and_sized_as_the_header_holds_its_bytes() {
     assert!(code == 0 && said.contains(&format!("Dropped the tool key k of {file} ({n} bytes).")), "{said}");
 }
 
+// SPEC 8.11
+#[test]
+fn a_tool_key_held_twice_is_listed_per_copy_and_dropped_whole_and_one_a_terminal_cannot_show_is_quoted() {
+    let (dir, file) = pressed("tool-twice", &recipe("branches = [\"nJet\"]", ""));
+    let path = dir.join(&file);
+    let bytes = std::fs::read(&path).unwrap();
+    let (text, arrays) = parts(&bytes);
+    // Written by another program: k twice, which FORMAT 1 refuses, and a name with a bell in it.
+    let text = format!(r#"{},"k":{{"a":1}},"k":{{}},"b\u0007":{{}}}}"#, std::str::from_utf8(&text[..text.len() - 1]).unwrap());
+    std::fs::write(&path, framed(text.as_bytes(), arrays)).unwrap();
+    let (code, said) = rvr(&dir, &["tool", &file]);
+    assert!(code == 0 && said.starts_with(&format!("{file} has 3 tool keys:\n  k (7 bytes)\n  k (2 bytes)\n  \"b\\u0007\" (2 bytes)\n")), "{said}");
+    assert!(said.contains(&format!(r#"rowver.drop_tool("{file}", "k", "b\u0007") in Python ("b\u0007" holds a character outside printable ASCII)"#)), "{said}");
+    let (code, said) = rvr(&dir, &["tool", &file, "k", "--get"]);
+    assert!(code == 1 && said.contains(&format!(r#"holds the tool key k 2 times, which FORMAT.md §1 refuses, so rvr tool cannot write out one: rowver.drop_tool("{file}", "k")"#)), "{said}");
+    // Dropped alone, k leaves a header the bell still breaks; with it, every copy goes.
+    let (code, said) = rvr(&dir, &["tool", &file, "k", "--drop", "-f"]);
+    assert!(code == 1 && said.contains("b\\u{7}"), "{said}");
+    let (code, said) = rvr(&dir, &["tool", &file, "k", "b\u{7}", "--drop", "-f"]);
+    assert!(code == 0 && said.contains(&format!("Dropped the tool keys k (9 bytes), \"b\\u0007\" (2 bytes) of {file}.")), "{said}");
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    // So is one a terminal would show turned about, or past U+FFFF, as Python writes it.
+    let bytes = std::fs::read(&path).unwrap();
+    let (text, arrays) = parts(&bytes);
+    let text = format!("{},\"z\u{202e}\u{1f600}\":{{}}}}", std::str::from_utf8(&text[..text.len() - 1]).unwrap());
+    std::fs::write(&path, framed(text.as_bytes(), arrays)).unwrap();
+    let (code, said) = rvr(&dir, &["tool", &file]);
+    assert!(code == 0 && said.contains("  \"z\\u202e\\U0001f600\" (2 bytes)") && said.contains(&format!(r#"rowver.drop_tool("{file}", "z\u202e\U0001f600")"#)), "{said}");
+}
+
 /// rvr in `dir`, started with `args` and holding the first of its two locks while the file `hold`
 /// is there (RVR_HOLD): the running rvr, once it holds it, and what it goes on to complain.
 fn holding(dir: &Path, hold: &Path, args: &[&str]) -> (std::process::Child, std::sync::mpsc::Receiver<String>) {
@@ -1057,6 +1102,24 @@ fn rvr_status_and_a_reader_read_a_file_a_press_holds_locked_with_no_journal_besi
     std::fs::remove_file(&hold).unwrap();
     let status = child.wait().unwrap();
     assert!(status.success(), "{}", lines.try_iter().collect::<Vec<_>>().join("\n"));
+}
+
+// SPEC 8.12
+#[test]
+#[cfg(debug_assertions)]
+fn a_press_never_writes_over_what_another_program_filled_an_empty_target_with_while_it_held_the_lock() {
+    use std::io::Write;
+    let (dir, file) = pressed("press-filled", &recipe("branches = [\"nJet\"]", ""));
+    let path = dir.join(&file);
+    std::fs::write(&path, "").unwrap();
+    let hold = dir.join("hold");
+    let (mut child, lines) = holding(&dir, &hold, &["press"]);
+    std::fs::OpenOptions::new().write(true).open(&path).unwrap().write_all(b"another program's bytes").unwrap();
+    std::fs::remove_file(&hold).unwrap();
+    let status = child.wait().unwrap();
+    let said = lines.iter().collect::<Vec<_>>().join("\n");
+    assert!(!status.success() && said.contains("is not an .rvr file (it does not begin as one does), and rvr press writes only over an .rvr file"), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap(), b"another program's bytes");
 }
 
 // SPEC 8.12

@@ -25,6 +25,27 @@ pub fn folder(target: &Path) -> PathBuf {
     rowver::write::beside(target, ".partial")
 }
 
+/// Make the folder `folder`, staging `target`: no wider open than the file there, as what it holds may
+/// be a copy of it (each who may read it may open the folder, each who may write it write there).
+fn private_folder(folder: &Path, target: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mode = match std::fs::metadata(target) {
+            Ok(there) => {
+                let mode = std::os::unix::fs::PermissionsExt::mode(&there.permissions()) & 0o666;
+                mode | (mode & 0o444) >> 2 | 0o700
+            }
+            Err(_) => 0o777,
+        };
+        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), mode).create(folder)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = target;
+        std::fs::create_dir(folder)
+    }
+}
+
 /// The folder `target` is in.
 pub fn parent(target: &Path) -> &Path {
     target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."))
@@ -70,7 +91,8 @@ impl Staged {
         // the journal locked may no longer be the one there): asked again.
         for _ in 0..5 {
             // Only the staging folder is made: a target in a folder that is not there is a mistake.
-            match std::fs::create_dir(&folder) {
+            // No wider open than the file there, as what it holds may be a copy of it.
+            match private_folder(&folder, target) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     return Err(format!("{} cannot be written: the folder {} is not there. Make it, or give --out a path in a folder that is.", target.display(), parent(target).display()));
                 }

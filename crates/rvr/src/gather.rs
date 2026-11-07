@@ -80,9 +80,14 @@ pub(crate) fn add_to(sum: &mut f64, name: &str, array: rvr_recipe::Result<Array>
         _ => return Err(rvr_recipe::problem(format!("{place}: a total sums one number per event, and this gives a list for each: sum the list, as sum(...)"))),
     };
     for index in 0..values.len() {
-        *sum += values.number(index);
+        let value = values.number(index);
+        *sum += value;
         if !sum.is_finite() {
-            return Err(rvr_recipe::data(index, format!("{place}: its sum is not a finite number once this entry's value, {:?}, is added, and a file holds only finite totals: give such events a finite value, as if(isfinite(x), x, 0)", values.number(index))));
+            let (why, mend) = match value.is_finite() {
+                true => (", the values adding up past what a double holds", format!("mend [totals] {name} so that its events give smaller values")),
+                false => ("", "give such events a finite value, as if(isfinite(x), x, 0)".to_owned()),
+            };
+            return Err(rvr_recipe::data(index, format!("{place}: its sum is not a finite number once this entry's value, {value:?}, is added{why}, and a file holds only finite totals: {mend}")));
         }
     }
     Ok(())

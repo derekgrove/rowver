@@ -40,6 +40,11 @@ pub(crate) fn without(header: &mut Value, names: Vec<String>) -> Result<(), Stri
     Ok(())
 }
 
+/// `text` as a TOML string on one line, as SPEC §8.8 writes a column: JSON's escapes are TOML's, but for DEL, which TOML escapes too.
+fn one_line(text: &str) -> String {
+    serde_json::Value::from(text).to_string().replace('\u{7f}', "\\u007F")
+}
+
 /// `name` as a TOML key: bare when TOML lets it be, else quoted.
 fn key(name: &str) -> String {
     match !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
@@ -338,6 +343,9 @@ fn run(path: &Path, change: Asked) -> Result<(), String> {
                 let quoted = expression.starts_with('"').then(|| format!("v = {expression}").parse::<toml::Table>().ok()).flatten();
                 let quoted = quoted.and_then(|t| t.get("v")?.as_str().map(str::to_owned));
                 let unquoted = quoted.as_deref().unwrap_or(expression);
+                if added.iter().any(|(n, _): &(String, String)| n == name) {
+                    return Err(format!("{name} is named twice in what was given: name each derived column once"));
+                }
                 if derived.iter().any(|(n, _)| n == name) {
                     return Err(format!("{} already has a derived column named {name}: an expression is not changed in place; drop it, then add it again", path.display()));
                 }
@@ -350,8 +358,7 @@ fn run(path: &Path, change: Asked) -> Result<(), String> {
                 let own = |at: &usize| !lines[*at].trim().is_empty() && !lines[*at].trim_start().starts_with('#');
                 let last = (table.0..table.1).rev().find(own).unwrap_or(table.0);
                 for (offset, (name, expression)) in added.iter().enumerate() {
-                    let quoted = toml::Value::String(expression.clone()).to_string();
-                    lines.insert(last + 1 + offset, format!("{} = {quoted}", key(name)));
+                    lines.insert(last + 1 + offset, format!("{} = {}", key(name), one_line(expression)));
                 }
                 Ok(())
             };
@@ -360,6 +367,13 @@ fn run(path: &Path, change: Asked) -> Result<(), String> {
         }
     };
     let records = records(&file, &derived, &kept).map_err(|e| e.to_string())?;
+    // Of one kind in every sample, those that kept no row too, as a press checks (FORMAT §10).
+    if records.len() > before.len() {
+        let lock = rowver::study::lock::Lock::read(header["made"]["lock"]["text"].as_str().unwrap_or_default()).map_err(|p| format!("{}: its lock cannot be read: {p}", path.display()))?;
+        let changed = Recipe { derived: derived.clone(), ..recipe.clone() };
+        let kinds = rowver::rvr::kinds(&changed, &lock).map_err(|e| format!("{}: {e}", path.display()))?;
+        rowver::rvr::derived_kinds(&changed, &lock, &kinds).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
     let made = &mut header["made"];
     made["recipe"]["text"] = text.as_str().into();
     made["recipe"]["sha256"] = rowver::write::text_checksum(&text).into();

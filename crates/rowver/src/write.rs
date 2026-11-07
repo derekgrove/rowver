@@ -11,13 +11,11 @@ use std::io::Write;
 use std::path::Path;
 
 mod column;
-mod derived;
 pub(crate) mod facts;
 mod spool;
 
 pub use column::Source;
 pub(crate) use column::{read_at, write_at, Measuring};
-pub use derived::derived;
 pub use spool::{Order, Spool, Spooled};
 
 /// Values of one kind, as the little-endian bytes of that kind.
@@ -446,7 +444,7 @@ pub(crate) fn copied(source: &std::fs::File, at: u64, length: u64, from: &Path, 
 pub fn empty(locked: crate::change::Locked) -> Result<u64> {
     let path = locked.path().to_path_buf();
     let (_, start, tail) = locked.tail().map_err(|e| crate::about(&path, e))?;
-    let (staged, file) = crate::change::staged(&path, ".empty")?;
+    let (staged, file) = crate::change::staged(&locked, ".empty")?;
     let written = (|| -> Result<()> {
         let mut out = std::io::BufWriter::new(file);
         out.write_all(crate::rvr::MAGIC)?;

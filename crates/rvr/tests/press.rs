@@ -567,6 +567,11 @@ per_jet = "ht / nJet"
     assert_eq!(rvr(&crlf, &["derive", &named, "m3 = ht * 3"]).0, 0);
     let carried = common::header(&crlf)["made"]["recipe"]["text"].as_str().unwrap().to_owned();
     assert!(carried.contains("m3 = \"ht * 3\"\r\n") && carried.matches('\n').count() == carried.matches("\r\n").count(), "{carried:?}");
+    // An expression holding a newline is written on one line, and changed again after.
+    assert_eq!(rvr(&crlf, &["derive", &named, "nl = ht\n + 1"]).0, 0);
+    let carried = common::header(&crlf)["made"]["recipe"]["text"].as_str().unwrap().to_owned();
+    assert!(carried.contains("nl = \"ht\\n + 1\"\r\n"), "{carried:?}");
+    assert_eq!(rvr(&crlf, &["derive", &named, "--drop", "nl"]).0, 0);
     // What a press adds to every sample's metadata is no expression's to read: refused as it is read.
     let (code, said) = rvr(&dir, &["derive", &file, "n = sample.events_total"]);
     assert!(code == 1 && said.contains("[derived] n: sample.events_total is a count rvr press records of each sample, which no expression can read"), "{said}");
@@ -966,6 +971,23 @@ fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_co
     let (code, said) = rvr(&dir, &["press"]);
     assert!(code == 1 && said.contains(&format!("{file} is as it was: put right what is said above and press again")), "{said}");
     assert_eq!(std::fs::read(dir.join(&file)).unwrap(), before);
+    // So when it may not be written, and would be written anew: and with a stored column read
+    // too, the new file keeps r (SPEC 8.12).
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir.join(&file), std::fs::Permissions::from_mode(0o444)).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 1 && said.contains(&format!("{file} is as it was")), "{said}");
+    assert_eq!(std::fs::read(dir.join(&file)).unwrap(), before);
+    let more = recipe.replace("weight * 1000", "weight * 2").replace("[\"weight\", \"nJet\"]", "[\"weight\", \"nJet\", \"Jet_pt\"]");
+    std::fs::write(dir.join("recipe.toml"), more.clone() + late).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 1 && said.contains("is written without the new derived columns s, keeping those it held"), "{said}");
+    let derived = &common::header(&dir)["derived"]["columns"];
+    assert!(derived.as_array().unwrap().len() == 1 && derived[0]["name"] == "r", "{derived}");
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    // The file put back as it was, for what follows.
+    std::fs::set_permissions(dir.join(&file), std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::write(dir.join(&file), &before).unwrap();
     // With a stored column read too, it leaves out that one alone, keeps r, and says whose signature it holds.
     let more = recipe.replace("weight * 1000", "weight * 2").replace("[\"weight\", \"nJet\"]", "[\"weight\", \"nJet\", \"Jet_pt\"]");
     std::fs::write(dir.join("recipe.toml"), more.clone() + late).unwrap();
@@ -1022,6 +1044,19 @@ fn a_derived_column_of_another_kind_in_another_sample_is_refused_before_reading(
     resolved_before(&dir, ANY);
     let (code, said) = rvr(&dir, &["press"]);
     assert!(code == 1 && said.contains("[derived] scaled is i4 in sample a and f8 in sample b, and a derived column has one kind in every sample") && !said.contains("Pressing"), "{said}");
+    // So rvr derive refuses one, though the sample of the other kind kept no row (FORMAT 10; SPEC 8.8).
+    let cut = recipe.replace("[keep]\n", "[keep]\nsome = \"sample.w > 0.75\"\n").replace("scaled = \"sample.w * nJet\"\n", "");
+    std::fs::write(dir.join("recipe.toml"), cut).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    let before = std::fs::read(dir.join(&file)).unwrap();
+    let (code, said) = rvr(&dir, &["derive", &file, "d = sample.w"]);
+    assert!(code == 1 && said.contains("[derived] d is i8 in sample a and f8 in sample b"), "{said}");
+    assert_eq!(std::fs::read(dir.join(&file)).unwrap(), before);
+    // Named twice in one add, it is said so.
+    let (code, said) = rvr(&dir, &["derive", &file, "x = nJet", "x = nJet * 2"]);
+    assert!(code == 1 && said.contains("x is named twice in what was given: name each derived column once"), "{said}");
 }
 
 // SPEC 2.6, 5.1.6, 7.3.1, 7.3.2, 7.3.4, 7.7.1, 7.7.3, 7.8.1, 8.1, 8.2, 8.7, 9.1, 9.5; FORMAT 6.2
@@ -1856,7 +1891,11 @@ fn totals_hold_when_a_sample_is_added_and_name_their_mistakes() {
     // A sum that is not a finite number, and a total named like a key of samples.toml, are refused by name.
     std::fs::write(dir.join("recipe.toml"), recipe.replace("sumw = \"w\"", "sumw = \"w / (nJet - nJet)\"")).unwrap();
     let (code, said) = rvr(&dir, &["press", "--full"]);
-    assert!(code == 1 && said.contains("[totals] sumw: its sum is not a finite number"), "{said}");
+    assert!(code == 1 && said.contains("[totals] sumw: its sum is not a finite number") && said.contains("give such events a finite value"), "{said}");
+    // Finite values that add up past a double are told to be smaller.
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("sumw = \"w\"", "sumw = \"if(nJet >= 0, 1e308, 0)\"")).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert!(code == 1 && said.contains("value, 1e308, is added, the values adding up past what a double holds, and a file holds only finite totals: mend [totals] sumw so that its events give smaller values"), "{said}");
     std::fs::write(dir.join("recipe.toml"), recipe.replace("sumw = \"w\"", "norm = \"w\"")).unwrap();
     let (code, said) = rvr(&dir, &["press", "--full"]);
     assert!(code == 1 && said.contains("[totals] norm has the name of a key of samples.toml"), "{said}");

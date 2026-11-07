@@ -351,10 +351,13 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool, each: &mut dyn
                     true => storage.digest(&at).map_err(|failed| failed.why)?,
                     false => (None, None),
                 };
-                // The listing's size, else the HEAD's: a lock pins every file's size.
-                let bytes = match e.bytes {
-                    0 => said.filter(|b| *b > 0).ok_or_else(|| format!("{at}: its storage gives no size for it, so the lock cannot pin it"))?,
-                    size => size,
+                // The HEAD's size when it was asked, which a press and rvr samples check compare, else
+                // the listing's: a lock pins every file's size.
+                let bytes = match (said, e.bytes) {
+                    (Some(0), 0) => return Err(format!("{at} is empty (0 bytes), so it is no ROOT file: remove it, or name the files so that this one is not among them")),
+                    (Some(0), listed) => return Err(format!("{at}: its storage answers that it holds 0 bytes, but lists it with {listed}, so the lock cannot pin its size: try again later, or ask the storage's admins")),
+                    (Some(size), _) | (None, size @ 1..) => size,
+                    (None, 0) => return Err(format!("{at}: its storage gives no size for it, so the lock cannot pin it")),
                 };
                 let identity = root_identity(HttpsFile::new(storage, &at, bytes)?, &at, tree, listed && i == 0)?;
                 let (file, list) = pinned(at, bytes, adler32, identity);

@@ -702,6 +702,20 @@ fn a_read_redirected_round_and_round_is_asked_again_after_each_wait() {
     });
     assert_eq!((code, hole(&dir).as_deref()), (3, Some("unreachable")), "{said}");
     assert!(said.contains("  waiting 300 s to ask again for flat.root (7 of 8 tries made): its storage redirected more than four times"), "{said}");
+    // So is a HEAD (SPEC 6.2.6).
+    let (dir, _server, code, said) = pressed("round-head", false, |request| match request.method.as_str() {
+        "HEAD" => Answer::Redirect("/store/flat.root".into()),
+        _ => Answer::Serve,
+    });
+    assert_eq!((code, hole(&dir).as_deref()), (3, Some("unreachable")), "{said}");
+    assert!(said.contains("(7 of 8 tries made): its storage redirected more than four times (302"), "{said}");
+    // One that says nowhere to go is not asked again, nor said to have redirected.
+    let (dir, _server, code, said) = pressed("round-nowhere", false, |request| match request.method.as_str() {
+        "HEAD" => Answer::Status(302),
+        _ => Answer::Serve,
+    });
+    assert_eq!((code, hole(&dir).as_deref()), (3, Some("unreachable")), "{said}");
+    assert!(said.contains("answered 302 Answer without saying where to go") && !said.contains("waiting") && !said.contains("more than four"), "{said}");
 }
 
 // SPEC 7.2.5

@@ -320,6 +320,34 @@ fn a_file_of_many_chunks_holds_and_slices_the_values_of_one_of_one_chunk() {
     assert!(code == 1 && said.contains("chunk_rows: the files are cut in chunks of 1,024 and 65,536 rows: their per-sample checksums cannot be compared; rvr diff --rows compares the events") && !said.contains("differs in sample"), "{said}");
 }
 
+// SPEC 7.6.2, 8.7
+#[test]
+fn a_fill_copies_the_rows_it_keeps_a_chunk_at_a_time_and_makes_the_file_a_full_press_makes() {
+    let samples = samples("[[sample]]\nname = \"whole\"\nfiles = [\"runs.root\", \"copy.root\"]\ntree = \"Events\"\n");
+    let columns = "branches = [\"event\", \"Jet_pt\"]\nht = \"sum(Jet_pt)\"\n";
+    let recipe = recipe("some = \"nJet >= 1\"\n", columns, "first = \"pair_first(Jet_pt)\"\n").replacen("version = 1\n", "version = 1\nchunk_rows = 1024\n", 1);
+    let dir = study("fill-chunks", &samples, &recipe);
+    for to in ["runs.root", "copy.root"] {
+        std::fs::copy(common::fixture("runs.root"), dir.join(to)).unwrap();
+    }
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    // copy.root gone, the file holds runs.root's rows alone, more than a chunk of them, and a hole.
+    std::fs::rename(dir.join("copy.root"), dir.join("away.root")).unwrap();
+    assert_eq!(rvr(&dir, &["press", "--workers", "3"]).0, 3);
+    let file = dir.join(name(&dir));
+    assert!(rowver::rvr::Reader::open(&file).unwrap().chunk_spans().unwrap().len() > 1);
+    std::fs::rename(dir.join("away.root"), dir.join("copy.root")).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--fill", "--workers", "3"]);
+    assert_eq!(code, 0, "{said}");
+    let filled = header(&dir);
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(rvr(&dir, &["press"]).0, 0);
+    let full = header(&dir);
+    assert!(full["data"]["chunk_rows"] == 1024 && full["data"]["rows"].as_u64() > Some(2048), "{}", full["data"]["rows"]);
+    assert_eq!(filled["data"], full["data"]);
+    assert_eq!(filled["derived"], full["derived"]);
+}
+
 // SPEC 8.6
 #[test]
 fn a_file_another_program_made_is_asked_about_as_another_builds_and_its_program_is_named() {

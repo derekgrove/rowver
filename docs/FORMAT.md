@@ -982,7 +982,8 @@ study's texts:
   header exactly, from their records (§7: in any order, no gap and no overlap; in an empty file,
   laid out as a whole file's are, the space they would fill gone); each array's `size` at least its
   chunk table's `chunks × (8w + 32)` bytes plus 13 bytes a lane per chunk (the least a frame §7
-  allows takes: its magic 4, a frame header of 2, one block header 3 and the content checksum 4);
+  allows takes: its magic 4, a frame header of 2, one block header 3 and the content checksum 4),
+  and 0 for an array of no chunks;
 - that no change to the file was cut short: a file `FILE-journal` beside the file `FILE` (its name
   with `-journal` added: `tiny.rvr-journal` beside `tiny.rvr`) is the journal of a change to it
   (SPEC.md §8.12) that did not finish, and a reader that only reads refuses the file while it is
@@ -1025,7 +1026,8 @@ all the same checks) does all of the above and:
   the lock;
 - §6.1: each random choice made again from its seed, each file's `take` its share;
 - §5, §6 and §6.2: every hole holding a chosen entry; `events_read`, `events_missing` and
-  `events_total` exact; totals on exactly the files the press read;
+  `events_total` exact; totals on exactly the files the press read; each file's `rows` at most the
+  entries read of it (those chosen, less those in holes), in an empty file too;
 - §7, unless the file is empty: every array's chunk table, and every chunk: its frames, their
   lengths, its SHA-256;
 - §3, unless the file is empty: the sample index running through the samples in order; each file's

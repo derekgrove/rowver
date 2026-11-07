@@ -55,12 +55,20 @@ pub(crate) use rvr_recipe::unknown;
 
 /// A local path with its `.` and `..` taken out by its text alone (no link followed), so one file written two ways is one.
 pub fn lexical(path: &std::path::Path) -> std::path::PathBuf {
-    use std::path::Component;
+    use std::path::{Component, Path};
     let mut out = std::path::PathBuf::new();
-    for part in path.components() {
+    // A leading ~ is the home folder, which no .. climbs out of; a folder named ~ elsewhere keeps the ./ before it.
+    let home = path.components().next() == Some(Component::Normal("~".as_ref()));
+    for (at, part) in path.components().enumerate() {
         match part {
             Component::CurDir => {}
-            Component::ParentDir if matches!(out.components().next_back(), Some(Component::Normal(_))) => drop(out.pop()),
+            Component::ParentDir if matches!(out.components().next_back(), Some(Component::Normal(_))) && !(home && out == Path::new("~")) => {
+                out.pop();
+                if out == Path::new(".") {
+                    out.clear();
+                }
+            }
+            Component::Normal(name) if at > 0 && name == "~" && out.as_os_str().is_empty() => out.push("./~"),
             part => out.push(part),
         }
     }
@@ -145,6 +153,12 @@ mod tests {
         assert_eq!(p("./d/x.root"), p("d/x.root"));
         assert_eq!(p("d/../e/./x.root"), p("e/x.root"));
         assert_eq!(p("../x.root"), std::path::PathBuf::from("../x.root"));
+        // A leading ~ is the home folder: no .. climbs out of it, and a folder named ~ is another.
+        assert_ne!(p("~/../x.root"), p("x.root"));
+        assert_eq!(p("~/d/../x.root"), p("~/x.root"));
+        assert_ne!(p("./~/x.root"), p("~/x.root"));
+        assert_eq!(p("./~/x.root"), p("d/../~/x.root"));
+        assert_eq!(p("./~/../x.root"), p("x.root"));
     }
 
     // SPEC 3.8.2; FORMAT 6.3

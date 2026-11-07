@@ -56,6 +56,9 @@ pub(super) fn layout(data: &Value) -> Result<u64> {
         let (at, size) = (count(record, &place, "at")? as u64, count(record, &place, "size")? as u64);
         let w = width(kind).unwrap_or(1) as u64;
         let least = chunks.saturating_mul(8 * w + 32 + w * crate::chunks::FRAME as u64);
+        if chunks == 0 && size != 0 {
+            return Err(invalid(format!("{place}.size is {size}, and an array of no chunks (a file of no rows) holds no bytes: size 0 (docs/FORMAT.md §7): {MEND}")));
+        }
         if size < least {
             return Err(invalid(format!("{place}.size is {size}, and its {chunks} chunks take at least {least} bytes: a chunk table of {} bytes, and a frame of 13 bytes or more a lane per chunk (docs/FORMAT.md §7): {MEND}", chunks.saturating_mul(8 * w + 32))));
         }

@@ -110,7 +110,7 @@ checked. It reads the entries the Plan names, evaluates the cuts and columns, an
 |---|---|
 | a file cannot be read: gone, changed since the lock, damaged, its storage unreachable or refusing it | makes a hole of what could not be read and goes on (§7) |
 | a failure that is not one file's: the network gone, a proxy or certificate refused, a disk not mounted or full, a permission refused, the process stopped | stops, keeps what it read, and the next press carries on (§7) |
-| a value in the data the recipe cannot take (the recipe reference's list): a conversion out of the target kind's range, a mask or two lists taken member by member whose lengths differ in one event, an event past the pair limit, a whole number to a negative power, a total that is not finite | stops, naming the file, entry, column and value, and keeps what it read |
+| a value in the data the recipe cannot take (the recipe reference's list): a conversion out of the target kind's range, a mask or two lists taken member by member whose lengths differ in one event, an event past the pair limit, a whole number to a negative power, a total over one file's entries that is not finite (a sample's, §4.5.4) | stops, naming the file, entry, column and value, and keeps what it read |
 | a file that lacks the tree a `[totals]` total over another tree names, or a branch that total reads in it, or has one there of a type rvr cannot read, or of a kind its expression does not take | stops, naming the file, the tree and the branch (or what of the expression does not fit), and keeps what it read; a failure reading that tree's bytes is a hole, as for the event tree |
 
 Floats may be NaN or infinite anywhere, stored and derived alike; a float stops the core only as
@@ -401,7 +401,11 @@ whole, and never the tree the events are read from.
 **4.5.3** A sample's total is its files' totals added from +0.0 in the lock's file order.
 
 **4.5.4** A total is one number per entry; a list is refused. A total that is not finite is a data
-error, since a file's metadata holds only finite numbers.
+error, since a file's metadata holds only finite numbers: over one file's entries it names the entry
+and its value, and advises a finite value (`if(isfinite(x), x, 0)`) where that value is not finite,
+smaller values where finite ones add up past what a double holds. A sample's total its files' totals
+(or a fill's and the file's) add up past a double stops too, naming the sample, and keeps nothing:
+the press, `[totals]` mended, starts over.
 
 ### 4.6 Derived columns
 
@@ -418,10 +422,11 @@ stops the press there, not after every file is read. A press that builds on colu
 copied columns are not read, works them out once at the end (§4.6.4).
 
 **4.6.4** A derived column that fails when worked out over the whole file leaves the file written
-without its derived columns; the press says so and exits 1. A press that adds columns in place
-(§8.2) keeps the derived columns the file held whose expressions the recipe still has, and leaves
-out only the new ones, naming them, and whose signature it replaces (§8.12); one whose only new
-columns are derived leaves the file as it was. Mending `[derived]` and pressing again reads no input (§8).
+without its derived columns; the press says so and exits 1. A press that only adds columns (§8.2),
+in place or written anew for want of a lock or the right to write (§8.12), keeps the derived
+columns the file held whose expressions the recipe still has, and leaves out only the new ones,
+naming them, and, in place, whose signature it replaces; one built on the file that read nothing
+(its only new columns derived, or a column dropped) leaves the file as it was. Mending `[derived]` and pressing again reads no input (§8).
 
 ## 5. The commands and their options
 
@@ -495,7 +500,7 @@ terminals; `y` or `yes`, in any case, is yes, and any other answer is no.
 | `rvr reproduce FILE [DIR] [--study FOLDER] [--workers N] [--texts]` | presses a file's own study again and compares, or (`--texts`) writes its three texts | 9 |
 | `rvr empty FILE… [--study FOLDER] [--anyway] [--force \| -f]` | lets a file's arrays go, keeping its header | 8 |
 | `rvr refill FILE [--study FOLDER] [--workers N]` | presses an empty file's arrays again | 8 |
-| `rvr tool FILE [KEY --set DATA.json \| KEY --get [OUT.json] \| KEY --drop] [--force \| -f]` | lists a file's tool keys, or sets, writes out or drops one | 8 |
+| `rvr tool FILE [KEY --set DATA.json \| KEY --get [OUT.json] \| KEY... --drop] [--force \| -f]` | lists a file's tool keys, or sets or writes out one, or drops some | 8 |
 | `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME…` | the key that signs your files, and the keys you trust | 10 |
 | `rvr proxy`, `rvr proxy init [--hours H]` | the grid proxy, shown or made | 10 |
 | `rvr --version` | `rvr VERSION (reads and writes rowver 15; commit COMMIT)` | 12 |
@@ -950,7 +955,10 @@ signed again with your key, saying whose signature it replaces. Other values are
 the columns; the file stays empty.
 
 **8.11 `rvr tool FILE`** lists the file's tool keys (FORMAT.md §11), each with its size, the bytes its
-object takes in the header (`FILE has no tool keys.` when it has none). `rvr tool FILE KEY --set
+object takes in the header (`FILE has no tool keys.` when it has none); a key held more than once,
+which §1 refuses, is listed for each copy, and a key holding a character outside printable ASCII
+(which no tool key's name holds, and a terminal may hide or turn about) is written in double quotes as
+Python reads a string: `"` and `\` escaped, each such character by its code (`\u202e`, `\U0001f600`). `rvr tool FILE KEY --set
 DATA.json` makes the JSON object DATA.json holds the tool key `KEY`, checked first, before anything
 is asked, by the header's own rules: DATA.json is one JSON object by FORMAT.md §1's rules (no byte-order mark, no key twice, no
 whole number written `-0`, no lone surrogate, and arrays and objects nested at most 64 deep, counted
@@ -968,7 +976,8 @@ several of them would, `FILE does not open (WHY): more
 than one of its tool keys breaks it, and rvr tool FILE KEY KEY… --drop takes them out`, naming each key
 the header does not open without dropping (every key, when those alone would not do; one beginning
 with `--` or named `-f` first, §5.1.2; `rowver.drop_tool(…)` in Python, which can name them, when a key
-is spelled as one of `rvr tool`'s flags in full, or more than one is so named); a name a shell would take apart is written in single quotes; and only `FILE does
+is spelled as one of `rvr tool`'s flags in full, holds a character outside printable ASCII, or more
+than one is so named, each word then a Python string, quoted so); a name a shell would take apart is written in single quotes; and only `FILE does
 not open (WHY)` when no drop of tool keys would mend it (a break under the format's own keys, a
 signature that does not hold); the list exits 0 all the same (`rvr validate` says whether a file
 is valid), and `--get` writes out its keys too. A file refused for anything but its header (its
@@ -982,7 +991,8 @@ the header holds it, and a newline, to `OUT.json`, or to standard output without
 already there is written over only once you say so, the question naming both sizes, and is replaced
 whole or not at all, with its permissions; an `OUT.json` that is `FILE` itself (named another way,
 or through a link) is refused: `OUT.json is FILE itself: write the key's object to another file`.
-`rvr tool FILE KEY --drop` drops `KEY` once you say so, the question naming it and its size (`rvr tool
+A key held more than once is refused by `--get`, naming `rowver.drop_tool(…)`, which gives back every
+copy. `rvr tool FILE KEY --drop` drops `KEY` once you say so, every copy of it, the question naming it and its size (`rvr tool
 FILE KEY KEY… --drop` drops each key named, in one change, the header left by them all checked): a key whose object
 breaks FORMAT.md §1's rules too, or holds what no JSON parser takes (a lone surrogate, nesting
 deeper than a parser goes), or is misnamed (a slip of the format's own keys, or no tool key's name;
@@ -990,7 +1000,7 @@ the format's own keys are refused), so that dropping it mends a file only it kee
 is found in the header's text by its brackets, outside strings, not parsed, and taken out with
 its comma; the header left must then open, checked before anything is asked. A header that breaks the rules outside the key is
 refused, as it is by every reader. The sizes `rvr tool` names, and the object `--get` writes, are
-the key's bytes as the header holds them. rvr asks at a terminal
+the key's bytes as the header holds them (with every copy, for a key held more than once). rvr asks at a terminal
 (§5.1.7); `--force` (`-f`) does not ask, and is needed where nobody is at a terminal. Every change of
 the tool keys is made in the file itself (§8.12), its arrays as they are, and leaves its signature as
 it is (tool keys are outside it: FORMAT.md §9). A key the file does not have, given to `--get` or
@@ -1262,7 +1272,8 @@ whose header fails, or beside which is the journal of a change to it cut short (
 value per sample), `recipe`, `study` (the three texts by file name), `signed_by` (the public key, or
 `None`), `holes` (`[{sample, file, entries: (first, last), kind, why}]`, `last` not included),
 `complete`, `empty` and `tools` (each tool key's object, by its name); and `path`, `header` (the JSON
-header), `len(f)` (its rows) and `name in f`.
+header, as `json.loads` reads it, but for a whole number past the digits Python turns into an int, or
+a number past a float (one a float would make infinite, or 0 though it is not), which a tool key may hold: a `Decimal`), `len(f)` (its rows) and `name in f`.
 
 **11.4** `f[name]` reads a column: a flat one as a read-only NumPy array (not copied), a list one as
 an Awkward array, `sample` as `int32`, `entry` as `int64`, a derived one worked out and checked
@@ -1292,10 +1303,11 @@ raise `rowver.Error`, an unknown name `KeyError`.
 `rvr tool --set` does (§8.11, §8.12), a key already there replaced without asking, even one breaking FORMAT.md §1 (a value the rules
 refuse is told as `the value given for the tool key KEY …`);
 `rowver.drop_tool(path, key, *keys)` drops it (or each key named, in one change), as `rvr tool --drop`
-does, and gives back its object (with several keys, a tuple of their objects in turn), or its text
-as the header held it where `json.loads` cannot read it whole (nesting deeper than it goes, a member held
-twice), a whole number past the digits Python turns into an int given as a `Decimal`, never raising once
-the file is changed. Each holds the file's lock while it
+does, and gives back its object (with several keys, a tuple of their objects in turn; a key held more than
+once, a tuple of every copy's), or its text as the header held it where `json.loads` cannot read it
+whole (nesting deeper than it goes, a member held twice), or its bytes where they are not UTF-8; a
+whole number past the digits Python turns into an int, or a number past a float, is a `Decimal`, as in
+`header` (§11.3); it never raises once the file is changed. Each holds the file's lock while it
 changes it (§8.12), first puts back a change to the file cut short, and raises `rowver.Error` saying
 what is wrong.
 

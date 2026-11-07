@@ -812,15 +812,6 @@ pub(super) fn column<'e>(name: &str, pieces: &'e dyn Pieces, rows: &[Rows], samp
     Ok(record)
 }
 
-/// The record a column of these values would have, its checksums (cut at the chunks `rows`),
-/// `by_sample` and facts, with no array written: a derived column's.
-pub(super) fn measured(name: &str, column: &crate::rvr::Held, rows: &[Rows], samples: usize) -> Result<Map<String, Value>> {
-    let mut measuring = Measuring::new(name, &column.kind, column.offsets.is_some(), rows)?;
-    let counts: Option<Vec<usize>> = column.offsets.as_ref().map(|o| o.windows(2).map(|w| w[1] - w[0]).collect());
-    measuring.take(&column.bytes, counts.as_deref())?;
-    measuring.finish(samples)
-}
-
 /// A column measured a few rows at a time, as a derived column's record holds it: its kind, its
 /// checksums (cut at the file's chunks) and facts, and no array.
 pub(crate) struct Measuring(Cutting<'static>);

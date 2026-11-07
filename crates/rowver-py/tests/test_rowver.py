@@ -299,7 +299,8 @@ class Pressed(unittest.TestCase):
         n = int.from_bytes(whole[-12:-8], "little")
 
         def written(key, text):
-            header = whole[-12 - n:-12][:-1] + b',"' + key.encode() + b'":' + text.encode() + b"}"
+            text = text if isinstance(text, bytes) else text.encode()
+            header = whole[-12 - n:-12][:-1] + b',"' + key.encode() + b'":' + text + b"}"
             copy.write_bytes(whole[:-12 - n] + header + len(header).to_bytes(4, "little") + whole[-8:])
 
         # Deeper than json.loads goes (Python 3.13 reads 9,998 deep): its text; a lone surrogate it reads.
@@ -307,7 +308,11 @@ class Pressed(unittest.TestCase):
         lone = '{"s":"\\ud800 } ] \\" {"}'
         twice = '{"t":{"a":1,"a":2}}'
         try:
-            for key, text, given in [("deep", deep, deep), ("lone", lone, {"s": "\ud800 } ] \" {"}), ("twice", twice, twice)]:
+            # A key held twice gives each copy; bytes that are not UTF-8 are given as they lie.
+            held = ('{"a":1},"two":[1]', ({"a": 1}, [1]))
+            raw = b'{"s":"\xff"}'
+            cases = [("deep", deep, deep), ("lone", lone, {"s": "\ud800 } ] \" {"}), ("twice", twice, twice), ("two", *held), ("raw", raw, raw)]
+            for key, text, given in cases:
                 with self.subTest(key=key):
                     written(key, text)
                     with self.assertRaises(rowver.Error):
@@ -321,6 +326,12 @@ class Pressed(unittest.TestCase):
             written("big", '{"n":' + digits + "}")
             self.assertEqual(rowver.open(copy).header["big"], {"n": decimal.Decimal(digits)})
             self.assertEqual(rowver.drop_tool(copy, "big"), {"n": decimal.Decimal(digits)})
+            self.assertEqual(copy.read_bytes(), whole)
+            # So does a number past a float, which json.loads would make infinite.
+            written("far", '{"x":1e400,"y":-2.5e999,"z":0.5,"u":1e-400,"o":-0.0e5}')
+            far = {"x": decimal.Decimal("1e400"), "y": decimal.Decimal("-2.5e999"), "z": 0.5, "u": decimal.Decimal("1e-400"), "o": -0.0}
+            self.assertEqual(rowver.open(copy).header["far"], far)
+            self.assertEqual(rowver.drop_tool(copy, "far"), far)
             self.assertEqual(copy.read_bytes(), whole)
             # A Decimal NaN raises ValueError, as a float's does; set back, a finite one is written as its digits.
             with self.assertRaises(ValueError):

@@ -259,33 +259,48 @@ pub(crate) fn laid(work: &[Input], lock: &Lock, plans: &HashMap<(String, String)
     Ok((reads, all))
 }
 
+/// A piece of a stretch a fill keeps: its place in the spool, and the old file's rows it holds, within one chunk.
+type Piece = ((usize, usize), Range<usize>);
+
 /// Put the old file's rows of every stretch a fill keeps in the spool, in its place: each of the
-/// `columns` read, then the entries. One column of the old file is held at a time, its stretches
-/// spooled by `workers` threads.
+/// `columns` read, then the entries. Each column is read a chunk of the old file at a time, each
+/// chunk once, by `workers` threads, and its rows go to the stretches it holds (SPEC §7.6.2).
 pub(crate) fn spool_old(spool: &write::Spool, fill: &Fill, columns: &[&str], laid: &[Laid], workers: usize) -> Result<(), String> {
     let file = &fill.file;
     let failed = |e: rowver::Error| rowver::plain(file.path(), &e);
     let old: Vec<&(usize, Range<usize>)> = laid.iter().flat_map(|l| &l.old).filter(|(_, rows)| !rows.is_empty()).collect();
-    rowver::parallel::map(&old, workers, |(order, rows)| {
-        spool.add(columns.len(), (*order, 0), write::Values::Flat(write::array(&fill.entries[rows.clone()]))).map_err(failed)
+    if old.is_empty() {
+        return Ok(());
+    }
+    // Each stretch cut where the file's chunks are, its pieces gathered by the chunk that holds them.
+    let spans = file.chunk_spans().map_err(failed)?;
+    let mut chunks: std::collections::BTreeMap<usize, Vec<Piece>> = Default::default();
+    for (order, rows) in &old {
+        let first = spans.partition_point(|(_, end)| *end <= rows.start);
+        for (k, (start, end)) in spans[first..].iter().take_while(|(start, _)| *start < rows.end).enumerate() {
+            chunks.entry(first + k).or_default().push(((*order, k), *start.max(&rows.start)..*end.min(&rows.end)));
+        }
+    }
+    let chunks: Vec<Vec<Piece>> = chunks.into_values().collect();
+    rowver::parallel::map(&chunks, workers, |pieces| {
+        pieces.iter().try_for_each(|(order, rows)| spool.add(columns.len(), *order, write::Values::Flat(write::array(&fill.entries[rows.clone()]))).map_err(failed))
     })?;
     for (index, name) in columns.iter().enumerate() {
-        let held = file.column(name).map_err(failed)?.expect("the Plan copies only the columns the file has");
-        let w = rvr_recipe::Kind::named(&held.kind).expect("the file validator checked its kinds").width();
-        rowver::parallel::map(&old, workers, |(order, rows)| {
-            let (from, to, counts) = match &held.offsets {
-                Some(offsets) => {
-                    let counts = (rows.start..rows.end).map(|r| offsets[r + 1] - offsets[r]).collect();
-                    (offsets[rows.start], offsets[rows.end], Some(counts))
-                }
-                None => (rows.start, rows.end, None),
-            };
-            let content = NumericBuffer { kind: held.kind.clone(), count: to - from, bytes: held.bytes[from * w..to * w].to_vec() };
-            let values = match counts {
-                Some(counts) => write::Values::Jagged { counts, content },
-                None => write::Values::Flat(content),
-            };
-            spool.add(index, (*order, 0), values).map_err(failed)
+        rowver::parallel::map(&chunks, workers, |pieces| {
+            // The rows of the chunk its pieces need, read once.
+            let from = pieces.iter().map(|(_, rows)| rows.start).min().unwrap_or_default();
+            let to = pieces.iter().map(|(_, rows)| rows.end).max().unwrap_or_default();
+            let held = file.slice(name, from, to).map_err(failed)?.expect("the Plan copies only the columns the file has");
+            let w = rvr_recipe::Kind::named(&held.kind).expect("the file validator checked its kinds").width();
+            pieces.iter().try_for_each(|(order, rows)| {
+                let piece = held.rows(rows.start - from, rows.end - from).map_err(failed)?;
+                let content = NumericBuffer { count: piece.bytes.len() / w, kind: piece.kind, bytes: piece.bytes };
+                let values = match piece.offsets {
+                    Some(offsets) => write::Values::Jagged { counts: offsets.windows(2).map(|pair| pair[1] - pair[0]).collect(), content },
+                    None => write::Values::Flat(content),
+                };
+                spool.add(index, *order, values).map_err(failed)
+            })
         })?;
     }
     Ok(())

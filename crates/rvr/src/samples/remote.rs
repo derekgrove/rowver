@@ -530,7 +530,9 @@ fn passing(error: &ureq::Error, proxied: bool) -> Option<String> {
     match error {
         ureq::Error::Transport(failure) if plain_http(failure).is_some() => None,
         ureq::Error::Status(403, _) if !proxied => None,
-        ureq::Error::Status(403 | 408 | 429 | 500..=599, _) => Some(why(error)),
+        // A redirect that says nowhere to go (or a 304) will not pass when asked again.
+        ureq::Error::Status(300..=399, answer) if answer.header("Location").is_none() => None,
+        ureq::Error::Status(300..=399 | 403 | 408 | 429 | 500..=599, _) => Some(why(error)),
         ureq::Error::Transport(failure)
             if grid_trust::tls_error(failure).is_none()
                 && matches!(
@@ -678,13 +680,13 @@ impl Storage {
                     reply
                 })
                 .1
+                .and_then(moved)
                 .map_err(|e| Unlisted::Asked(Box::new(e)))?;
                 match reply.status() / 100 == 2 {
                     true => listing(reply, folder),
                     false => Err(Unlisted::Said(format!(
-                        "{folder} could not be listed: its storage answered {} {} (redirected too \
-                         often, or not with a listing). Try again later; if it persists, the folder \
-                         may have moved.",
+                        "{folder} could not be listed: its storage answered {} {}, not with a \
+                         listing. Try again later; if it persists, the folder may have moved.",
                         reply.status(),
                         reply.status_text()
                     ))),
@@ -751,6 +753,12 @@ pub fn why(error: &ureq::Error) -> String {
         }
     }
     match error {
+        ureq::Error::Status(code @ 300..=399, answer) if answer.header("Location").is_some() => {
+            format!("its storage redirected more than four times ({code} {})", answer.status_text())
+        }
+        ureq::Error::Status(code @ 300..=399, answer) => {
+            format!("its storage answered {code} {} without saying where to go", answer.status_text())
+        }
         ureq::Error::Status(code, answer) => {
             format!("its storage answered {code} {}", answer.status_text())
         }
@@ -849,6 +857,16 @@ fn head(agent: &ureq::Agent, at: &str, watch: &Watch) -> Result<ureq::Response, 
         reply
     })
     .1
+    .and_then(moved)
+}
+
+/// An answer still redirected after four redirects as the failure it is, asked again as a busy storage's (SPEC §7.4.1).
+#[allow(clippy::result_large_err)] // ureq's own error
+fn moved(reply: ureq::Response) -> Result<ureq::Response, ureq::Error> {
+    match reply.status() {
+        code @ 300..=399 => Err(ureq::Error::Status(code, reply)),
+        _ => Ok(reply),
+    }
 }
 
 /// The size and adler32 a HEAD's answer gives.
@@ -863,8 +881,8 @@ fn digested(
     })?;
     if reply.status() / 100 != 2 {
         return Err(format!(
-            "{url} could not be asked: its storage answered {} {} (redirected too often, or \
-             not with the file). Try again later; if it persists, the file may have moved.",
+            "{url} could not be asked: its storage answered {} {}, not with the file. Try \
+             again later; if it persists, the file may have moved.",
             reply.status(),
             reply.status_text()
         ));

@@ -49,15 +49,47 @@ pub fn main(options: &Options) -> u8 {
     crate::report("tool", done.map_err(|why| if !meant.is_empty() && keyless() { format!("{why}{meant}") } else { why }).map(|()| 0))
 }
 
+/// `text` in double quotes as Python reads a string: `"` and `\` escaped, each character outside printable ASCII by its code (`\u202e`, `\U0001f600`).
+fn quoted(text: &str) -> String {
+    let mut out = String::from('"');
+    for c in text.chars() {
+        match c {
+            '"' | '\\' => out.extend(['\\', c]),
+            ' '..='~' => out.push(c),
+            c if u32::from(c) <= 0xffff => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c => out.push_str(&format!("\\U{:08x}", u32::from(c))),
+        }
+    }
+    out + "\""
+}
+
+/// Whether `key` holds a character outside printable ASCII, which a terminal may hide or turn about.
+fn unplain(key: &str) -> bool {
+    !key.chars().all(|c| matches!(c, ' '..='~'))
+}
+
+/// `key` as it is shown: as it is, or `quoted` when it holds a character outside printable ASCII.
+fn seen(key: &str) -> String {
+    match unplain(key) {
+        true => quoted(key),
+        false => key.to_owned(),
+    }
+}
+
 /// The tool keys of the header `text` of `file`, by name, each with its object's bytes as they lie there.
 fn keys(file: &Path, text: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     let spans = rowver::rvr::tool_texts(text).map_err(|e| rowver::plain(file, &e))?;
     Ok(spans.into_iter().map(|(key, span)| (key, text[span].to_vec())).collect())
 }
 
-/// The bytes of the tool key `key`'s object, as the header `text` of `file` holds them.
+/// The bytes of the tool key `key`'s object, as the header `text` of `file` holds them: refused when it holds more than one.
 fn held(file: &Path, text: &[u8], key: &str) -> Result<Vec<u8>, String> {
-    keys(file, text)?.into_iter().find(|(name, _)| name == key).map(|(_, bytes)| bytes).ok_or_else(|| absent(file, key))
+    let mut copies: Vec<Vec<u8>> = keys(file, text)?.into_iter().filter(|(name, _)| name == key).map(|(_, bytes)| bytes).collect();
+    match copies.len() {
+        0 => Err(absent(file, key)),
+        1 => Ok(copies.remove(0)),
+        n => Err(format!("{} holds the tool key {} {n} times, which FORMAT.md §1 refuses, so rvr tool cannot write out one: rowver.drop_tool({}, {}) in Python drops it and gives back every copy", file.display(), seen(key), quoted(&file.display().to_string()), quoted(key))),
+    }
 }
 
 /// The header text of the file at `file`, and why the header keeps the file from opening, when it does.
@@ -89,7 +121,7 @@ fn list(file: &Path) -> Result<(), String> {
         n => {
             println!("{shown} has {}:", crate::samples::some(n, "tool key", "tool keys"));
             for (key, bytes) in &keys {
-                println!("  {key} ({} bytes)", bytes.len());
+                println!("  {} ({} bytes)", seen(key), bytes.len());
             }
         }
     }
@@ -103,7 +135,13 @@ fn list(file: &Path) -> Result<(), String> {
         rowver::Error::Tool { fact, key } => (fact.clone(), Some(key.clone())),
         other => (other.to_string(), None),
     };
-    let names: Vec<&str> = keys.iter().map(|(name, _)| name.as_str()).collect();
+    // A key held more than once is one name.
+    let mut names: Vec<&str> = Vec::new();
+    for (name, _) in &keys {
+        if !names.contains(&name.as_str()) {
+            names.push(name);
+        }
+    }
     let elsewhere = under.is_some_and(|key| !names.contains(&key.as_str()));
     let opens = |without: &[&str]| !elsewhere && rowver::change::opens_without(&text, without);
     // The command that drops `keys`: rvr tool's, which names a key beginning with -- or named -f
@@ -111,9 +149,14 @@ fn list(file: &Path) -> Result<(), String> {
     let command = |mut keys: Vec<&str>| {
         let flag = keys.iter().find(|key| ["--set", "--get", "--drop", "--force"].contains(&key.split_once('=').map_or(**key, |(flag, _)| flag)));
         let first = |key: &&str| key.starts_with("--") || *key == "-f";
-        if flag.is_some() || keys.iter().filter(|key| first(key)).count() > 1 {
-            let why = flag.map_or("rvr tool names only one key beginning with -- or named -f, right after FILE".to_owned(), |key| format!("rvr tool reads {key} as its flag"));
-            let quoted: Vec<String> = [shown.to_string().as_str()].into_iter().chain(keys.iter().copied()).map(|text| Value::from(text).to_string()).collect();
+        let unseen = keys.iter().find(|key| unplain(key));
+        if flag.is_some() || unseen.is_some() || keys.iter().filter(|key| first(key)).count() > 1 {
+            let why = match (flag, unseen) {
+                (Some(key), _) => format!("rvr tool reads {key} as its flag"),
+                (_, Some(key)) => format!("{} holds a character outside printable ASCII", seen(key)),
+                _ => "rvr tool names only one key beginning with -- or named -f, right after FILE".to_owned(),
+            };
+            let quoted: Vec<String> = [shown.to_string().as_str()].into_iter().chain(keys.iter().copied()).map(quoted).collect();
             return format!("rowver.drop_tool({}) in Python ({why})", quoted.join(", "));
         }
         keys.sort_by_key(|key| !first(key));
@@ -208,9 +251,11 @@ fn dropped(file: &Path, keys: &[&str], force: bool) -> Result<(), String> {
     let locked = crate::locked(file)?;
     // Their bytes found unparsed, so that keys the header's rules refuse are dropped, and the header left checked, before it asks.
     let change = Change::dropping(&locked, keys).map_err(|e| rowver::plain(file, &e))?;
-    let held: Vec<String> = keys.iter().zip(change.dropped()).map(|(key, bytes)| format!("{key} ({} bytes)", bytes.len())).collect();
+    // A key held more than once is all its copies' bytes.
+    let sizes: Vec<usize> = change.dropped().iter().map(|copies| copies.iter().map(|bytes| bytes.len()).sum()).collect();
+    let held: Vec<String> = keys.iter().zip(&sizes).map(|(key, size)| format!("{} ({size} bytes)", seen(key))).collect();
     let named = match keys {
-        [key] => format!("the tool key {key} of {shown} ({} bytes)", change.dropped()[0].len()),
+        [key] => format!("the tool key {} of {shown} ({} bytes)", seen(key), sizes[0]),
         _ => format!("the tool keys {} of {shown}", held.join(", ")),
     };
     let question = format!("Drop {named}? [y/N] ");

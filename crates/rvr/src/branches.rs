@@ -25,9 +25,11 @@ fn run(options: &Options) -> Result<(), String> {
         true => {
             let lock = crate::texts::lock(dir)?;
             // It needs only the lock, but says when the lock is not of samples.toml as it is now.
-            let samples = std::fs::read_to_string(dir.join("samples.toml")).unwrap_or_default();
-            if crate::agree::stale(&samples, &lock) {
-                println!("samples.toml has changed since samples.lock was written: these are the files of the lock ({}).", lock.resolved);
+            match std::fs::read_to_string(dir.join("samples.toml")) {
+                Ok(samples) if crate::agree::stale(&samples, &lock) => println!("samples.toml has changed since samples.lock was written: these are the files of the lock ({}).", lock.resolved),
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => println!("There is no samples.toml beside samples.lock to read: these are the files of the lock ({}).", lock.resolved),
+                Err(e) => println!("samples.toml beside samples.lock could not be read ({e}): these are the files of the lock ({}).", lock.resolved),
             }
             let sample = &lock.samples[crate::open::sample_in(&lock, options.value("--sample"))?];
             let list = lock.branches_of(sample).expect("the lock validator checks every sample names a branch list it holds");

@@ -126,24 +126,8 @@ fn a_derived_column_is_a_record_with_no_array_that_the_header_check_takes() {
         .map(|s| s["rows"].as_u64().unwrap() as usize)
         .collect();
     let path = common::written(&bytes, "derived");
-    let met = rowver::rvr::Reader::open(&path).unwrap().column("MET").unwrap().unwrap();
-    let twice: Vec<f32> = met
-        .bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()) * 2.)
-        .collect();
-    let twice = rowver::rvr::Held {
-        kind: "f4".into(),
-        bytes: twice.iter().flat_map(|v| v.to_le_bytes()).collect(),
-        offsets: None,
-    };
-    let record = rowver::write::derived("twice", "MET * 2", &twice, &rows, 65_536).unwrap();
-    // A chunk_rows out of bounds, and bytes that are not whole values, are refused.
-    let said = rowver::write::derived("twice", "MET * 2", &twice, &rows, 0).unwrap_err().to_string();
-    assert!(said.contains("chunk_rows is 0, and a chunk holds from 1,024 to 16,777,216 rows"), "{said}");
-    let ragged = rowver::rvr::Held { bytes: twice.bytes[1..].to_vec(), ..twice.clone() };
-    let said = rowver::write::derived("twice", "MET * 2", &ragged, &rows, 65_536).unwrap_err().to_string();
-    assert!(said.contains("are not whole values of f4, 4 bytes each"), "{said}");
+    let wanted = [("twice".to_owned(), "MET * 2".to_owned())];
+    let record = rowver::rvr::derived::records(&rowver::rvr::Reader::open(&path).unwrap(), &wanted, &[]).unwrap().remove(0);
     assert_eq!(record["expression"], "MET * 2");
     assert!(record.get("at").is_none() && record.get("size").is_none());
     assert_eq!(record["by_sample"].as_array().unwrap().len(), rows.len());

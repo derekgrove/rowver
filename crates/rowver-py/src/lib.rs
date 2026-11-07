@@ -168,12 +168,13 @@ fn set_tool(py: Python<'_>, path: PathBuf, key: String, text: Vec<u8>) -> PyResu
     py.detach(set).map_err(|e| failed(rowver::plain(&path, &e)))
 }
 
-/// Drop the tool keys `keys` of the file at `path` in one change: each object's text, as the header held it.
+/// Drop the tool keys `keys` of the file at `path` in one change: each one's bytes as the header held them, every copy of a key held more than once.
 #[pyfunction]
-fn drop_tool(py: Python<'_>, path: PathBuf, keys: Vec<String>) -> PyResult<Vec<String>> {
+fn drop_tool<'py>(py: Python<'py>, path: PathBuf, keys: Vec<String>) -> PyResult<Vec<Vec<Bound<'py, PyBytes>>>> {
     let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
     let dropped = || rowver::change::drop_tool(&rowver::change::Locked::take(&path)?, &keys);
-    py.detach(dropped).map_err(|e| failed(rowver::plain(&path, &e)))
+    let dropped = py.detach(dropped).map_err(|e| failed(rowver::plain(&path, &e)))?;
+    Ok(dropped.iter().map(|copies| copies.iter().map(|bytes| PyBytes::new(py, bytes)).collect()).collect())
 }
 
 /// One argument to `rvr`: text, or the bytes the system gave (`os.fsencode`).

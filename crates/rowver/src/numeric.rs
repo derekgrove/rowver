@@ -1,4 +1,3 @@
-use crate::write::NumericBuffer;
 use crate::{invalid, Result};
 use rvr_recipe::Kind;
 
@@ -62,24 +61,6 @@ pub fn push_shown(kind: &str, bytes: &[u8], out: &mut String) -> Result<()> {
         };
     }
     Ok(())
-}
-
-impl NumericBuffer {
-    /// Read signed integer identity and offset arrays exactly.
-    pub fn signed(&self, index: usize) -> Result<i64> {
-        if index >= self.count {
-            return Err(invalid(format!("a bug in rowver: value {index} of an array of {} values was asked for; please report it", self.count)));
-        }
-        match self.kind.as_str() {
-            "i4" => Ok(
-                i32::from_le_bytes(self.bytes[index * 4..index * 4 + 4].try_into().unwrap()) as i64,
-            ),
-            "i8" => Ok(i64::from_le_bytes(
-                self.bytes[index * 8..index * 8 + 8].try_into().unwrap(),
-            )),
-            _ => Err(invalid(format!("a bug in rowver: an array of {} was read as positions, which are i4 or i8; please report it", self.kind))),
-        }
-    }
 }
 
 /// Call `each` on every value of `bytes` in order, as a float.
