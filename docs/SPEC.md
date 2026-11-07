@@ -232,7 +232,7 @@ recipe reference's). Each value is text, a whole number (TOML's 64-bit integers)
 ### 3.6 Placeholders
 
 **3.6.1** In `files` and in the text values of metadata (those of `[defaults]` too, filled for each
-sample), `{NAME}` is replaced by: `{era}`, the
+sample that takes them, not for one that replaces them), `{NAME}` is replaced by: `{era}`, the
 era's name (for a sample made by `eras`); a key of that era's table; or a place. An era key named
 like a place is refused, so that a name means one thing. In an era's own text values, a
 placeholder is a place, or `{era}`.
@@ -756,7 +756,12 @@ over, removing what a stopped press left.
 **7.5.6** A build whose commit is `unknown` or ends in `-dirty` (§12) keeps no journal, so a press it
 makes cannot be carried on.
 
-**7.5.7** The staging folder goes once the file is in place.
+**7.5.7** The staging folder goes once the file is in place. A press stopped after that, before
+its folder went, leaves the folder: the next press of the file removes it and says so, and
+`rvr status` says it will. So does a press that finds the file current, of a folder whose press
+finished every file it read and would make that file as it is (the same three texts, event
+choices and toolchain). A folder any
+other press left stays.
 
 ### 7.6 What a press holds
 
@@ -1021,10 +1026,13 @@ has no locks, a writer goes on without the lock, writing a new file for a change
 that may not be written is opened only to be read, and where the lock is a write lock (Linux NFS)
 one is refused it: the writer goes on without the lock all the same, writing a new file because the
 file may not be written (WHY below: `you may not write it`), as `rvr status` says. A new file
-moved over a file keeps that file's permissions, and is moved only while the path still names the
-file locked (its device and inode): one another program moved there meanwhile is left as it is, and
-the change refused, `FILE was replaced by another program while rvr held it: run the command again`.
-A reader takes no lock.
+moved over a file keeps that file's permissions, and is moved only if, just before the move, the path
+still names the file locked (its device and inode): one another program moved there meanwhile is
+left as it is, and the change refused, `FILE was replaced by another program while rvr held it: run the command again`.
+A press that found no file at its target moves its file there only if, just before the move, there
+is still none: a file another program put there meanwhile is left as it is, and the press stopped, `FILE was put
+there by another program while rvr pressed it, and is left as it is: move it away`. A reader takes
+no lock.
 
 A change that cannot be made in the file itself, because its filesystem has no locks or because the
 file may not be written (`chmod 444` in a folder that may be, or a read-only filesystem: CVMFS, a

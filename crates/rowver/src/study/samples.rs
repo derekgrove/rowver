@@ -298,7 +298,10 @@ fn expand(
         for file in &files {
             reachable(file, &place, p);
         }
-        for (key, value) in mine(defaults).into_iter().chain(mine(body)) {
+        // Merged first, so that a default text the sample replaces is never filled for it.
+        let mut merged = mine(defaults);
+        merged.extend(mine(body));
+        for (key, value) in merged {
             if let Some(value) = filled(&value, &vars, &place, p) {
                 metadata.insert(key, value);
             }
@@ -605,6 +608,11 @@ mod tests {
         assert!(clash.contains("[eras.E1] p: a place has this name too"), "{clash}");
         let undefined = problems(&format!("{}[[sample]]\nname = \"a\"\nfiles = \"{{folder}}/x.root\"\ntree = \"T\"\neras = [\"E1\"]", placed.replace("{p}/d", "{q}/d")));
         assert_eq!(undefined.lines().count(), 1, "{undefined}");
+        // A default text a sample replaces is not filled for it; one it takes is (SPEC 3.3.2).
+        let noted = HEAD.replace("[defaults]\n", "[defaults]\nmetadata = { note = \"{campaign}\", n = 1 }\n");
+        let own = read(&format!("{noted}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = {{ note = \"no era\" }}")).unwrap();
+        assert_eq!(Value::Object(own[0].metadata.clone()), json!({"note": "no era", "n": 1}));
+        assert!(problems(&format!("{noted}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"")).contains("{campaign} is not defined"));
     }
 
     // SPEC 1.4, 1.5, 3.1.3, 3.1.4, 3.2.1, 3.3.1, 3.3.2, 3.5.1, 3.5.2, 3.5.4, 3.5.5, 3.5.7, 3.5.8, 3.5.9, 3.5.10, 3.6.4, 3.7.2, 3.7.4, 3.8.1, 3.8.2, 3.8.5

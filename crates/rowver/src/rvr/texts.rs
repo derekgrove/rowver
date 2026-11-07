@@ -257,7 +257,12 @@ pub fn kinds(recipe: &Recipe, lock: &Lock) -> Result<Vec<(Kind, bool)>> {
                 if clashes && e.clash() {
                     return;
                 }
-                let near = e.missing().map(|name| rvr_recipe::meant(name, list.list.iter().map(|b| b.name.as_str())));
+                // A branch rvr cannot read is left out of the scope: said as such, not as no column.
+                if let Some(b) = e.missing().and_then(|name| list.list.iter().find(|b| b.name == name && b.why.is_some())) {
+                    let why = b.why.as_deref().unwrap_or_default();
+                    return found.add(format!("{what}: {} is a branch of a type rvr cannot read ({why}): leave it out of the recipe.", b.name), &sample.name);
+                }
+                let near = e.missing().map(|name| rvr_recipe::meant(name, list.list.iter().filter(|b| b.why.is_none()).map(|b| b.name.as_str())));
                 let text = if e.0.ends_with(['.', '?']) { e.0 } else { format!("{}.", e.0) };
                 found.add(format!("{what}: {text}{}", near.unwrap_or_default()), &sample.name);
             };

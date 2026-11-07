@@ -96,7 +96,7 @@ Read 100,000 entries; kept after each cut:
   trigger                                8,590
   a_good_muon                            6,650
   a_good_tau                             2,248
-Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 3.7 s.
+Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.2 MB) in 3.7 s.
 
 $ rvr validate higgs_tautau.rvr
 higgs_tautau.rvr: valid, 2,248 rows, 11 columns, read 100,000 of 968,616 entries, not signed
@@ -120,7 +120,7 @@ Read 100,000 entries; kept after each cut:
   trigger                                8,590
   a_good_muon                            6,650
   a_good_tau                             2,248
-Wrote higgs_tautau.reproduced/higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 4.7 s.
+Wrote higgs_tautau.reproduced/higgs_tautau.rvr (2,248 rows, 11 columns, 0.2 MB) in 4.7 s.
 Comparing the two with rvr diff:
 The headers show no difference in rows, samples, labels, columns, derived columns, by_sample or sample columns.
 ```
@@ -429,7 +429,7 @@ anywhere.
 ```text
 $ rvr press
 Pressing 1 sample, 1 file, 5 entries, 1 at a time:
-rvr press: ./uproot_flat.root, tree analysis, entry 3: [columns] x: inf does not fit in u1, which holds 0 to 255. The recipe cannot take this value: mend the recipe (or the file), then press again. err.rvr was not written.
+rvr press: ./uproot_flat.root, tree analysis, entry 3: [columns] x: inf does not fit in u1, which holds 0 to 255. The recipe cannot take what this file holds: mend the recipe (or the file), then press again. err.rvr was not written.
 ```
 
 A file that lacks the tree a `[totals]` total over another tree names, or a branch that total reads
@@ -570,7 +570,7 @@ Read 968,616 entries; kept after each cut:
   a_good_muon                           64,771
   a_good_tau                            22,325
 Signed with your key 013f1fa24edd009f…
-Wrote higgs_tautau.rvr (22,325 rows, 11 columns, 2.4 MB) in 19.4 s.
+Wrote higgs_tautau.rvr (22,325 rows, 11 columns, 2.2 MB) in 19.4 s.
 ```
 
 The file picked up is the one an uninterrupted press writes (`rvr diff` finds no difference).

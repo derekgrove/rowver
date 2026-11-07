@@ -8,6 +8,8 @@ mod server;
 use common::{rvr_with, Study};
 use server::{Answer, Server};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 const RECIPE: &str = r#"format = "rvr-recipe"
 version = 1
@@ -229,9 +231,11 @@ fn a_busy_or_lost_answer_is_asked_again_after_each_wait() {
         (Answer::Status(408), false, "its storage answered 408"),
         (Answer::Status(429), false, "its storage answered 429"),
         (Answer::Status(500), false, "its storage answered 500"),
+        (Answer::Status(502), false, "its storage answered 502"),
         (Answer::Status(503), false, "its storage answered 503"),
-        (Answer::Drop, false, ""),
-        (Answer::Short, false, ""),
+        (Answer::Status(504), false, "its storage answered 504"),
+        (Answer::Drop, false, "the connection to its storage broke ("),
+        (Answer::Short, false, "its storage's answer ended before every byte asked came (peer closed connection"),
     ] {
         let (dir, _server, code, said) = pressed("busy", proxied, failing_gets(2, answer.clone()));
         assert_eq!((code, hole(&dir)), (0, None), "{answer:?}: {said}");
@@ -283,7 +287,8 @@ fn a_location_to_a_plain_http_server_is_a_hole_naming_only_its_host_and_port() {
 // SPEC 7.4.3
 #[test]
 fn some_answers_are_taken_at_once() {
-    for (answer, kind) in [(Answer::Status(404), "gone"), (Answer::Status(410), "gone"), (Answer::Whole, "unreachable"), (Answer::Status(418), "unreachable")] {
+    let unreachable = [Answer::Whole, Answer::Status(400), Answer::Status(416), Answer::Status(418)].map(|answer| (answer, "unreachable"));
+    for (answer, kind) in [(Answer::Status(404), "gone"), (Answer::Status(410), "gone")].into_iter().chain(unreachable) {
         let (dir, _server, code, said) = pressed("at-once", false, failing_gets(usize::MAX, answer.clone()));
         assert_eq!((code, hole(&dir).as_deref()), (3, Some(kind)), "{answer:?}: {said}");
         assert!(!said.contains("waiting"), "{answer:?}: {said}");
@@ -438,6 +443,11 @@ fn a_read_waits_120_s_for_its_answer() {
 
 /// rvr in `dir` as `rvr` runs it, started: the child, and the file it says what it says in.
 fn spawned(dir: &Path, args: &[&str]) -> (std::process::Child, std::path::PathBuf) {
+    spawned_with(dir, &[], args)
+}
+
+/// The same, with more variables set.
+fn spawned_with(dir: &Path, more: &[(&str, &str)], args: &[&str]) -> (std::process::Child, std::path::PathBuf) {
     let said = dir.join("said.txt");
     let out = std::fs::File::create(&said).unwrap();
     let child = std::process::Command::new(env!("CARGO_BIN_EXE_rvr"))
@@ -447,6 +457,7 @@ fn spawned(dir: &Path, args: &[&str]) -> (std::process::Child, std::path::PathBu
         .env("X509_CERT_DIR", fixtures().join("tls/authority"))
         .env("X509_USER_PROXY", dir.join("no-proxy"))
         .env("RVR_SECOND_MS", "1")
+        .envs(more.iter().copied())
         .stdout(out.try_clone().unwrap())
         .stderr(out)
         .spawn()
@@ -656,4 +667,207 @@ fn branches_before_a_lock_opens_the_first_file_and_asks_no_digest() {
     let asked = server.taken();
     assert!(asked.iter().all(|r| r.method != "HEAD" && r.path != "/store/flat2.root"), "only the listing and the first file's bytes: {asked:?}");
     assert!(!dir.join("samples.lock").exists());
+}
+
+/// Every hole of the file a press of the study in `dir` wrote: its file and its kind.
+fn holes(dir: &Path) -> Vec<(String, String)> {
+    let header = header(dir);
+    let samples = header["made"]["files"].as_object().unwrap().values();
+    let files = samples.flat_map(|sample| sample["files"].as_object().unwrap().iter());
+    files.flat_map(|(at, file)| file["holes"].as_array().into_iter().flatten().map(|hole| (at.clone(), hole["kind"].as_str().unwrap().to_owned()))).collect()
+}
+
+// SPEC 7.4.1, 7.4.2
+#[test]
+fn a_read_sent_to_a_name_that_does_not_resolve_is_asked_again_after_each_wait() {
+    // A label of 64 letters, one more than a DNS name holds: no resolver can send it, so the name
+    // fails on this computer and no query leaves it.
+    let nowhere = format!("https://{}.invalid/store/flat.root", "a".repeat(64));
+    let (dir, _server, code, said) = pressed("unresolved", false, move |request| match request.method.as_str() {
+        "GET" => Answer::Redirect(nowhere.clone()),
+        _ => Answer::Serve,
+    });
+    assert_eq!((code, hole(&dir).as_deref()), (3, Some("unreachable")), "{said}");
+    for k in 1..=7 {
+        assert!(said.contains(&format!("({k} of 8 tries made): its storage's name could not be looked up")), "{said}");
+    }
+}
+
+// SPEC 7.2.4, 7.4.1, 7.4.2
+#[test]
+fn a_read_redirected_round_and_round_is_asked_again_after_each_wait() {
+    let (dir, _server, code, said) = pressed("round", false, |request| match request.method.as_str() {
+        "GET" => Answer::Redirect("/store/flat.root".into()),
+        _ => Answer::Serve,
+    });
+    assert_eq!((code, hole(&dir).as_deref()), (3, Some("unreachable")), "{said}");
+    assert!(said.contains("  waiting 300 s to ask again for flat.root (7 of 8 tries made): its storage redirected more than four times"), "{said}");
+}
+
+// SPEC 7.2.5
+#[test]
+fn a_multipart_answer_not_laid_out_as_the_parts_asked_is_asked_again_one_range_a_request() {
+    for answer in [Answer::Placeless, Answer::Garbled] {
+        let shown = format!("{answer:?}");
+        let (dir, server, code, said) = pressed("malformed", false, move |_| answer.clone());
+        assert_eq!((code, hole(&dir)), (0, None), "{shown}: {said}");
+        assert!(!said.contains("waiting"), "{shown}: {said}");
+        let asked = server.taken();
+        let many = asked.iter().position(|r| r.ranges() > 1).expect("a request for several ranges");
+        assert!(asked[many + 1..].iter().all(|r| r.ranges() <= 1), "{shown}: {asked:?}");
+    }
+}
+
+// SPEC 7.2.3, 7.3.1
+#[test]
+fn a_file_changed_on_its_storage_since_the_lock_is_a_changed_hole() {
+    let mut longer = ntuple();
+    longer.push(0);
+    let mut other = ntuple();
+    let middle = other.len() / 2;
+    other[middle] ^= 1;
+    let (size, sum) = (ntuple().len(), server::adler32(&ntuple()));
+    let now = [format!("it is now {} bytes, adler32 {}", size + 1, server::adler32(&longer)), format!("it is now {size} bytes, adler32 {}", server::adler32(&other))];
+    for (bytes, now) in [longer, other].into_iter().zip(now) {
+        let (dir, server) = remote("changed-there", |s| format!("{:?}", s.url("/store/flat.root")));
+        resolved(&dir);
+        server.put("/store/flat.root", bytes);
+        let (code, said) = rvr(&dir, None, &["press"]);
+        assert_eq!((code, holes(&dir).len(), hole(&dir).as_deref()), (3, 1, Some("changed")), "{said}");
+        assert!(said.contains(&format!("flat.root: it was {size} bytes, adler32 {sum}; {now}. It has changed since samples.lock was written")), "{said}");
+    }
+}
+
+/// A study of two copies of the ntuple at two doors, the first at `localhost` and the second at
+/// `host` (`localhost` again: a door of the same site; `127.0.0.1`: of another), resolved.
+fn two_doors(name: &str, host: &str) -> (Study, Server, Server) {
+    let (first, second) = (Server::start(), Server::start());
+    first.put("/store/a.root", ntuple());
+    second.put("/store/b.root", ntuple());
+    let files = format!("[{:?}, {:?}]", first.url("/store/a.root"), second.url("/store/b.root").replace("localhost", host));
+    let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\n\n[eras]\n\n[[sample]]\nname = \"flat\"\nfiles = {files}\ntree = \"analysis\"\n");
+    let dir = common::study(name, &samples, RECIPE);
+    resolved(&dir);
+    (dir, first, second)
+}
+
+/// The second door's script: its first GET is served, so that it too has answered in the press;
+/// its second takes the first door away (its file read by then), and is answered `answer`, as
+/// are those after it until `served` is set.
+fn second_door(first: Server, answer: Answer, served: Arc<AtomicBool>) -> impl FnMut(&server::Request) -> Answer + Send + 'static {
+    let (mut first, mut gets) = (Some(first), 0);
+    move |request| match request.method.as_str() {
+        "GET" if !served.load(Ordering::SeqCst) => {
+            gets += 1;
+            if gets == 1 {
+                return Answer::Serve;
+            }
+            first.take();
+            answer.clone()
+        }
+        _ => Answer::Serve,
+    }
+}
+
+// SPEC 2.6, 7.4.5, 7.5.3, 7.5.4
+#[test]
+fn every_door_gone_quiet_stops_the_press_and_the_next_carries_on() {
+    for (name, host, why) in [
+        ("quiet-two-sites", "127.0.0.1", "none that answered earlier in this press takes a connection now"),
+        ("quiet-one-site", "localhost", "rvr cannot tell that site down from the network gone"),
+    ] {
+        let (dir, first, second) = two_doors(name, host);
+        let ports = (first.port, second.port);
+        second.script(second_door(first, Answer::Vanish, Default::default()));
+        let (code, said) = rvr(&dir, None, &["press", "--workers", "1"]);
+        assert_eq!(code, 1, "{name}: {said}");
+        assert!(said.contains(why) && !said.contains("hole ("), "{name}: {said}");
+        assert!(said.contains("no file was made a hole of it: fix it, then press again, which carries on from the 1 of 2 files done"), "{name}: {said}");
+        assert!(!dir.join(file(&dir)).exists(), "{name}: {said}");
+        drop(second);
+        // Both doors back on their ports: the next press reads only the second file, and writes
+        // what a press of both writes.
+        let (first, second) = (Server::on("server", ports.0), Server::on("server", ports.1));
+        first.put("/store/a.root", ntuple());
+        second.put("/store/b.root", ntuple());
+        let (code, said) = rvr(&dir, None, &["press", "--workers", "1"]);
+        assert!(code == 0 && said.contains("where it stopped: 1 of 2 files done") && !said.contains("1/2"), "{name}: {said}");
+        let picked = header(&dir)["data"]["sha256"].clone();
+        assert_eq!(rvr(&dir, None, &["press", "--full"]).0, 0);
+        assert_eq!(header(&dir)["data"]["sha256"], picked, "{name}");
+    }
+}
+
+// SPEC 7.4.2, 7.4.5
+#[test]
+fn a_storage_down_while_another_sites_door_takes_connections_makes_holes_after_the_waits() {
+    let (dir, _first, second) = two_doors("one-down", "127.0.0.1");
+    let lost = second.url("/store/b.root").replace("localhost", "127.0.0.1");
+    second.script(|request| match request.method.as_str() {
+        "GET" => Answer::Vanish,
+        _ => Answer::Serve,
+    });
+    let (code, said) = rvr(&dir, None, &["press", "--workers", "1"]);
+    assert_eq!(code, 3, "{said}");
+    assert!(said.contains("(7 of 8 tries made)") && !said.contains("network") && !said.contains("cannot tell"), "{said}");
+    assert_eq!(holes(&dir), [(lost, "unreachable".to_owned())], "{said}");
+}
+
+// SPEC 7.4.5
+#[test]
+fn the_network_back_between_two_probes_lets_the_press_go_on() {
+    let (dir, first, second) = two_doors("back", "127.0.0.1");
+    let port = first.port;
+    let served = Arc::new(AtomicBool::new(false));
+    let since = Arc::new(std::sync::Mutex::new(None::<std::time::Instant>));
+    let mut script = second_door(first, Answer::Drop, served.clone());
+    let failed = since.clone();
+    second.script(move |request| {
+        let answer = script(request);
+        if matches!(answer, Answer::Drop) {
+            failed.lock().unwrap().get_or_insert_with(std::time::Instant::now);
+        }
+        answer
+    });
+    // A second of waiting is 200 ms: no answer for 120 s is 24 s, a probe's 15 s 3 s. The first
+    // probe finds no door; the first door comes back 1.5 s later, and the second probe finds it.
+    let (mut child, said) = spawned_with(&dir, &[("RVR_SECOND_MS", "200")], &["press", "--workers", "1"]);
+    let started = std::time::Instant::now();
+    let quiet = loop {
+        if let Some(at) = *since.lock().unwrap() {
+            break at;
+        }
+        assert!(started.elapsed().as_secs() < 30, "the second file was never asked for");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    std::thread::sleep((quiet + std::time::Duration::from_millis(25_500)).saturating_duration_since(std::time::Instant::now()));
+    let again = Server::on("server", port);
+    again.put("/store/a.root", ntuple());
+    served.store(true, Ordering::SeqCst);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if started.elapsed().as_secs() > 90 {
+            let _ = child.kill();
+            panic!("the press did not end: {}", std::fs::read_to_string(&said).unwrap());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let said = std::fs::read_to_string(said).unwrap();
+    assert_eq!(status.code(), Some(0), "{said}");
+    assert!(again.connections() > 0, "no probe reached the first door once it was back: {said}");
+    assert!(said.contains("(5 of 8 tries made)") && !said.contains("network") && holes(&dir).is_empty(), "{said}");
+}
+
+// SPEC 7.4.2, 7.4.5
+#[test]
+fn a_press_no_door_ever_answered_makes_holes_after_the_waits() {
+    let (dir, server) = two_files("never-heard");
+    drop(server);
+    let (code, said) = rvr(&dir, None, &["press", "--workers", "2"]);
+    assert_eq!(code, 3, "{said}");
+    assert!(said.contains("(7 of 8 tries made)") && !said.contains("network") && !said.contains("cannot tell"), "{said}");
+    let kinds: Vec<String> = holes(&dir).into_iter().map(|(_, kind)| kind).collect();
+    assert_eq!(kinds, ["unreachable", "unreachable"], "{said}");
 }

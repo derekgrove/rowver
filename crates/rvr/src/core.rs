@@ -102,7 +102,7 @@ pub fn press(plan: Plan) -> Result<usize, String> {
         Base::Columns(_) if plan.reads().is_empty() => copied(&plan, &spool).map_err(&stuck)?,
         _ => read,
     };
-    let done = crate::written::Done { taken, spool: &spool, started, worth, stuck: &stuck };
+    let done = crate::written::Done { taken, spool: &spool, started, worth, stuck: &stuck, journal: &journal };
     let holes = crate::written::write(&plan, done)?;
     drop((journal, spool));
     drop(staged);
@@ -279,7 +279,7 @@ pub(crate) fn again(saved: &Option<Result<usize, String>>, files: usize) -> Stri
     match saved {
         None | Some(Ok(0)) => "press again".into(),
         Some(Ok(done)) => format!("press again, which carries on from the {done} of {} done (rvr press --restart starts over)", some(files, "file", "files")),
-        Some(Err(lost)) => format!("press again, which carries on from what this press saved before ({lost}; rvr press --restart starts over)"),
+        Some(Err(lost)) => format!("press again, which carries on from what this press saved before, or starts over if it saved nothing ({lost}; rvr press --restart starts over)"),
     }
 }
 
@@ -291,8 +291,8 @@ fn ended(failed: Failed, target: &Path, saved: &Option<Result<usize, String>>, f
         // Pressing again would meet it again: it is reported, not pressed past.
         Fault::Bug => format!("{why} This is a bug in rvr: please report it, with this message and the command you ran. What was read is kept."),
         Fault::Data => match saved {
-            Some(Ok(done)) if *done > 0 => format!("{why} The recipe cannot take this value: a press of the same study carries on from the {done} of {} done, and stops here again; mend the recipe (or the file), and the press starts over.", some(files, "file", "files")),
-            _ => format!("{why} The recipe cannot take this value: mend the recipe (or the file), then press again."),
+            Some(Ok(done)) if *done > 0 => format!("{why} The recipe cannot take what this file holds: a press of the same study carries on from the {done} of {} done, and stops here again; mend the recipe (or the file), and the press starts over.", some(files, "file", "files")),
+            _ => format!("{why} The recipe cannot take what this file holds: mend the recipe (or the file), then press again."),
         },
         _ => format!("{why} Once it can be read, {}.", again(saved, files)),
     };

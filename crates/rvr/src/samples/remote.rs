@@ -347,7 +347,7 @@ impl Watch {
     /// Once no storage has answered for `quiet`, the doors that answered are asked: those whose
     /// last reply was an answer or, when every one fails, all of them. When none takes a
     /// connection twice, `again` apart, with no answer meanwhile, the press stops: the network is
-    /// gone, or, when every door is of one site, that site down cannot be told from it.
+    /// gone, or, when every door that answered is of one site, that site down cannot be told from it.
     fn ask(&self, heard: &Heard) -> bool {
         let now = || heard.began.elapsed().as_millis() as u64;
         let answers = heard.answers.load(Ordering::Relaxed);
@@ -363,8 +363,9 @@ impl Watch {
             }
             let known: Vec<_> = last.doors.iter().filter(|(_, (_, addresses))| addresses.is_some()).collect();
             let up: Vec<_> = known.iter().copied().filter(|(_, (up, _))| *up).collect();
+            // One site when every door that answered is of it (SPEC §7.4.5), though only those up may be asked.
             let sites: BTreeSet<String> = known.iter().map(|(door, _)| domain(door)).collect();
-            let one_site = up.is_empty() && sites.len() == 1;
+            let one_site = sites.len() == 1;
             let asked = match (up.is_empty(), known.is_empty()) {
                 (false, _) => up,
                 (true, false) => known,
@@ -388,7 +389,7 @@ impl Watch {
         }
         let said = match one_site {
             true => format!(
-                "no storage has answered, and the one site this press reads takes no connection ({}): rvr cannot tell that site down from the network gone, so it stops and keeps what it read",
+                "no storage has answered, and the doors asked, all at one site, take no connection now ({}): rvr cannot tell that site down from the network gone, so it stops and keeps what it read",
                 names.join(", ")
             ),
             false => format!(
@@ -694,16 +695,49 @@ pub fn why(error: &ureq::Error) -> String {
             Some(tls) => tls.to_string(),
             None if grid_trust::timed_out(failure) => "it did not answer in time".into(),
             None => {
-                let source = std::error::Error::source(failure).map(|s| format!(": {s}"));
-                let said = failure.message().map(|m| format!(": {m}"));
-                format!(
-                    "{}{}{}",
-                    failure.kind(),
-                    said.unwrap_or_default(),
-                    source.unwrap_or_default()
-                )
+                use ureq::ErrorKind as K;
+                let plain = match failure.kind() {
+                    K::Dns => "its storage's name could not be looked up".to_owned(),
+                    K::ConnectionFailed => "its storage did not take the connection".to_owned(),
+                    K::TooManyRedirects => "it was redirected too many times".to_owned(),
+                    K::BadStatus => "its storage answered in a way that is not HTTP".to_owned(),
+                    K::BadHeader => "its storage answered with a header that cannot be read".to_owned(),
+                    K::Io => "the connection to its storage broke".to_owned(),
+                    K::ProxyConnect => "the proxy between this computer and its storage could not be reached".to_owned(),
+                    K::ProxyUnauthorized => "the proxy between this computer and its storage asked for a login (407)".to_owned(),
+                    other => format!("it could not be asked ({other})"),
+                };
+                // The system's own words follow in brackets: ureq's, then their cause's.
+                let words: Vec<String> = [failure.message().map(str::to_owned), std::error::Error::source(failure).map(innermost)].into_iter().flatten().filter(|w| !w.is_empty()).collect();
+                match words.is_empty() {
+                    true => plain,
+                    false => format!("{plain} ({})", words.join(": ")),
+                }
             }
         },
+    }
+}
+
+/// The innermost cause of `error`, without the link rustls adds to its words.
+fn innermost(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut at = error;
+    while let Some(next) = at.source() {
+        at = next;
+    }
+    let said = at.to_string();
+    let said = said.split(": https://").next().unwrap_or_default();
+    // The system's error number is left out, as rowver::described does.
+    match said.rsplit_once(" (os error ") {
+        Some((words, number)) if number.ends_with(')') => words.to_owned(),
+        _ => said.to_owned(),
+    }
+}
+
+/// A failure reading an answer as it came, in plain words, the system's own in brackets.
+fn broke(error: &std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::UnexpectedEof => format!("its storage's answer ended before every byte asked came ({})", innermost(error)),
+        _ => format!("the connection to its storage broke as its answer came ({})", innermost(error)),
     }
 }
 
@@ -970,8 +1004,19 @@ impl HttpsFile {
             .and_then(super::multipart::boundary)
             .filter(|_| reply.status() == 206 && reply.content_type() == "multipart/byteranges");
         let parts = match boundary {
+            // An answer whose connection failed as it came is asked again as it was, as a busy
+            // storage's; any other not laid out as the parts asked (one that ends early with no
+            // failure cannot be told from it) is asked again one range a request.
             Some(boundary) => {
-                super::multipart::parts(reply.into_reader(), &boundary, total).map_err(fail)?
+                let mut body = super::multipart::Noted { inner: reply.into_reader(), failed: None };
+                match (super::multipart::parts(&mut body, &boundary, total), &body.failed) {
+                    (Ok(parts), _) => parts,
+                    (Err(_), Some(e)) => {
+                        self.seen.note(Fault::Unreachable);
+                        return Err(fail(broke(e)));
+                    }
+                    (Err(_), None) => return Ok(None),
+                }
             }
             // A storage may join every range asked into one: one part, its place in Content-Range.
             None if reply.status() == 206 => {
@@ -985,8 +1030,10 @@ impl HttpsFile {
                     return Ok(None);
                 }
                 let mut bytes = vec![0; len as usize];
-                std::io::Read::read_exact(&mut reply.into_reader(), &mut bytes)
-                    .map_err(|e| fail(e.to_string()))?;
+                std::io::Read::read_exact(&mut reply.into_reader(), &mut bytes).map_err(|e| {
+                    self.seen.note(Fault::Unreachable);
+                    fail(broke(&e))
+                })?;
                 vec![super::multipart::Part { at, bytes }]
             }
             None => return Ok(None),
@@ -1047,7 +1094,7 @@ impl ByteSource for HttpsFile {
                     .read_exact(buf)
                     .map_err(|e| {
                         self.seen.note(Fault::Unreachable);
-                        hep_root::Error::Remote(format!("{}: {e}", self.shown))
+                        hep_root::Error::Remote(format!("{}: {}", self.shown, broke(&e)))
                     })
             }
             Ok(reply) if (300..400).contains(&reply.status()) => {
@@ -1223,6 +1270,26 @@ mod tests {
         assert_eq!(asked, [2, 1, 1]);
     }
 
+    // SPEC 7.2.5
+    #[test]
+    fn an_answer_not_laid_out_as_the_parts_asked_is_asked_one_range_a_request_from_then_on() {
+        for answer in [server::Answer::Placeless, server::Answer::Garbled] {
+            let (server, storage) = served(40 << 20);
+            server.script(move |_| answer.clone());
+            let file = HttpsFile::reading(&storage, "f.root", &server.url("/f.root"), 40 << 20);
+            let far = [(0, 100), (30 << 20, 100)];
+            assert_eq!(file.read_ranges(&far).unwrap()[1], vec![7; 100]);
+            assert_eq!(file.read_ranges(&far).unwrap()[0], vec![7; 100]);
+            let asked: Vec<usize> = server.taken().iter().map(server::Request::ranges).collect();
+            assert_eq!(asked, [2, 1, 1, 1, 1]);
+        }
+        // One cut short as it came fails, to be asked again as a busy storage is.
+        let (server, storage) = served(40 << 20);
+        server.script(|_| server::Answer::Short);
+        let file = HttpsFile::reading(&storage, "f.root", &server.url("/f.root"), 40 << 20);
+        assert!(matches!(file.read_ranges(&[(0, 100), (30 << 20, 100)]), Err(hep_root::Error::Remote(_))));
+    }
+
     // SPEC 6.2.3
     #[test]
     fn listing_keeps_files_by_resourcetype() {
@@ -1359,7 +1426,7 @@ mod tests {
         assert!(!cut.lost(), "a first probe that finds none is asked again");
         assert!(cut.lost());
         let why = cut.gone().unwrap();
-        assert!(why.contains("the one site this press reads takes no connection (127.0.0.1:0): rvr cannot tell that site down from the network gone"), "{why}");
+        assert!(why.contains("the doors asked, all at one site, take no connection now (127.0.0.1:0): rvr cannot tell that site down from the network gone"), "{why}");
         // Doors that never answered have no addresses to ask: no telling either.
         let never = watch(Duration::ZERO);
         never.note(Some(closed), &unanswered);

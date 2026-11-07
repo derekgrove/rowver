@@ -197,7 +197,14 @@ pub(crate) fn derived_tried(recipe: &Recipe, kinds: &[(Kind, bool)], gathered: &
 /// Send what a file has gathered since it last did to the spool, keeping each column's kind:
 /// its columns, then its entry numbers.
 pub(crate) fn spooled(spool: &write::Spool, gathered: &mut [Gathered], entry: &mut Vec<i64>, order: write::Order) -> Result<(), String> {
-    let failed = |e: rowver::Error| format!("its kept values could not be held on disk ({e}): free disk space beside the output");
+    let failed = |e: rowver::Error| {
+        let why = match &e {
+            rowver::Error::Io(io) | rowver::Error::File(_, io) if matches!(io.kind(), std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded) => "the disk is full".to_owned(),
+            rowver::Error::Io(io) => rowver::described(io),
+            e => e.to_string(),
+        };
+        format!("its kept values could not be held on disk ({why}): free disk space beside the output")
+    };
     let entries = write::array(&std::mem::take(entry));
     spool.add(gathered.len(), order, write::Values::Flat(entries)).map_err(failed)?;
     for (index, held) in gathered.iter_mut().enumerate() {

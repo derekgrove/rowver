@@ -56,7 +56,8 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
     let asked = Asked { choose: Choose::Options(choice.clone()), on: On::Earlier, workers: 1, sign: true };
     let plan = crate::plan::build(place, texts.clone(), asked);
     let pressing = plan.as_ref().is_ok_and(|plan| !matches!(plan.from, Base::Current(_)));
-    if let Some(note) = stopped_note(&stopped, pressing) {
+    let current = plan.as_ref().ok().filter(|plan| matches!(plan.from, Base::Current(0))).map(|plan| &plan.identity);
+    if let Some(note) = stopped_note(&stopped, &target, current, pressing) {
         println!("{note}");
     }
     let made = &header["made"];
@@ -148,14 +149,14 @@ fn missing(dir: PathBuf, study: String, target: PathBuf, texts: crate::texts::Te
                 );
             }
             _ => {
-                if let Some(note) = stopped_note(&stopped, true) {
+                if let Some(note) = stopped_note(&stopped, &target, None, true) {
                     println!("{note}");
                 }
                 println!("rvr press would press every column: {}.", crate::core::pressed(&plan));
             }
         },
         Err(why) => {
-            if let Some(note) = stopped_note(&stopped, false) {
+            if let Some(note) = stopped_note(&stopped, &target, None, false) {
                 println!("{note}");
             }
             refused(&why);
@@ -173,11 +174,15 @@ fn refused(why: &str) {
     }
 }
 
-/// A press stopped in `stopped` (its staging folder), said; none, nothing. One that saved no
-/// finished file is said to start over only when a press would read (`pressing`).
-fn stopped_note(stopped: &std::path::Path, pressing: bool) -> Option<String> {
+/// A press stopped in `stopped` (its staging folder), said; none, nothing. One that left it for
+/// nothing (`current`: the Plan of the file there, current) is said to be removed by the next
+/// press; one that saved no finished file, to start over only when a press would read (`pressing`).
+fn stopped_note(stopped: &std::path::Path, target: &std::path::Path, current: Option<&serde_json::Value>, pressing: bool) -> Option<String> {
     if crate::journal::under_way(stopped) {
         return None;
+    }
+    if let Some(why) = crate::journal::left(stopped, target, current) {
+        return Some(format!("{}: {why}; rvr press removes it.", stopped.display()));
     }
     let (press, done) = crate::journal::unfinished(stopped)?;
     if done.inputs.is_empty() {

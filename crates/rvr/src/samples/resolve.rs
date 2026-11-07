@@ -177,8 +177,13 @@ fn root_identity<S: hep_root::ByteSource>(
     tree: &str,
     listed: bool,
 ) -> Result<(String, u64, Option<Branches>), String> {
-    let file = hep_root::RootFile::open(source)
-        .map_err(|e| format!("{shown} is not a ROOT file this reader can open: {e}"))?;
+    let file = hep_root::RootFile::open(source).map_err(|e| match e {
+        // Shorter than its header says: cut short, as a copy that did not finish leaves a file.
+        hep_root::Error::SourceChanged(why) if why.starts_with("header says the file ends at") => {
+            format!("{shown} is cut short ({why}), as a copy that did not finish leaves a file: put a whole copy in its place, then run resolve again")
+        }
+        e => format!("{shown} is not a ROOT file this reader can open: {e}"),
+    })?;
     let uuid = file.header().uuid_string();
     let found = match listed {
         true => file.tree_at(tree).map(|t| (t.entries, Some(branch_list(&t)))),

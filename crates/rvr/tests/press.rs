@@ -894,22 +894,39 @@ fn twice(name: &str, recipe: &str) -> Study {
     dir
 }
 
+/// Where the first basket of `branch` lies in a fixture file, and its size.
+fn first_basket(path: &Path, branch: &str) -> (usize, usize) {
+    let file = hep_root::RootFile::open(hep_root::LocalFile::open(path).unwrap()).unwrap();
+    let tree = file.tree_at("analysis").unwrap();
+    let branch = tree.branch(branch).unwrap();
+    (branch.basket_seek[0] as usize, branch.basket_bytes[0] as usize)
+}
+
 /// Damage the first basket of `branch` in a fixture file.
 fn damage(path: &Path, branch: &str) {
-    let (seek, nbytes) = {
-        let file = hep_root::RootFile::open(hep_root::LocalFile::open(path).unwrap()).unwrap();
-        let tree = file.tree_at("analysis").unwrap();
-        let branch = tree.branch(branch).unwrap();
-        (
-            branch.basket_seek[0] as usize,
-            branch.basket_bytes[0] as usize,
-        )
-    };
+    let (seek, nbytes) = first_basket(path, branch);
     let mut bytes = std::fs::read(path).unwrap();
     for b in &mut bytes[seek + nbytes - 12..seek + nbytes] {
         *b ^= 0x5a;
     }
     std::fs::write(path, &bytes).unwrap();
+}
+
+// SPEC 1.5, 7.3.1
+#[test]
+fn a_basket_of_a_compression_rvr_does_not_know_is_a_damaged_hole_that_says_what_to_do() {
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
+    let dir = twice("algorithm", recipe);
+    let path = dir.join("flat_b.root");
+    let (seek, nbytes) = first_basket(&path, "weight");
+    let mut bytes = std::fs::read(&path).unwrap();
+    let at = seek + bytes[seek..seek + nbytes].windows(2).position(|w| w == b"ZL").unwrap();
+    bytes[at..at + 2].copy_from_slice(b"QQ");
+    std::fs::write(&path, &bytes).unwrap();
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 3, "{said}");
+    assert!(said.contains("flat_b.root, tree analysis, entries 0 to 4: weight: unsupported ROOT layout: compression algorithm \"QQ\". The file is damaged there"), "{said}");
 }
 
 // SPEC 2.6, 4.6.3, 4.6.4, 7.8.2, 8.3
@@ -1233,6 +1250,45 @@ fn a_press_picked_up_where_it_stopped_writes_over_a_read_only_pressed_file_a_cra
     assert_eq!(rvr(&dir, &["validate", &name]).0, 0);
 }
 
+// SPEC 7.5.5, 7.5.7
+#[test]
+fn a_staging_folder_left_once_its_file_was_in_place_is_removed_by_the_next_press() {
+    // RVR_STOP_AFTER stops a debug build only.
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    use std::os::unix::fs::MetadataExt;
+    let recipe = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\"]\n\n[totals]\n\n[derived]\n";
+    let dir = twice("left-staged", recipe);
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
+    assert_eq!(rvr(&dir, &["press"]).0, 0);
+    let (staged, pressed) = (dir.join(format!("{name}.partial")), std::fs::read(dir.join(&name)).unwrap());
+    // A press stopped after it moved its file in, before its folder went: its journal names the file there.
+    let there = std::fs::metadata(dir.join(&name)).unwrap();
+    std::fs::create_dir_all(staged.join("spool")).unwrap();
+    let placed = format!("[{},{},{},{},{}]", there.dev(), there.ino(), there.len(), there.mtime(), there.mtime_nsec());
+    std::fs::write(staged.join("journal.jsonl"), format!("{{\"press\":{{}}}}\n{{\"placed\":{placed}}}\n")).unwrap();
+    let said = rvr(&dir, &["status"]).1;
+    assert!(said.contains(&format!("{name}.partial: a press left it, stopped after it put ")) && !said.contains("carries on"), "{said}");
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains("is current: nothing to press.") && said.contains(&format!("Removed {name}.partial: a press left it, stopped after it put {name} in place.")), "{said}");
+    assert!(!staged.exists());
+    assert_eq!(std::fs::read(dir.join(&name)).unwrap(), pressed);
+    // One stopped there that would make the file as it is goes too.
+    stopped_after(&dir, 2, &["--full"]);
+    assert!(rvr(&dir, &["status"]).1.contains(&format!("{name}.partial: the press stopped there would make {name} as it is; rvr press removes it.")));
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains(&format!("Removed {name}.partial: the press stopped there would make {name} as it is.")), "{said}");
+    assert!(!staged.exists());
+    // Any other stays, though it finished every file it read.
+    stopped_after(&dir, 2, &["--events", "8"]);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains("is current: nothing to press.") && !said.contains("Removed"), "{said}");
+    assert!(staged.join("journal.jsonl").exists());
+    assert!(!rvr(&dir, &["status"]).1.contains("rvr press removes it"));
+}
+
 /// The data checksum of a study's file.
 fn data_sha256(dir: &Path) -> Value {
     let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
@@ -1535,6 +1591,13 @@ fn branches_lists_every_branch_with_its_kind_and_shape_from_the_lock() {
     assert_eq!(code, 0, "{said}");
     assert!(said.contains("\nNot readable by rvr:\n"), "{said}");
     assert!(said.contains("\n  label  (string: strings are not read)\n"), "{said}");
+    // A recipe that stores one is told why it cannot, not that there is no such column (SPEC 1.5, 2.3).
+    let stored = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"label\"]\n\n[totals]\n\n[derived]\n";
+    std::fs::write(dir.join("recipe.toml"), stored).unwrap();
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("[columns] label: label is a branch of a type rvr cannot read (string: strings are not read): leave it out of the recipe."), "{said}");
+    std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
     std::fs::write(dir.join("samples.toml"), FLAT).unwrap();
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     // A misspelt branch suggests the nearest, and says where to look.

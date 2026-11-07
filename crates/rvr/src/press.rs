@@ -89,6 +89,7 @@ fn run(pressing: Pressing) -> Result<u8, String> {
     if let Some(why) = pressing.restart.then(|| crate::plan::read_only(&target, unwritable())).flatten() {
         return Err(why);
     }
+    crate::journal::tidy(&target, None);
     if pressing.restart {
         let stopped = crate::journal::Staged::lock(&target)?;
         if stopped.keep.get() {
@@ -121,6 +122,7 @@ fn run(pressing: Pressing) -> Result<u8, String> {
     let holes = match plan.from {
         Base::Current(0) => {
             println!("{} is current: nothing to press.", target.display());
+            crate::journal::tidy(&target, Some(&plan.identity));
             0
         }
         Base::Current(holes) => {

@@ -24,6 +24,8 @@ pub(crate) struct Done<'a> {
     pub worth: bool,
     /// What a failure that keeps what was read says.
     pub stuck: &'a dyn Fn(String) -> String,
+    /// The press's journal, told when its file is about to be put in place.
+    pub journal: &'a crate::journal::Journal,
 }
 
 /// What a press counts over every file.
@@ -291,9 +293,23 @@ pub(crate) fn write(plan: &Plan, mut done: Done) -> Result<usize, String> {
         // A press of more than a few seconds is on disk before what would carry it on goes.
         Target::New(laid) => {
             let write = || crate::derive::sealed(&mut header, signer.as_ref()).map_err(unwritten).and_then(|()| write::write_laid(&header, laid).map_err(|e| what(&staged_file, e)));
-            // Not over a file another program moved there since the press locked the one it read.
-            let ready = || plan.locked.as_ref().map_or(Ok(()), |locked| locked.there().map_err(|e| e.to_string()));
-            crate::files::in_place(&staged_file, target, done.worth, write, ready, |at, e| what(at, e.into())).map_err(stuck)?;
+            // Not over a file another program moved there since the press locked the one it read,
+            // nor over one another program put where there was none (SPEC §8.12).
+            let placed_at = std::cell::Cell::new(None);
+            let ready = || {
+                match &plan.locked {
+                    Some(locked) => locked.there().map_err(|e| e.to_string())?,
+                    None if std::fs::metadata(target).is_ok_and(|there| there.is_file()) => return Err(format!("{} was put there by another program while rvr pressed it, and is left as it is: move it away", target.display())),
+                    None => {}
+                }
+                placed_at.set(done.journal.placing(&staged_file));
+                Ok(())
+            };
+            let put = crate::files::in_place(&staged_file, target, done.worth, write, ready, |at, e| what(at, e.into()));
+            if let (Err(_), Some(at)) = (&put, placed_at.get()) {
+                done.journal.unplaced(at);
+            }
+            put.map_err(stuck)?;
             if done.worth {
                 let _ = std::fs::File::open(crate::journal::parent(target)).and_then(|f| f.sync_all());
             }

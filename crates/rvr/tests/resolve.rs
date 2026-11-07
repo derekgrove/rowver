@@ -53,6 +53,19 @@ fn resolve_writes_all_or_nothing_and_says_how_to_fix_each_failure() {
     assert!(left.is_empty(), "{left:?}");
 }
 
+// SPEC 1.5, 6.2.7
+#[test]
+fn a_file_cut_short_before_resolve_is_said_to_be_cut_short() {
+    let dir = study("cut-short", &reading("\"uproot_flat.root\""), RECIPE);
+    let path = dir.join("uproot_flat.root");
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("uproot_flat.root is cut short (header says the file ends at ") && said.contains("put a whole copy in its place, then run resolve again"), "{said}");
+    assert!(!said.contains("changed during reading"), "{said}");
+}
+
 // SPEC 3.8.2, 3.8.3, 6.2.9
 #[test]
 fn a_pattern_matches_in_byte_order_and_a_link_counts_as_its_file() {

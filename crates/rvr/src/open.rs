@@ -259,7 +259,8 @@ pub(crate) fn entries(error: &rvr_recipe::Error, first: u64, part: &std::ops::Ra
 }
 
 /// What to do about a failure reading a file's events: a name that is not a branch, with the
-/// nearest branches and defined names; a damaged file (hep-root says `decompression failed`).
+/// nearest branches and defined names; a damaged file (hep-root says `decompression failed`, or
+/// names a compression algorithm it does not know).
 pub(crate) fn hint(error: &rvr_recipe::Error, branches: &[String], recipe: &Recipe) -> String {
     if let Some(name) = error.missing() {
         let defined = recipe.defines.keys().map(String::as_str);
@@ -269,7 +270,7 @@ pub(crate) fn hint(error: &rvr_recipe::Error, branches: &[String], recipe: &Reci
         let near = rvr_recipe::meant(name.trim(), names.into_iter());
         return format!(".{near} rvr branches lists every branch the file has.");
     }
-    match error.0.contains("decompression failed") {
+    match error.0.contains("decompression failed") || error.0.contains("compression algorithm") {
         false => String::new(),
         true => ". The file is damaged there: if another copy of it exists, put it in its place, run rvr samples resolve samples.toml, then rvr press --fill.".into(),
     }

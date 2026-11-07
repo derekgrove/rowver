@@ -277,6 +277,67 @@ pub fn unfinished(folder: &Path) -> Option<(Value, Done)> {
     unfinished_in(&File::open(folder.join(JOURNAL)).ok()?)
 }
 
+/// Why the press whose journal is read through `file` left its folder for nothing, if it did: it
+/// was stopped once its file was in place (its last line names the file now at `target`), or it
+/// finished every file and would make what is there (`current`, the Plan of a file current).
+fn left_in(file: &File, target: &Path, current: Option<&Value>) -> Option<String> {
+    let shown = target.display();
+    let placed = last_line(file).and_then(|line| line.get("placed").cloned());
+    if placed.is_some() && placed == identity(target) {
+        return Some(format!("a press left it, stopped after it put {shown} in place"));
+    }
+    let (now, (was, done)) = (current?, unfinished_in(file)?);
+    let all = was["inputs"].as_u64() == Some(done.inputs.len() as u64);
+    let makes = all && ["recipe", "samples", "lock", "events", "toolchain"].iter().all(|key| was.get(key) == now.get(key));
+    makes.then(|| format!("the press stopped there would make {shown} as it is"))
+}
+
+/// `left_in`, the journal in `folder` opened to be read.
+pub fn left(folder: &Path, target: &Path, current: Option<&Value>) -> Option<String> {
+    left_in(&File::open(folder.join(JOURNAL)).ok()?, target, current)
+}
+
+/// The last whole line of the journal read through `file`, if it is short (as a `placed` note is).
+fn last_line(mut file: &File) -> Option<Value> {
+    let len = file.metadata().ok()?.len();
+    let mut tail = Vec::new();
+    file.seek(SeekFrom::Start(len.saturating_sub(4096))).and_then(|_| file.read_to_end(&mut tail)).ok()?;
+    let line = tail.strip_suffix(b"\n")?.rsplit(|b| *b == b'\n').next()?;
+    serde_json::from_slice(line).ok()
+}
+
+/// The device, inode, size and modification time of the file at `path`, which a move keeps.
+fn identity(path: &Path) -> Option<Value> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path).ok().map(|m| json!([m.dev(), m.ino(), m.len(), m.mtime(), m.mtime_nsec()]))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// Remove the staging folder of `target` a press left for nothing, saying so (SPEC §7.5.7).
+pub fn tidy(target: &Path, current: Option<&Value>) {
+    let folder = folder(target);
+    // Any other stays as it is, one with no journal untouched.
+    if !folder.join(JOURNAL).is_file() || under_way(&folder) {
+        return;
+    }
+    let Ok(staged) = Staged::lock(target) else {
+        return;
+    };
+    let why = left_in(&staged.journal, target, current);
+    staged.keep.set(why.is_none());
+    drop(staged);
+    if let Some(why) = why.filter(|_| !folder.exists()) {
+        println!("Removed {}: {why}.", folder.display());
+    }
+}
+
 /// `unfinished`, its journal read through `file`.
 fn unfinished_in(file: &File) -> Option<(Value, Done)> {
     let (lines, when) = lines(file)?;
@@ -417,6 +478,22 @@ impl Journal {
         }
     }
 
+    /// Note that `staged` is about to be moved into place (not made durable): where the note begins.
+    pub fn placing(&self, staged: &Path) -> Option<u64> {
+        let it = identity(staged)?;
+        let mut file = held(&self.file);
+        let at = file.stream_position().ok()?;
+        // Begun, it is taken back if the move fails, written whole or not.
+        let _ = writeln!(file, "{}", json!({ "placed": it }));
+        Some(at)
+    }
+
+    /// Take back the note `placing` began `at`, the move not made (its inode may be another file's).
+    pub fn unplaced(&self, at: u64) {
+        let mut file = held(&self.file);
+        let _ = file.set_len(at).and_then(|()| file.seek(SeekFrom::Start(at)).map(drop));
+    }
+
     /// A checkpoint `every` until `ended` closes; one that fails is tried again at the next.
     pub fn keep_up(&self, spool: &Spool, every: Duration, ended: Receiver<()>) {
         while let Err(RecvTimeoutError::Timeout) = ended.recv_timeout(every) {
@@ -428,6 +505,43 @@ impl Journal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // SPEC 7.5.7
+    #[test]
+    fn a_folder_is_known_as_left_only_when_its_journal_names_the_file_moved_in() {
+        let dir = std::env::temp_dir().join(format!("rvr-placed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("study.rvr");
+        let staged = Staged::lock(&target).unwrap();
+        let (spool, journal) = stage(&target, &staged, &json!({"inputs": 1}), None).unwrap();
+        let file = staged.folder.join("pressed.rvr");
+        std::fs::write(&file, b"pressed").unwrap();
+        journal.placing(&file);
+        staged.keep.set(true);
+        drop((journal, spool, staged));
+        // Stopped before the move: not left, and tidied away by nothing.
+        assert!(left(&folder(&target), &target, None).is_none());
+        tidy(&target, None);
+        assert!(folder(&target).is_dir());
+        std::fs::rename(&file, &target).unwrap();
+        assert!(left(&folder(&target), &target, None).is_some());
+        tidy(&target, None);
+        assert!(!folder(&target).exists());
+        // A move that failed takes its note back: the file it named may be another's by then.
+        std::fs::remove_file(&target).unwrap();
+        let staged = Staged::lock(&target).unwrap();
+        let (spool, journal) = stage(&target, &staged, &json!({"inputs": 1}), None).unwrap();
+        std::fs::write(&file, b"pressed").unwrap();
+        let at = journal.placing(&file).unwrap();
+        journal.unplaced(at);
+        std::fs::rename(&file, &target).unwrap();
+        staged.keep.set(true);
+        drop((journal, spool, staged));
+        assert!(left(&folder(&target), &target, None).is_none());
+        assert!(unfinished(&folder(&target)).is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     // SPEC 7.5.2, 7.5.3, 7.5.5
     #[test]

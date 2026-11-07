@@ -44,6 +44,10 @@ pub enum Answer {
     Whole,
     /// Every range asked joined into one part, as a single `206`.
     OnePart,
+    /// To several ranges, a `multipart/byteranges` answer whose parts do not say where they lie.
+    Placeless,
+    /// To several ranges, a `multipart/byteranges` answer whose body is not laid out as parts.
+    Garbled,
     /// The answer, after a wait.
     Late(Duration, Box<Answer>),
     /// The server gone: this connection closed, and no other taken.
@@ -66,6 +70,7 @@ pub struct Server {
     multipart: Arc<Mutex<bool>>,
     stop: Arc<std::sync::atomic::AtomicBool>,
     busy: Arc<(AtomicUsize, AtomicUsize, AtomicUsize)>,
+    connections: Arc<AtomicUsize>,
 }
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -114,14 +119,17 @@ impl Server {
             multipart: Arc::new(Mutex::new(true)),
             stop: Default::default(),
             busy: Default::default(),
+            connections: Default::default(),
         };
         let shared = (server.files.clone(), server.log.clone(), server.script.clone(), server.multipart.clone(), server.stop.clone(), server.busy.clone());
+        let connections = server.connections.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 if shared.4.load(Ordering::Relaxed) {
                     return;
                 }
                 let Ok(stream) = stream else { continue };
+                connections.fetch_add(1, Ordering::SeqCst);
                 let (config, files, log, script, multipart, stop, busy) = (config.clone(), shared.0.clone(), shared.1.clone(), shared.2.clone(), shared.3.clone(), shared.4.clone(), shared.5.clone());
                 std::thread::spawn(move || {
                     let Ok(tls) = rustls::ServerConnection::new(config) else { return };
@@ -159,6 +167,11 @@ impl Server {
     /// The most requests answered at once so far.
     pub fn most_at_once(&self) -> usize {
         self.busy.1.load(Ordering::SeqCst)
+    }
+
+    /// The connections taken so far, a request sent on them or not.
+    pub fn connections(&self) -> usize {
+        self.connections.load(Ordering::SeqCst)
     }
 
     /// Every request so far, and none kept after.
@@ -251,7 +264,7 @@ fn serve(
             }
             Answer::Status(code) => reply(out, code, &[], b"")?,
             Answer::Redirect(to) => reply(out, 302, &[("Location", to)], b"")?,
-            Answer::Serve | Answer::Short | Answer::Whole | Answer::OnePart => {
+            Answer::Serve | Answer::Short | Answer::Whole | Answer::OnePart | Answer::Placeless | Answer::Garbled => {
                 let short = matches!(answer, Answer::Short);
                 let (code, headers, bytes) = served(&request, files, file.as_deref().map(Vec::as_slice), &answer, several);
                 if short {
@@ -323,8 +336,15 @@ fn served(
     let mut body = Vec::new();
     for &r in &ranges {
         let (range, bytes) = part(r);
-        body.extend(format!("\r\n--RVRTEST\r\nContent-Type: application/octet-stream\r\nContent-Range: {range}\r\n\r\n").bytes());
+        let place = match answer {
+            Answer::Placeless => String::new(),
+            _ => format!("Content-Range: {range}\r\n"),
+        };
+        body.extend(format!("\r\n--RVRTEST\r\nContent-Type: application/octet-stream\r\n{place}\r\n").bytes());
         body.extend(bytes);
+    }
+    if matches!(answer, Answer::Garbled) {
+        body = [&b"these are not parts\r\n"[..], &body].concat();
     }
     body.extend(b"\r\n--RVRTEST--\r\n");
     (206, vec![("Content-Type", "multipart/byteranges; boundary=RVRTEST".into())], body)

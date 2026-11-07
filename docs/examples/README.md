@@ -663,7 +663,7 @@ to 255 only:
 $ rvr press
 zmumu.rvr has the events this recipe keeps (26,649) and 4 of its 5 columns.
 Reading only pt_tenths for those events, 3 files, 3 at a time:
-rvr press: root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/Run2012BC_DoubleMuParked_Muons.root, tree Events, entry 6: [columns] pt_tenths: 576.0670166015625 does not fit in u1, which holds 0 to 255. The recipe cannot take this value: mend the recipe (or the file), then press again. zmumu.rvr was not written.
+rvr press: root://eospublic.cern.ch//eos/opendata/cms/derived-data/AOD2NanoAODOutreachTool/Run2012BC_DoubleMuParked_Muons.root, tree Events, entry 6: [columns] pt_tenths: 576.0670166015625 does not fit in u1, which holds 0 to 255. The recipe cannot take what this file holds: mend the recipe (or the file), then press again. zmumu.rvr was not written.
 ```
 
 A storage that is busy is waited for (each wait printed), and the press carries on where it was.

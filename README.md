@@ -220,7 +220,7 @@ Read 100,000 entries; kept after each cut:
   trigger                                8,590
   a_good_muon                            6,650
   a_good_tau                             2,248
-Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.3 MB) in 2.8 s.
+Wrote higgs_tautau.rvr (2,248 rows, 11 columns, 0.2 MB) in 2.8 s.
 ```
 
 **5. Check it, and look inside.**

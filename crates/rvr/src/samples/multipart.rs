@@ -10,6 +10,27 @@ pub struct Part {
     pub bytes: Vec<u8>,
 }
 
+/// A reader that notes how the one it reads failed, as a connection cut short does.
+// A read interrupted is not noted: it is asked again.
+pub struct Noted<R> {
+    pub inner: R,
+    /// The failure it gave, if it failed.
+    pub failed: Option<std::io::Error>,
+}
+
+impl<R: Read> Read for Noted<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self.inner.read(buf) {
+            Err(e) if e.kind() != std::io::ErrorKind::Interrupted => {
+                let kind = e.kind();
+                self.failed = Some(e);
+                Err(kind.into())
+            }
+            read => read,
+        }
+    }
+}
+
 /// The longest line of a part's headers that is read.
 const LINE: u64 = 1024;
 /// The most parts one answer may hold.
