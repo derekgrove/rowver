@@ -231,7 +231,8 @@ rvr gives, nor `sample` or a word of the recipe language (`and`, `in`, `true` an
 recipe reference's). Each value is text, a whole number (TOML's 64-bit integers), a finite float, `true` or
 `false`, or a list or table of these, nested at most 59 deep (a sample's metadata lies 5 levels into
 a header of at most 64, FORMAT §1), refused once for a key that nests deeper. A date or time is
-refused: write it as text. The same holds for `[defaults]` metadata and an era's values, which
+refused: write it as text. No table in a value holds the key `$serde_json::private::Number`, which
+no header holds (FORMAT §1). The same holds for `[defaults]` metadata and an era's values, which
 become a sample's metadata.
 
 ### 3.6 Placeholders
@@ -963,7 +964,7 @@ which §1 refuses, is listed for each copy, and a key holding a character outsid
 Python reads a string: `"` and `\` escaped, each such character by its code (`\u202e`, `\U0001f600`). `rvr tool FILE KEY --set
 DATA.json` makes the JSON object DATA.json holds the tool key `KEY`, checked first, before anything
 is asked, by the header's own rules: DATA.json is one JSON object by FORMAT.md §1's rules (no byte-order mark, no key twice, no
-whole number written `-0`, no lone surrogate, and arrays and objects nested at most 64 deep, counted
+whole number written `-0`, no key `$serde_json::private::Number`, no lone surrogate, and arrays and objects nested at most 64 deep, counted
 from the key's place in the header, where its object is 2 deep); `KEY` is a tool key's name and no
 slip of the format's own keys (§11); and the header with it is at most 2^32 − 1 bytes. The object is
 written compactly, each number as DATA.json writes it but for an exponent, which is written `e` with

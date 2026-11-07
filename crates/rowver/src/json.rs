@@ -13,11 +13,12 @@ pub(crate) const DEEPEST: usize = 64;
 type Broken = Option<(String, Option<String>)>;
 
 /// Parse a header's JSON, refusing what a plain parse lets through (docs/FORMAT.md §1): an object
-/// holding a key twice, arrays and objects nested deeper than 64, or a whole number written -0.
+/// holding a key twice or the key `NUMBER`, arrays and objects nested deeper than 64, or a whole
+/// number written -0.
 pub(crate) fn strict(text: &[u8]) -> Result<Value> {
-    let broken = Cell::new(None);
+    let (broken, keyed) = (Cell::new(None), Cell::new(None));
     let mut parsed = serde_json::Deserializer::from_slice(text);
-    let value = Strict { depth: 1, at: At::Top, broken: &broken }.deserialize(&mut parsed).map_err(|e| match broken.take() {
+    let value = Strict { depth: 1, at: At::Top, broken: &broken, text, keyed: &keyed }.deserialize(&mut parsed).map_err(|e| match broken.take() {
         Some((fact, under)) => Error::Breaks { fact, under, line: e.line(), column: e.column() },
         None => e.into(),
     })?;
@@ -28,10 +29,10 @@ pub(crate) fn strict(text: &[u8]) -> Result<Value> {
 /// Parse `text`, the object of the tool key `key`, as a header's own rules parse it (docs/FORMAT.md
 /// §1), nested from where it lies in the header: 2 deep.
 pub(crate) fn strict_tool(text: &[u8], key: &str) -> Result<Value> {
-    let broken = Cell::new(None);
+    let (broken, keyed) = (Cell::new(None), Cell::new(None));
     let mut parsed = serde_json::Deserializer::from_slice(text);
     let top = At::Top;
-    let value = Strict { depth: 2, at: At::Key(&top, key), broken: &broken }.deserialize(&mut parsed).and_then(|value| parsed.end().map(|()| value));
+    let value = Strict { depth: 2, at: At::Key(&top, key), broken: &broken, text, keyed: &keyed }.deserialize(&mut parsed).and_then(|value| parsed.end().map(|()| value));
     value.map_err(|e| match broken.take() {
         Some((fact, _)) => invalid(format!("the tool key {key} breaks docs/FORMAT.md §1: {fact} (line {}, column {}): write its data as a header's rules say", e.line(), e.column())),
         None => invalid(format!("the tool key {key} is not JSON as docs/FORMAT.md §1 reads it ({e}): write its data as one JSON object")),
@@ -78,12 +79,14 @@ impl std::fmt::Display for At<'_> {
 }
 
 /// One value of the header, `depth` arrays and objects deep, at `at`; `broken` holds the rule it
-/// breaks, when it breaks one.
+/// breaks, when it breaks one; `keyed`, once asked, whether `text`, all of it, writes the key `NUMBER`.
 #[derive(Clone, Copy)]
 struct Strict<'a> {
     depth: usize,
     at: At<'a>,
     broken: &'a Cell<Broken>,
+    text: &'a [u8],
+    keyed: &'a Cell<Option<bool>>,
 }
 
 impl Strict<'_> {
@@ -93,6 +96,13 @@ impl Strict<'_> {
         let error = E::custom(&fact);
         self.broken.set(Some((fact, at.top().map(str::to_owned))));
         error
+    }
+
+    /// Whether the text writes the key `NUMBER`, looked for once.
+    fn keyed(self) -> bool {
+        let keyed = self.keyed.get().unwrap_or_else(|| writes_number_key(self.text));
+        self.keyed.set(Some(keyed));
+        keyed
     }
 
     /// The depth of what an array or object holds, refused when it is too deep itself.
@@ -154,9 +164,16 @@ impl<'de> Visitor<'de> for Strict<'_> {
         while let Some(key) = map.next_key::<String>()? {
             // With arbitrary_precision (rowver's Cargo.toml turns it on), serde_json hands a number
             // no i64 or u64 holds over as a map of one member, its digits as written; from 1.0.154
-            // on, -0 too.
-            if out.is_empty() && key == "$serde_json::private::Number" {
-                let digits: String = map.next_value()?;
+            // on, -0 too. The key written in the text, anywhere in an object, is refused (FORMAT 1).
+            if key == NUMBER {
+                let handed = if out.is_empty() { map.next_value_seed(Digits).ok() } else { None };
+                let digits = match handed {
+                    Some(Handed::Owned(digits)) => digits,
+                    // serde_json hands its own digits over owned; were a later one to lend them,
+                    // the text tells its numbers from the key written.
+                    Some(Handed::Lent(digits)) if !self.keyed() => digits,
+                    _ => return Err(self.breaks(At::Key(&self.at, &key), "is a key no header holds, as the JSON reader takes it for a number")),
+                };
                 if digits == "-0" {
                     return Err(self.breaks(self.at, "is written -0"));
                 }
@@ -173,6 +190,39 @@ impl<'de> Visitor<'de> for Strict<'_> {
             self.deeper()?;
         }
         Ok(Value::Object(out))
+    }
+}
+
+/// The key serde_json hands a number over under, which no header holds (docs/FORMAT.md §1).
+pub(crate) const NUMBER: &str = "$serde_json::private::Number";
+
+/// How serde_json hands over a value under the key `NUMBER`: its own digits owned, text written
+/// under that key lent (any other kind is refused).
+enum Handed {
+    Owned(String),
+    Lent(String),
+}
+
+/// The value under the key `NUMBER`, as it is handed over.
+struct Digits;
+
+impl<'de> DeserializeSeed<'de> for Digits {
+    type Value = Handed;
+    fn deserialize<D: serde::Deserializer<'de>>(self, value: D) -> std::result::Result<Self::Value, D::Error> {
+        value.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Digits {
+    type Value = Handed;
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a number's digits")
+    }
+    fn visit_string<E>(self, digits: String) -> std::result::Result<Self::Value, E> {
+        Ok(Handed::Owned(digits))
+    }
+    fn visit_str<E>(self, text: &str) -> std::result::Result<Self::Value, E> {
+        Ok(Handed::Lent(text.to_owned()))
     }
 }
 
@@ -224,6 +274,21 @@ pub(crate) fn members(text: &[u8]) -> Option<Vec<Member>> {
 /// A member's name, from its text with its quotes: as JSON reads it, or, when it does not, as it is written.
 pub(crate) fn name(text: &[u8]) -> String {
     serde_json::from_slice(text).unwrap_or_else(|_| String::from_utf8_lossy(text.get(1..text.len().saturating_sub(1)).unwrap_or_default()).into_owned())
+}
+
+/// Whether `text` writes the key `NUMBER`, however it is escaped: serde_json's own numbers are
+/// never written so. Strings are found from the first quote on, each past the one before it.
+fn writes_number_key(text: &[u8]) -> bool {
+    let mut at = 0;
+    while let Some(open) = text[at..].iter().position(|&b| b == b'"').map(|i| at + i) {
+        let Some(end) = string_end(text, open) else { return false };
+        let colon = text[end..].iter().find(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r')) == Some(&b':');
+        if colon && name(&text[open..end]) == NUMBER {
+            return true;
+        }
+        at = end;
+    }
+    false
 }
 
 /// Where the JSON string beginning at `at` ends, just past its closing quote.
@@ -393,6 +458,24 @@ mod tests {
         // -0.0 and -0e0 are floats, and allowed; so is a negative whole number.
         for text in ["-0.0", "-0e0", "-1", "0", r#"{"a": [-0.0, -0e0]}"#] {
             assert!(strict(text.as_bytes()).is_ok(), "{text}");
+        }
+    }
+
+    // FORMAT 1
+    #[test]
+    fn the_key_serde_json_hands_a_number_over_under_is_refused_and_every_number_read() {
+        let refused = |text: &str| strict(text.as_bytes()).unwrap_err().to_string();
+        let marker = r#"["$serde_json::private::Number"] is a key no header holds, as the JSON reader takes it for a number ("#;
+        for text in [r#"{"t": {"$serde_json::private::Number": "12"}}"#, r#"{"t": {"\u0024serde_json::private::Number": "1\u0032"}}"#, r#"{"t": {"a": 1, "$serde_json::private::Number": "12"}}"#, r#"{"t": {"$serde_json::private::Number": 12}}"#, r#"{"t": {"$serde_json::private::Number": {"a": [1]}}}"#] {
+            assert!(refused(text).contains(&format!(": t{marker}")), "{text}: {}", refused(text));
+        }
+        assert!(strict_tool(br#"{"note": {"$serde_json::private::Number": "12"}}"#, "app").unwrap_err().to_string().contains(&format!("app.note{marker}")));
+        // A number no u64 or i64 holds is read as written, wherever it is.
+        let read = strict(br#"{"t": [18446744073709551616, -9223372036854775809, 1e400, 0.1]}"#).unwrap();
+        assert_eq!(read["t"].to_string(), "[18446744073709551616,-9223372036854775809,1e+400,0.1]");
+        // Were serde_json to lend its own digits, the text alone would tell them from the key written.
+        for (text, keyed) in [(r#"{"$serde_json::private::Number": 1}"#, true), (r#"{"a": {"\u0024serde_json::private::Number" : 1}}"#, true), (r#"{"a": "$serde_json::private::Number"}"#, false), (r#"{"a": "\"$serde_json::private::Number\": 1"}"#, false), ("[1.5, 1e400]", false)] {
+            assert_eq!(writes_number_key(text.as_bytes()), keyed, "{text}");
         }
     }
 

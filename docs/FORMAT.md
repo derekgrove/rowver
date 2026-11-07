@@ -84,6 +84,8 @@ more than one of these faults may be refused for any one of them.
 - no object holds the same key twice, at any depth;
 - arrays and objects nest at most 64 deep, the header itself the first;
 - no whole number (one written without a fraction or an exponent) is written `-0`;
+- no object holds the key `$serde_json::private::Number` (however it is escaped), under which the
+  JSON reader rowver uses hands over a number it keeps as written;
 - a string holds no lone surrogate (`\ud800` without its pair);
 - every count the format names (`rows`, `chunk_rows`, `at`, `size`, `count`, `entries`, `stop`, `take`, `n`, a
   hole's entries, and `events_read`, `events_total` and `events_missing`) is a whole number written

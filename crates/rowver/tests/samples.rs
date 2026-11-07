@@ -77,6 +77,7 @@ fn refusals() -> Vec<(&'static str, String, &'static str)> {
         ("3.5.10 events_missing", sample("files = \"x\"\nmetadata = { events_missing = 1 }"), "events_missing"),
         ("3.5.10 nan", sample("files = \"x\"\nmetadata = { x = nan }"), "finite"),
         ("3.5.10 inf", sample("files = \"x\"\nmetadata = { x = [1.0, -inf] }"), "finite"),
+        ("3.5.10 the JSON reader's number key", sample("files = \"x\"\nmetadata = { x = [{ a = 1, \"$serde_json::private::Number\" = \"12\" }] }"), "is a key no .rvr header holds, as the JSON reader takes it for a number: name it otherwise"),
         ("3.6.2 era float", text("", "", "[eras.E]\nv = 2.5", "[[sample]]\nname = \"a\"\nfiles = \"{v}/x\"\ntree = \"T\"\neras = [\"E\"]"), "v"),
         ("3.6.4 unclosed", sample("files = \"{x.root\""), "{"),
         ("3.7.4 label twice", format!("{HEAD}{ONE}label = \"L\"\n[[sample]]\nname = \"b\"\nfiles = \"y.root\"\ntree = \"T\"\nlabel = \"L\"\n"), "label"),

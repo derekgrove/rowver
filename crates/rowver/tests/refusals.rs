@@ -622,6 +622,7 @@ fn opening() -> Vec<Row> {
         ("§1", "no byte-order mark", Text(|t| t.insert(0, '\u{feff}')), "the header is not JSON as docs/FORMAT.md §1 reads it"),
         ("§1", "one JSON object", Text(|t| *t = format!("[{t}]")), "the header must be one JSON object"),
         ("§1", "no key twice", Text(|t| *t = t.replacen("{\"rows\":", "{\"rows\":5,\"rows\":", 1)), "the header breaks docs/FORMAT.md §1: data.rows is written twice (line 1, column "),
+        ("§1 §11", "no key the JSON reader takes for a number", Text(|t| *t = t.replace("\"preserved\":\"μ\"", "\"preserved\":{\"$serde_json::private::Number\":\"12\"}")), "fixture_tool.preserved[\"$serde_json::private::Number\"] is a key no header holds, as the JSON reader takes it for a number"),
         ("§1 §11", "no key twice in a tool key", Text(|t| *t = t.replace("\"preserved\":\"μ\"", "\"preserved\":\"μ\",\"preserved\":1")), "fixture_tool.preserved is written twice"),
         ("§1 §11", "nesting at most 64", Raw(|h| h["fixture_tool"]["deep"] = nested(63)), "is nested 65 arrays and objects deep, more than 64 (line 1, column "),
         ("§1", "no lone surrogate", Text(|t| *t = t.replace("\"preserved\":\"μ\"", "\"preserved\":\"\\ud800\"")), "the header is not JSON as docs/FORMAT.md §1 reads it"),

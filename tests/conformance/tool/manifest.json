@@ -56,6 +56,13 @@
     },
     {
       "key": "my-tool",
+      "rule": "FORMAT §1 no key the JSON reader takes for a number",
+      "rust_says": "the tool key my-tool breaks docs/FORMAT.md §1: [\"my-tool\"].n[\"$serde_json::private::Number\"] is a key no header holds, as the JSON reader takes it for a number (line 1, column 44): write its data as a header's rules say",
+      "text": "{\"n\": {\"$serde_json::private::Number\": \"12\"}}",
+      "verdict": "refused"
+    },
+    {
+      "key": "my-tool",
       "rule": "FORMAT §1 no lone surrogate",
       "rust_says": "the tool key my-tool is not JSON as docs/FORMAT.md §1 reads it (unexpected end of hex escape at line 1 column 14): write its data as one JSON object",
       "text": "{\"a\": \"\\ud800\"}",

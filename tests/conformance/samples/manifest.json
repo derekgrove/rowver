@@ -510,6 +510,12 @@
       "verdict": "refused"
     },
     {
+      "rule": "SPEC 3.5.10 the JSON reader's number key",
+      "rust_says": "sample \"a\" metadata x: \"$serde_json::private::Number\" is a key no .rvr header holds, as the JSON reader takes it for a number: name it otherwise",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nmetadata = { x = [{ a = 1, \"$serde_json::private::Number\" = \"12\" }] }\n",
+      "verdict": "refused"
+    },
+    {
       "rule": "SPEC 3.6.2 era float",
       "rust_says": "sample \"a\": {v} is not text or a whole number, so it cannot be put into \"{v}/x\"",
       "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n\n[defaults]\n\n[eras]\n[eras.E]\nv = 2.5\n[[sample]]\nname = \"a\"\nfiles = \"{v}/x\"\ntree = \"T\"\neras = [\"E\"]",

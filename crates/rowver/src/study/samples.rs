@@ -462,7 +462,12 @@ fn value_ok(value: &toml::Value, place: &str, p: &mut Problems) -> usize {
         toml::Value::Datetime(_) => p.say(format!("{place}: a date or time is not metadata: write it as text, in quotes")),
         toml::Value::Float(f) if !f.is_finite() => p.say(format!("{place}: {f} is not a finite number")),
         toml::Value::Array(list) => return 1 + list.iter().map(|v| value_ok(v, place, p)).max().unwrap_or(0),
-        toml::Value::Table(table) => return 1 + table.values().map(|v| value_ok(v, place, p)).max().unwrap_or(0),
+        toml::Value::Table(table) => {
+            if table.contains_key(crate::json::NUMBER) {
+                p.say(format!("{place}: {:?} is a key no .rvr header holds, as the JSON reader takes it for a number: name it otherwise", crate::json::NUMBER));
+            }
+            return 1 + table.values().map(|v| value_ok(v, place, p)).max().unwrap_or(0);
+        }
         _ => {}
     }
     0

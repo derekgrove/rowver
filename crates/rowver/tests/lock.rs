@@ -79,13 +79,14 @@ fn refusals() -> Vec<(&'static str, String, &'static str)> {
     let good = lock(LISTED, LIST);
     let no_why = (LISTED.replace(", why = \"a TObject\"", ""), LIST.replace(r#","why":"a TObject""#, ""));
     let why_too = (LISTED.replace("shape = \"flat\" },", "shape = \"flat\", why = \"x\" },"), LIST.replace(r#""shape":"flat"}]"#, r#""shape":"flat","why":"x"}]"#));
-    let cases: [(&'static str, String, &'static str); 6] = [
+    let cases: [(&'static str, String, &'static str); 7] = [
         ("why missing on a branch rvr cannot read", lock(&no_why.0, &no_why.1), "why"),
         ("why on a branch rvr reads", lock(&why_too.0, &why_too.1), "why"),
         ("a list no sample has", format!("{good}\n[[branches]]\nsha256 = \"{}\"\nlist = [{{ name = \"x\", kind = \"f4\", shape = \"flat\" }}]\n", sha(r#"[{"kind":"f4","name":"x","shape":"flat"}]"#)), "no sample"),
         ("no take for a random choice", good.replace("take = 3\n", ""), "take"),
         ("choose for a choice not random", good.replace("choose = \"random\"\nseed = 4\n", "choose = \"first\"\n").replace("take = 3\n", "stop = 3\n"), "choose"),
         ("no branch list at all", good[..good.find("[[branches]]").unwrap()].to_owned(), "branches"),
+        ("no metadata table holds the key the JSON reader takes for a number", good.replace("metadata = {}", "metadata = { x = { \"$serde_json::private::Number\" = \"12\" } }"), "is a key no .rvr header holds"),
     ];
     cases.into_iter().collect()
 }

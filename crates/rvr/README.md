@@ -902,8 +902,8 @@ header does not open has none to keep, and a press adds none of its own.
 A tool key is a top-level key of the header that another tool keeps there, outside every checksum
 and the signature ([FORMAT §11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#11-tool-keys)). `rvr tool FILE` lists
 them with their sizes; `--set DATA.json` makes the JSON object in DATA.json the key KEY, checked
-first as the header's own rules check it (one JSON object, no key twice, no `-0`, no lone
-surrogate, nested at most 64 deep counted from its place in the header; a tool key's name, no slip
+first as the header's own rules check it (one JSON object, no key twice, no `-0`, no key
+`$serde_json::private::Number`, no lone surrogate, nested at most 64 deep counted from its place in the header; a tool key's name, no slip
 of the format's own keys); `--get` writes KEY's object out, to OUT.json (replaced whole, and never FILE
 itself) or standard output; `--drop` drops it, even one whose object or name breaks those rules, so that a file only it keeps
 from opening opens again, or drops each KEY named in one change, for a file several keys keep shut (the list and `--get` read such a file too, the list saying why it does not

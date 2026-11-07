@@ -165,6 +165,7 @@ fn imports() -> Vec<(&'static str, &'static str, String, &'static str)> {
         ("FORMAT §1 no byte-order mark", "my-tool", "\u{feff}{}".to_owned(), "the tool key my-tool is not JSON as docs/FORMAT.md §1 reads it"),
         ("FORMAT §1 no key twice", "my-tool", r#"{"a": 1, "a": 2}"#.to_owned(), "[\"my-tool\"].a is written twice"),
         ("FORMAT §1 no whole number written -0", "my-tool", r#"{"a": [-0]}"#.to_owned(), "[\"my-tool\"].a[0] is written -0"),
+        ("FORMAT §1 no key the JSON reader takes for a number", "my-tool", r#"{"n": {"$serde_json::private::Number": "12"}}"#.to_owned(), "[\"my-tool\"].n[\"$serde_json::private::Number\"] is a key no header holds"),
         ("FORMAT §1 no lone surrogate", "my-tool", r#"{"a": "\ud800"}"#.to_owned(), "the tool key my-tool is not JSON as docs/FORMAT.md §1 reads it"),
         ("FORMAT §1 §11 nesting at most 64, counted from its place", "my-tool", deep(63), "is nested 65 arrays and objects deep, more than 64"),
         ("FORMAT §11 a tool key's name", "my tool", "{}".to_owned(), "\"my tool\" is not a tool key's name"),

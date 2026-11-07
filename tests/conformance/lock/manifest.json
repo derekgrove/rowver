@@ -41,6 +41,12 @@
       "rust_says": "samples.lock has no branches",
       "text": "format = \"rvr-samples-lock\"\nversion = 1\nresolved = \"2026-11-04T16:06:01Z\"\nsamples_toml_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\n[[sample]]\nname = \"flat\"\nlabel = \"flat\"\nasked = [\"a.root\"]\ntree = \"analysis\"\nbranches = \"7161d524c0e231c0bf783668e5cf1f3cc901f8684b68d60040a7b6f34ec82461\"\nevents = 3\nchoose = \"random\"\nseed = 4\nevents_total = 5\nevents_read = 3\nmetadata = {}\n\n[[sample.file]]\nat = \"./a.root\"\nbytes = 39262\nadler32 = \"bbc43743\"\nuuid = \"31e851e4-b994-11f1-ba5c-1a45bb13c76a\"\nentries = 5\ntake = 3\n\n",
       "verdict": "refused"
+    },
+    {
+      "rule": "FORMAT §6.3 no metadata table holds the key the JSON reader takes for a number",
+      "rust_says": "samples.lock sample 1 metadata x: \"$serde_json::private::Number\" is a key no .rvr header holds, as the JSON reader takes it for a number: name it otherwise",
+      "text": "format = \"rvr-samples-lock\"\nversion = 1\nresolved = \"2026-11-04T16:06:01Z\"\nsamples_toml_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\n[[sample]]\nname = \"flat\"\nlabel = \"flat\"\nasked = [\"a.root\"]\ntree = \"analysis\"\nbranches = \"7161d524c0e231c0bf783668e5cf1f3cc901f8684b68d60040a7b6f34ec82461\"\nevents = 3\nchoose = \"random\"\nseed = 4\nevents_total = 5\nevents_read = 3\nmetadata = { x = { \"$serde_json::private::Number\" = \"12\" } }\n\n[[sample.file]]\nat = \"./a.root\"\nbytes = 39262\nadler32 = \"bbc43743\"\nuuid = \"31e851e4-b994-11f1-ba5c-1a45bb13c76a\"\nentries = 5\ntake = 3\n\n[[branches]]\nsha256 = \"7161d524c0e231c0bf783668e5cf1f3cc901f8684b68d60040a7b6f34ec82461\"\nlist = [\n  { name = \"a\", kind = \"none\", shape = \"flat\", why = \"a TObject\" },\n  { name = \"nJet\", kind = \"i4\", shape = \"flat\" },\n]\n",
+      "verdict": "refused"
     }
   ]
 }

@@ -410,6 +410,7 @@ class Pressed(unittest.TestCase):
                 ("my-tool", [1], "^the value given for the tool key my-tool must be one JSON object"),
                 ("my-tool", {"a": "\ud800"}, "^the value given for the tool key my-tool is not JSON as docs/FORMAT.md §1 reads it"),
                 ("my-tool", deep, "^the value given for the tool key my-tool breaks docs/FORMAT.md §1: .* is nested 65 arrays"),
+                ("my-tool", {"n": {"$serde_json::private::Number": "12"}}, r'breaks docs/FORMAT.md §1: \["my-tool"\]\.n\["\$serde_json::private::Number"\] is a key no header holds'),
                 ("data", {}, "data is the format's own key, not a tool key"),
                 ("my tool", {}, "\"my tool\" is not a tool key's name"),
             ]:
