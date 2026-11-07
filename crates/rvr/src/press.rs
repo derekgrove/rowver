@@ -79,6 +79,8 @@ fn run(pressing: Pressing) -> Result<u8, String> {
     // Held from its first read of the file there until its new file is in place (SPEC §8.12), and
     // read through the descriptor that holds the lock; a folder there, or nothing, has no lock.
     // The file's lock is taken before the staging folder's, as every writer takes them.
+    // What stands there is taken first: whatever comes after is another program's (SPEC §8.12).
+    let found = crate::plan::standing(&target);
     let locked = match std::fs::metadata(&target) {
         Ok(there) if there.is_file() => Some(target_locked(&target)?),
         _ => None,
@@ -98,7 +100,7 @@ fn run(pressing: Pressing) -> Result<u8, String> {
         stopped.keep.set(false);
     }
     let at = locked.as_ref().map_or_else(|| crate::plan::At::open(&target), crate::plan::At::held);
-    let place = Place { base: dir, study, at, target: target.clone(), locked };
+    let place = Place { base: dir, study, at, target: target.clone(), locked, found };
     let asked = Asked { choose: Choose::Options(pressing.choice), on: pressing.on, workers: pressing.workers, sign: true };
     let plan = crate::plan::build(place, texts, asked)?;
     if let Some(why) = &plan.refused {

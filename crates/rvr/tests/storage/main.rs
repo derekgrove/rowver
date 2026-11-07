@@ -599,7 +599,7 @@ fn resolve_works_on_12_samples_at_once_and_lists_a_folder_once() {
         server.put(&format!("/store/own/f{n}.root"), ntuple());
     }
     body += &format!("[[sample]]\nname = \"three\"\nfiles = {:?}\n", server.url("/store/own/f*.root"));
-    let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n{body}");
+    let samples = common::samples(&body);
     let dir = common::study("twelve", &samples, RECIPE);
     server.script(|r| match r.method.as_str() {
         "HEAD" => Answer::Late(std::time::Duration::from_millis(300), Box::new(Answer::Serve)),
@@ -616,7 +616,7 @@ fn resolve_works_on_12_samples_at_once_and_lists_a_folder_once() {
         one.put(&format!("/store/own/f{n}.root"), ntuple());
     }
     let dir = common::study("one-by-one", "", RECIPE);
-    std::fs::write(dir.join("samples.toml"), format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n[[sample]]\nname = \"three\"\nfiles = {:?}\n", one.url("/store/own/f*.root"))).unwrap();
+    std::fs::write(dir.join("samples.toml"), common::samples(&format!("[[sample]]\nname = \"three\"\nfiles = {:?}\n", one.url("/store/own/f*.root")))).unwrap();
     one.script(|_| Answer::Late(std::time::Duration::from_millis(100), Box::new(Answer::Serve)));
     resolved(&dir);
     assert_eq!(one.most_at_once(), 1);
@@ -647,7 +647,7 @@ fn a_recipe_that_does_not_fit_stops_resolve_at_each_samples_first_file() {
     for n in 0..3 {
         server.put(&format!("/store/own/f{n}.root"), ntuple());
     }
-    let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n[[sample]]\nname = \"three\"\nfiles = {:?}\n", server.url("/store/own/f*.root"));
+    let samples = common::samples(&format!("[[sample]]\nname = \"three\"\nfiles = {:?}\n", server.url("/store/own/f*.root")));
     let dir = common::study("early-refusal", &samples, &RECIPE.replace("\"Jet_pt\"", "\"Jet_ptt\""));
     let (code, said) = rvr(&dir, None, &["samples", "resolve", "samples.toml"]);
     assert!(code == 1 && said.contains("  FAIL  [columns] Jet_ptt: ") && !said.contains("FAIL  three"), "{said}");

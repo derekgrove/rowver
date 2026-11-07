@@ -190,6 +190,22 @@ mod tests {
 
     // FORMAT 7
     #[test]
+    fn a_window_of_two_to_the_27_is_taken_and_the_next_one_up_refused() {
+        // A frame header with a checksum: a window descriptor (exponent, mantissa), or a single
+        // segment whose window is its declared content size (8 bytes of it).
+        let windowed = |descriptor: u8| [0x28, 0xB5, 0x2F, 0xFD, 0x04, descriptor];
+        let single = |size: u64| [&[0x28, 0xB5, 0x2F, 0xFD, 0xE4][..], &size.to_le_bytes()].concat();
+        let said = |head: &[u8], n: usize| frame(head, n, "x", "its chunk's lane").err().map(|e| e.to_string());
+        assert_eq!(said(&windowed(17 << 3), 5), None, "2^27 exactly");
+        let past = said(&windowed((17 << 3) | 1), 5).unwrap();
+        assert!(past.starts_with("x: its zstd frame asks for a window of 150994944 bytes, more than 2^27 (docs/FORMAT.md §7): the file is damaged"), "{past}");
+        assert_eq!(said(&single(1 << 27), 1 << 27), None);
+        let past = said(&single((1 << 27) + 1), (1 << 27) + 1).unwrap();
+        assert!(past.contains("asks for a window of 134217729 bytes, more than 2^27"), "{past}");
+    }
+
+    // FORMAT 7
+    #[test]
     fn a_frame_is_refused_before_decoding_when_its_values_would_take_more_than_it_can_give() {
         let zeros = vec![0; 1 << 22];
         let packed = pack(&zeros);

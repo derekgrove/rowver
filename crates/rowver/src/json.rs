@@ -7,7 +7,7 @@ use serde_json::{Map, Number, Value};
 use std::cell::Cell;
 
 /// How deep a header's arrays and objects may nest, the header itself the first.
-const DEEPEST: usize = 64;
+pub(crate) const DEEPEST: usize = 64;
 
 /// A rule of docs/FORMAT.md §1 a header breaks: the fact, and the top-level key it lies under.
 type Broken = Option<(String, Option<String>)>;

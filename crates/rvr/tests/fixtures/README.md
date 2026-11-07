@@ -8,7 +8,9 @@ README says how each was made: `uproot_flat.root` by uproot (`make_ntuple_fixtur
 flag, and each event's run and unique number) was written for this repository by
 `make_runs_fixture.py` with uproot 5.7.5, awkward 2.12.0 and NumPy 2.5.1 (`mamba run -n rowver
 python tests/fixtures/make_runs_fixture.py tests/fixtures/runs.root`); `tests/core.rs` presses it
-in runs of every size, and `tests/diff.rs` compares its presses event by event.
+in runs of every size, and `tests/diff.rs` compares its presses event by event. `rntuple.root`
+(an RNTuple `Events` of three entries of `nJet`) was written by uproot 5.7.5's `mkrntuple`;
+`tests/resolve.rs` names it as a tree.
 
 `tls/` holds certificates for the tests' HTTPS storage (`tests/storage`), made once with the
 openssl 3 command, each valid for 100 years: `authority/ca.pem`, a test authority the tests trust

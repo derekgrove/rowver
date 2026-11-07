@@ -317,7 +317,10 @@ impl Lock {
             let entries: Vec<u64> = s.files.iter().map(|f| f.entries).collect();
             let total = entries.iter().try_fold(0u64, |sum, e| sum.checked_add(*e));
             if total.is_none_or(|t| t > MOST_ENTRIES) {
-                p.say(format!("{place}'s files hold more than 2^40 entries in all, more than a file may"));
+                p.say(match entries.iter().any(|&e| e > MOST_ENTRIES) {
+                    true => format!("{place}: one of its files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones, split them among samples, and resolve again"),
+                    false => format!("{place}'s files hold more than 2^40 entries in all, more than a sample of a .rvr file may: split them among samples of fewer files, and resolve again"),
+                });
                 continue;
             }
             // A random choice is made again where it is made anyway (full validation, the Plan):
@@ -491,7 +494,7 @@ pub(crate) fn toml_value(value: &Value, name: &str) -> Result<toml::Value, Strin
 }
 
 fn toml_whole(n: u64, name: &str) -> Result<String, String> {
-    i64::try_from(n).map(|n| n.to_string()).map_err(|_| format!("samples.lock cannot hold {name} {n}: TOML's whole numbers end at 2^63 - 1"))
+    i64::try_from(n).map(|n| n.to_string()).map_err(|_| format!("samples.lock cannot hold {name} {n}: TOML's whole numbers end at 2^63 − 1"))
 }
 
 /// One `[[sample]]` of a lock.

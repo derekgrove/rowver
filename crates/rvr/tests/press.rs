@@ -1404,12 +1404,15 @@ fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("where it stopped: 1 of 2 files done") && said.contains("  2/2 "), "{said}");
-    assert!(said.contains("is a folder, not a file"), "{said}");
+    assert!(said.contains("is a folder, not a file") && !said.contains("put there by another program"), "{said}");
     assert!(said.contains("Mend it, then press again, which carries on from the 2 of 2 files done"), "{said}");
     std::fs::remove_dir_all(dir.join(&name)).unwrap();
+    // A link to nothing there before the press is not another program's: the file is put in its place.
+    std::os::unix::fs::symlink("nowhere.rvr", dir.join(&name)).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 0, "{said}");
     assert!(said.contains("where it stopped: 2 of 2 files done") && !said.contains("/2 "), "{said}");
+    assert!(std::fs::symlink_metadata(dir.join(&name)).unwrap().is_file());
     assert!(rvr(&dir, &["validate", &name, "--complete"]).1.contains("read all 10 entries"));
 }
 

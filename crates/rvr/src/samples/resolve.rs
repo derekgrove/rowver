@@ -192,18 +192,25 @@ fn root_identity<S: hep_root::ByteSource>(
     match found {
         Ok((entries, list)) => Ok((uuid, entries.max(0) as u64, list)),
         Err(hep_root::Error::KeyNotFound(_)) => {
-            let trees: Vec<String> = file
-                .trees_listing()
-                .map(|l| l.trees.into_iter().map(|t| t.path).collect())
-                .unwrap_or_default();
-            Err(format!(
-                "{shown} has no tree {tree:?}. Its trees: {}.",
-                if trees.is_empty() {
-                    "none".into()
-                } else {
-                    trees.join(", ")
+            let listing = match file.trees_listing() {
+                Ok(listing) => listing,
+                Err(e) => return Err(format!("{shown} has no tree {tree:?}, and its trees could not be listed ({e}): check that it is a whole ROOT file (a copy that did not finish leaves one cut short), then resolve again")),
+            };
+            if listing.rntuples.iter().any(|path| path == tree.trim_matches('/')) {
+                return Err(format!("{shown} holds {tree:?} as an RNTuple, which rvr cannot read (it reads TTrees): write its events as a TTree"));
+            }
+            let trees: Vec<String> = listing.trees.into_iter().map(|t| t.path).collect();
+            let listed = if trees.is_empty() { "none".into() } else { trees.join(", ") };
+            // The listing goes LISTING_DEPTH folders deep and opens at most LISTING_DIRECTORIES (SPEC §6.2.7): what it left is said.
+            let (depth, most) = (hep_root::file::LISTING_DEPTH, hep_root::file::LISTING_DIRECTORIES);
+            let left = match listing.unopened {
+                0 => String::new(),
+                n => {
+                    let was = if n == 1 { "was" } else { "were" };
+                    format!(" ({}, past the {depth} folders deep or {most} folders the listing opens, {was} not looked in)", super::some(n, "folder", "folders"))
                 }
-            ))
+            };
+            Err(format!("{shown} has no tree {tree:?}. Its trees: {listed}{left}."))
         }
         Err(e) => Err(format!("{shown}: its tree {tree:?} could not be read: {e}")),
     }
@@ -410,7 +417,11 @@ pub fn resolve(ctx: &Context, sample: &Sample, first: &dyn Fn(lock::Sample, &Bra
     }
     let list = list.ok_or("it has no files")?;
     if files.iter().try_fold(0u64, |sum, f| sum.checked_add(f.entries)).is_none_or(|t| t > lock::MOST_ENTRIES) {
-        return Err("its files hold more than 2^40 entries in all, more than a .rvr file may: split them among samples of fewer files".into());
+        return Err(if files.iter().any(|f| f.entries > lock::MOST_ENTRIES) {
+            "one of its files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones, and split them among samples".into()
+        } else {
+            "its files hold more than 2^40 entries in all, more than a sample of a .rvr file may: split them among samples of fewer files".into()
+        });
     }
     if list.list.iter().any(|b| b.name.is_empty()) {
         return Err(format!("its tree {} has a branch with no name, which samples.lock cannot record: write the files again with every branch named", sample.tree));

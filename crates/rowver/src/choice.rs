@@ -53,7 +53,7 @@ impl Events {
                     )));
                 }
                 let seed = whole(&record["seed"]).ok_or_else(|| {
-                    invalid("events.seed must be a whole number from 0 to 2^64 - 1")
+                    invalid("events.seed must be a whole number from 0 to 2^64 − 1")
                 })?;
                 (Events::Random { n: n()?, seed }, 4)
             }

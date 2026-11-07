@@ -122,6 +122,167 @@
       "verdict": "valid"
     },
     {
+      "rule": "metadata nested 59 deep, as deep as a header holds it",
+      "samples": [
+        {
+          "events": {
+            "choose": "all"
+          },
+          "files": [
+            "x.root"
+          ],
+          "label": "a",
+          "metadata": {
+            "deep": [
+              [
+                [
+                  [
+                    [
+                      [
+                        [
+                          [
+                            [
+                              [
+                                [
+                                  [
+                                    [
+                                      [
+                                        [
+                                          [
+                                            [
+                                              [
+                                                [
+                                                  [
+                                                    [
+                                                      [
+                                                        [
+                                                          [
+                                                            [
+                                                              [
+                                                                [
+                                                                  [
+                                                                    [
+                                                                      [
+                                                                        [
+                                                                          [
+                                                                            [
+                                                                              [
+                                                                                [
+                                                                                  [
+                                                                                    [
+                                                                                      [
+                                                                                        [
+                                                                                          [
+                                                                                            [
+                                                                                              [
+                                                                                                [
+                                                                                                  [
+                                                                                                    [
+                                                                                                      [
+                                                                                                        [
+                                                                                                          [
+                                                                                                            [
+                                                                                                              [
+                                                                                                                [
+                                                                                                                  [
+                                                                                                                    [
+                                                                                                                      [
+                                                                                                                        [
+                                                                                                                          [
+                                                                                                                            [
+                                                                                                                              [
+                                                                                                                                [
+                                                                                                                                  1
+                                                                                                                                ]
+                                                                                                                              ]
+                                                                                                                            ]
+                                                                                                                          ]
+                                                                                                                        ]
+                                                                                                                      ]
+                                                                                                                    ]
+                                                                                                                  ]
+                                                                                                                ]
+                                                                                                              ]
+                                                                                                            ]
+                                                                                                          ]
+                                                                                                        ]
+                                                                                                      ]
+                                                                                                    ]
+                                                                                                  ]
+                                                                                                ]
+                                                                                              ]
+                                                                                            ]
+                                                                                          ]
+                                                                                        ]
+                                                                                      ]
+                                                                                    ]
+                                                                                  ]
+                                                                                ]
+                                                                              ]
+                                                                            ]
+                                                                          ]
+                                                                        ]
+                                                                      ]
+                                                                    ]
+                                                                  ]
+                                                                ]
+                                                              ]
+                                                            ]
+                                                          ]
+                                                        ]
+                                                      ]
+                                                    ]
+                                                  ]
+                                                ]
+                                              ]
+                                            ]
+                                          ]
+                                        ]
+                                      ]
+                                    ]
+                                  ]
+                                ]
+                              ]
+                            ]
+                          ]
+                        ]
+                      ]
+                    ]
+                  ]
+                ]
+              ]
+            ]
+          },
+          "name": "a",
+          "tree": "T"
+        }
+      ],
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x.root\"\nmetadata = { deep = [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]] }\n",
+      "verdict": "valid"
+    },
+    {
+      "rule": "a number of events and a seed at TOML's largest, 2^63 − 1",
+      "samples": [
+        {
+          "events": {
+            "algorithm": "splitmix64-selection-sampling",
+            "choose": "random",
+            "n": 9223372036854775807,
+            "seed": 9223372036854775807
+          },
+          "files": [
+            "x.root"
+          ],
+          "label": "a",
+          "metadata": {},
+          "name": "a",
+          "tree": "T"
+        }
+      ],
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x.root\"\nevents = 9223372036854775807\nchoose = \"random\"\nseed = 9223372036854775807\n",
+      "verdict": "valid"
+    },
+    {
       "rule": "choices: first N, random with a seed, a default seed",
       "samples": [
         {
@@ -283,6 +444,12 @@
       "verdict": "refused"
     },
     {
+      "rule": "SPEC 3.5.7 events from 1",
+      "rust_says": "sample \"a\": events is a number of entries to read, from 1, like events = 50_000, or \"all\"",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nevents = 0\n",
+      "verdict": "refused"
+    },
+    {
       "rule": "SPEC 3.5.9 seed",
       "rust_says": "sample \"a\": seed is a whole number from 0, like seed = 7",
       "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nevents = 5\nchoose = \"random\"\nseed = -1\n",
@@ -298,6 +465,12 @@
       "rule": "SPEC 3.5.10 key sample",
       "rust_says": "sample \"a\" metadata: \"sample\" is not a name a recipe can read as sample.sample: use a letter or _, then letters, digits and _",
       "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nmetadata = { sample = 1 }\n",
+      "verdict": "refused"
+    },
+    {
+      "rule": "SPEC 3.5.10 nested 60 deep",
+      "rust_says": "sample \"a\" metadata deep: its lists and tables nest more than 59 deep, more than a .rvr header holds: nest them less",
+      "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nmetadata = { deep = [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]] }\n",
       "verdict": "refused"
     },
     {

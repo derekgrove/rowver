@@ -471,16 +471,26 @@ pub fn set_tool(locked: &Locked, key: &str, value: Value) -> Result<()> {
 }
 
 /// Refuse a header every reader would not open, or longer than the format holds, before it is written over the file at `path`.
-fn opens(header: &Value, path: &Path) -> Result<()> {
-    opening(header).map(drop).map_err(|e| crate::about(path, e))
+fn opens(header: &Value, path: &Path, advice: &str) -> Result<()> {
+    checked_text(header, advice).map(drop).map_err(|e| crate::about(path, e))
 }
 
-/// The tail `header` is written as (its text, length and magic), refused unless every reader opens it.
-fn opening(header: &Value) -> Result<Vec<u8>> {
+/// The text `header` is written as, refused unless every reader opens it, with `advice` when it is too long.
+fn checked_text(header: &Value, advice: &str) -> Result<Vec<u8>> {
     let text = serde_json::to_vec(header)?;
-    let mut bytes = Vec::with_capacity(text.len() + 12);
-    crate::write::framing(&mut bytes, &text)?;
+    crate::write::length(text.len(), advice)?;
     crate::rvr::checked_header(&text)?;
+    Ok(text)
+}
+
+/// The tail `header` is written as (its text, length and magic), refused unless every reader opens
+/// it, with `advice` when it is too long.
+fn opening(header: &Value, advice: &str) -> Result<Vec<u8>> {
+    let mut bytes = checked_text(header, advice)?;
+    let length = crate::write::length(bytes.len(), advice)?;
+    bytes.reserve_exact(12);
+    bytes.extend_from_slice(&length.to_le_bytes());
+    bytes.extend_from_slice(crate::rvr::MAGIC);
     Ok(bytes)
 }
 
@@ -557,7 +567,7 @@ impl<'a> Change<'a> {
             // Without the key, the whole header is read: refused as it is, or else for not having it.
             None => crate::json::strict(text).and_then(|_| Err(invalid(format!("{shown} has no tool key {key}: rvr tool {shown} lists its tool keys")))),
         })?;
-        opens(&change.header, &locked.path)?;
+        opens(&change.header, &locked.path, crate::write::FEWER)?;
         Ok(change)
     }
 
@@ -581,7 +591,7 @@ impl<'a> Change<'a> {
             }
             _ => header[key] = value,
         }
-        opens(&header, &locked.path)?;
+        opens(&header, &locked.path, "give the tool key less to hold")?;
         Ok((change, header))
     }
 
@@ -675,7 +685,7 @@ impl<'a> Change<'a> {
         let path = self.locked.path.clone();
         // A header every reader opens, or none: refused, the file put back.
         let shown = path.display();
-        let bytes = opening(header).map_err(|e| invalid(format!("{shown} is as it was: the header the change would write would not open ({e}), so it was not written")))?;
+        let bytes = opening(header, crate::write::FEWER).map_err(|e| invalid(format!("{shown} is as it was: the header the change would write would not open ({e}), so it was not written")))?;
         // Its records lay out exactly the arrays written (an empty file's, what its records did), or
         // the change is a bug: refused, the file put back.
         let bug = |why: String| invalid(format!("{}: a bug in rowver: the header it was about to write lays out other arrays than the file holds ({why}), so the file is put back as it was; please report it", path.display()));

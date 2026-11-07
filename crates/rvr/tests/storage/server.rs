@@ -71,6 +71,8 @@ pub struct Server {
     stop: Arc<std::sync::atomic::AtomicBool>,
     busy: Arc<(AtomicUsize, AtomicUsize, AtomicUsize)>,
     connections: Arc<AtomicUsize>,
+    /// The thread taking connections, joined on drop so its port is free again after.
+    accepting: Option<std::thread::JoinHandle<()>>,
 }
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -111,7 +113,7 @@ impl Server {
         let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let script: Script = Box::new(|_| Answer::Serve);
-        let server = Server {
+        let mut server = Server {
             port,
             files: Default::default(),
             log: Default::default(),
@@ -120,10 +122,11 @@ impl Server {
             stop: Default::default(),
             busy: Default::default(),
             connections: Default::default(),
+            accepting: None,
         };
         let shared = (server.files.clone(), server.log.clone(), server.script.clone(), server.multipart.clone(), server.stop.clone(), server.busy.clone());
         let connections = server.connections.clone();
-        std::thread::spawn(move || {
+        server.accepting = Some(std::thread::spawn(move || {
             for stream in listener.incoming() {
                 if shared.4.load(Ordering::Relaxed) {
                     return;
@@ -140,7 +143,7 @@ impl Server {
                     }
                 });
             }
-        });
+        }));
         server
     }
 
@@ -183,7 +186,12 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        // Joined only when woken: a server gone already is not listening.
+        if TcpStream::connect(("127.0.0.1", self.port)).is_ok() {
+            if let Some(accepting) = self.accepting.take() {
+                let _ = accepting.join();
+            }
+        }
     }
 }
 

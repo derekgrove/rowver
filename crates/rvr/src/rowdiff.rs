@@ -110,7 +110,7 @@ fn side(path: &str) -> Result<Side, String> {
         at += rows;
     }
     if at > u32::MAX as usize {
-        return Err(format!("{path} holds {at} rows, more than rvr diff --rows compares (2^32)"));
+        return Err(format!("{path} holds {} rows, more than the 4,294,967,295 (2^32 − 1) rvr diff --rows compares: rvr diff without --rows compares their headers", count(at as u64)));
     }
     Ok(Side { reader, samples, files })
 }

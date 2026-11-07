@@ -294,12 +294,13 @@ pub(crate) fn write(plan: &Plan, mut done: Done) -> Result<usize, String> {
         Target::New(laid) => {
             let write = || crate::derive::sealed(&mut header, signer.as_ref()).map_err(unwritten).and_then(|()| write::write_laid(&header, laid).map_err(|e| what(&staged_file, e)));
             // Not over a file another program moved there since the press locked the one it read,
-            // nor over one another program put where there was none (SPEC §8.12).
+            // nor, where it holds no lock, over a file (links followed) or anything else another
+            // program put there since the press began (SPEC §8.12).
             let placed_at = std::cell::Cell::new(None);
             let ready = || {
                 match &plan.locked {
                     Some(locked) => locked.there().map_err(|e| e.to_string())?,
-                    None if std::fs::metadata(target).is_ok_and(|there| there.is_file()) => return Err(format!("{} was put there by another program while rvr pressed it, and is left as it is: move it away", target.display())),
+                    None if std::fs::metadata(target).is_ok_and(|there| there.is_file()) || crate::plan::standing(target).is_some_and(|now| plan.found != Some(now)) => return Err(format!("{} was put there by another program while rvr pressed it, and is left as it is: move it away", target.display())),
                     None => {}
                 }
                 placed_at.set(done.journal.placing(&staged_file));

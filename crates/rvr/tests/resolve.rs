@@ -2,14 +2,9 @@
 
 mod common;
 
-use common::{rvr, study};
+use common::{rvr, samples, study};
 
 const RECIPE: &str = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[totals]\n\n[derived]\n";
-
-/// samples.toml with these samples.
-fn samples(body: &str) -> String {
-    format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n{body}")
-}
 
 /// One sample reading `files` (a TOML value).
 fn reading(files: &str) -> String {
@@ -40,12 +35,14 @@ fn resolve_writes_all_or_nothing_and_says_how_to_fix_each_failure() {
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
     assert_eq!(code, 0, "{said}");
     let lock = std::fs::read(dir.join("samples.lock")).unwrap();
-    let bad = samples("[[sample]]\nname = \"ok\"\nfiles = \"uproot_flat.root\"\n[[sample]]\nname = \"typo\"\nfiles = \"uproot_flt.root\"\n[[sample]]\nname = \"tree\"\nfiles = \"codecs-zlib.root\"\n");
+    let bad = samples("[[sample]]\nname = \"ok\"\nfiles = \"uproot_flat.root\"\n[[sample]]\nname = \"typo\"\nfiles = \"uproot_flt.root\"\n[[sample]]\nname = \"tree\"\nfiles = \"codecs-zlib.root\"\n[[sample]]\nname = \"rnt\"\nfiles = \"rntuple.root\"\ntree = \"Events\"\n");
     std::fs::write(dir.join("samples.toml"), bad).unwrap();
+    std::fs::copy(common::fixture("rntuple.root"), dir.join("rntuple.root")).unwrap();
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("  FAIL  typo: ") && said.contains("Did you mean: uproot_flat.root?"), "{said}");
     assert!(said.contains("  FAIL  tree: ") && said.contains("Its trees: Events, Empty"), "{said}");
+    assert!(said.contains("  FAIL  rnt: ./rntuple.root holds \"Events\" as an RNTuple, which rvr cannot read (it reads TTrees): write its events as a TTree"), "{said}");
     assert!(!said.contains("FAIL  ok"), "{said}");
     // The old lock stands as it was, and nothing staged is left beside it.
     assert_eq!(std::fs::read(dir.join("samples.lock")).unwrap(), lock);

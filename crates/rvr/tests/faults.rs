@@ -310,16 +310,32 @@ const PUT_THERE: &str = " was put there by another program while rvr pressed it,
 // SPEC 7.5.3, 7.5.4, 8.12
 #[test]
 fn a_press_begun_with_no_file_at_its_target_leaves_one_another_program_put_there_meanwhile() {
-    let (dir, server) = halted("put-there");
-    let target = dir.join(file(&dir));
-    let (code, said, ()) = while_held(&dir, &server, &["press", "--workers", "1"], || std::fs::write(&target, b"another program's file").unwrap());
-    assert!(std::fs::read(&target).unwrap() == b"another program's file", "{said}");
-    assert_eq!(code, 1, "{said}");
-    assert!(said.contains(PUT_THERE) && said.contains("press again, which carries on from the 3 of 3 files done"), "{said}");
-    std::fs::remove_file(&target).unwrap();
-    let (code, said) = rvr(&dir, &["press"]);
-    assert!(code == 0 && said.contains("where it stopped: 3 of 3 files done"), "{said}");
-    assert_eq!(rvr(&dir, &["validate", &file(&dir)]).0, 0);
+    // A file, a link to nothing, or a file written where a link there from the start leads: each
+    // is something there.
+    for put in ["file", "link", "where a link leads"] {
+        let (dir, server) = halted(&format!("put-there-{}", put.replace(' ', "-")));
+        let target = dir.join(file(&dir));
+        if put == "where a link leads" {
+            std::os::unix::fs::symlink("elsewhere.rvr", &target).unwrap();
+        }
+        let putting = || match put {
+            "file" => std::fs::write(&target, b"another program's file").unwrap(),
+            "link" => std::os::unix::fs::symlink("nowhere.rvr", &target).unwrap(),
+            _ => std::fs::write(dir.join("elsewhere.rvr"), b"another program's file").unwrap(),
+        };
+        let (code, said, ()) = while_held(&dir, &server, &["press", "--workers", "1"], putting);
+        match put {
+            "file" => assert!(std::fs::read(&target).unwrap() == b"another program's file", "{said}"),
+            "link" => assert_eq!(std::fs::read_link(&target).unwrap(), Path::new("nowhere.rvr"), "{said}"),
+            _ => assert!(std::fs::read_link(&target).is_ok() && std::fs::read(&target).unwrap() == b"another program's file", "{said}"),
+        }
+        assert_eq!(code, 1, "{said}");
+        assert!(said.contains(PUT_THERE) && said.contains("press again, which carries on from the 3 of 3 files done"), "{said}");
+        std::fs::remove_file(&target).unwrap();
+        let (code, said) = rvr(&dir, &["press"]);
+        assert!(code == 0 && said.contains("where it stopped: 3 of 3 files done"), "{said}");
+        assert_eq!(rvr(&dir, &["validate", &file(&dir)]).0, 0);
+    }
 }
 
 // SPEC 7.5.2, 8.12

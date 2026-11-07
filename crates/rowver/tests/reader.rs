@@ -388,3 +388,26 @@ fn the_header_text_is_the_file_opened_even_with_another_renamed_over_it() {
     assert_eq!(reader.header_text().unwrap(), common::parts(&bytes).0);
 }
 
+// FORMAT 1, 12
+#[test]
+fn a_header_length_one_byte_past_the_room_the_file_leaves_is_refused() {
+    // An empty file is the magic, the header, its length and the magic: its length is S − 20, all the room there is.
+    let mut bytes = to_bytes(&rebuilt(10.).0, &[]);
+    let n = bytes.len();
+    let length = u32::from_le_bytes(bytes[n - 12..n - 8].try_into().unwrap());
+    assert_eq!(length as usize, n - 20);
+    assert!(Reader::open(written(&bytes, "room")).is_ok_and(|reader| reader.empty()));
+    bytes[n - 12..n - 8].copy_from_slice(&(length + 1).to_le_bytes());
+    let Err(said) = Reader::open(written(&bytes, "past")) else { panic!("opened") };
+    assert!(said.to_string().contains("the header's length (the 4 bytes before the last 8) is more than the file holds: the file was cut short; copy it again"), "{said}");
+}
+
+// FORMAT 4, 12
+#[test]
+fn a_whole_number_column_whose_lim_spans_65_values_opens_without_vals() {
+    let (mut header, arrays) = split(&golden());
+    let nlep = &mut header["data"]["cols"][0];
+    (nlep["lim"], nlep["nice"]) = (json!([0, 64]), json!([0, 64]));
+    nlep.as_object_mut().unwrap().shift_remove("vals");
+    assert!(Reader::open(written(&to_bytes(&header, std::slice::from_ref(&arrays)), "span")).is_ok());
+}

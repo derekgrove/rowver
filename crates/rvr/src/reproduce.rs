@@ -72,7 +72,7 @@ fn run(file: &Path, dir: Option<PathBuf>, study: Option<PathBuf>, workers: usize
         return Ok(0);
     }
     let target = dir.join(format!("{name}.rvr"));
-    let place = Place { base, study: name.to_owned(), target: target.clone(), at: At::Missing, locked: None };
+    let place = Place { base, study: name.to_owned(), target: target.clone(), at: At::Missing, locked: None, found: None };
     let asked = Asked { choose: Choose::Recorded(made["files"].clone()), on: On::Once, workers, sign: true };
     let again = |why: String| format!("{why}\nTo press it again, remove {} and run rvr reproduce again.", dir.display());
     let plan = crate::plan::build(place, texts, asked).map_err(again)?;

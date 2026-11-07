@@ -364,16 +364,25 @@ pub fn made_checksum(made: &Value) -> Result<String> {
 /// Send what follows the arrays (docs/FORMAT.md §1): the header's text, its length and the magic;
 /// how many bytes they take.
 pub(crate) fn tail(mut out: impl Write, header: &Value) -> Result<u64> {
-    framing(&mut out, serde_json::to_string(header)?.as_bytes())
+    framing(&mut out, serde_json::to_string(header)?.as_bytes(), FEWER)
 }
 
-/// Send a header's `text` as the file holds it, then its length and the magic; how many bytes they take.
-pub(crate) fn framing(mut out: impl Write, text: &[u8]) -> Result<u64> {
-    let length = u32::try_from(text.len()).map_err(|_| invalid("the header is longer than 4 GiB, more than the format holds: press fewer samples or files into one file"))?;
+/// What to do for a header longer than its length's four bytes hold, but for a tool key's.
+pub(crate) const FEWER: &str = "press fewer samples, files or columns into one file, or give its tool keys less to hold";
+
+/// Send a header's `text` as the file holds it, then its length and the magic; how many bytes they
+/// take. A `text` too long is refused with `advice`.
+pub(crate) fn framing(mut out: impl Write, text: &[u8], advice: &str) -> Result<u64> {
+    let length = length(text.len(), advice)?;
     out.write_all(text)?;
     out.write_all(&length.to_le_bytes())?;
     out.write_all(crate::rvr::MAGIC)?;
     Ok(text.len() as u64 + 12)
+}
+
+/// A header's length as its four bytes hold it, refused past 2^32 − 1.
+pub(crate) fn length(bytes: usize, advice: &str) -> Result<u32> {
+    u32::try_from(bytes).map_err(|_| invalid(format!("the header would be {} bytes, more than the 4,294,967,295 (2^32 − 1) its length's four bytes hold (docs/FORMAT.md §1): {advice}", crate::rvr::grouped(bytes as u64))))
 }
 
 /// Write `header` after the arrays of the file `stream` began, then its length and the magic (docs/FORMAT.md §1).
@@ -510,7 +519,7 @@ pub fn refilled(shell: &crate::change::Locked, from: impl AsRef<Path>, to: impl 
     for (_, at, size) in spans {
         copied(&source, 8 + at, size, from, &mut out, to)?;
     }
-    framing(&mut out, &text).map_err(|e| about(to, e))?;
+    framing(&mut out, &text, FEWER).map_err(|e| about(to, e))?;
     out.flush().map_err(written)
 }
 
@@ -535,6 +544,15 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    // FORMAT 1; SPEC 8.11, 8.12
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn a_header_of_two_to_the_32_bytes_is_refused_and_one_byte_fewer_is_framed() {
+        assert_eq!(super::length((1 << 32) - 1, super::FEWER).unwrap(), u32::MAX);
+        let said = super::length(1 << 32, super::FEWER).unwrap_err().to_string();
+        assert_eq!(said, "the header would be 4,294,967,296 bytes, more than the 4,294,967,295 (2^32 − 1) its length's four bytes hold (docs/FORMAT.md §1): press fewer samples, files or columns into one file, or give its tool keys less to hold");
     }
 
     // SPEC 1.5

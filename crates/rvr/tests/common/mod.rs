@@ -36,6 +36,23 @@ pub fn fixture(file: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(file)
 }
 
+/// samples.toml with these samples, their tree `analysis` unless they say otherwise.
+pub fn samples(body: &str) -> String {
+    format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n{body}")
+}
+
+/// The name of the file a press of the study in `dir` writes.
+pub fn name(dir: &Path) -> String {
+    format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap())
+}
+
+/// The header of the study's file, as rvr header prints it.
+pub fn header(dir: &Path) -> serde_json::Value {
+    let (code, said) = rvr(dir, &["header", &name(dir)]);
+    assert_eq!(code, 0, "{said}");
+    serde_json::from_str(&said).unwrap()
+}
+
 /// A study folder: three of the fixtures beside a samples.toml and a recipe.toml.
 pub fn study(name: &str, samples: &str, recipe: &str) -> Study {
     let dir = Study::new(name);

@@ -505,6 +505,11 @@ fn allowed() -> Vec<(&'static str, Change)> {
             let text = h["made"]["recipe"]["text"].as_str().unwrap().replacen("version = 1\n", "version = 1\nchunk_rows = 1024\n", 1);
             set_text(h, "recipe", &text);
         })),
+        ("§3 §7 a chunk_rows of 16,777,216, the most", Header(|h| {
+            h["data"]["chunk_rows"] = 16_777_216.into();
+            let text = h["made"]["recipe"]["text"].as_str().unwrap().replacen("version = 1\n", "version = 1\nchunk_rows = 16777216\n", 1);
+            set_text(h, "recipe", &text);
+        })),
         ("§11 tool keys of every allowed character", Raw(|h| h["A_b-9.z"] = json!({"x": [null, {}]}))),
         ("§11 a tool key two edits from data", Raw(|h| h["dash"] = json!({}))),
         ("§11 a tool key two edits from made", Raw(|h| h["mile"] = json!({}))),
@@ -566,6 +571,7 @@ fn opening() -> Vec<Row> {
         // §3 and §7: chunks
         ("§3", "chunk_rows there", Header(|h| { h["data"].as_object_mut().unwrap().remove("chunk_rows"); }), "data.chunk_rows is missing"),
         ("§3", "chunk_rows within its bounds", Header(|h| h["data"]["chunk_rows"] = 1023.into()), "data.chunk_rows is 1023, and a chunk holds from 1,024 to 16,777,216 rows"),
+        ("§3", "chunk_rows within its bounds: 16,777,217 is one too many", Header(|h| h["data"]["chunk_rows"] = 16_777_217.into()), "data.chunk_rows is 16777217, and a chunk holds from 1,024 to 16,777,216 rows"),
         ("§7 §12", "an array at least its table and a frame a lane", Header(|h| h["data"]["cols"][1]["size"] = 231.into()), "data.cols[\"MET\"].size is 231, and its 2 chunks take at least 232 bytes"),
         ("§7 §8", "no chunk spanning two samples", Arrays(|h, a| {
             let values: Vec<u8> = [20_f32, 0., 40., 30., 10.].iter().flat_map(|v| v.to_le_bytes()).collect();
@@ -611,6 +617,12 @@ fn opening() -> Vec<Row> {
         ("§1", "a count to 2^63 − 1", Header(|h| h["made"]["files"]["A"]["files"]["./fixture-a.root"]["entries"] = json!(9223372036854775808_u64)), "made.files[\"A\"].files[\"./fixture-a.root\"].entries must be a whole number"),
         ("§1", "a hole's entries are counts", Header(|h| h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["holes"] = json!([{"entries": [1.5, 3], "kind": "damaged", "why": "x"}])), "holes[0].entries must be [first, last]"),
         ("§1 §6.1", "seed from 0 to 2^64 − 1", Header(|h| h["made"]["files"]["B"]["events"]["seed"] = json!(-1)), "made.files[\"B\"].events: events.seed must be a whole number"),
+        ("§1 §6.1", "seed from 0 to 2^64 − 1: 2^64 refused", Text(|t| {
+            // made.sha256 made again of made as a reader parses it, so that the seed is what is refused.
+            *t = t.replacen("\"seed\":7", "\"seed\":18446744073709551616", 1);
+            let made = &serde_json::from_str::<Value>(t).unwrap()["made"];
+            *t = t.replacen(made["sha256"].as_str().unwrap(), &rowver::write::made_checksum(made).unwrap(), 1);
+        }), "made.files[\"B\"].events: events.seed must be a whole number from 0 to 2^64 − 1"),
         // §2 The top level
         ("§2", "rowver, data, made", Raw(|h| drop(h.as_object_mut().unwrap().shift_remove("made"))), "made is missing"),
         ("§2 §11", "each but rowver an object", Raw(|h| h["fixture_tool"] = 5.into()), "fixture_tool must be an object"),
@@ -648,6 +660,15 @@ fn opening() -> Vec<Row> {
         ("§4", "lim in order", Header(|h| h["data"]["cols"][1]["lim"] = json!([40.0, 0.0])), "data.cols[\"MET\"].lim is [40.0,0.0], and its first end is its least value"),
         ("§4", "vals ascending, from lim to lim", Header(|h| h["data"]["cols"][0]["vals"] = json!([0, 1, 2])), "data.cols[\"nlep\"].vals must be every distinct value"),
         ("§4", "vals required on a few values", Header(|h| drop(h["data"]["cols"][0].as_object_mut().unwrap().shift_remove("vals"))), "data.cols[\"nlep\"] has no vals"),
+        ("§4", "vals there whenever lim spans 64 values", Header(|h| {
+            let nlep = &mut h["data"]["cols"][0];
+            (nlep["lim"], nlep["nice"]) = (json!([0, 63]), json!([0, 63]));
+            nlep.as_object_mut().unwrap().shift_remove("vals");
+        }), "data.cols[\"nlep\"] has no vals, and a whole-number column whose lim [0,63] spans 64 values or fewer lists them"),
+        ("§4", "vals at most 64 of them", Header(|h| {
+            let nlep = &mut h["data"]["cols"][0];
+            (nlep["lim"], nlep["nice"], nlep["vals"]) = (json!([0, 64]), json!([0, 64]), json!((0..=64).collect::<Vec<u64>>()));
+        }), "data.cols[\"nlep\"].vals must be every distinct value, ascending, from lim's first end to its last, at most 64 of them"),
         ("§4 R5", "vals on no float column", Header(|h| h["data"]["cols"][1]["vals"] = json!([0])), "data.cols[\"MET\"] has vals, which a float column never has"),
         ("§4 F6", "whole facts are whole numbers", Header(|h| h["data"]["cols"][0]["lim"] = json!([0, 3.5])), "data.cols[\"nlep\"].lim must be two whole numbers"),
         ("§4 §8", "by_sample one per sample", Header(|h| drop(h["data"]["cols"][1]["by_sample"].as_array_mut().unwrap().pop())), "data.cols[\"MET\"].by_sample must hold one SHA-256 per sample"),
@@ -699,11 +720,13 @@ fn opening() -> Vec<Row> {
         ("§6.1", "the algorithm named", Header(|h| h["made"]["files"]["B"]["events"]["algorithm"] = "another".into()), "made.files[\"B\"].events: events.algorithm is not"),
         ("§6.1", "choose all, first or random", Header(|h| h["made"]["files"]["A"]["events"]["choose"] = "last".into()), "made.files[\"A\"].events: events.choose is not all, first or random"),
         ("§6.1 R10", "N from 1", Header(|h| h["made"]["files"]["A"]["events"]["n"] = 0.into()), "made.files[\"A\"].events: events.n must be a whole number from 1"),
+        ("§1 §6.1", "N to 2^63 − 1: 2^63 refused", Header(|h| h["made"]["files"]["A"]["events"]["n"] = json!(9223372036854775808_u64)), "made.files[\"A\"].events: events.n must be a whole number from 1 to 2^63 − 1"),
         ("§6.1", "all: no stop", Header(|h| h["made"]["files"]["A"]["events"] = json!({"choose": "all"})), "made.files[\"A\"].events: the file ./fixture-a2.root's stop or take is not what"),
         ("§6.1", "first: stop when it read fewer", Header(|h| drop(h["made"]["files"]["A"]["files"]["./fixture-a2.root"].as_object_mut().unwrap().shift_remove("stop"))), "made.files[\"A\"].events: the file ./fixture-a2.root's stop is not what"),
         ("§6.1", "random: take on every file", Header(|h| drop(h["made"]["files"]["B"]["files"]["./fixture-b.root"].as_object_mut().unwrap().shift_remove("take"))), "made.files[\"B\"].events: the file ./fixture-b.root's take is not what"),
         ("§6.1", "random: takes add up to min(N, total)", Header(|h| h["made"]["files"]["B"]["files"]["./fixture-b.root"]["take"] = 3.into()), "made.files[\"B\"].events: the files' take adds up to 3, and a random choice of 4 takes 4"),
         ("§6.1 F8", "at most 2^40 entries a sample", Header(|h| h["made"]["files"]["B"]["files"]["./fixture-b.root"]["entries"] = json!(1_u64 << 41)), "made.files[\"B\"].events: the sample's files hold more than 2^40 entries in all"),
+        ("§6.1 F8", "at most 2^40 entries a sample: 2^40 + 1 refused", Header(|h| h["made"]["files"]["B"]["files"]["./fixture-b.root"]["entries"] = json!((1_u64 << 40) + 1)), "made.files[\"B\"].events: the sample's files hold more than 2^40 entries in all"),
         // §6.2 Holes
         ("§6.2", "a hole is exactly entries, kind, why", Header(|h| h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["holes"] = json!([{"entries": [3, 7], "kind": "damaged", "why": "x", "more": 1}])), "made.files[\"A\"].files[\"./fixture-empty.root\"].holes[0] has a field \"more\""),
         ("§6.2", "first < last", Header(|h| h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["holes"] = json!([hole(5, 5)])), "holes[0].entries is [5, 5], and holes are ranges first < last"),
@@ -871,7 +894,13 @@ fn in_full() -> Vec<Row> {
         ("§6.3 L16", "uuid 8-4-4-4-12 lowercase hex", Lock(|l| l.samples[0].files[0].uuid = "X".into()), "./fixture-a.root's uuid is not a ROOT UUID"),
         ("§6.3 L17", "a branch's kind", Lock(|l| met_as(l, "f16")), "kind is a .rvr kind"),
         ("§6.3 L18", "no list twice", Lock(|l| l.branches.push(l.branches[0].clone())), "samples.lock writes one branch list twice"),
-        ("§6.3 L19", "2^40 entries a sample", Lock(|l| l.samples[1].files[0].entries = 1 << 41), "samples.lock sample \"B\"'s files hold more than 2^40 entries in all"),
+        ("§6.3 L19", "2^40 entries a sample", Lock(|l| {
+            let mut more = l.samples[1].files[0].clone();
+            (more.at, more.uuid, more.entries) = ("./fixture-b9.root".into(), "31e851e4-b994-11f1-ba5c-000000000009".into(), 1);
+            l.samples[1].files[0].entries = 1 << 40;
+            l.samples[1].files.push(more);
+        }), "samples.lock sample \"B\"'s files hold more than 2^40 entries in all, more than a sample of a .rvr file may: split them among samples of fewer files"),
+        ("§6.3 L19", "2^40 entries a sample: 2^40 + 1 in one file refused", Lock(|l| l.samples[1].files[0].entries = (1 << 40) + 1), "samples.lock sample \"B\": one of its files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones"),
         // §7 Arrays: chunks, lanes, frames and tables
         ("§3 §7", "chunk_rows the recipe's", Header(|h| h["data"]["chunk_rows"] = 1024.into()), "data.chunk_rows is 1024, and it is the recipe's chunk_rows, 65,536"),
         ("§7", "lane sizes adding up to the frames", Arrays(|_, a| { let n = a[3].len(); a[3][n - 128] += 1; }), "data.cols[\"MET\"]: its chunk table gives its frames"),

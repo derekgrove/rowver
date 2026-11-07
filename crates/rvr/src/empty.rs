@@ -156,11 +156,11 @@ fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), Strin
     let (texts, name) = study_texts(shell.header());
     let base = base(file, study)?;
     let (staged, out) = (rowver::write::beside(&real, ".refill"), rowver::write::beside(&real, ".refilled"));
-    if let Some(there) = [&staged, &out].into_iter().find(|p| p.exists()) {
+    if let Some(there) = [&staged, &out].into_iter().find(|p| std::fs::symlink_metadata(p).is_ok()) {
         return Err(format!("{} is in the way: remove it, and refill again.", there.display()));
     }
     println!("Pressing the study {shown} carries again, into {}:", staged.display());
-    let place = Place { base, study: name, target: staged.clone(), at: At::Missing, locked: None };
+    let place = Place { base, study: name, target: staged.clone(), at: At::Missing, locked: None, found: None };
     // The copy pressed beside it is not signed: only its arrays are kept.
     let asked = Asked { choose: Choose::Recorded(shell.header()["made"]["files"].clone()), on: On::Once, workers, sign: false };
     let pressed = crate::plan::build(place, texts, asked).and_then(crate::core::press);

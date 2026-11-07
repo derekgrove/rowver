@@ -233,7 +233,7 @@ lock already there stays as it was. Each failure is a line marked `FAIL`, with t
 
 ```text
 $ rvr samples resolve samples.toml
-  FAIL  flat: ./flat_a.root has no tree "Events". Its trees: analysis, other, ntuple/Events, deep/a/b/t.
+  FAIL  flat: ./flat_a.root has no tree "Events". Its trees: analysis, other, ntuple/Events, deep/a/b/t (1 folder, past the 3 folders deep or 64 folders the listing opens, was not looked in).
 
 0 samples, 0 distinct files, 0.0 MB in 0.0 s.
 rvr samples resolve: 1 of 1 samples could not be resolved; samples.lock was not written. Fix the lines marked FAIL and run resolve again.
@@ -823,11 +823,12 @@ copy in another skim; two events of one key in one file are refused). Per sample
 events only A holds, how many only B holds, and, of those both hold, the first whose values differ
 in a stored or derived column both hold (floats bit for bit), with how many differ; values are
 written as `rvr dump --all` writes them, with their bits in hex when two that differ read alike (as
-NaNs). `--sample NAME` compares one sample. A column held with two kinds, or as a list in one file
-only, is named and not compared, as is a column only one file holds. It holds the key columns of
-both files, two row numbers per event both hold, and one column of each file at a time (a derived
-one worked out alone, a chunk of the columns it uses at a time). Exit status 0 when the two hold the same events with the
-same values, 1 when they do not, 2 when one cannot be read.
+NaNs). `--sample NAME` compares one sample. A file of more than 2^32 − 1 rows is refused. A column
+held with two kinds, or as a list in one file only, is named and not compared, as is a column only
+one file holds. It holds the key columns of both files, two row numbers per event both hold, and one
+column of each file at a time (a derived one worked out alone, a chunk of the columns it uses at a
+time). Exit status 0 when the two hold the same events with the same values, 1 when they do not, 2
+when one cannot be read.
 
 ```text
 $ rvr diff loose.rvr tight.rvr --rows --key run,event

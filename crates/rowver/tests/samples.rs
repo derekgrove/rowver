@@ -22,7 +22,7 @@ fn refused(text: &str) -> String {
     }
 }
 
-// SPEC 3.1.1, 3.1.2, 3.1.5, 3.2.1, 3.2.2, 3.3.1, 3.4.1, 3.4.2, 3.5.2, 3.5.3, 3.5.4, 3.5.5, 3.5.6, 3.5.8, 3.5.9, 3.5.10, 3.6.2, 3.6.4, 3.7.4, 3.8.5, 1.5
+// SPEC 3.1.1, 3.1.2, 3.1.5, 3.2.1, 3.2.2, 3.3.1, 3.4.1, 3.4.2, 3.5.2, 3.5.3, 3.5.4, 3.5.5, 3.5.6, 3.5.7, 3.5.8, 3.5.9, 3.5.10, 3.6.2, 3.6.4, 3.7.4, 3.8.5, 1.5
 #[test]
 fn each_rule_refuses_a_text_that_breaks_it_alone() {
     let cases = refusals();
@@ -66,9 +66,11 @@ fn refusals() -> Vec<(&'static str, String, &'static str)> {
         ("3.5.6 eras empty", sample("files = \"x\"\neras = []"), "eras"),
         ("3.5.6 era unknown", sample("files = \"x\"\neras = [\"UL19\"]"), "UL19"),
         ("3.5.8 random", sample("files = \"x\"\nchoose = \"random\""), "events"),
+        ("3.5.7 events from 1", sample("files = \"x\"\nevents = 0"), "from 1"),
         ("3.5.9 seed", sample("files = \"x\"\nevents = 5\nchoose = \"random\"\nseed = -1"), "seed"),
         ("3.5.10 key start", sample("files = \"x\"\nmetadata = { \"1a\" = 1 }"), "1a"),
         ("3.5.10 key sample", sample("files = \"x\"\nmetadata = { sample = 1 }"), "sample"),
+        ("3.5.10 nested 60 deep", sample(&format!("files = \"x\"\nmetadata = {{ deep = {}1{} }}", "[".repeat(60), "]".repeat(60))), "nest more than 59 deep"),
         ("3.5.10 key file", sample("files = \"x\"\nmetadata = { file = 1 }"), "file"),
         ("3.5.10 key word", sample("files = \"x\"\nmetadata = { and = 1 }"), "and"),
         ("3.5.10 events_total", sample("files = \"x\"\nmetadata = { events_total = 1 }"), "events_total"),
@@ -110,11 +112,13 @@ fn accepted() -> Vec<(&'static str, String)> {
         ("one sample", format!("{HEAD}{ONE}")),
         ("places, defaults, an era, trees and every form of files", text("p = \"/data/\"", "tree = \"T\"", "[eras.E]\nn = 7", "[[sample]]\nname = \"a\"\nfiles = [\"{p}/{n}.root\", \"~/b.root\", \"c/d.root\", \"root://h.org//e.root\", \"davs://h.org:443/f.root\", \"https://h.org/g.root\"]\neras = [\"E\"]\ntrees = { p1 = \"T1\" }\n")),
         ("eras and mass points named and labelled", text("lpc = \"root://cmseos.fnal.gov//store/x/\"", "metadata = { lumi = 59.8 }", "[eras.UL17]\nera = 2\n[eras.UL18]\nera = 3", "[[sample]]\nname = \"Signal\"\nfiles = \"{lpc}/{era}/s_{era}.root\"\neras = [\"UL17\", \"UL18\"]\ntrees = { \"300/292.5\" = \"SMS_300\", \"400/300\" = \"SMS_400\" }\nmetadata = { kind = \"signal\", xsec = 2 }\n")),
+        ("metadata nested 59 deep, as deep as a header holds it", sample(&format!("files = \"x.root\"\nmetadata = {{ deep = {}1{} }}", "[".repeat(59), "]".repeat(59)))),
+        ("a number of events and a seed at TOML's largest, 2^63 − 1", sample("files = \"x.root\"\nevents = 9223372036854775807\nchoose = \"random\"\nseed = 9223372036854775807")),
         ("choices: first N, random with a seed, a default seed", text("", "tree = \"T\"\nevents = 10\nchoose = \"random\"\nseed = 7", "", "[[sample]]\nname = \"a\"\nfiles = \"x.root\"\n[[sample]]\nname = \"b\"\nfiles = \"y.root\"\nchoose = \"first\"\n[[sample]]\nname = \"c\"\nfiles = \"z.root\"\nevents = \"all\"\nchoose = \"first\"\n")),
     ]
 }
 
-// SPEC 3.1.1, 3.7.1, 3.7.2, 3.7.3
+// SPEC 3.1.1, 3.5.7, 3.5.9, 3.7.1, 3.7.2, 3.7.3
 #[test]
 fn the_conformance_corpus_holds_what_this_validator_says() {
     let mut cases = Vec::new();

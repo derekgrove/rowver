@@ -3,13 +3,9 @@
 
 mod common;
 
-use common::{rvr, study, Study};
+use common::{header, name, rvr, samples, study, Study};
 use serde_json::Value;
 use std::path::Path;
-
-fn samples(body: &str) -> String {
-    format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n{body}")
-}
 
 fn recipe(keep: &str, columns: &str, derived: &str) -> String {
     format!("format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n{keep}\n[columns]\n{columns}\n[totals]\n\n[derived]\n{derived}")
@@ -24,16 +20,6 @@ fn copies(name: &str, copies: usize, recipe: &str) -> Study {
     }
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     dir
-}
-
-fn name(dir: &Path) -> String {
-    format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap())
-}
-
-fn header(dir: &Path) -> Value {
-    let (code, said) = rvr(dir, &["header", &name(dir)]);
-    assert_eq!(code, 0, "{said}");
-    serde_json::from_str(&said).unwrap()
 }
 
 // SPEC 4.3.1, 4.3.3, 7.7.3

@@ -35,6 +35,8 @@ pub struct Place {
     pub at: At,
     /// The lock on the file at the target, for a press that writes it (SPEC §8.12).
     pub locked: Option<rowver::change::Locked>,
+    /// What stood at the target, taken before it was found to hold no file to lock.
+    pub found: Option<Standing>,
 }
 
 /// The file at a press's target, as it was found.
@@ -217,6 +219,8 @@ pub struct Plan {
     pub tools: serde_json::Map<String, Value>,
     /// The lock on the file at the target, held until the press ends (SPEC §8.12).
     pub locked: Option<rowver::change::Locked>,
+    /// What stood at the target where there was no file to lock (a folder, a link to nothing).
+    pub found: Option<Standing>,
     /// Why the file it only adds columns to cannot be changed in place, so it is written anew.
     pub anew: Option<String>,
     /// Why a press that would write the file is refused before it reads: it lies on a read-only filesystem.
@@ -516,10 +520,23 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
         signer,
         identity,
         tools,
+        found: place.found,
         locked: place.locked,
         anew,
         refused,
     })
+}
+
+/// What stands at a path, links not followed: its kind, device and inode (none where the system has no inodes).
+pub type Standing = (std::fs::FileType, u64, u64);
+
+/// What stands at `path`, links not followed.
+pub fn standing(path: &std::path::Path) -> Option<Standing> {
+    let there = std::fs::symlink_metadata(path).ok()?;
+    #[cfg(unix)]
+    return Some((there.file_type(), std::os::unix::fs::MetadataExt::dev(&there), std::os::unix::fs::MetadataExt::ino(&there)));
+    #[cfg(not(unix))]
+    Some((there.file_type(), 0, 0))
 }
 
 /// What a press of the file at `target` is told when the file lies on a read-only filesystem (`kind`, why it may not be written).

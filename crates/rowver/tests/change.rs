@@ -877,3 +877,32 @@ fn a_column_is_added_in_place_to_a_2_gb_file_reading_none_of_its_arrays() {
     let after = std::fs::metadata(&path).unwrap().len();
     eprintln!("a column added in place to a {:.2} GB file ({:.2} GB after) in {:.2} s", size as f64 / 1e9, after as f64 / 1e9, took.as_secs_f64());
 }
+
+/// The header length a file's last 12 bytes state (FORMAT §1), read without reading the file.
+fn length_of(path: impl AsRef<Path>) -> u64 {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).unwrap();
+    file.seek(SeekFrom::End(-12)).unwrap();
+    let mut four = [0; 4];
+    file.read_exact(&mut four).unwrap();
+    u32::from_le_bytes(four).into()
+}
+
+// FORMAT 1, 11; SPEC 8.11, 8.12
+#[test]
+#[ignore = "writes a 4 GiB header and holds about 16 GB while it does: cargo test --release -p rowver --test change -- --ignored two_to_the_32"]
+fn a_tool_key_that_makes_the_header_two_to_the_32_bytes_is_refused_and_one_byte_fewer_is_set() {
+    let path = written(&golden(), "huge-tool");
+    let _journal = common::Written(journal(&path));
+    // The key's object replaced where it lies: the header grows by the text's bytes alone.
+    set(&path, "huge", br#"{"s": ""}"#).unwrap();
+    let most = (1_u64 << 32) - 1;
+    let fill = (most - length_of(&path)) as usize;
+    set_tool(&Locked::take(&path).unwrap(), "huge", json!({"s": "a".repeat(fill)})).unwrap();
+    assert_eq!(length_of(&path), most);
+    let size = std::fs::metadata(&path).unwrap().len();
+    assert!(Reader::open(&path).is_ok_and(|reader| reader.header()["huge"]["s"].as_str().map(str::len) == Some(fill)));
+    let said = set_tool(&Locked::take(&path).unwrap(), "huge", json!({"s": "a".repeat(fill + 1)})).unwrap_err().to_string();
+    assert!(said.ends_with("the header would be 4,294,967,296 bytes, more than the 4,294,967,295 (2^32 − 1) its length's four bytes hold (docs/FORMAT.md §1): give the tool key less to hold"), "{said}");
+    assert_eq!((std::fs::metadata(&path).unwrap().len(), length_of(&path)), (size, most), "the file as it was");
+}

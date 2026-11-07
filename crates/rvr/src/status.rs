@@ -52,7 +52,7 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
         At::Unopened(e) => return Err(rowver::plain(&target, e)),
     };
     // The Plan rvr press would make, with these options, of the file there.
-    let place = Place { base: dir, study, target: target.clone(), at, locked: None };
+    let place = Place { base: dir, study, target: target.clone(), at, locked: None, found: None };
     let asked = Asked { choose: Choose::Options(choice.clone()), on: On::Earlier, workers: 1, sign: true };
     let plan = crate::plan::build(place, texts.clone(), asked);
     let pressing = plan.as_ref().is_ok_and(|plan| !matches!(plan.from, Base::Current(_)));
@@ -129,7 +129,7 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
 /// With no file at the target: what rvr press would read (the Plan's reads), or why it would
 /// refuse, then that there is no file yet. Never current.
 fn missing(dir: PathBuf, study: String, target: PathBuf, texts: crate::texts::Texts, choice: Choice) -> Result<bool, String> {
-    let place = Place { base: dir, study, target: target.clone(), at: At::Missing, locked: None };
+    let place = Place { base: dir, study, target: target.clone(), at: At::Missing, locked: None, found: None };
     let asked = Asked { choose: Choose::Options(choice), on: On::Earlier, workers: 1, sign: true };
     let stopped = crate::journal::folder(&target);
     match crate::plan::build(place, texts, asked) {

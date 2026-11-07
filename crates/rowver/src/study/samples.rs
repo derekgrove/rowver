@@ -445,18 +445,27 @@ pub(super) fn metadata(values: &toml::Table, place: &str, p: &mut Problems) {
         } else if given(key) {
             p.say(format!("{place}: {key} is given by rvr to every sample: name yours otherwise"));
         }
-        value_ok(value, &format!("{place} {key}"), p);
+        let place = format!("{place} {key}");
+        if value_ok(value, &place, p) > NESTING {
+            p.say(format!("{place}: its lists and tables nest more than {NESTING} deep, more than a .rvr header holds: nest them less"));
+        }
     }
 }
 
-fn value_ok(value: &toml::Value, place: &str, p: &mut Problems) {
+/// The lists and tables a metadata value may nest: a sample's metadata lies 5 deep in a header of
+/// at most `DEEPEST` levels (docs/FORMAT.md §1).
+const NESTING: usize = crate::json::DEEPEST - 5;
+
+/// Say what in `value` is not metadata; how many lists and tables it nests, itself among them.
+fn value_ok(value: &toml::Value, place: &str, p: &mut Problems) -> usize {
     match value {
         toml::Value::Datetime(_) => p.say(format!("{place}: a date or time is not metadata: write it as text, in quotes")),
         toml::Value::Float(f) if !f.is_finite() => p.say(format!("{place}: {f} is not a finite number")),
-        toml::Value::Array(list) => list.iter().for_each(|v| value_ok(v, place, p)),
-        toml::Value::Table(table) => table.values().for_each(|v| value_ok(v, place, p)),
+        toml::Value::Array(list) => return 1 + list.iter().map(|v| value_ok(v, place, p)).max().unwrap_or(0),
+        toml::Value::Table(table) => return 1 + table.values().map(|v| value_ok(v, place, p)).max().unwrap_or(0),
         _ => {}
     }
+    0
 }
 
 /// Whether text can be a sample's or era's name: ASCII letters, digits, `_` and `-`, at least one.
@@ -613,6 +622,14 @@ mod tests {
         let own = read(&format!("{noted}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = {{ note = \"no era\" }}")).unwrap();
         assert_eq!(Value::Object(own[0].metadata.clone()), json!({"note": "no era", "n": 1}));
         assert!(problems(&format!("{noted}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"")).contains("{campaign} is not defined"));
+        // Metadata nests as deep as the header holds, and no deeper (SPEC 3.5.10).
+        let nested = |n: usize| format!("{HEAD}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = {{ deep = {}1{} }}", "[".repeat(n), "]".repeat(n));
+        assert!(read(&nested(59)).is_ok());
+        assert!(problems(&nested(60)).contains("metadata deep: its lists and tables nest more than 59 deep, more than a .rvr header holds: nest them less"), "{}", problems(&nested(60)));
+        // Said once for the key, however many of its lists go too deep.
+        let deep = format!("{}1{}", "[".repeat(60), "]".repeat(60));
+        let siblings = problems(&format!("{HEAD}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = {{ deep = [{deep}, {deep}, {deep}] }}"));
+        assert_eq!(siblings.matches("nest more than 59 deep").count(), 1, "{siblings}");
     }
 
     // SPEC 1.4, 1.5, 3.1.3, 3.1.4, 3.2.1, 3.3.1, 3.3.2, 3.5.1, 3.5.2, 3.5.4, 3.5.5, 3.5.7, 3.5.8, 3.5.9, 3.5.10, 3.6.4, 3.7.2, 3.7.4, 3.8.1, 3.8.2, 3.8.5

@@ -2100,3 +2100,30 @@ fn a_sample_of_two_to_the_forty_entries_is_valid() {
     let (header, arrays) = s.header(&[flat("x", vals([1u8, 2, 3]))], &[]);
     assert_valid("big", &file(&header, &arrays));
 }
+
+// FORMAT 3, 6, 6.3, 12
+#[test]
+fn a_sample_of_ten_thousand_files_is_valid() {
+    let paths: Vec<String> = (0..10_000).map(|i| format!("./f{i:05}.root")).collect();
+    let files: Vec<(&str, u64)> = paths.iter().map(|p| (p.as_str(), 1)).collect();
+    let samples_toml = format!("{NO_DEFAULTS}\n[[sample]]\nname = \"many\"\nfiles = \"./f*.root\"\ntree = \"Events\"\n");
+    let recipe = recipe("", "branches = [\"x\"]\n", "", "");
+    let s = study("many", &samples_toml, &recipe, vec![br("x", "u1", "flat")], vec![sample("many", "Events", &files).asked(&["./f*.root"])]);
+    let (header, arrays) = s.header(&[flat("x", vals((0..10_000).map(|i| (i % 3) as u8)))], &[]);
+    assert_eq!(header["data"]["files"].as_array().unwrap().len(), 10_000);
+    assert_valid("many", &file(&header, &arrays));
+}
+
+// FORMAT 1, 5, 6; SPEC 3.5.10
+#[test]
+fn metadata_at_the_ends_of_tomls_whole_numbers_and_nested_as_deep_as_the_header_goes_is_valid() {
+    // made.files[s].metadata lies 5 deep in the header: a list nested 59 deep in it reaches 64.
+    let deep = format!("{}1{}", "[".repeat(59), "]".repeat(59));
+    let samples_toml = format!("{NO_DEFAULTS}\n[[sample]]\nname = \"a\"\nfiles = \"./a.root\"\ntree = \"Events\"\nmetadata = {{ low = -9223372036854775808, high = 9223372036854775807, deep = {deep} }}\n");
+    let recipe = recipe("", "branches = [\"x\"]\n", "", "");
+    let nested = (1..59).fold(json!([1]), |inner, _| json!([inner]));
+    let a = sample("a", "Events", &[("./a.root", 2)]).meta(json!({"low": i64::MIN, "high": i64::MAX, "deep": nested}));
+    let s = study("ends", &samples_toml, &recipe, vec![br("x", "u1", "flat")], vec![a]);
+    let (header, arrays) = s.header(&[flat("x", vals([1u8, 2]))], &[]);
+    assert_valid("ends", &file(&header, &arrays));
+}
