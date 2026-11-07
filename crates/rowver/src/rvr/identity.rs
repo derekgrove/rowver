@@ -4,7 +4,7 @@
 
 use super::{count, exactly, list, nonempty, object, text, whole_count, MEND};
 use crate::choice::{per_file, Events};
-use crate::study::lock::{self, uuid, MOST_ENTRIES};
+use crate::study::lock::{self, uuid};
 use crate::{invalid, Result};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -103,8 +103,7 @@ fn wrong(place: &str, path: &str, what: &str) -> crate::Error {
 /// A sample's `events` record checked against each file's entries, stop and take: what it says a press read.
 fn counted(files: &[(&str, &Value)], events: &Value, place: &str) -> Result<Counted> {
     let entries: Vec<u64> = files.iter().map(|(_, record)| whole_count(&record["entries"]).unwrap_or(0)).collect();
-    let total = entries.iter().try_fold(0_u64, |sum, n| sum.checked_add(*n)).filter(|total| *total <= MOST_ENTRIES);
-    let total = total.ok_or_else(|| invalid(format!("{place}: the sample's files hold more than 2^40 entries in all, more than a file's samples may, so that a random choice is made again in bounded time (docs/FORMAT.md §6.1): split the sample")))?;
+    let total = lock::entries_in_all(&entries, "the sample's").map_err(|_| invalid(format!("{place}: the sample's files hold more than 2^40 entries, more than a sample of a .rvr file may (docs/FORMAT.md §6.1): {MEND}")))?;
     let field = |record: &Value, key: &str| record.get(key).and_then(whole_count);
     let choice = Events::read(events).map_err(|e| invalid(format!("{place}: {e} (docs/FORMAT.md §6.1): {MEND}")))?;
     match choice {

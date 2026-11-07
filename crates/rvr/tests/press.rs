@@ -1378,7 +1378,7 @@ fn a_press_stopped_part_way_is_picked_up_where_it_stopped() {
     assert!(!staged.exists());
 }
 
-// SPEC 2.6, 7.3.3, 7.5.1, 7.5.4
+// SPEC 2.6, 7.3.3, 7.5.1, 7.5.4, 8.12
 #[test]
 fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
     let samples = "format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\n\n[eras]\n\n[[sample]]\nname = \"flat\"\nlabel = \"Flat\"\nfiles = [\"a/flat.root\", \"b/flat.root\"]\ntree = \"analysis\"\n";
@@ -1398,20 +1398,25 @@ fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
     let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     assert!(!dir.join(&name).exists());
     std::fs::rename(dir.join("away"), dir.join("b")).unwrap();
-    // Every file read, the file cannot be put in place (a folder stands there): what was read is
-    // kept, and the next press reads nothing again.
+    // A folder at the target is refused before anything is read.
     std::fs::create_dir_all(dir.join(&name).join("in the way")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 1, "{said}");
-    assert!(said.contains("where it stopped: 1 of 2 files done") && said.contains("  2/2 "), "{said}");
-    assert!(said.contains("is a folder, not a file") && !said.contains("put there by another program"), "{said}");
-    assert!(said.contains("Mend it, then press again, which carries on from the 2 of 2 files done"), "{said}");
+    assert!(said.contains("is a folder, not a file: move it away, or name a file with --out") && !said.contains("/2 "), "{said}");
+    assert!(rvr(&dir, &["status"]).1.contains("is a folder, not a file: move it away"));
     std::fs::remove_dir_all(dir.join(&name)).unwrap();
+    // A pipe there too, refused without waiting on it.
+    assert!(std::process::Command::new("mkfifo").arg(dir.join(&name)).status().unwrap().success());
+    for command in ["press", "status"] {
+        let (code, said) = rvr(&dir, &[command]);
+        assert!(code == 1 && said.contains(&format!("{name} is a pipe, socket or device, not a file: move it away, or name a file with --out")), "{said}");
+    }
+    std::fs::remove_file(dir.join(&name)).unwrap();
     // A link to nothing there before the press is not another program's: the file is put in its place.
     std::os::unix::fs::symlink("nowhere.rvr", dir.join(&name)).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 0, "{said}");
-    assert!(said.contains("where it stopped: 2 of 2 files done") && !said.contains("/2 "), "{said}");
+    assert!(said.contains("where it stopped: 1 of 2 files done") && said.contains("  2/2 "), "{said}");
     assert!(std::fs::symlink_metadata(dir.join(&name)).unwrap().is_file());
     assert!(rvr(&dir, &["validate", &name, "--complete"]).1.contains("read all 10 entries"));
 }

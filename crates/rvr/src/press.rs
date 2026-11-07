@@ -60,6 +60,7 @@ fn read(options: &Options) -> Result<Pressing, String> {
 /// Press as asked: the exit status, 3 when the file at the target has holes.
 fn run(pressing: Pressing) -> Result<u8, String> {
     let (dir, study, target) = crate::texts::study(pressing.dir, pressing.out)?;
+    crate::plan::a_file_or_none(&target)?;
     // Through a link, the file it names is pressed, staged beside it and moved over it.
     let target = rowver::change::resolved(&target);
     let mut texts = crate::texts::read(&dir)?;
@@ -77,9 +78,11 @@ fn run(pressing: Pressing) -> Result<u8, String> {
         texts = crate::texts::read(&dir)?;
     }
     // Held from its first read of the file there until its new file is in place (SPEC §8.12), and
-    // read through the descriptor that holds the lock; a folder there, or nothing, has no lock.
+    // read through the descriptor that holds the lock; nothing there, or a link to nothing, has none.
     // The file's lock is taken before the staging folder's, as every writer takes them.
-    // What stands there is taken first: whatever comes after is another program's (SPEC §8.12).
+    // Checked again after the questions, what stands there is taken first: whatever comes after
+    // is another program's (SPEC §8.12).
+    crate::plan::a_file_or_none(&target)?;
     let found = crate::plan::standing(&target);
     let locked = match std::fs::metadata(&target) {
         Ok(there) if there.is_file() => Some(target_locked(&target)?),

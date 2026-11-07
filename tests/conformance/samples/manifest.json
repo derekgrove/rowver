@@ -469,7 +469,7 @@
     },
     {
       "rule": "SPEC 3.5.10 nested 60 deep",
-      "rust_says": "sample \"a\" metadata deep: its lists and tables nest more than 59 deep, more than a .rvr header holds: nest them less",
+      "rust_says": "sample \"a\" metadata deep: its lists and tables nest more than 59 deep, more than a .rvr header holds: nest them less in samples.toml, then resolve again",
       "text": "format = \"rvr-samples\"\nversion = 1\n[places]\n[defaults]\n[eras]\n[[sample]]\nname = \"a\"\ntree = \"T\"\nfiles = \"x\"\nmetadata = { deep = [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]] }\n",
       "verdict": "refused"
     },

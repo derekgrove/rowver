@@ -227,8 +227,10 @@ then letters, digits and `_` (a letter any character Unicode 16.0 counts Alphabe
 a number, of any script: `Nd`, `Nl` or `No`). Not `events_read`, `events_total`, `events_missing` or `file`, which
 rvr gives, nor `sample` or a word of the recipe language (`and`, `in`, `true` and the rest: the
 recipe reference's). Each value is text, a whole number (TOML's 64-bit integers), a finite float, `true` or
-`false`, or a list or table of these, nested at most 59 deep (a sample's metadata lies 5 levels
-into a header of at most 64, FORMAT §1). A date or time is refused: write it as text.
+`false`, or a list or table of these, nested at most 59 deep (a sample's metadata lies 5 levels into
+a header of at most 64, FORMAT §1), refused once for a key that nests deeper. A date or time is
+refused: write it as text. The same holds for `[defaults]` metadata and an era's values, which
+become a sample's metadata.
 
 ### 3.6 Placeholders
 
@@ -578,8 +580,9 @@ does not resolve, is asked again after 5, 15 and 30 seconds.
 `  FAIL  NAME: why`, with the fix: the nearest names in the folder for a name that matches nothing,
 the trees a file has for a tree it lacks (each as its folders and name joined by `/`, folder level
 by folder level from the top, each folder's in the order of its keys, to 3 folders deep and at most
-64 folders opened, with how many folders past those bounds were not looked in; or why its trees
-could not be listed; or, for an RNTuple of that name, that rvr reads TTrees alone).
+64 folders opened below the top, with how many folders it saw past those bounds and did not open;
+or why its trees could not be listed; or, for an RNTuple of that name, that rvr reads TTrees
+alone).
 
 **6.2.8** The lock is written through a file beside it, then put in its place, so it is whole or the
 old one.
@@ -1032,10 +1035,13 @@ moved over a file keeps that file's permissions, and is moved only if, just befo
 still names the file locked (its device and inode): one another program moved there meanwhile is
 left as it is, and the change refused, `FILE was replaced by another program while rvr held it: run the command again`.
 A press that found no file at its target moves its file there only if, just before the move, the
-path leads to no file, links followed, and names nothing or what it named as the press began (a
-folder, a link to nothing: the same kind, device and inode): anything another program put there meanwhile is left as it is, and the
-press stops, keeping what it read (exit 1), `FILE was put there by another program while rvr pressed it, and is left as
-it is: move it away`. A reader takes no lock.
+path leads to nothing, links followed, and names nothing or what it named as the press began (a link
+to nothing: the same kind, device and inode). The file then replaces a link to nothing, the link
+itself. A target that leads to anything but a file, links followed, is refused before anything is
+read (`FILE is a folder, not a file: move it away, or name a file with --out`, or `a pipe, socket or
+device`, exit 1), by `rvr status` too. Anything another program put there meanwhile is left as it
+is, and the press stops, keeping what it read (exit 1), `FILE was put there by another program while
+rvr pressed it, and is left as it is: move it away`. A reader takes no lock.
 
 A change that cannot be made in the file itself, because its filesystem has no locks or because the
 file may not be written (`chmod 444` in a folder that may be, or a read-only filesystem: CVMFS, a
@@ -1155,9 +1161,9 @@ column, and both values), with how many events differ in all; columns only one f
 named, not compared, and so is a column of another kind, or flat in one and a list in the other.
 Values, and the `--key` values events are matched by, compare as FORMAT.md §4 stores them: floats
 bit for bit, NaN equal to the same NaN. `--sample NAME` compares that sample alone. A file of more
-than 2^32 − 1 rows is refused. Exit 0 when the two hold the same events with the same values, 1 when
-they do not (a sample or column only one holds, or a column not compared, included), 2 when one
-cannot be read, is empty, or neither holds the `--sample`.
+than 2^32 − 1 rows is refused (exit 2). Exit 0 when the two hold the same events with the same
+values, 1 when they do not (a sample or column only one holds, or a column not compared, included),
+2 when one cannot be read, is empty, or neither holds the `--sample`.
 
 **9.5 `rvr status [DIR]`** says, from the study's texts and the file's header alone (no input is read),
 whether the file holds the study as it is: what changed in each text, what a press would do (§8), how

@@ -475,19 +475,18 @@ fn opens(header: &Value, path: &Path, advice: &str) -> Result<()> {
     checked_text(header, advice).map(drop).map_err(|e| crate::about(path, e))
 }
 
-/// The text `header` is written as, refused unless every reader opens it, with `advice` when it is too long.
-fn checked_text(header: &Value, advice: &str) -> Result<Vec<u8>> {
+/// The text `header` is written as, and its length, refused unless every reader opens it, with `advice` when it is too long.
+fn checked_text(header: &Value, advice: &str) -> Result<(Vec<u8>, u32)> {
     let text = serde_json::to_vec(header)?;
-    crate::write::length(text.len(), advice)?;
+    let length = crate::write::length(text.len(), advice)?;
     crate::rvr::checked_header(&text)?;
-    Ok(text)
+    Ok((text, length))
 }
 
 /// The tail `header` is written as (its text, length and magic), refused unless every reader opens
 /// it, with `advice` when it is too long.
 fn opening(header: &Value, advice: &str) -> Result<Vec<u8>> {
-    let mut bytes = checked_text(header, advice)?;
-    let length = crate::write::length(bytes.len(), advice)?;
+    let (mut bytes, length) = checked_text(header, advice)?;
     bytes.reserve_exact(12);
     bytes.extend_from_slice(&length.to_le_bytes());
     bytes.extend_from_slice(crate::rvr::MAGIC);

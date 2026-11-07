@@ -416,13 +416,7 @@ pub fn resolve(ctx: &Context, sample: &Sample, first: &dyn Fn(lock::Sample, &Bra
         })?;
     }
     let list = list.ok_or("it has no files")?;
-    if files.iter().try_fold(0u64, |sum, f| sum.checked_add(f.entries)).is_none_or(|t| t > lock::MOST_ENTRIES) {
-        return Err(if files.iter().any(|f| f.entries > lock::MOST_ENTRIES) {
-            "one of its files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones, and split them among samples".into()
-        } else {
-            "its files hold more than 2^40 entries in all, more than a sample of a .rvr file may: split them among samples of fewer files".into()
-        });
-    }
+    lock::entries_in_all(&files.iter().map(|f| f.entries).collect::<Vec<_>>(), "its")?;
     if list.list.iter().any(|b| b.name.is_empty()) {
         return Err(format!("its tree {} has a branch with no name, which samples.lock cannot record: write the files again with every branch named", sample.tree));
     }

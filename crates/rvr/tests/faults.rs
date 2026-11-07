@@ -8,7 +8,7 @@ mod common;
 #[path = "storage/server.rs"]
 mod server;
 
-use common::{rvr_with, Study};
+use common::{name as file, rvr_with, Study};
 use rowver::study::lock::{Branches, Lock};
 use serde_json::Value;
 use server::{Answer, Server};
@@ -36,11 +36,6 @@ fn rvr(dir: &Path, args: &[&str]) -> (i32, String) {
     let set = set(dir);
     let set: Vec<(&str, &str)> = set.iter().map(|(name, value)| (*name, value.as_str())).collect();
     rvr_with(dir, &set, args)
-}
-
-/// The file a press of the study in `dir` writes.
-fn file(dir: &Path) -> String {
-    format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap())
 }
 
 /// The header of the file at `path` (in `dir`).
@@ -310,28 +305,32 @@ const PUT_THERE: &str = " was put there by another program while rvr pressed it,
 // SPEC 7.5.3, 7.5.4, 8.12
 #[test]
 fn a_press_begun_with_no_file_at_its_target_leaves_one_another_program_put_there_meanwhile() {
-    // A file, a link to nothing, or a file written where a link there from the start leads: each
-    // is something there.
-    for put in ["file", "link", "where a link leads"] {
+    // A file, a link to nothing, a folder, or a file or folder made where a link there from the
+    // start leads: each is something there.
+    for put in ["file", "link", "where a link leads", "folder", "a folder where a link leads"] {
         let (dir, server) = halted(&format!("put-there-{}", put.replace(' ', "-")));
         let target = dir.join(file(&dir));
-        if put == "where a link leads" {
+        if put.ends_with("where a link leads") {
             std::os::unix::fs::symlink("elsewhere.rvr", &target).unwrap();
         }
         let putting = || match put {
             "file" => std::fs::write(&target, b"another program's file").unwrap(),
             "link" => std::os::unix::fs::symlink("nowhere.rvr", &target).unwrap(),
+            "folder" => std::fs::create_dir(&target).unwrap(),
+            "a folder where a link leads" => std::fs::create_dir(dir.join("elsewhere.rvr")).unwrap(),
             _ => std::fs::write(dir.join("elsewhere.rvr"), b"another program's file").unwrap(),
         };
         let (code, said, ()) = while_held(&dir, &server, &["press", "--workers", "1"], putting);
         match put {
             "file" => assert!(std::fs::read(&target).unwrap() == b"another program's file", "{said}"),
             "link" => assert_eq!(std::fs::read_link(&target).unwrap(), Path::new("nowhere.rvr"), "{said}"),
+            "folder" => assert!(std::fs::read_dir(&target).unwrap().next().is_none(), "{said}"),
+            "a folder where a link leads" => assert!(std::fs::read_link(&target).is_ok() && dir.join("elsewhere.rvr").is_dir(), "{said}"),
             _ => assert!(std::fs::read_link(&target).is_ok() && std::fs::read(&target).unwrap() == b"another program's file", "{said}"),
         }
         assert_eq!(code, 1, "{said}");
         assert!(said.contains(PUT_THERE) && said.contains("press again, which carries on from the 3 of 3 files done"), "{said}");
-        std::fs::remove_file(&target).unwrap();
+        if put == "folder" { std::fs::remove_dir(&target) } else { std::fs::remove_file(&target) }.unwrap();
         let (code, said) = rvr(&dir, &["press"]);
         assert!(code == 0 && said.contains("where it stopped: 3 of 3 files done"), "{said}");
         assert_eq!(rvr(&dir, &["validate", &file(&dir)]).0, 0);

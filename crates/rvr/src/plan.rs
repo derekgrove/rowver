@@ -219,7 +219,7 @@ pub struct Plan {
     pub tools: serde_json::Map<String, Value>,
     /// The lock on the file at the target, held until the press ends (SPEC §8.12).
     pub locked: Option<rowver::change::Locked>,
-    /// What stood at the target where there was no file to lock (a folder, a link to nothing).
+    /// What stood at the target where there was no file to lock: a link to nothing, or nothing.
     pub found: Option<Standing>,
     /// Why the file it only adds columns to cannot be changed in place, so it is written anew.
     pub anew: Option<String>,
@@ -525,6 +525,16 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
         anew,
         refused,
     })
+}
+
+/// Refuse a target that leads to anything but a file, links followed, before anything is read or asked (SPEC §8.12).
+pub fn a_file_or_none(target: &std::path::Path) -> Result<(), String> {
+    let what = match std::fs::metadata(target) {
+        Ok(there) if there.is_dir() => "a folder",
+        Ok(there) if !there.is_file() => "a pipe, socket or device",
+        _ => return Ok(()),
+    };
+    Err(format!("{} is {what}, not a file: move it away, or name a file with --out", target.display()))
 }
 
 /// What stands at a path, links not followed: its kind, device and inode (none where the system has no inodes).

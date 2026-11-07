@@ -12,6 +12,15 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The most entries a sample's files may hold in all, so a random choice is made again in bounded time.
 pub const MOST_ENTRIES: u64 = 1 << 40;
 
+/// The entries a sample's files hold in all, or, past `MOST_ENTRIES`, what is wrong and its fix.
+pub fn entries_in_all(entries: &[u64], whose: &str) -> std::result::Result<u64, String> {
+    match entries.iter().try_fold(0_u64, |sum, e| sum.checked_add(*e)) {
+        Some(total) if total <= MOST_ENTRIES => Ok(total),
+        _ if entries.iter().any(|&e| e > MOST_ENTRIES) => Err(format!("one of {whose} files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones and split them among samples")),
+        _ => Err(format!("{whose} files hold more than 2^40 entries in all, more than a sample of a .rvr file may: split them among samples of fewer files")),
+    }
+}
+
 /// Every file a study reads, pinned.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lock {
@@ -315,14 +324,13 @@ impl Lock {
                 false => p.say(format!("{place}: its branches names no branch list of the lock")),
             }
             let entries: Vec<u64> = s.files.iter().map(|f| f.entries).collect();
-            let total = entries.iter().try_fold(0u64, |sum, e| sum.checked_add(*e));
-            if total.is_none_or(|t| t > MOST_ENTRIES) {
-                p.say(match entries.iter().any(|&e| e > MOST_ENTRIES) {
-                    true => format!("{place}: one of its files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones, split them among samples, and resolve again"),
-                    false => format!("{place}'s files hold more than 2^40 entries in all, more than a sample of a .rvr file may: split them among samples of fewer files, and resolve again"),
-                });
-                continue;
-            }
+            let total = match entries_in_all(&entries, "its") {
+                Ok(total) => total,
+                Err(why) => {
+                    p.say(format!("{place}: {why}, then resolve again"));
+                    continue;
+                }
+            };
             // A random choice is made again where it is made anyway (full validation, the Plan):
             // its time grows with the entries. Here, that it takes what it chose in all.
             let planned = match s.events {
@@ -330,7 +338,7 @@ impl Lock {
                     let taken = s.files.iter().try_fold(0u64, |sum, f| sum.checked_add(f.take.unwrap_or(0)));
                     let fits = s.files.iter().all(|f| f.stop.is_none() && f.take.is_some_and(|t| t <= f.entries));
                     let taken = taken.filter(|_| fits).unwrap_or(u64::MAX);
-                    if taken != n.min(total.unwrap_or(0)) {
+                    if taken != n.min(total) {
                         p.say(format!("{place}: its files' take is not what its random choice reads"));
                     }
                     taken
@@ -345,7 +353,7 @@ impl Lock {
                     planned.iter().map(|r| r.read).sum::<u64>()
                 }
             };
-            if Some(s.events_total) != total {
+            if s.events_total != total {
                 p.say(format!("{place}: events_total is not the sum of its files' entries"));
             }
             if s.events_read != planned {

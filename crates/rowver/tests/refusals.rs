@@ -725,8 +725,8 @@ fn opening() -> Vec<Row> {
         ("§6.1", "first: stop when it read fewer", Header(|h| drop(h["made"]["files"]["A"]["files"]["./fixture-a2.root"].as_object_mut().unwrap().shift_remove("stop"))), "made.files[\"A\"].events: the file ./fixture-a2.root's stop is not what"),
         ("§6.1", "random: take on every file", Header(|h| drop(h["made"]["files"]["B"]["files"]["./fixture-b.root"].as_object_mut().unwrap().shift_remove("take"))), "made.files[\"B\"].events: the file ./fixture-b.root's take is not what"),
         ("§6.1", "random: takes add up to min(N, total)", Header(|h| h["made"]["files"]["B"]["files"]["./fixture-b.root"]["take"] = 3.into()), "made.files[\"B\"].events: the files' take adds up to 3, and a random choice of 4 takes 4"),
-        ("§6.1 F8", "at most 2^40 entries a sample", Header(|h| h["made"]["files"]["B"]["files"]["./fixture-b.root"]["entries"] = json!(1_u64 << 41)), "made.files[\"B\"].events: the sample's files hold more than 2^40 entries in all"),
-        ("§6.1 F8", "at most 2^40 entries a sample: 2^40 + 1 refused", Header(|h| h["made"]["files"]["B"]["files"]["./fixture-b.root"]["entries"] = json!((1_u64 << 40) + 1)), "made.files[\"B\"].events: the sample's files hold more than 2^40 entries in all"),
+        ("§6.1 F8", "at most 2^40 entries a sample", Header(|h| h["made"]["files"]["B"]["files"]["./fixture-b.root"]["entries"] = json!(1_u64 << 41)), "made.files[\"B\"].events: the sample's files hold more than 2^40 entries, more than a sample of a .rvr file may (docs/FORMAT.md §6.1): press its study again with rvr press, which writes it as docs/FORMAT.md says"),
+        ("§6.1 F8", "at most 2^40 entries a sample: 2^40 + 1 refused", Header(|h| h["made"]["files"]["B"]["files"]["./fixture-b.root"]["entries"] = json!((1_u64 << 40) + 1)), "made.files[\"B\"].events: the sample's files hold more than 2^40 entries, more than a sample of a .rvr file may (docs/FORMAT.md §6.1): press its study again with rvr press, which writes it as docs/FORMAT.md says"),
         // §6.2 Holes
         ("§6.2", "a hole is exactly entries, kind, why", Header(|h| h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["holes"] = json!([{"entries": [3, 7], "kind": "damaged", "why": "x", "more": 1}])), "made.files[\"A\"].files[\"./fixture-empty.root\"].holes[0] has a field \"more\""),
         ("§6.2", "first < last", Header(|h| h["made"]["files"]["A"]["files"]["./fixture-empty.root"]["holes"] = json!([hole(5, 5)])), "holes[0].entries is [5, 5], and holes are ranges first < last"),
@@ -899,8 +899,8 @@ fn in_full() -> Vec<Row> {
             (more.at, more.uuid, more.entries) = ("./fixture-b9.root".into(), "31e851e4-b994-11f1-ba5c-000000000009".into(), 1);
             l.samples[1].files[0].entries = 1 << 40;
             l.samples[1].files.push(more);
-        }), "samples.lock sample \"B\"'s files hold more than 2^40 entries in all, more than a sample of a .rvr file may: split them among samples of fewer files"),
-        ("§6.3 L19", "2^40 entries a sample: 2^40 + 1 in one file refused", Lock(|l| l.samples[1].files[0].entries = (1 << 40) + 1), "samples.lock sample \"B\": one of its files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones"),
+        }), "samples.lock sample \"B\": its files hold more than 2^40 entries in all, more than a sample of a .rvr file may: split them among samples of fewer files, then resolve again"),
+        ("§6.3 L19", "2^40 entries a sample: 2^40 + 1 in one file refused", Lock(|l| l.samples[1].files[0].entries = (1 << 40) + 1), "samples.lock sample \"B\": one of its files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones and split them among samples, then resolve again"),
         // §7 Arrays: chunks, lanes, frames and tables
         ("§3 §7", "chunk_rows the recipe's", Header(|h| h["data"]["chunk_rows"] = 1024.into()), "data.chunk_rows is 1024, and it is the recipe's chunk_rows, 65,536"),
         ("§7", "lane sizes adding up to the frames", Arrays(|_, a| { let n = a[3].len(); a[3][n - 128] += 1; }), "data.cols[\"MET\"]: its chunk table gives its frames"),

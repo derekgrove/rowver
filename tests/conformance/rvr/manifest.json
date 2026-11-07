@@ -1311,7 +1311,7 @@
       "at": 2254385,
       "refused": "opening",
       "rule": "FORMAT §6.1 F8 at most 2^40 entries a sample",
-      "rust_says": "made.files[\"B\"].events: the sample's files hold more than 2^40 entries in all, more than a file's samples may, so that a random choice is made again in bounded time (docs/FORMAT.md §6.1): split the sample",
+      "rust_says": "made.files[\"B\"].events: the sample's files hold more than 2^40 entries, more than a sample of a .rvr file may (docs/FORMAT.md §6.1): press its study again with rvr press, which writes it as docs/FORMAT.md says",
       "sha256": "9511970fa7e9131212d782119cd05493808ff695c210c68a8ba49c46d8a9b41a",
       "size": 15773,
       "verdict": "opening"
@@ -1320,7 +1320,7 @@
       "at": 2270158,
       "refused": "opening",
       "rule": "FORMAT §6.1 F8 at most 2^40 entries a sample: 2^40 + 1 refused",
-      "rust_says": "made.files[\"B\"].events: the sample's files hold more than 2^40 entries in all, more than a file's samples may, so that a random choice is made again in bounded time (docs/FORMAT.md §6.1): split the sample",
+      "rust_says": "made.files[\"B\"].events: the sample's files hold more than 2^40 entries, more than a sample of a .rvr file may (docs/FORMAT.md §6.1): press its study again with rvr press, which writes it as docs/FORMAT.md says",
       "sha256": "522063006dd2149d5c437ed8ade5062fc6e415c78a5b47e53da708408d2c77a1",
       "size": 15773,
       "verdict": "opening"
@@ -2229,7 +2229,7 @@
       "at": 3848168,
       "refused": "full",
       "rule": "FORMAT §6.3 L19 2^40 entries a sample",
-      "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"B\": ./fixture-b9.root is not where the lock lists it: its files are the matches of asked, entry after entry, each entry's in byte order of name, written as the entry writes its folder (a bare name as ./NAME); samples.lock sample \"B\"'s files hold more than 2^40 entries in all, more than a sample of a .rvr file may: split them among samples of fewer files, and resolve again. press its study again with rvr press, which writes it as docs/FORMAT.md says",
+      "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"B\": ./fixture-b9.root is not where the lock lists it: its files are the matches of asked, entry after entry, each entry's in byte order of name, written as the entry writes its folder (a bare name as ./NAME); samples.lock sample \"B\": its files hold more than 2^40 entries in all, more than a sample of a .rvr file may: split them among samples of fewer files, then resolve again. press its study again with rvr press, which writes it as docs/FORMAT.md says",
       "sha256": "24c0f7688748e79514e4111be1d27d5a6e622e2b839d787a4575575cffb3878b",
       "size": 15930,
       "verdict": "full"
@@ -2238,7 +2238,7 @@
       "at": 3864098,
       "refused": "full",
       "rule": "FORMAT §6.3 L19 2^40 entries a sample: 2^40 + 1 in one file refused",
-      "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"B\": one of its files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones, split them among samples, and resolve again. press its study again with rvr press, which writes it as docs/FORMAT.md says",
+      "rust_says": "made.lock.text is not a samples.lock docs/FORMAT.md §6.3 accepts: samples.lock sample \"B\": one of its files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones and split them among samples, then resolve again. press its study again with rvr press, which writes it as docs/FORMAT.md says",
       "sha256": "0e83deed9830392ef3a03ce906341f59ecfe82d507c6e03c3e31081a73466b02",
       "size": 15773,
       "verdict": "full"

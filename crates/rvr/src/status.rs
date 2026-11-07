@@ -30,6 +30,7 @@ pub fn main(options: &Options) -> u8 {
 
 fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) -> Result<bool, String> {
     let (dir, study, target) = crate::texts::study(dir, out)?;
+    crate::plan::a_file_or_none(&target)?;
     // Through a link, the file it names, and the press staged beside it, as rvr press finds them.
     let target = rowver::change::resolved(&target);
     let texts = crate::texts::read(&dir)?;

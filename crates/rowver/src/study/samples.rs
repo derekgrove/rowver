@@ -447,7 +447,7 @@ pub(super) fn metadata(values: &toml::Table, place: &str, p: &mut Problems) {
         }
         let place = format!("{place} {key}");
         if value_ok(value, &place, p) > NESTING {
-            p.say(format!("{place}: its lists and tables nest more than {NESTING} deep, more than a .rvr header holds: nest them less"));
+            p.say(format!("{place}: its lists and tables nest more than {NESTING} deep, more than a .rvr header holds: nest them less in samples.toml, then resolve again"));
         }
     }
 }

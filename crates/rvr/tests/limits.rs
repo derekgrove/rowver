@@ -50,7 +50,7 @@ fn a_sample_of_two_to_the_40_entries_is_resolved_pressed_and_valid_and_one_entry
     // One file alone past it: it is to be written again as smaller ones, for events = N does not help.
     claiming(&dir.join("big.root"), (1 << 40) + 1);
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
-    assert!(code == 1 && said.contains("  FAIL  big: one of its files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones, and split them among samples"), "{said}");
+    assert!(code == 1 && said.contains("  FAIL  big: one of its files holds more than 2^40 entries, more than a sample of a .rvr file may: write that file again as smaller ones and split them among samples"), "{said}");
 }
 
 // FORMAT 1, 6.1; SPEC 5.1.4, 7.1.2
