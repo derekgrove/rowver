@@ -248,7 +248,7 @@ fn a_reader_works_out_a_derived_column_and_validation_checks_it() {
     let path = written(&header, "derived-other-program");
     let refused = rowver::rvr::Reader::open(&path).unwrap().column("again").unwrap_err().to_string();
     drop(path);
-    assert!(refused.contains("The file was made by rvrcpp 15.1.0, which knows a function this rvr does not") && !refused.contains("update rvr"), "{refused}");
+    assert!(refused.contains("The file was made by rvrcpp 15.1.0, not by rvr, and may hold what this rvr does not read") && !refused.contains("update rvr"), "{refused}");
     header["made"]["toolchain"]["program"] = "rvr".into();
     // Syntax a newer rvr's recipe holds that this one cannot read says to update too.
     header["derived"]["columns"] = serde_json::json!([header["derived"]["columns"][0].clone()]);

@@ -456,7 +456,7 @@
       "at": 765407,
       "refused": "opening",
       "rule": "FORMAT §1 no byte-order mark",
-      "rust_says": "the header is not JSON as docs/FORMAT.md §1 reads it (expected value at line 1 column 1): the file is damaged, or the program that wrote it does not follow the format; copy it again, or press its study again with rvr",
+      "rust_says": "the header is not JSON as docs/FORMAT.md §1 reads it (expected value at line 1 column 1): the file is damaged, or the program that wrote it does not follow the format; copy it again, or press its study again with rvr (where a tool key holds what breaks it, rvr tool on the file says whether dropping one lets it open)",
       "sha256": "e75edcd23aa10aebfdf3ee9c55b88ef9d24af973781271b8e62d5a2405d6b45a",
       "size": 15765,
       "verdict": "opening"
@@ -501,7 +501,7 @@
       "at": 844379,
       "refused": "opening",
       "rule": "FORMAT §1 no lone surrogate",
-      "rust_says": "the header is not JSON as docs/FORMAT.md §1 reads it (unexpected end of hex escape at line 1 column 11490): the file is damaged, or the program that wrote it does not follow the format; copy it again, or press its study again with rvr",
+      "rust_says": "the header is not JSON as docs/FORMAT.md §1 reads it (unexpected end of hex escape at line 1 column 11490): the file is damaged, or the program that wrote it does not follow the format; copy it again, or press its study again with rvr (where a tool key holds what breaks it, rvr tool on the file says whether dropping one lets it open)",
       "sha256": "acd85ecda6845206ff2e8e569d8e1f64ed3df7547b86482f0f7e8d52a802abbd",
       "size": 15766,
       "verdict": "opening"
@@ -1572,7 +1572,7 @@
       "at": 2715618,
       "refused": "opening",
       "rule": "FORMAT §10 a name no other column has",
-      "rust_says": "derived.columns[\"xsec\"]: a derived column's name is one no stored, sample or other derived column has, nor sample, entry, file, events_read, events_total or events_missing (docs/FORMAT.md §10): rename it with rvr derive",
+      "rust_says": "derived.columns[\"xsec\"]: a derived column's name is one no stored, sample or other derived column has, nor sample, entry, file, events_read, events_total or events_missing (docs/FORMAT.md §10): name it otherwise in the recipe, and press again",
       "sha256": "d63eb4f2ddf1d6f43d6bc2a9eaaea4833fc951e6be5614d3cc039c87bacf8e48",
       "size": 16696,
       "verdict": "opening"
@@ -1581,7 +1581,7 @@
       "at": 2732314,
       "refused": "opening",
       "rule": "FORMAT §10 a name no file gives a sample later",
-      "rust_says": "derived.columns[\"events_missing\"]: a derived column's name is one no stored, sample or other derived column has, nor sample, entry, file, events_read, events_total or events_missing (docs/FORMAT.md §10): rename it with rvr derive",
+      "rust_says": "derived.columns[\"events_missing\"]: a derived column's name is one no stored, sample or other derived column has, nor sample, entry, file, events_read, events_total or events_missing (docs/FORMAT.md §10): name it otherwise in the recipe, and press again",
       "sha256": "8209a0cd56312d8d50814fab6809f34c58d571668077b722edb71e25ac9bcf58",
       "size": 16706,
       "verdict": "opening"
@@ -2454,7 +2454,7 @@
       "at": 4233952,
       "refused": "full",
       "rule": "FORMAT §10 F6 facts made again, compared as numbers",
-      "rust_says": "derived.columns[\"twice\"], worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr derive 'FILE.rvr' --drop twice (with any derived column that uses it), then rvr derive 'FILE.rvr' 'twice = MET * 2', records it as this rowver works it out.",
+      "rust_says": "derived.columns[\"twice\"], worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr derive FILE.rvr --drop twice (with any derived column that uses it), then rvr derive FILE.rvr 'twice = MET * 2', records it as this rowver works it out.",
       "sha256": "802138ed598319fe491ee924a97fc1445f06afe1adc1c98e6ca900f8cd7ed491",
       "size": 16689,
       "verdict": "full"
@@ -2463,7 +2463,7 @@
       "at": 4250641,
       "refused": "full",
       "rule": "FORMAT §10 §8 checksums made again",
-      "rust_says": "derived.columns[\"muons\"], worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr derive 'FILE.rvr' --drop muons (with any derived column that uses it), then rvr derive 'FILE.rvr' 'muons = Muon_pt * 2', records it as this rowver works it out.",
+      "rust_says": "derived.columns[\"muons\"], worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr derive FILE.rvr --drop muons (with any derived column that uses it), then rvr derive FILE.rvr 'muons = Muon_pt * 2', records it as this rowver works it out.",
       "sha256": "cb853a6fa3b3e4bee70dab6cce2ade31534dc88c05c8fa655ea8460b419d745e",
       "size": 16697,
       "verdict": "full"

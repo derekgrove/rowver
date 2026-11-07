@@ -356,12 +356,17 @@ pub fn checked_header(text: &[u8]) -> Result<Value> {
 /// `checked_header` of a header about to be written, saying what in what it was given to change:
 /// where the arrays its records lay out end.
 pub fn checked_to_write(text: &[u8]) -> Result<u64> {
-    checked(text).map(|(_, end)| end).map_err(|e| match e {
+    checked(text).map(|(_, end)| end).map_err(to_write)
+}
+
+/// What `checked` refuses in a header about to be written, said as what in what it was given to change.
+pub(crate) fn to_write(e: Error) -> Error {
+    match e {
         Error::Breaks { fact, under: Some(key), .. } if !TOP.contains(&key.as_str()) => invalid(format!("the header rowver was about to write breaks docs/FORMAT.md §1: {fact}, in the tool key {key} it was given: change that tool key's data to follow §1")),
         Error::Breaks { fact, .. } => invalid(format!("the header rowver was about to write breaks docs/FORMAT.md §1: {fact}, in what it was given to write: change that to follow §1")),
         Error::Tool { fact, key } => invalid(format!("the header rowver was about to write is refused: {fact}: change the tool key {key:?} it was given, as docs/FORMAT.md §11 says")),
         e => e,
-    })
+    }
 }
 
 /// `checked_header`, and where the arrays its records lay out end.
@@ -373,7 +378,7 @@ fn checked(text: &[u8]) -> Result<(Value, u64)> {
 
 /// How a header a tool key breaks is mended, of the file at `path` (FILE when unknown).
 pub(crate) fn dropping(path: Option<&std::path::Path>) -> String {
-    let on = path.map_or_else(|| "on the file".to_owned(), |path| path.display().to_string());
+    let on = path.map_or_else(|| "on the file".to_owned(), |path| crate::shell(&path.display().to_string()));
     format!("the program that wrote it does not follow the format; rvr tool {on} says whether dropping a tool key lets it open")
 }
 

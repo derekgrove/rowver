@@ -111,7 +111,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "reproduce", flags: &[("--study", Value, None), ("--workers", Value, None), ("--texts", No, None)], words: (1, 2, "a file and at most one folder"), dashes: false, usage: reproduce::USAGE },
     Command { name: "empty", flags: &[("--study", Value, None), ("--anyway", No, None), ("--force", No, Some("-f"))], words: (1, usize::MAX, "the files to empty"), dashes: false, usage: empty::USAGE },
     Command { name: "refill", flags: &[("--study", Value, None), ("--workers", Value, None)], words: (1, 1, "one file"), dashes: false, usage: empty::USAGE },
-    Command { name: "tool", flags: &[("--set", Value, None), ("--get", No, None), ("--drop", No, None), ("--force", No, Some("-f"))], words: (1, 3, "a file, then a tool key and what to do with it"), dashes: true, usage: tool::USAGE },
+    Command { name: "tool", flags: &[("--set", Value, None), ("--get", No, None), ("--drop", No, None), ("--force", No, Some("-f"))], words: (1, usize::MAX, "a file, then a tool key (or keys to drop) and what to do with it"), dashes: true, usage: tool::USAGE },
     Command { name: "key new", flags: &[], words: (0, 1, "at most one name"), dashes: false, usage: key::USAGE },
     Command { name: "key show", flags: &[], words: (0, 0, "no words"), dashes: false, usage: key::USAGE },
     Command { name: "key trust", flags: &[], words: (2, usize::MAX, "a key and its owner's name"), dashes: false, usage: key::USAGE },

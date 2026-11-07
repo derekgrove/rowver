@@ -168,10 +168,11 @@ fn set_tool(py: Python<'_>, path: PathBuf, key: String, text: Vec<u8>) -> PyResu
     py.detach(set).map_err(|e| failed(rowver::plain(&path, &e)))
 }
 
-/// Drop the tool key `key` of the file at `path`: its object's text, as the header held it.
+/// Drop the tool keys `keys` of the file at `path` in one change: each object's text, as the header held it.
 #[pyfunction]
-fn drop_tool(py: Python<'_>, path: PathBuf, key: String) -> PyResult<String> {
-    let dropped = || rowver::change::drop_tool(&rowver::change::Locked::take(&path)?, &key);
+fn drop_tool(py: Python<'_>, path: PathBuf, keys: Vec<String>) -> PyResult<Vec<String>> {
+    let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let dropped = || rowver::change::drop_tool(&rowver::change::Locked::take(&path)?, &keys);
     py.detach(dropped).map_err(|e| failed(rowver::plain(&path, &e)))
 }
 

@@ -457,6 +457,21 @@ fn a_full_disk_stops_the_press_keeping_what_it_read_and_the_next_carries_on() {
     assert!(stopped >= 3, "the disk filled only {stopped} times");
 }
 
+// SPEC 6.2.3, 7.4.3
+#[test]
+fn a_file_its_storage_will_not_give_is_not_called_no_root_file() {
+    let server = Server::start();
+    server.put("/st/f.root", std::fs::read(common::fixture("uproot_flat.root")).unwrap());
+    server.script(|request| match request.method.as_str() {
+        "GET" => Answer::Status(403),
+        _ => Answer::Serve,
+    });
+    let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n[[sample]]\nname = \"far\"\nfiles = {:?}\n", server.url("/st/f.root"));
+    let dir = common::study("refused-get", &samples, RECIPE);
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains("/st/f.root could not be read: ") && !said.contains("is not a ROOT file"), "{said}");
+}
+
 // SPEC 6.2.3
 #[test]
 fn a_storage_name_percent_encoded_is_matched_as_listed_and_said_so() {
@@ -475,6 +490,14 @@ fn a_storage_name_percent_encoded_is_matched_as_listed_and_said_so() {
     std::fs::write(dir.join("samples.toml"), samples.replace("a b.root", "c%2Eroot")).unwrap();
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
     assert!(code == 1 && said.contains("c%2Eroot matched no file: a name is matched as its storage spells it") && said.contains("it spells this one c.root: write it so"), "{said}");
+    // A pattern written with escapes is told so too.
+    std::fs::write(dir.join("samples.toml"), samples.replace("a b.root", "c%2E*")).unwrap();
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains("c%2E* matched no file") && said.contains("it spells one c.root: write the pattern so"), "{said}");
+    // A %2A is not made a wildcard to find a spelling.
+    std::fs::write(dir.join("samples.toml"), samples.replace("a b.root", "c%2A*")).unwrap();
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains("c%2A* matched no file (2 files in that folder)"), "{said}");
     std::fs::write(dir.join("samples.toml"), samples.replace("a b.root", "a%20b.root")).unwrap();
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
     assert!(code == 0 && said.contains("also hold 1 .root file no sample reads") && said.contains("/enc/c.root") && !said.contains("a%20b.root"), "{said}");

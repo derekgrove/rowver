@@ -84,9 +84,10 @@ pub fn read(command: &Command, args: &[&str]) -> Result<Options, String> {
     let mut options = Options::default();
     let mut args = args.iter().copied().peekable();
     let names: Vec<&str> = command.flags.iter().map(|(name, _, _)| *name).collect();
+    let mut after_first = false;
     while let Some(word) = args.next() {
-        // rvr tool's word right after FILE is KEY, unless it is one of its flags in full (SPEC §5.1.2).
-        if command.name == "tool" && options.words.len() == 1 && !names.contains(&word.split_once('=').map_or(word, |(flag, _)| flag)) {
+        // rvr tool's argument right after FILE is KEY, unless it is one of its flags in full (SPEC §5.1.2).
+        if std::mem::take(&mut after_first) && command.name == "tool" && !names.contains(&word.split_once('=').map_or(word, |(flag, _)| flag)) {
             options.words.push(word.to_owned());
             continue;
         }
@@ -103,6 +104,7 @@ pub fn read(command: &Command, args: &[&str]) -> Result<Options, String> {
                 });
             }
             options.words.push(word.to_owned());
+            after_first = options.words.len() == 1;
             continue;
         };
         if options.has(name) && name != "--drop" {

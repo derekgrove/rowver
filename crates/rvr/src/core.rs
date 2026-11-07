@@ -84,8 +84,8 @@ pub fn press(plan: Plan) -> Result<usize, String> {
     if plan.carries && worth {
         let _ = journal.checkpoint(&spool);
     }
-    // Every file is read: a failure from here on (the disk, the key, the spool, a sum) keeps what
-    // was read.
+    // Every file is read: a failure from here on (the disk, the key, the spool) keeps what was
+    // read; a sum too large for its kind does not, for its [totals] must change.
     let stuck = |why: String| format!("{} Mend it, then {}.", sentence(&why), again(&save(), plan.reads().len()));
     let taken = match &plan.from {
         // A fill that read none of its holes again, each failing as before, leaves the file.
@@ -97,7 +97,7 @@ pub fn press(plan: Plan) -> Result<usize, String> {
         Base::Holes(fill) | Base::Samples(fill) => {
             let names: Vec<&str> = plan.outputs().iter().map(|((name, _), _)| name.as_str()).collect();
             crate::fill::spool_old(&spool, fill, &names, &plan.laid, plan.workers).map_err(&stuck)?;
-            crate::fill::merged(&plan.work, &plan.lock, fill, &plan.laid, read, &plan.recipe, &stuck)?
+            crate::fill::merged(&plan.work, &plan.lock, fill, &plan.laid, read, &plan.recipe)?
         }
         Base::Columns(_) if plan.reads().is_empty() => copied(&plan, &spool).map_err(&stuck)?,
         _ => read,

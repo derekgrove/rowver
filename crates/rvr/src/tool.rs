@@ -14,28 +14,39 @@ pub(crate) const USAGE: &str = "usage:
       replaced once you say so, or with --force
   rvr tool FILE KEY --get [OUT.json] [--force | -f]
       KEY's object, to OUT.json (written over once you say so, or with --force) or standard output
-  rvr tool FILE KEY --drop [--force | -f]       drop KEY, once you say so, or with --force";
+  rvr tool FILE KEY... --drop [--force | -f]    drop KEY (or each KEY named), once you say so, or with --force";
 
 /// `rvr tool` with its options: the exit status (2 for a wrong use of it).
 pub fn main(options: &Options) -> u8 {
     let words = options.plain();
-    // A word with a dash is a key's name only after FILE: anywhere else, a flag mistyped.
-    if let Some(word) = words.iter().enumerate().find(|(at, word)| *at != 1 && crate::options::short(word)).map(|(_, word)| word) {
+    let acts: Vec<&str> = ["--set", "--get", "--drop"].into_iter().filter(|flag| options.has(flag)).collect();
+    // A word with a dash is a key's name right after FILE, and after it the name of another to drop: anywhere else, a flag mistyped.
+    if let Some(word) = words.iter().enumerate().find(|(at, word)| (*at == 0 || (*at > 1 && acts != ["--drop"])) && crate::options::short(word)).map(|(_, word)| word) {
         return crate::wrong("tool", &format!("{word} is not one of its flags (a tool key whose name begins with - is named right after FILE)"));
     }
-    let acts: Vec<&str> = ["--set", "--get", "--drop"].into_iter().filter(|flag| options.has(flag)).collect();
     let (file, force) = (Path::new(words[0]), options.has("--force"));
+    // -f right after FILE is the key's name (SPEC §5.1.2): said where the force was meant.
+    let meant = match words.get(1) {
+        Some(&"-f") => " (-f right after FILE is taken as KEY: give it after KEY, or write --force)",
+        _ => "",
+    };
     let done = match (words.get(1), acts.as_slice(), words.len()) {
         (None, [], _) => list(file),
         (Some(key), ["--set"], 2) => set(file, key, Path::new(options.value("--set").unwrap_or_default()), force),
         (Some(key), ["--get"], 2 | 3) => get(file, key, words.get(2).map(Path::new), force),
-        (Some(key), ["--drop"], 2) => dropped(file, key, force),
+        (Some(_), ["--drop"], _) => {
+            // A key named twice is dropped once.
+            let keys: Vec<&str> = words[1..].iter().enumerate().filter(|(at, key)| !words[1..*at + 1].contains(key)).map(|(_, key)| *key).collect();
+            dropped(file, &keys, force)
+        }
         (None, _, _) => return crate::wrong("tool", "give the tool key's name, KEY, before --set, --get or --drop"),
-        (Some(_), [], _) => return crate::wrong("tool", "give what to do with KEY: --set DATA.json, --get [OUT.json] or --drop"),
+        (Some(_), [], _) => return crate::wrong("tool", &format!("give what to do with KEY: --set DATA.json, --get [OUT.json] or --drop{meant}")),
         (Some(_), [_, _, ..], _) => return crate::wrong("tool", "give one of --set, --get and --drop"),
-        (Some(_), _, _) => return crate::wrong("tool", "only --get takes a word after KEY, the file it writes"),
+        (Some(_), _, _) => return crate::wrong("tool", &format!("only --get takes a word after KEY, the file it writes, and --drop more keys{meant}")),
     };
-    crate::report("tool", done.map(|()| 0))
+    // Said when the file has no key -f: the force was meant.
+    let keyless = || rowver::rvr::header_text(file).ok().and_then(|text| rowver::rvr::tool_texts(&text).ok()).is_some_and(|keys| keys.iter().all(|(key, _)| key != "-f"));
+    crate::report("tool", done.map_err(|why| if !meant.is_empty() && keyless() { format!("{why}{meant}") } else { why }).map(|()| 0))
 }
 
 /// The tool keys of the header `text` of `file`, by name, each with its object's bytes as they lie there.
@@ -95,10 +106,27 @@ fn list(file: &Path) -> Result<(), String> {
     let names: Vec<&str> = keys.iter().map(|(name, _)| name.as_str()).collect();
     let elsewhere = under.is_some_and(|key| !names.contains(&key.as_str()));
     let opens = |without: &[&str]| !elsewhere && rowver::change::opens_without(&text, without);
+    // The command that drops `keys`: rvr tool's, which names a key beginning with -- or named -f
+    // only right after FILE, and one spelled as its flags in full not at all (SPEC §5.1.2); else Python's.
+    let command = |mut keys: Vec<&str>| {
+        let flag = keys.iter().find(|key| ["--set", "--get", "--drop", "--force"].contains(&key.split_once('=').map_or(**key, |(flag, _)| flag)));
+        let first = |key: &&str| key.starts_with("--") || *key == "-f";
+        if flag.is_some() || keys.iter().filter(|key| first(key)).count() > 1 {
+            let why = flag.map_or("rvr tool names only one key beginning with -- or named -f, right after FILE".to_owned(), |key| format!("rvr tool reads {key} as its flag"));
+            let quoted: Vec<String> = [shown.to_string().as_str()].into_iter().chain(keys.iter().copied()).map(|text| Value::from(text).to_string()).collect();
+            return format!("rowver.drop_tool({}) in Python ({why})", quoted.join(", "));
+        }
+        keys.sort_by_key(|key| !first(key));
+        let keys: Vec<String> = keys.iter().map(|key| rowver::shell(key)).collect();
+        format!("rvr tool {} {} --drop", rowver::shell(&shown.to_string()), keys.join(" "))
+    };
     match names.iter().find(|name| opens(&[name])) {
-        Some(key) => println!("{shown} does not open ({said}): rvr tool {shown} {key} --drop takes out the key that breaks it"),
+        Some(key) => println!("{shown} does not open ({said}): {} takes out the key that breaks it", command(vec![key])),
         None if names.len() > 1 && opens(&names) => {
-            println!("{shown} does not open ({said}): more than one of its tool keys breaks it, and rvr tool {shown} KEY --drop takes out each")
+            // Each key the header does not open without dropping; every key, when those alone would not do.
+            let needed: Vec<&str> = names.iter().copied().filter(|key| !opens(&names.iter().copied().filter(|other| other != key).collect::<Vec<_>>())).collect();
+            let drop = if opens(&needed) { needed } else { names.clone() };
+            println!("{shown} does not open ({said}): more than one of its tool keys breaks it, and {} takes them out", command(drop))
         }
         None => println!("{shown} does not open ({said})"),
     }
@@ -171,24 +199,28 @@ fn get(file: &Path, key: &str, out: Option<&Path>, force: bool) -> Result<(), St
 
 /// What a file without the tool key `key` is told.
 fn absent(file: &Path, key: &str) -> String {
-    format!("{} has no tool key {key}: rvr tool {} lists its tool keys", file.display(), file.display())
+    format!("{} has no tool key {key}: rvr tool {} lists its tool keys", file.display(), rowver::shell(&file.display().to_string()))
 }
 
-/// Drop the tool key `key`, asking first: one that breaks the header's rules too.
-fn dropped(file: &Path, key: &str, force: bool) -> Result<(), String> {
+/// Drop the tool keys `keys` in one change, asking first: ones that break the header's rules too.
+fn dropped(file: &Path, keys: &[&str], force: bool) -> Result<(), String> {
     let shown = file.display();
     let locked = crate::locked(file)?;
-    // Its bytes found unparsed, so that a key the header's rules refuse is dropped, and the header left checked, before it asks.
-    let change = Change::dropping(&locked, key).map_err(|e| rowver::plain(file, &e))?;
-    let held = change.dropped().len();
-    let question = format!("Drop the tool key {key} of {shown} ({held} bytes)? [y/N] ");
+    // Their bytes found unparsed, so that keys the header's rules refuse are dropped, and the header left checked, before it asks.
+    let change = Change::dropping(&locked, keys).map_err(|e| rowver::plain(file, &e))?;
+    let held: Vec<String> = keys.iter().zip(change.dropped()).map(|(key, bytes)| format!("{key} ({} bytes)", bytes.len())).collect();
+    let named = match keys {
+        [key] => format!("the tool key {key} of {shown} ({} bytes)", change.dropped()[0].len()),
+        _ => format!("the tool keys {} of {shown}", held.join(", ")),
+    };
+    let question = format!("Drop {named}? [y/N] ");
     let nobody = "nothing was dropped: rvr tool asks before it drops a tool key, and no one is at a terminal to answer. Give --force (or -f) to drop it without asking.";
     if !asked(force, &question, nobody)? {
-        return Err(format!("{shown} is as it was: {key} not dropped."));
+        return Err(format!("{shown} is as it was: {} not dropped.", keys.join(", ")));
     }
     let header = change.header().clone();
     change.finish(&header).map_err(|e| rowver::plain(file, &e))?;
     crate::anew(file, &locked);
-    println!("Dropped the tool key {key} of {shown} ({held} bytes).");
+    println!("Dropped {named}.");
     Ok(())
 }

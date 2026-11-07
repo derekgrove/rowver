@@ -553,7 +553,20 @@ per_jet = "ht / nJet"
     assert!(code == 1 && said.contains("ht is already the name of a stored column"), "{said}");
     let (code, said) = rvr(&dir, &["derive", &file, "--rename", "z", "a b"]);
     assert!(code == 1 && said.contains("\"a b\" is not a name a derived column can have"), "{said}");
-    assert_eq!(rvr(&dir, &["derive", &file, "--drop", "z"]).0, 0);
+    // A name TOML takes only quoted is written so.
+    assert_eq!(rvr(&dir, &["derive", &file, "--rename", "z", "zé"]).0, 0);
+    let (code, said) = rvr(&dir, &["derive", &file, "pté = ht * 2"]);
+    assert!(code == 0 && said.contains("Added pté to"), "{said}");
+    let (_, text) = rvr(&dir, &["header", &file]);
+    assert!(text.contains("\\\"zé\\\" = ") && text.contains("\\\"pté\\\" = "), "{text}");
+    assert_eq!(rvr(&dir, &["derive", &file, "--drop", "pté", "zé"]).0, 0);
+    // A recipe whose lines end \r\n keeps them so.
+    let crlf = study("derived-crlf", FLAT, &recipe.replace('\n', "\r\n"));
+    pressed(&crlf, &[]);
+    let named = format!("{}.rvr", crlf.file_name().unwrap().to_str().unwrap());
+    assert_eq!(rvr(&crlf, &["derive", &named, "m3 = ht * 3"]).0, 0);
+    let carried = common::header(&crlf)["made"]["recipe"]["text"].as_str().unwrap().to_owned();
+    assert!(carried.contains("m3 = \"ht * 3\"\r\n") && carried.matches('\n').count() == carried.matches("\r\n").count(), "{carried:?}");
     // What a press adds to every sample's metadata is no expression's to read: refused as it is read.
     let (code, said) = rvr(&dir, &["derive", &file, "n = sample.events_total"]);
     assert!(code == 1 && said.contains("[derived] n: sample.events_total is a count rvr press records of each sample, which no expression can read"), "{said}");
@@ -946,11 +959,18 @@ fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_co
     std::fs::write(dir.join("recipe.toml"), recipe.replace("weight * 1000", "weight * 2")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert!(code == 0 && said.contains("Nothing to read") && said.contains("2 columns and 1 derived"), "{said}");
-    // A new one that fails in place leaves out that one alone: the file keeps r.
+    // A new one alone that fails in place leaves the file as it was: nothing was read to keep.
     let late = "s = \"if(sample.file == './flat_b.root', stored(weight * 1000, 'u1'), stored(weight, 'u1'))\"\n";
     std::fs::write(dir.join("recipe.toml"), recipe.replace("weight * 1000", "weight * 2") + late).unwrap();
+    let before = std::fs::read(dir.join(&file)).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
-    assert!(code == 1 && said.contains("is written without the new derived columns s, keeping those it held"), "{said}");
+    assert!(code == 1 && said.contains(&format!("{file} is as it was: put right what is said above and press again")), "{said}");
+    assert_eq!(std::fs::read(dir.join(&file)).unwrap(), before);
+    // With a stored column read too, it leaves out that one alone, keeps r, and says whose signature it holds.
+    let more = recipe.replace("weight * 1000", "weight * 2").replace("[\"weight\", \"nJet\"]", "[\"weight\", \"nJet\", \"Jet_pt\"]");
+    std::fs::write(dir.join("recipe.toml"), more.clone() + late).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 1 && said.contains("is written without the new derived columns s, keeping those it held") && said.contains("It is signed with your key "), "{said}");
     let derived = &common::header(&dir)["derived"]["columns"];
     assert!(derived.as_array().unwrap().len() == 1 && derived[0]["name"] == "r", "{derived}");
     assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
@@ -965,6 +985,12 @@ fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_co
     assert!(code == 1 && said.contains("is written without its derived columns"), "{said}");
     let file = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
     assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    // Written again whole, a recipe whose lines end \r\n keeps them so.
+    let crlf = twice("late-inline-crlf", &inline.replace('\n', "\r\n"));
+    assert_eq!(rvr(&crlf, &["samples", "resolve", "samples.toml"]).0, 0);
+    assert_eq!(rvr(&crlf, &["press", "--workers", "1"]).0, 1);
+    let carried = common::header(&crlf)["made"]["recipe"]["text"].as_str().unwrap().to_owned();
+    assert!(carried.contains("[derived]\r\n") && carried.matches('\n').count() == carried.matches("\r\n").count(), "{carried:?}");
     // The recipe it carries keeps an empty [derived], so the next press builds on the file.
     std::fs::write(dir.join("recipe.toml"), inline.replace("weight * 1000", "weight * 2")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);

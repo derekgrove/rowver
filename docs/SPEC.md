@@ -98,7 +98,8 @@ validator reads only its input: none reads an event or opens a ROOT file.
   keeps a journal and what its first line says the press is;
 - every name the recipe reads, so that the branches it names are fetched ahead;
 - the study's name and the folder a relative path in the lock is read from;
-- the earlier file, as opened (§2.1), and its tool keys, which the new file carries (FORMAT.md §11).
+- the earlier file, as opened (§2.1), and its tool keys, which the new file carries (FORMAT.md §11):
+  a file whose header opens though its arrays do not has them too.
 
 **2.5 The pressing core** takes only a Plan. It checks nothing a validator or the agreement check has
 checked. It reads the entries the Plan names, evaluates the cuts and columns, and writes the file.
@@ -419,7 +420,8 @@ copied columns are not read, works them out once at the end (§4.6.4).
 **4.6.4** A derived column that fails when worked out over the whole file leaves the file written
 without its derived columns; the press says so and exits 1. A press that adds columns in place
 (§8.2) keeps the derived columns the file held whose expressions the recipe still has, and leaves
-out only the new ones, naming them. Mending `[derived]` and pressing again reads no input (§8).
+out only the new ones, naming them, and whose signature it replaces (§8.12); one whose only new
+columns are derived leaves the file as it was. Mending `[derived]` and pressing again reads no input (§8).
 
 ## 5. The commands and their options
 
@@ -436,7 +438,8 @@ nothing.
 **5.1.2** A flag is `--NAME`, with its value, when it takes one, as the next argument (an argument
 that begins with `--` is not a value); `--NAME=VALUE` is not read. `-f`, for `--force` (`rvr empty`, `rvr tool`), is
 the only short flag. In `rvr tool` the argument right after FILE is KEY, even one that begins with
-`-` (`-f`, `--x`), unless it is one of its flags written in full. `--fill [KINDS]` takes the next argument as its KINDS exactly when every
+`-` (`-f`, `--x`), unless it is one of its flags written in full; with `--drop`, each word after it is a key
+to drop, one that begins with a single `-` too (but `-f`). `--fill [KINDS]` takes the next argument as its KINDS exactly when every
 comma-separated part of it is a kind of hole (§7.3.1), whatever folders there are; otherwise that
 argument is a word (the study folder). An argument after `--fill` that is not kinds, but holds a
 comma or has a part a slip of a letter or two from a kind, and is no folder there, is wrong use,
@@ -962,7 +965,10 @@ L, column C): …`. A file whose header does not open is listed all the same, fr
 list then saying after the keys `FILE does not open (WHY): rvr tool FILE KEY --drop takes out the
 key that breaks it`, naming the first key whose drop alone lets the header open; when only dropping
 several of them would, `FILE does not open (WHY): more
-than one of its tool keys breaks it, and rvr tool FILE KEY --drop takes out each`; and only `FILE does
+than one of its tool keys breaks it, and rvr tool FILE KEY KEY… --drop takes them out`, naming each key
+the header does not open without dropping (every key, when those alone would not do; one beginning
+with `--` or named `-f` first, §5.1.2; `rowver.drop_tool(…)` in Python, which can name them, when a key
+is spelled as one of `rvr tool`'s flags in full, or more than one is so named); a name a shell would take apart is written in single quotes; and only `FILE does
 not open (WHY)` when no drop of tool keys would mend it (a break under the format's own keys, a
 signature that does not hold); the list exits 0 all the same (`rvr validate` says whether a file
 is valid), and `--get` writes out its keys too. A file refused for anything but its header (its
@@ -976,7 +982,8 @@ the header holds it, and a newline, to `OUT.json`, or to standard output without
 already there is written over only once you say so, the question naming both sizes, and is replaced
 whole or not at all, with its permissions; an `OUT.json` that is `FILE` itself (named another way,
 or through a link) is refused: `OUT.json is FILE itself: write the key's object to another file`.
-`rvr tool FILE KEY --drop` drops `KEY` once you say so, the question naming it and its size: a key whose object
+`rvr tool FILE KEY --drop` drops `KEY` once you say so, the question naming it and its size (`rvr tool
+FILE KEY KEY… --drop` drops each key named, in one change, the header left by them all checked): a key whose object
 breaks FORMAT.md §1's rules too, or holds what no JSON parser takes (a lone surrogate, nesting
 deeper than a parser goes), or is misnamed (a slip of the format's own keys, or no tool key's name;
 the format's own keys are refused), so that dropping it mends a file only it keeps from opening. Its object
@@ -1025,7 +1032,10 @@ finished or the new file it writes is moved over it: a press, in place or not (�
 (§11.9). Another writer is refused while it is held, saying that another program is changing the
 file. A press whose target is there but may not be opened stops, for what the file holds (its tool
 keys) is carried over: `FILE is not yours to read or write, and a press carries over what it holds
-(its tool keys), so it stops: chmod u+rw FILE, or remove it`. A writer given a symbolic link locks,
+(its tool keys), so it stops: chmod u+rw FILE, or remove it`; so does one whose target its tool keys
+alone keep from opening (it would open with them dropped): `FILE does not open: WHY. A press carries
+over the tool keys of the file it replaces, so it stops: drop the tool keys that break it (rvr tool
+FILE names them), or remove the file, then press again.` A writer given a symbolic link locks,
 changes and replaces the file it names, so the link stays a link. Once locked, the file is checked to be the one at its path still (its device and
 inode), and one replaced as it was opened is opened again. While it holds the lock, a writer reads
 and writes the file only through the one descriptor it locked, and opens no other: where the lock is
@@ -1278,11 +1288,13 @@ raise `rowver.Error`, an unknown name `KeyError`.
 
 **11.9** `rowver.set_tool(path, key, value)` makes `value`, a dict written as
 `json.dumps(value, allow_nan=False)` writes it (NaN and infinity, which JSON does not have, raise
-`ValueError`), the tool key `key` of the file at `path`, checked and made in the file itself as
+`ValueError`; a finite `Decimal`, as a header can give one, written as its digits), the tool key `key` of the file at `path`, checked and made in the file itself as
 `rvr tool --set` does (§8.11, §8.12), a key already there replaced without asking, even one breaking FORMAT.md §1 (a value the rules
 refuse is told as `the value given for the tool key KEY …`);
-`rowver.drop_tool(path, key)` drops it, as `rvr tool --drop` does, and gives back its object, or its text
-as the header held it where `json.loads` cannot read it (nesting deeper than it goes), never raising once
+`rowver.drop_tool(path, key, *keys)` drops it (or each key named, in one change), as `rvr tool --drop`
+does, and gives back its object (with several keys, a tuple of their objects in turn), or its text
+as the header held it where `json.loads` cannot read it whole (nesting deeper than it goes, a member held
+twice), a whole number past the digits Python turns into an int given as a `Decimal`, never raising once
 the file is changed. Each holds the file's lock while it
 changes it (§8.12), first puts back a change to the file cut short, and raises `rowver.Error` saying
 what is wrong.

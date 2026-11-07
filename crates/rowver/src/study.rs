@@ -112,10 +112,10 @@ pub fn matches(pattern: &str, name: &str) -> bool {
     let (p, n): (Vec<char>, Vec<char>) = (pattern.chars().collect(), name.chars().collect());
     let (mut pi, mut ni, mut star, mut mark) = (0, 0, None, 0);
     while ni < n.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
-            (pi, ni) = (pi + 1, ni + 1);
-        } else if pi < p.len() && p[pi] == '*' {
+        if pi < p.len() && p[pi] == '*' {
             (star, mark, pi) = (Some(pi), ni, pi + 1);
+        } else if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+            (pi, ni) = (pi + 1, ni + 1);
         } else if let Some(s) = star {
             (pi, mark) = (s + 1, mark + 1);
             ni = mark;
@@ -154,6 +154,8 @@ mod tests {
         assert!(!matches("Run2012?_Tau*.root", "Run2012BC_DoubleMuParked_Muons.root"));
         assert!(matches("SMS-Signal*_Summer22_130X.root", "SMS-Signal-2L_TuneCP5_13p6TeV_madgraphMLM-pythia8_Summer22_130X.root"));
         assert!(matches("a?c*", "abc") && !matches("a?c", "ac") && matches("*", ""));
+        // A * in a name is matched by a * of the pattern as any other character is.
+        assert!(matches("x*.root", "x*1.root") && matches("a*b", "a*xb") && matches("x*", "x*y*") && !matches("x*.root", "y*.root"));
         for asked in ["root://eospublic.cern.ch//x.root", "root://h//eos/a/x.root", "/x.root", "./x.root", "~/d/x.root", "d//x.root"] {
             let (folder, name) = split(asked);
             assert_eq!(join(folder, name), asked);

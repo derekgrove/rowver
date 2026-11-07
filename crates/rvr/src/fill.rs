@@ -300,7 +300,6 @@ pub(crate) fn merged(
     laid: &[Laid],
     read: Vec<Taken>,
     recipe: &rvr_recipe::Recipe,
-    stuck: &dyn Fn(String) -> String,
 ) -> Result<Vec<Taken>, String> {
     let mut out = Vec::new();
     for (input, laid) in work.iter().zip(laid) {
@@ -340,7 +339,7 @@ pub(crate) fn merged(
                         (None, ..) => was.unwrap_or(0.0) + now.unwrap_or(0.0),
                     };
                     if !sum.is_finite() {
-                        return Err(stuck(format!("{}: [totals] {}: its sum is not a finite number, as the total the file held and the one this fill read add up past what a double holds: give its events smaller values", input.file.at, total.name)));
+                        return Err(format!("{}: [totals] {}: its sum is not a finite number, as the total the file held and the one this fill read add up past what a double holds: mend [totals] {} so that its events give smaller values, then press again, which presses every column", input.file.at, total.name, total.name));
                     }
                     sums.insert(total.name.clone(), sum.into());
                 }

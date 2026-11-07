@@ -407,12 +407,33 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
         true => crate::key::secret()?,
         false => None,
     };
-    // A press that replaces the file at its target keeps its tool keys (docs/FORMAT.md §11); a
-    // file that does not open has none to keep.
+    // A press that replaces the file at its target keeps its tool keys (docs/FORMAT.md §11), those
+    // of one whose header opens though its arrays do not too; it stops over one that only its tool
+    // keys keep from opening, for they would go with it (SPEC §8.12).
     let at = std::mem::replace(&mut place.at, At::Missing);
     let tools = match &at {
+        At::Missing => serde_json::Map::new(),
         At::Opened(file, Ok(())) => rowver::rvr::tool_keys(file.header()),
-        _ => serde_json::Map::new(),
+        At::Unopened(e) | At::Opened(_, Err(e)) => {
+            let text = match &place.locked {
+                Some(locked) => locked.header_text(),
+                None => rowver::rvr::header_text(&place.target),
+            };
+            match text.as_deref().map(rowver::rvr::checked_header) {
+                Ok(Ok(header)) => rowver::rvr::tool_keys(&header),
+                Ok(Err(_)) if text.as_deref().is_ok_and(rowver::change::shut_by_tools) => {
+                    let shown = place.target.display();
+                    let named = rowver::shell(&shown.to_string());
+                    let why = match e {
+                        rowver::Error::Tool { fact, .. } | rowver::Error::Breaks { fact, .. } => fact.clone(),
+                        rowver::Error::Json(json) => format!("its header is not JSON as docs/FORMAT.md §1 reads it ({json})"),
+                        e => e.to_string(),
+                    };
+                    return Err(format!("{shown} does not open: {why}. A press carries over the tool keys of the file it replaces, so it stops: drop the tool keys that break it (rvr tool {named} names them), or remove the file, then press again."));
+                }
+                _ => serde_json::Map::new(),
+            }
+        }
     };
     let (mut from, why) = base(&place, at, &texts, &checked, &asked.on)?;
     let (mut why, other_build) = match why {

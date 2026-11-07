@@ -34,7 +34,7 @@ pub enum Error {
     #[error("{}", plain_io(.0, .1))]
     File(std::path::PathBuf, std::io::Error),
     /// A header's JSON does not parse.
-    #[error("the header is not JSON as docs/FORMAT.md §1 reads it ({0}): the file is damaged, or the program that wrote it does not follow the format; copy it again, or press its study again with rvr")]
+    #[error("{}", unread(.0, None))]
     Json(#[from] serde_json::Error),
     /// A header's JSON parses, but breaks a rule of docs/FORMAT.md §1.
     #[error("{}", breaks(fact, under.as_deref(), (*line, *column), None))]
@@ -68,6 +68,20 @@ fn breaks(fact: &str, under: Option<&str>, (line, column): (usize, usize), path:
     format!("the header breaks docs/FORMAT.md §1: {fact} (line {line}, column {column}): {mend}")
 }
 
+/// `word` as a shell reads it back: as it is when it holds nothing a shell takes apart, else in single quotes.
+pub fn shell(word: &str) -> String {
+    match !word.is_empty() && !word.starts_with('=') && word.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.,/:=@+%".contains(&b)) {
+        true => word.to_owned(),
+        false => format!("'{}'", word.replace('\'', r"'\''")),
+    }
+}
+
+/// A header that is not JSON (`error`), and what mends it, of the file at `path`.
+fn unread(error: &serde_json::Error, path: Option<&Path>) -> String {
+    let on = path.map_or_else(|| "on the file".to_owned(), |path| shell(&path.display().to_string()));
+    format!("the header is not JSON as docs/FORMAT.md §1 reads it ({error}): the file is damaged, or the program that wrote it does not follow the format; copy it again, or press its study again with rvr (where a tool key holds what breaks it, rvr tool {on} says whether dropping one lets it open)")
+}
+
 /// A value, or the `Error` that stopped it.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -85,6 +99,7 @@ pub fn words(path: &Path, error: &Error) -> String {
     match error {
         Error::Breaks { fact, under, line, column } => breaks(fact, under.as_deref(), (*line, *column), Some(path)),
         Error::Tool { fact, .. } => format!("{fact}: {}", rvr::dropping(Some(path))),
+        Error::Json(e) => unread(e, Some(path)),
         e => e.to_string(),
     }
 }

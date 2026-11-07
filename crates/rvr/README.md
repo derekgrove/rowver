@@ -155,7 +155,7 @@ The headers show no difference in rows, samples, labels, columns, derived column
 | `rvr reproduce FILE [DIR] [--study FOLDER] [--workers N] [--texts]` | presses a file's own study again and compares, or (`--texts`) writes its three texts | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
 | `rvr empty FILE… [--study FOLDER] [--anyway] [--force \| -f]` | lets a file's arrays go, keeping its header | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
 | `rvr refill FILE [--study FOLDER] [--workers N]` | presses an empty file's arrays again | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
-| `rvr tool FILE [KEY --set DATA.json \| KEY --get [OUT.json] \| KEY --drop] [--force \| -f]` | lists a file's tool keys, or sets, writes out or drops one, in the file itself | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
+| `rvr tool FILE [KEY --set DATA.json \| KEY --get [OUT.json] \| KEY... --drop] [--force \| -f]` | lists a file's tool keys, or sets, writes out or drops one, in the file itself | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
 | `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME…` | the key that signs your files, and the keys you trust | [10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#10-keys-and-proxies) |
 | `rvr proxy`, `rvr proxy init [--hours H]` | the grid proxy, shown or made | [10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#10-keys-and-proxies) |
 | `rvr --version` | `rvr VERSION (reads and writes rowver 15; commit COMMIT)` | [12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#12-builds-and-releases) |
@@ -444,7 +444,8 @@ metadata with its totals and `file`, without `events_read`, `events_total` and `
 The press works each one out on the first run of each sample that keeps an event, so that a value
 it cannot take stops the press there, and once more over the whole file, to record its kind,
 checksums and facts; one that fails then leaves the file written without its derived columns (in
-place, without the new ones alone), and the press says so and exits 1. The rules are
+place, without the new ones alone, or as it was when only derived columns are new), and the press
+says so and exits 1. The rules are
 [SPEC §4.6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#46-derived-columns) and
 [FORMAT §10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#10-derived-columns); `rvr derive` changes them in a pressed file
 alone.
@@ -891,11 +892,11 @@ again: `rvr empty` writes it beside the file (as `FILE.empty-PID-N`, a name no o
 `rvr derive`, `rvr empty` and `rvr refill` keep every tool key a file has (a top-level key of
 another tool's, [FORMAT §11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#11-tool-keys)) as it was, and so does a press
 that replaces the file at its target (a fill, a build on its columns or samples, a full press): the
-new file carries them. A file at the target that does not open has none to keep, and a press adds
-none of its own.
+new file carries them, those of a file whose arrays are damaged too. A file at the target whose
+header does not open has none to keep, and a press adds none of its own.
 
 
-### `rvr tool FILE`, `rvr tool FILE KEY --set DATA.json | --get [OUT.json] | --drop [--force | -f]`
+### `rvr tool FILE`, `rvr tool FILE KEY --set DATA.json | --get [OUT.json] | --drop [--force | -f]`, `rvr tool FILE KEY... --drop`
 
 A tool key is a top-level key of the header that another tool keeps there, outside every checksum
 and the signature ([FORMAT §11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#11-tool-keys)). `rvr tool FILE` lists
@@ -904,8 +905,8 @@ first as the header's own rules check it (one JSON object, no key twice, no `-0`
 surrogate, nested at most 64 deep counted from its place in the header; a tool key's name, no slip
 of the format's own keys); `--get` writes KEY's object out, to OUT.json (replaced whole, and never FILE
 itself) or standard output; `--drop` drops it, even one whose object or name breaks those rules, so that a file only it keeps
-from opening opens again (the list and `--get` read such a file too, the list saying why it does not
-open and which key to drop; `--set` replaces a key whose object breaks those rules in one step). Replacing a key that is there, dropping one, and writing over an OUT.json that is there
+from opening opens again, or drops each KEY named in one change, for a file several keys keep shut (the list and `--get` read such a file too, the list saying why it does not
+open and which keys to drop; `--set` replaces a key whose object breaks those rules in one step). Replacing a key that is there, dropping one, and writing over an OUT.json that is there
 ask first at a terminal, naming the sizes; `--force` (`-f`) does not ask, and is needed where nobody
 is at a terminal. Every change is made in the file itself, under its lock, its header written again
 after its arrays, which stay as they are; while it is made, another rvr that would write the file
@@ -925,7 +926,7 @@ Dropped the tool key my-plots of flat.rvr (25 bytes).
 ```
 
 The Python package sets and drops them too: `rowver.set_tool(path, key, value)`,
-`rowver.drop_tool(path, key)` and `File.tools`.
+`rowver.drop_tool(path, key, *keys)` and `File.tools`.
 
 ### `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME...`
 

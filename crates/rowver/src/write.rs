@@ -446,7 +446,7 @@ pub(crate) fn copied(source: &std::fs::File, at: u64, length: u64, from: &Path, 
 pub fn empty(locked: crate::change::Locked) -> Result<u64> {
     let path = locked.path().to_path_buf();
     let (_, start, tail) = locked.tail().map_err(|e| crate::about(&path, e))?;
-    let (staged, file) = crate::change::staging(&path, ".empty").map_err(|e| crate::about(&path, e.into()))?;
+    let (staged, file) = crate::change::staged(&path, ".empty")?;
     let written = (|| -> Result<()> {
         let mut out = std::io::BufWriter::new(file);
         out.write_all(crate::rvr::MAGIC)?;

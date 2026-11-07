@@ -964,8 +964,8 @@ one edit from one of them, an edit being a character inserted, deleted or replac
 neighbouring characters swapped (so `Data`, `mde`, `signatur`, `rowvr` and `dervied` are refused;
 `dash`, `view`, `router` and `driver` are tool keys). `rvr press` never adds one; `rvr tool` sets
 and drops them, in the file itself (SPEC.md §8.11). Any program that saves a `.rvr` file writes back
-every tool key it found: `rvr press` those of the file it replaces at its target, when that file
-opens. Tool keys are outside every checksum and the signature, so a tool can
+every tool key it found: `rvr press` those of the file it replaces at its target, when that
+file's header opens (its arrays may not). Tool keys are outside every checksum and the signature, so a tool can
 change its own key without breaking either.
 
 ## 12. What a reader checks

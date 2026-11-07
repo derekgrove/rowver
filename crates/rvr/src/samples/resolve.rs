@@ -182,6 +182,10 @@ fn root_identity<S: hep_root::ByteSource>(
         hep_root::Error::SourceChanged(why) if why.starts_with("header says the file ends at") => {
             format!("{shown} is cut short ({why}), as a copy that did not finish leaves a file: put a whole copy in its place, then run resolve again")
         }
+        // Its storage failing it is not the file's fault, as open.rs says too; a file shorter than
+        // its keys say, or holding what cannot be so, is (a remote one's storage fails as Remote).
+        hep_root::Error::Io(e) if matches!(e.kind(), std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::InvalidData) => format!("{shown} is not a ROOT file this reader can open: {e}"),
+        e @ (hep_root::Error::Remote(_) | hep_root::Error::SourceChanged(_) | hep_root::Error::Io(_)) => format!("{shown} could not be read: {e}"),
         e => format!("{shown} is not a ROOT file this reader can open: {e}"),
     })?;
     let uuid = file.header().uuid_string();
@@ -323,9 +327,11 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool, each: &mut dyn
             // A storage may list a name percent-encoded, as in a URL, and a lock pins it as listed:
             // one that would match with its escapes decoded, either side, is told how to be written.
             let plain = |n: &str| crate::samples::remote::decoded(n).unwrap_or_else(|| n.to_owned());
-            // A pattern is not decoded: its %2A would become a wildcard.
+            // A pattern is decoded too, unless that makes a wildcard of a %2A or %3F.
+            let wild = |n: &str| n.matches(['*', '?']).count();
+            let decoded = Some(plain(name)).filter(|n| wild(n) == wild(name));
             let alike = |listed: &str| match pattern(name) {
-                true => matches(name, &plain(listed)),
+                true => matches(name, &plain(listed)) || decoded.as_ref().is_some_and(|n| matches(n, &plain(listed))),
                 false => plain(name) == plain(listed),
             };
             if let Some(e) = entries.iter().find(|e| alike(&e.name)) {

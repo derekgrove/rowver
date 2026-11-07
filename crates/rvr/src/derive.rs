@@ -40,19 +40,27 @@ pub(crate) fn without(header: &mut Value, names: Vec<String>) -> Result<(), Stri
     Ok(())
 }
 
+/// `name` as a TOML key: bare when TOML lets it be, else quoted.
+fn key(name: &str) -> String {
+    match !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        true => name.to_owned(),
+        false => toml::Value::from(name).to_string(),
+    }
+}
+
 /// A recipe's TOML written again with `[derived]` holding `kept`: every table, and every key in it, in
 /// the order read, a value that is a table written inline; refused unless it reads as the same recipe.
 fn written_again(text: &str, recipe: &Recipe, kept: &[(String, String)]) -> Result<String, String> {
     let mut root: toml::Table = text.parse().map_err(|e: toml::de::Error| e.to_string())?;
     root.insert("derived".into(), kept.iter().map(|(name, expression)| (name.clone(), toml::Value::from(expression.as_str()))).collect::<toml::Table>().into());
-    let key = |key: &str| match !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-        true => key.to_owned(),
-        false => toml::Value::from(key).to_string(),
-    };
     let mut out: String = root.iter().filter(|(_, value)| !value.is_table()).map(|(name, value)| format!("{} = {value}\n", key(name))).collect();
     for (name, table) in root.iter().filter_map(|(name, value)| value.as_table().map(|table| (name, table))) {
         out.push_str(&format!("\n[{}]\n", key(name)));
         out.extend(table.iter().map(|(name, value)| format!("{} = {value}\n", key(name))));
+    }
+    // Its lines end as the text's did.
+    if text.contains("\r\n") {
+        out = out.replace('\n', "\r\n");
     }
     match Recipe::read(&out) {
         Ok(again) if again == (Recipe { derived: kept.to_vec(), ..recipe.clone() }) => Ok(out),
@@ -248,8 +256,10 @@ fn edited(text: &str, change: &Change, expected: &[(String, String)]) -> Result<
         return Err(format!("rvr derive changes the [derived] table of the recipe a file carries a line at a time, and {what}: write each derived column on a line of its own in recipe.toml (a line per column, NAME = \"EXPRESSION\"), and press again"));
     }
     change(&mut owned, table)?;
-    let mut text = owned.join("\n");
-    text.push('\n');
+    // Its lines end as the recipe's do.
+    let end = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut text = owned.join(end);
+    text.push_str(end);
     let recipe = Recipe::read(&text).map_err(|e| e.line())?;
     if recipe.derived != expected {
         return Err("rvr could not change the [derived] table of the recipe the file carries: it writes each derived column on a line of its own, NAME = \"EXPRESSION\"".into());
@@ -305,7 +315,7 @@ fn run(path: &Path, change: Asked) -> Result<(), String> {
                 let view: Vec<&str> = lines.iter().map(String::as_str).collect();
                 let line = line_of(&view, table, old).ok_or_else(|| format!("rvr could not find {old} in the [derived] table of the recipe the file carries"))?;
                 let (_, rest) = lines[line].split_once('=').ok_or_else(|| format!("rvr could not find {old} in the [derived] table of the recipe the file carries"))?;
-                lines[line] = format!("{new} ={rest}");
+                lines[line] = format!("{} ={rest}", key(new));
                 Ok(())
             };
             // The record is kept as it is, under its new name: its values have not changed.
@@ -341,7 +351,7 @@ fn run(path: &Path, change: Asked) -> Result<(), String> {
                 let last = (table.0..table.1).rev().find(own).unwrap_or(table.0);
                 for (offset, (name, expression)) in added.iter().enumerate() {
                     let quoted = toml::Value::String(expression.clone()).to_string();
-                    lines.insert(last + 1 + offset, format!("{name} = {quoted}"));
+                    lines.insert(last + 1 + offset, format!("{} = {quoted}", key(name)));
                 }
                 Ok(())
             };

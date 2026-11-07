@@ -305,14 +305,30 @@ class Pressed(unittest.TestCase):
         # Deeper than json.loads goes (Python 3.13 reads 9,998 deep): its text; a lone surrogate it reads.
         deep = '{"d":' + "[" * 100_000 + "]" * 100_000 + "}"
         lone = '{"s":"\\ud800 } ] \\" {"}'
+        twice = '{"t":{"a":1,"a":2}}'
         try:
-            for key, text, given in [("deep", deep, deep), ("lone", lone, {"s": "\ud800 } ] \" {"})]:
+            for key, text, given in [("deep", deep, deep), ("lone", lone, {"s": "\ud800 } ] \" {"}), ("twice", twice, twice)]:
                 with self.subTest(key=key):
                     written(key, text)
                     with self.assertRaises(rowver.Error):
                         rowver.open(copy)
                     self.assertEqual(rowver.drop_tool(copy, key), given)
                     self.assertEqual(copy.read_bytes(), whole)
+            # A whole number of more digits than Python turns into an int opens, as a Decimal.
+            import decimal
+
+            digits = "1" * 5000
+            written("big", '{"n":' + digits + "}")
+            self.assertEqual(rowver.open(copy).header["big"], {"n": decimal.Decimal(digits)})
+            self.assertEqual(rowver.drop_tool(copy, "big"), {"n": decimal.Decimal(digits)})
+            self.assertEqual(copy.read_bytes(), whole)
+            # A Decimal NaN raises ValueError, as a float's does; set back, a finite one is written as its digits.
+            with self.assertRaises(ValueError):
+                rowver.set_tool(copy, "big", {"n": decimal.Decimal("NaN")})
+            rowver.set_tool(copy, "big", {"n": decimal.Decimal(digits), "m": [decimal.Decimal("2.5")]})
+            self.assertEqual(rowver.open(copy).header["big"], {"n": decimal.Decimal(digits), "m": [2.5]})
+            rowver.drop_tool(copy, "big")
+            self.assertEqual(copy.read_bytes(), whole)
         finally:
             copy.unlink()
 
@@ -352,6 +368,10 @@ class Pressed(unittest.TestCase):
             self.assertEqual(copy.read_bytes(), broken)
             self.assertFalse(pathlib.Path(str(copy) + "-journal").exists())
             self.assertEqual((copy.stat().st_mtime_ns, self.dir.stat().st_mtime_ns), stamps)
+            # Dropped together, in one change, they give back their objects in turn.
+            nested = json.loads(deep)
+            self.assertEqual(rowver.drop_tool(copy, "two", "one"), (nested, nested))
+            self.assertEqual(copy.read_bytes(), whole)
         finally:
             copy.unlink()
 

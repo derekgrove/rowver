@@ -189,11 +189,13 @@ fn trust(key: &str, name: &str) -> Result<(), String> {
     let dir = folder()?;
     std::fs::create_dir_all(&dir).map_err(|e| rowver::plain_io(&dir, &e))?;
     use std::io::Write;
+    // A last line written by hand without its line end is ended first, so that the key is a line of its own.
+    let ended = std::fs::read(&path).map_or(true, |held| held.is_empty() || held.ends_with(b"\n"));
     std::fs::OpenOptions::new()
         .append(true)
         .create(true)
         .open(&path)
-        .and_then(|mut f| writeln!(f, "{key} {name}"))
+        .and_then(|mut f| writeln!(f, "{}{key} {name}", if ended { "" } else { "\n" }))
         .map_err(|e| rowver::plain_io(&path, &e))?;
     println!("Files signed by {} now say they are {name}'s.", short(key));
     Ok(())

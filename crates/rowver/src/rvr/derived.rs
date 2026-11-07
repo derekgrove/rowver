@@ -32,7 +32,7 @@ pub(super) fn validate(derived: &Value, data: &Value) -> Result<()> {
         let name = nonempty(record, &format!("derived.columns[{index}]"), "name")?;
         let place = format!("derived.columns[{name:?}]");
         if rvr_recipe::taken(name) || !names.insert(name) {
-            return Err(invalid(format!("{place}: a derived column's name is one no stored, sample or other derived column has, nor {} (docs/FORMAT.md §10): rename it with rvr derive", rvr_recipe::given())));
+            return Err(invalid(format!("{place}: a derived column's name is one no stored, sample or other derived column has, nor {} (docs/FORMAT.md §10): name it otherwise in the recipe, and press again", rvr_recipe::given())));
         }
         if text(record, &place, "expression")?.trim().is_empty() {
             return Err(invalid(format!("{place}.expression is blank, and a derived column is kept as the expression that computes it (docs/FORMAT.md §10): {MEND}")));
@@ -505,11 +505,14 @@ fn agrees(store: &Store, name: &str, expression: &str, again: &Map<String, Value
     let differs = format!("{}, worked out here, is not what the file records of it (its checksums or facts differ)", store.place(name));
     // A newer rvr's record is not to be replaced by this rowver's: it says to update too.
     if let Some(hint) = unread(header) {
-        return Err(invalid(format!("{differs}: its header was changed, or a newer rvr works the expression out otherwise. {hint}")));
+        let other = match header["made"]["toolchain"]["program"].as_str() {
+            Some("rvr") => "a newer rvr",
+            _ => "the program that made it",
+        };
+        return Err(invalid(format!("{differs}: its header was changed, or {other} works the expression out otherwise. {hint}")));
     }
     // Quoted for a shell: an expression may hold quotes of its own, as branch('Jet.pt').
-    let quoted = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
-    let (path, line) = (quoted(&file.path().display().to_string()), quoted(&format!("{name} = {expression}")));
+    let (path, line) = (crate::shell(&file.path().display().to_string()), crate::shell(&format!("{name} = {expression}")));
     Err(invalid(format!("{differs}: its header was changed, or the rowver that wrote it works the expression out differently. rvr derive {path} --drop {name} (with any derived column that uses it), then rvr derive {path} {line}, records it as this rowver works it out.")))
 }
 
@@ -574,7 +577,7 @@ fn newer(header: &Value) -> Option<String> {
     let made = header["made"]["toolchain"]["version"].as_str()?;
     let program = header["made"]["toolchain"]["program"].as_str()?;
     if program != "rvr" {
-        return Some(format!("The file was made by {program} {made}, which knows a function this rvr does not: press its study again with rvr to work it out here."));
+        return Some(format!("The file was made by {program} {made}, not by rvr, and may hold what this rvr does not read: press its study again with rvr to work it out here."));
     }
     let this = env!("CARGO_PKG_VERSION");
     later(made, this).then(|| {

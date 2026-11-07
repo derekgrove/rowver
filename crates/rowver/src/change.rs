@@ -3,7 +3,7 @@
 // and a file that cannot be changed in place is written anew and moved over it.
 
 use crate::write::{read_at, write_at, Source};
-use crate::{invalid, Result};
+use crate::{invalid, Error, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs::File;
@@ -270,6 +270,14 @@ impl Locked {
         checked.map(|()| reader)
     }
 
+    /// The file's header text, unchecked, read through the descriptor that holds the lock.
+    pub fn header_text(&self) -> Result<Vec<u8>> {
+        self.tail().map(|(_, _, mut tail)| {
+            tail.truncate(tail.len().saturating_sub(12));
+            tail
+        })
+    }
+
     /// Refused when another program moved a file over the one locked since it was locked.
     pub fn there(&self) -> Result<()> {
         unreplaced(&self.file, &self.path)
@@ -470,9 +478,21 @@ pub fn set_tool(locked: &Locked, key: &str, value: Value) -> Result<()> {
     change.finish(&header)
 }
 
-/// Refuse a header every reader would not open, or longer than the format holds, before it is written over the file at `path`.
-fn opens(header: &Value, path: &Path, advice: &str) -> Result<()> {
-    checked_text(header, advice).map(drop).map_err(|e| crate::about(path, e))
+/// Refuse a header every reader would not open, or longer than the format holds, before it is
+/// written over the file at `path`: a fault under `given`, the tool key it was given, said as one to
+/// change, any other as the file's own.
+fn opens(header: &Value, path: &Path, advice: &str, given: Option<&str>) -> Result<()> {
+    let text = serde_json::to_vec(header)?;
+    crate::write::length(text.len(), advice).map_err(|e| crate::about(path, e))?;
+    let under = |e: &Error| match e {
+        Error::Tool { key, .. } => Some(key.clone()),
+        Error::Breaks { under, .. } => under.clone(),
+        _ => None,
+    };
+    match crate::rvr::checked_header(&text) {
+        Err(e) if given.is_some() && under(&e).as_deref() == given => Err(crate::about(path, crate::rvr::to_write(e))),
+        checked => checked.map(drop).map_err(|e| crate::about(path, e)),
+    }
 }
 
 /// The text `header` is written as, and its length, refused unless every reader opens it, with `advice` when it is too long.
@@ -495,37 +515,48 @@ fn opening(header: &Value, advice: &str) -> Result<Vec<u8>> {
 
 /// Whether the header `text` opens once the tool keys `keys` are taken out, whatever they hold.
 pub fn opens_without(text: &[u8], keys: &[&str]) -> bool {
-    let rest = keys.iter().try_fold(text.to_vec(), |rest, key| without(&rest, key).map(|(rest, ..)| rest));
-    rest.is_some_and(|rest| crate::rvr::checked_header(&rest).is_ok())
+    without(text, keys).is_ok_and(|(rest, ..)| crate::rvr::checked_header(&rest).is_ok())
 }
 
-/// Drop the tool key `key` of the file `locked`, whatever its object holds: that object's text.
-pub fn drop_tool(locked: &Locked, key: &str) -> Result<String> {
-    let change = Change::dropping(locked, key)?;
-    let dropped = String::from_utf8_lossy(change.dropped()).into_owned();
+/// Whether the header `text`, which does not open, would with its tool keys taken out: only they keep it from opening (docs/FORMAT.md §11).
+pub fn shut_by_tools(text: &[u8]) -> bool {
+    let names: Vec<String> = crate::rvr::tool_texts(text).map(|keys| keys.into_iter().map(|(name, _)| name).collect()).unwrap_or_default();
+    !names.is_empty() && crate::rvr::checked_header(text).is_err() && opens_without(text, &names.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// Drop the tool keys `keys` of the file `locked` in one change, whatever their objects hold: each object's text.
+pub fn drop_tool(locked: &Locked, keys: &[&str]) -> Result<Vec<String>> {
+    let change = Change::dropping(locked, keys)?;
+    let dropped = change.dropped().into_iter().map(|bytes| String::from_utf8_lossy(bytes).into_owned()).collect();
     let header = change.header().clone();
     change.finish(&header)?;
     Ok(dropped)
 }
 
-/// The header `text` with every top-level member named `key` blanked out, its newlines kept so
-/// that what is left lies at its lines and columns still; where the first one's value lies, and its place among the members.
+/// A header's text with tool keys taken out, where their objects lay, and the first one's place.
+type Without = (Vec<u8>, Vec<std::ops::Range<usize>>, usize);
+
+/// The header `text` with every top-level member named one of `keys` blanked out, its newlines kept
+/// so that what is left lies at its lines and columns still; where each key's first value lies, and
+/// the first key's place among the members; or the first key it does not hold (none: no object).
 // Its bytes are not parsed: a key holding what no parser reads (a lone surrogate, depth past
 // serde_json's 128) is dropped all the same.
-fn without(text: &[u8], key: &str) -> Option<(Vec<u8>, std::ops::Range<usize>, usize)> {
-    let members = crate::json::members(text)?;
-    let named = |m: &crate::json::Member| crate::json::name(&text[m.name.clone()]) == key;
-    let at = members.iter().position(named)?;
-    let first = members[at].value.clone();
+fn without<'k>(text: &[u8], keys: &[&'k str]) -> std::result::Result<Without, Option<&'k str>> {
+    let members = crate::json::members(text).ok_or(None)?;
+    let names: Vec<String> = members.iter().map(|m| crate::json::name(&text[m.name.clone()])).collect();
+    let found = keys.iter().map(|&key| names.iter().position(|name| name == key).ok_or(Some(key))).collect::<std::result::Result<Vec<usize>, _>>()?;
+    let cuts = found.iter().map(|&at| members[at].value.clone()).collect();
+    let at = found.first().copied().unwrap_or_default();
+    let named: Vec<bool> = names.iter().map(|name| keys.contains(&name.as_str())).collect();
     let mut out = text.to_vec();
-    for m in members.iter().filter(|m| named(m)) {
+    for (m, _) in members.iter().zip(&named).filter(|(_, named)| **named) {
         out[m.name.start..m.value.end].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
     }
     // Every comma goes, and one comes back after each member kept but the last.
     members.iter().filter_map(|m| m.comma).for_each(|at| out[at] = b' ');
-    let kept: Vec<&crate::json::Member> = members.iter().filter(|m| !named(m)).collect();
+    let kept: Vec<&crate::json::Member> = members.iter().zip(&named).filter(|(_, named)| !**named).map(|(m, _)| m).collect();
     kept.iter().take(kept.len().saturating_sub(1)).filter_map(|m| m.comma).for_each(|at| out[at] = b',');
-    Some((out, first, at))
+    Ok((out, cuts, at))
 }
 
 /// A change of a locked file, journaled in place or written anew, undone when dropped unfinished.
@@ -538,8 +569,8 @@ pub struct Change<'a> {
     size: u64,
     start: u64,
     tail: Vec<u8>,
-    /// Where the object of the tool key it drops lies in the old header (none for another change).
-    cut: std::ops::Range<usize>,
+    /// Where the objects of the tool keys it drops lie in the old header (none for another change).
+    cut: Vec<std::ops::Range<usize>>,
     /// The end of the arrays, counted from byte 8 (docs/FORMAT.md §7): where new ones go.
     end: u64,
     /// Whether it is empty: its records name bytes it does not hold.
@@ -553,20 +584,24 @@ pub struct Change<'a> {
 impl<'a> Change<'a> {
     /// Begin a change of the file `locked`: its header read and checked, nothing written.
     pub fn begin(locked: &'a Locked) -> Result<Self> {
-        Self::begun(locked, |text| Ok((crate::json::strict(text)?, 0..0)))
+        Self::begun(locked, |text| Ok((crate::json::strict(text)?, Vec::new())))
     }
 
-    /// `begin`, the tool key `key` taken out unparsed, whatever it holds, and the header left checked to open (docs/SPEC.md §8.11).
-    pub fn dropping(locked: &'a Locked, key: &str) -> Result<Self> {
+    /// `begin`, the tool keys `keys` taken out unparsed, whatever they hold, and the header left checked to open (docs/SPEC.md §8.11).
+    pub fn dropping(locked: &'a Locked, keys: &[&str]) -> Result<Self> {
         // A key misnamed (a slip of the format's own, or no tool key's name) is dropped too: it too keeps a file from opening.
-        crate::rvr::not_own(key)?;
+        keys.iter().try_for_each(|key| crate::rvr::not_own(key))?;
+        if keys.is_empty() {
+            return Err(invalid("no tool key was named to drop: name one or more"));
+        }
         let shown = locked.path.display();
-        let change = Self::begun(locked, |text| match without(text, key) {
-            Some((rest, cut, _)) => Ok((crate::json::strict(&rest)?, cut)),
-            // Without the key, the whole header is read: refused as it is, or else for not having it.
-            None => crate::json::strict(text).and_then(|_| Err(invalid(format!("{shown} has no tool key {key}: rvr tool {shown} lists its tool keys")))),
+        let change = Self::begun(locked, |text| match without(text, keys) {
+            Ok((rest, cuts, _)) => Ok((crate::json::strict(&rest)?, cuts)),
+            Err(Some(missing)) => Err(invalid(format!("{shown} has no tool key {missing}: rvr tool {} lists its tool keys", crate::shell(&shown.to_string())))),
+            // A header that is not one object is refused as it is.
+            Err(None) => Err(crate::rvr::checked_header(text).err().unwrap_or_else(|| invalid(format!("{shown}'s header is not one JSON object")))),
         })?;
-        opens(&change.header, &locked.path, crate::write::FEWER)?;
+        opens(&change.header, &locked.path, crate::write::FEWER, None)?;
         Ok(change)
     }
 
@@ -576,12 +611,12 @@ impl<'a> Change<'a> {
         crate::rvr::not_own(key)?;
         // Taken out unparsed, so that a key breaking docs/FORMAT.md §1 is replaced too, and every copy of one held twice.
         let mut place = None;
-        let change = Self::begun(locked, |text| match without(text, key) {
-            Some((rest, cut, at)) => {
+        let change = Self::begun(locked, |text| match without(text, &[key]) {
+            Ok((rest, cuts, at)) => {
                 place = Some(at);
-                Ok((crate::json::strict(&rest)?, cut))
+                Ok((crate::json::strict(&rest)?, cuts))
             }
-            None => Ok((crate::json::strict(text)?, 0..0)),
+            Err(_) => Ok((crate::json::strict(text)?, Vec::new())),
         })?;
         let mut header = change.header.clone();
         match (place, header.as_object_mut()) {
@@ -590,7 +625,7 @@ impl<'a> Change<'a> {
             }
             _ => header[key] = value,
         }
-        opens(&header, &locked.path, "give the tool key less to hold")?;
+        opens(&header, &locked.path, "give the tool key less to hold", Some(key))?;
         Ok((change, header))
     }
 
@@ -599,14 +634,14 @@ impl<'a> Change<'a> {
         match &reader.seen {
             Some((size, start, tail, at)) if *at == (locked.token, locked.changes.load(Ordering::Relaxed)) && !locked.moved.load(Ordering::Relaxed) => {
                 stop(1);
-                Self::from(locked, (*size, *start, tail.clone()), reader.header().clone(), 0..0)
+                Self::from(locked, (*size, *start, tail.clone()), reader.header().clone(), Vec::new())
             }
             _ => Self::begin(locked),
         }
     }
 
-    /// `begin`, the header read from its text by `read`: its value, and where the object of a tool key it drops lies.
-    fn begun(locked: &'a Locked, read: impl FnOnce(&[u8]) -> Result<(Value, std::ops::Range<usize>)>) -> Result<Self> {
+    /// `begin`, the header read from its text by `read`: its value, and where the objects of the tool keys it drops lie.
+    fn begun(locked: &'a Locked, read: impl FnOnce(&[u8]) -> Result<(Value, Vec<std::ops::Range<usize>>)>) -> Result<Self> {
         let path = &locked.path;
         stop(1);
         let (size, start, tail) = locked.tail().map_err(|e| crate::about(path, e))?;
@@ -615,8 +650,8 @@ impl<'a> Change<'a> {
     }
 
     /// The change of the file `locked` from its tail (its length, where the tail starts, and the
-    /// tail) and the header it holds, parsed; `cut`, the object of a tool key it drops.
-    fn from(locked: &'a Locked, (size, start, tail): (u64, u64, Vec<u8>), header: Value, cut: std::ops::Range<usize>) -> Result<Self> {
+    /// tail) and the header it holds, parsed; `cut`, the objects of the tool keys it drops.
+    fn from(locked: &'a Locked, (size, start, tail): (u64, u64, Vec<u8>), header: Value, cut: Vec<std::ops::Range<usize>>) -> Result<Self> {
         let end = crate::rvr::placed(&header, start as usize - 8).map_err(|e| crate::about(&locked.path, e))?;
         Ok(Self { locked, header, size, start, tail, cut, end: start - 8, empty: start == 8 && end > 0, staged: None, prepared: false, finished: false })
     }
@@ -631,9 +666,9 @@ impl<'a> Change<'a> {
         &self.tail[..self.tail.len() - 12]
     }
 
-    /// The bytes of the object of the tool key the change takes out, as the header held them (none for another change).
-    pub fn dropped(&self) -> &[u8] {
-        &self.text()[self.cut.clone()]
+    /// The bytes of the objects of the tool keys the change takes out, as the header held them, in their order (none for another change).
+    pub fn dropped(&self) -> Vec<&[u8]> {
+        self.cut.iter().map(|cut| &self.text()[cut.clone()]).collect()
     }
 
     /// The file written: the file itself, or the new one it is written anew in.
@@ -725,13 +760,7 @@ impl<'a> Change<'a> {
             None => self.journal(after, new)?,
             Some(_) => {
                 let path = &self.locked.path;
-                let (at, mut out) = match staging(path, ".anew") {
-                    Err(e) if e.kind() == ErrorKind::ReadOnlyFilesystem => {
-                        return Err(invalid(format!("{} cannot be changed: its filesystem is read-only, so neither it nor a new file beside it can be written: copy it to a disk you may write, and change the copy", path.display())));
-                    }
-                    Err(e) if e.kind() == ErrorKind::PermissionDenied => return Err(invalid(shut(path, "the new file that replaces it"))),
-                    staged => staged.map_err(|e| crate::about(path, e.into()))?,
-                };
+                let (at, mut out) = staged(path, ".anew")?;
                 if let Err(e) = crate::write::copied(&self.locked.file, 0, self.start, path, &mut out, &at) {
                     let _ = std::fs::remove_file(&at);
                     return Err(e);
@@ -774,6 +803,15 @@ impl<'a> Change<'a> {
         stop(2);
         Ok(())
     }
+}
+
+/// `staging`, refused for the file at `path` as one that cannot be changed where nothing may be written beside it.
+pub(crate) fn staged(path: &Path, suffix: &str) -> Result<(PathBuf, File)> {
+    staging(path, suffix).map_err(|e| match e.kind() {
+        ErrorKind::ReadOnlyFilesystem => invalid(format!("{} cannot be changed: its filesystem is read-only, so neither it nor a new file beside it can be written: copy it to a disk you may write, and change the copy", path.display())),
+        ErrorKind::PermissionDenied => invalid(shut(path, "the new file that replaces it")),
+        _ => crate::about(path, e.into()),
+    })
 }
 
 /// Why the file at `path` cannot be changed when its folder may not be written, where `what` goes first.

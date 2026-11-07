@@ -162,6 +162,12 @@ fn a_file_a_tool_key_keeps_from_opening_has_its_keys_listed_and_written_out_and_
         assert_eq!(rvr(&dir, &["tool", &file, key, "--drop", "-f"]).0, 0, "{key}");
         assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
     }
+    // After a flag right after FILE, -f is --force; right after FILE it is KEY, and said so where it was meant as the force.
+    std::fs::write(dir.join("m.json"), "{}").unwrap();
+    assert_eq!(rvr(&dir, &["tool", &file, "m", "--set", "m.json"]).0, 0);
+    let (code, said) = rvr(&dir, &["tool", &file, "-f", "m", "--drop"]);
+    assert!(code == 1 && said.contains("has no tool key -f") && said.contains("(-f right after FILE is taken as KEY: give it after KEY, or write --force)"), "{said}");
+    assert_eq!(rvr(&dir, &["tool", &file, "--drop", "-f", "m"]).0, 0);
 }
 
 // SPEC 8.11
@@ -179,12 +185,52 @@ fn the_list_names_the_tool_key_that_keeps_a_file_from_opening_and_a_set_replaces
         let (code, said) = rvr(&dir, &["tool", &file]);
         assert!(code == 0 && said.trim_end().ends_with(&format!("): rvr tool {file} k --drop takes out the key that breaks it")), "{member}: {said}");
     }
-    // Two keys that each keep it from opening: neither is named, and dropping each is said.
-    for members in [r#""a":5,"b":5"#, r#""k":"\ud800","b":5"#] {
+    // Two keys that each keep it from opening, beside one that does not: the two are named, and dropped in one change.
+    // Keys that begin with a dash too: one with -- (or named -f) is named first, where it is KEY (SPEC 5.1.2).
+    let cases = [
+        (r#""a":5,"ok":{},"b":5"#, "a b", ["a", "b"]),
+        (r#""k":"\ud800","ok":{},"b c":5"#, "k 'b c'", ["k", "b c"]),
+        (r#""-a":5,"ok":{},"--b":5"#, "--b -a", ["--b", "-a"]),
+    ];
+    for (members, drop, keys) in cases {
         with(text, members);
         let (code, said) = rvr(&dir, &["tool", &file]);
-        assert!(code == 0 && said.trim_end().ends_with(&format!("): more than one of its tool keys breaks it, and rvr tool {file} KEY --drop takes out each")), "{members}: {said}");
+        assert!(code == 0 && said.trim_end().ends_with(&format!("): more than one of its tool keys breaks it, and rvr tool {file} {drop} --drop takes them out")), "{members}: {said}");
+        let mut args = vec!["tool", file.as_str()];
+        args.extend(keys);
+        args.extend(["--drop", "-f"]);
+        let (code, said) = rvr(&dir, &args);
+        assert!(code == 0 && said.contains(&format!("Dropped the tool keys {} (", keys[0])), "{members}: {said}");
+        assert_eq!(rvr(&dir, &["tool", &file]), (0, format!("{file} has 1 tool key:\n  ok (2 bytes)\n")));
     }
+    // Of keys to drop, the one the file does not hold is said, though another breaks its header.
+    with(text, r#""a":"\ud800""#);
+    let (code, said) = rvr(&dir, &["tool", &file, "a", "bb", "--drop", "-f"]);
+    assert!(code == 1 && said.contains(&format!("{file} has no tool key bb: rvr tool {file} lists its tool keys")), "{said}");
+    // A key in the file that breaks it is said as the file's, not as the one given.
+    with(text, r#""x y":{}"#);
+    std::fs::write(dir.join("k.json"), "{}").unwrap();
+    for args in [vec!["tool", &file, "k", "--set", "k.json", "-f"], vec!["tool", &file, "--drop", "-f", "x y"]] {
+        let (code, said) = rvr(&dir, &args);
+        let expected = if args[2] == "k" { (1, format!("rvr tool {file} says whether dropping a tool key lets it open")) } else { (0, "Dropped the tool key x y".to_owned()) };
+        assert!(code == expected.0 && said.contains(&expected.1) && !said.contains("it was given"), "{args:?}: {said}");
+    }
+    // A key spelled as one of rvr tool's flags, or two it names only right after FILE, are dropped from Python, which can name them.
+    for (members, advice) in [
+        (r#""--force":5"#, format!(r#"rowver.drop_tool("{file}", "--force") in Python (rvr tool reads --force as its flag) takes out the key that breaks it"#)),
+        (r#""--drop=x":5"#, format!(r#"rowver.drop_tool("{file}", "--drop=x") in Python (rvr tool reads --drop=x as its flag) takes out the key that breaks it"#)),
+        (r#""--a":5,"ok":{},"-f":5"#, format!(r#"rowver.drop_tool("{file}", "--a", "-f") in Python (rvr tool names only one key beginning with -- or named -f, right after FILE) takes them out"#)),
+    ] {
+        with(text, members);
+        let (code, said) = rvr(&dir, &["tool", &file]);
+        assert!(code == 0 && said.trim_end().ends_with(&advice), "{members}: {said}");
+    }
+    // After KEY, a word beginning with -- is a flag, and a slip of one is said so.
+    let (code, said) = rvr(&dir, &["tool", &file, "ok", "--drop", "--forse"]);
+    assert!(code == 2 && said.contains("--forse is not one of its flags") && said.contains("--force"), "{said}");
+    // A name a shell takes apart is quoted in the advice.
+    with(text, r#""a;rm x":5"#);
+    assert!(rvr(&dir, &["tool", &file]).1.trim_end().ends_with(&format!("rvr tool {file} 'a;rm x' --drop takes out the key that breaks it")));
     // Set over, a key that does not parse is replaced where it lies.
     with(text, r#""k":"\ud800","z":{}"#);
     std::fs::write(dir.join("k.json"), "{}").unwrap();
@@ -436,6 +482,8 @@ fn a_file_that_may_not_be_written_is_changed_anew_and_moved_over() {
     // In a folder that may not be written, the folder is said, for the journal or the new file.
     std::fs::create_dir(dir.join("shut")).unwrap();
     std::fs::copy(&path, dir.join("shut/f.rvr")).unwrap();
+    // As a stopped press leaves it, so that rvr empty gets as far as its new file.
+    std::fs::create_dir(dir.join("shut/f.rvr.partial")).unwrap();
     std::fs::set_permissions(dir.join("shut"), std::fs::Permissions::from_mode(0o555)).unwrap();
     /// The folder opened again however the test ends, so that its study can be removed.
     struct Opened(std::path::PathBuf);
@@ -452,6 +500,9 @@ fn a_file_that_may_not_be_written_is_changed_anew_and_moved_over() {
         assert!(code == 1 && said.contains(&format!("shut/f.rvr cannot be changed: its folder may not be written, and {what} is written there first: give yourself the right to write it (chmod u+w shut, if it is yours)")), "{said}");
         assert_eq!(std::fs::read(dir.join("shut/f.rvr")).unwrap(), before);
     }
+    std::fs::set_permissions(dir.join("shut/f.rvr"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    let (code, said) = rvr(&dir, &["empty", "shut/f.rvr", "--anyway", "-f"]);
+    assert!(code == 1 && said.contains("shut/f.rvr cannot be changed: its folder may not be written, and the new file that replaces it is written there first"), "{said}");
 }
 
 // SPEC 8.12
@@ -1253,4 +1304,43 @@ fn reproduce_texts_writes_the_three_texts_and_presses_nothing() {
     std::fs::write(dir.join("again/recipe.toml"), "# another\n").unwrap();
     let (code, said) = rvr(&dir, &["reproduce", &file, "again", "--texts"]);
     assert!(code == 1 && said.contains("recipe.toml"), "{said}");
+}
+
+// SPEC 8.12; FORMAT 11
+#[test]
+fn a_press_stops_over_a_file_its_tool_keys_alone_keep_from_opening() {
+    let (dir, file) = pressed("tools-shut", &recipe("branches = [\"nJet\"]", ""));
+    let path = dir.join(&file);
+    std::fs::write(dir.join("k.json"), "{\"a\":1}").unwrap();
+    assert_eq!(rvr(&dir, &["tool", &file, "keep", "--set", "k.json"]).0, 0);
+    reheadered(&path, &path, |header| header["bad"] = json!(3));
+    let before = std::fs::read(&path).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert!(code == 1 && said.contains(&format!("{file} does not open: ")) && said.contains(&format!("A press carries over the tool keys of the file it replaces, so it stops: drop the tool keys that break it (rvr tool {file} names them), or remove the file, then press again.")), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(rvr(&dir, &["tool", &file, "bad", "--drop", "-f"]).0, 0);
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert!(code == 0 && rvr(&dir, &["tool", &file]).1.contains("  keep (7 bytes)"), "{said}");
+    // A file kept from opening by its arrays, not its tool keys, is pressed over, and its tool keys
+    // kept; one its tool keys keep shut too gets the stop, and is left as it was.
+    let damaged = |path: &std::path::Path| {
+        let whole = std::fs::read(path).unwrap();
+        let (text, arrays) = parts(&whole);
+        std::fs::write(path, framed(text, &[arrays, &[0]].concat())).unwrap();
+    };
+    damaged(&path);
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 1);
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert!(code == 0 && !said.contains("carries over the tool keys"), "{said}");
+    assert!(rvr(&dir, &["tool", &file]).1.contains("  keep (7 bytes)"));
+    // A key named twice is dropped once.
+    let (code, said) = rvr(&dir, &["tool", &file, "keep", "keep", "--drop", "-f"]);
+    assert!(code == 0 && said.contains("Dropped the tool key keep of"), "{said}");
+    assert_eq!(rvr(&dir, &["tool", &file, "keep", "--set", "k.json"]).0, 0);
+    reheadered(&path, &path, |header| header["bad"] = json!(3));
+    damaged(&path);
+    let before = std::fs::read(&path).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert!(code == 1 && said.contains("so it stops"), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
 }

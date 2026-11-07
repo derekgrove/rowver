@@ -81,7 +81,8 @@ fn samples(plan: &Plan, done: &mut Done) -> Result<Joined, String> {
         for total in &plan.recipe.totals {
             let sum = records.values().filter_map(|record| record["totals"][&total.name].as_f64()).fold(0.0, |sum, more| sum + more);
             if !sum.is_finite() {
-                return Err((done.stuck)(format!("[totals] {}: its sum over sample {} is not a finite number, as its files' totals add up past what a double holds: give its events smaller values", total.name, sample.name)));
+                // Pressed again, it would stop here again: the recipe is mended, and the press starts over.
+                return Err(format!("[totals] {}: its sum over sample {} is not a finite number, as its files' totals add up past what a double holds: mend [totals] {} so that its events give smaller values, then press again, which starts over", total.name, sample.name, total.name));
             }
             metadata.insert(total.name.clone(), sum.into());
         }
@@ -281,8 +282,14 @@ pub(crate) fn write(plan: &Plan, mut done: Done) -> Result<usize, String> {
             let gone: Vec<String> = plan.recipe.derived.iter().map(|(name, _)| name.clone()).filter(|name| !held.iter().any(|r| r["name"] == name.as_str())).collect();
             // In place every derived column it held is the recipe's (SPEC §8.2): with none new, what
             // failed is not one of them, and the press keeps what it read.
-            if matches!(into, Target::InPlace(_)) && gone.is_empty() {
-                return Err(stuck(format!("{} could not be written: {why}", target.display())));
+            if matches!(into, Target::InPlace(_)) {
+                if gone.is_empty() {
+                    return Err(stuck(format!("{} could not be written: {why}", target.display())));
+                }
+                // With only derived columns new, nothing was read that writing would keep: the file is left as it was.
+                if plan.reads().is_empty() {
+                    return Err(format!("{why}. {} is as it was: put right what is said above and press again.", target.display()));
+                }
             }
             header["derived"] = json!({ "columns": held });
             crate::derive::without(&mut header, gone.clone()).map_err(|e| stuck(format!("{} could not be written: {why}; and its [derived] lines could not be taken out of the recipe it carries, to write it without them: {e}", target.display())))?;
@@ -332,13 +339,16 @@ pub(crate) fn write(plan: &Plan, mut done: Done) -> Result<usize, String> {
             }
         }
     }
-    match underived {
-        Some((why, gone)) if in_place => return Err(format!("{why}. {} is written without the new derived columns {}, keeping those it held and what was read: put right what is said above and press again, which adds them in place and reads no input.", target.display(), gone.join(", "))),
-        Some((why, _)) => return Err(format!("{why}. {} is written without its derived columns, so that what was read is kept: put right what is said above and press again, which, by the same rvr, copies every stored column from it and reads no input.", target.display())),
-        None => {}
-    }
     // In place, whose signature it replaces is said, when it had one or has one now.
     let signed = (in_place && (signer.is_some() || was.is_some())).then(|| crate::key::resigned(signer.as_ref(), was.as_deref()));
+    match underived {
+        Some((why, gone)) if in_place => {
+            let signature = signed.map_or_else(String::new, |signed| format!(" It is {signed}."));
+            return Err(format!("{why}. {} is written without the new derived columns {}, keeping those it held and what was read: put right what is said above and press again, which adds them in place and reads no input.{signature}", target.display(), gone.join(", ")));
+        }
+        Some((why, _)) => return Err(format!("{why}. {} is written without its derived columns, so that what was read is kept: put right what is said above and press again, which, by the same rvr, adds them in place and reads no input.", target.display())),
+        None => {}
+    }
     said(plan, &tally, &missing, signer.as_ref(), (rows, in_place, signed), done.started);
     Ok(tally.holes.len())
 }

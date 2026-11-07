@@ -314,6 +314,11 @@ fn keys_are_made_once_and_trusted_once_under_one_name() {
     let (code, _, err) = key(&["trust", &other, "Another"]);
     assert!(code == 1 && err.contains("trusted already, as Someone Else's, and is left so: to trust it as Another's"), "{err}");
     assert_eq!(std::fs::read_to_string(config.join("trusted")).unwrap(), format!("{other} Someone Else\n"));
+    // A last line written by hand without its line end stays a line of its own.
+    std::fs::write(config.join("trusted"), format!("{other} Someone Else")).unwrap();
+    let third = "cd".repeat(32);
+    assert_eq!(key(&["trust", &third, "Third"]).0, 0);
+    assert_eq!(std::fs::read_to_string(config.join("trusted")).unwrap(), format!("{other} Someone Else\n{third} Third\n"));
     let (code, _, err) = key(&["trust", &"AB".repeat(32), "Upper"]);
     assert!(code == 1 && err.contains("one is 64 lowercase hexadecimal characters"), "{err}");
 }

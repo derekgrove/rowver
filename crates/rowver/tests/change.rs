@@ -19,7 +19,7 @@ fn set(path: impl AsRef<Path>, key: &str, text: &[u8]) -> rowver::Result<()> {
 
 /// Drop the tool key `key` of the file at `path`, under its lock: its object's text.
 fn dropped(path: impl AsRef<Path>, key: &str) -> rowver::Result<String> {
-    drop_tool(&Locked::take(path)?, key)
+    drop_tool(&Locked::take(path)?, &[key]).map(|mut texts| texts.remove(0))
 }
 
 /// The journal a change that adds arrays writes before it touches a file whose bytes were
@@ -244,7 +244,9 @@ fn a_second_writer_is_refused_while_one_holds_the_file() {
     let locked = Locked::take(&path).unwrap();
     assert!(matches!(std::fs::File::open(&path).unwrap().try_lock(), Err(std::fs::TryLockError::WouldBlock)));
     set_tool(&locked, "my-tool", json!({})).unwrap();
-    assert_eq!(drop_tool(&locked, "my-tool").unwrap(), "{}");
+    set_tool(&locked, "other", json!({"n": 1})).unwrap();
+    assert_eq!(drop_tool(&locked, &["other", "my-tool"]).unwrap(), [r#"{"n":1}"#, "{}"]);
+    assert_eq!(drop_tool(&locked, &[]).unwrap_err().to_string(), "no tool key was named to drop: name one or more");
     let freed = rowver::write::empty(locked).unwrap();
     assert_eq!(freed as usize, parts(&before).1.len());
     assert!(validate_file(&path).unwrap().empty);

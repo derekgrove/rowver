@@ -62,22 +62,29 @@ fn element<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
+/// What asking for a folder's listing met: its answer refused, the listing cut short as it came
+/// (asked again, as a connection dropped is), or a listing refused, in words.
+enum Unlisted {
+    Asked(Box<ureq::Error>),
+    Cut(std::io::Error),
+    Said(String),
+}
+
 /// A PROPFIND answer's text, read whole: a folder of a million files lists in some hundreds of MiB.
-fn listing(reply: ureq::Response, folder: &str) -> Result<String, String> {
+fn listing(reply: ureq::Response, folder: &str) -> Result<String, Unlisted> {
     const MOST: u64 = 1 << 30;
-    let over = || format!("{folder} could not be listed: its listing is over 1 GiB, the most rvr reads of one folder; split its files among subfolders");
+    let over = || Unlisted::Said(format!("{folder} could not be listed: its listing is over 1 GiB, the most rvr reads of one folder; split its files among subfolders"));
     let said = reply.header("Content-Length").and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
     if said > MOST {
         return Err(over());
     }
     // Room for what it says, up to 16 MiB: a body shorter than said grows no more.
     let mut bytes = Vec::with_capacity(said.min(16 << 20) as usize);
-    std::io::Read::read_to_end(&mut std::io::Read::take(reply.into_reader(), MOST + 1), &mut bytes)
-        .map_err(|e| format!("{folder} could not be listed: its listing was cut short ({e}). Try again later."))?;
+    std::io::Read::read_to_end(&mut std::io::Read::take(reply.into_reader(), MOST + 1), &mut bytes).map_err(Unlisted::Cut)?;
     if bytes.len() as u64 > MOST {
         return Err(over());
     }
-    String::from_utf8(bytes).map_err(|_| format!("{folder} could not be listed: its storage's listing is not UTF-8 text, as WebDAV's XML is"))
+    String::from_utf8(bytes).map_err(|_| Unlisted::Said(format!("{folder} could not be listed: its storage's listing is not UTF-8 text, as WebDAV's XML is")))
 }
 
 /// The files (not folders) of a PROPFIND answer, sorted by name.
@@ -649,13 +656,18 @@ impl Storage {
         let body = r#"<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getcontentlength/></D:prop></D:propfind>"#;
         let at = format!("{origin}{path}");
         let (proxied, door) = (self.proxy.is_some(), host_port(&origin));
+        // The listing is read in the asking: one cut short as it came is asked again.
         let reply = patiently(
             self.waits,
             &self.watch,
             folder,
-            |e| self.watch.passing(e, proxied),
+            |e| match e {
+                Unlisted::Asked(e) => self.watch.passing(e.as_ref(), proxied),
+                Unlisted::Cut(e) => Some(broke(e)),
+                Unlisted::Said(_) => None,
+            },
             || {
-                follow(&at, |url| {
+                let reply = follow(&at, |url| {
                     let reply = self
                         .agent
                         .request("PROPFIND", url)
@@ -666,33 +678,37 @@ impl Storage {
                     reply
                 })
                 .1
+                .map_err(|e| Unlisted::Asked(Box::new(e)))?;
+                match reply.status() / 100 == 2 {
+                    true => listing(reply, folder),
+                    false => Err(Unlisted::Said(format!(
+                        "{folder} could not be listed: its storage answered {} {} (redirected too \
+                         often, or not with a listing). Try again later; if it persists, the folder \
+                         may have moved.",
+                        reply.status(),
+                        reply.status_text()
+                    ))),
+                }
             },
         );
         if reply.is_err() && self.watch.stop.load(Ordering::Acquire) {
             return Err(format!("{folder}: {STOPPED}"));
         }
         let text = match reply {
-            Ok(r) if r.status() / 100 == 2 => listing(r, folder)?,
-            Ok(r) => {
-                return Err(format!(
-                    "{folder} could not be listed: its storage answered {} {} (redirected too \
-                     often, or not with a listing). Try again later; if it persists, the folder \
-                     may have moved.",
-                    r.status(),
-                    r.status_text()
-                ))
-            }
-            Err(ureq::Error::Status(404, _)) => {
-                return Err(format!("the folder {folder} does not exist"))
-            }
-            Err(ureq::Error::Status(code @ (401 | 403), _)) => {
-                return Err(match (&self.proxy, code) {
-                    (None, _) => format!("{folder} refused the listing ({code}): {UNPROXIED}."),
-                    (Some(_), 401) => format!("{folder} refused the listing (401): it did not accept the grid proxy. Check it with rvr proxy, and make a new one with rvr proxy init."),
-                    (Some(_), _) => format!("{folder} refused the listing (403, {}). Either the grid proxy does not give access there, or the storage is refusing requests while it is busy, as EOS does under heavy load: if rvr proxy shows a valid proxy, try again later.", waited(self.waits)),
+            Ok(text) => text,
+            Err(Unlisted::Said(why)) => return Err(why),
+            Err(Unlisted::Cut(e)) => return Err(format!("{folder} could not be listed: {}. Try again later.", broke(&e))),
+            Err(Unlisted::Asked(e)) => {
+                return Err(match *e {
+                    ureq::Error::Status(404, _) => format!("the folder {folder} does not exist"),
+                    ureq::Error::Status(code @ (401 | 403), _) => match (&self.proxy, code) {
+                        (None, _) => format!("{folder} refused the listing ({code}): {UNPROXIED}."),
+                        (Some(_), 401) => format!("{folder} refused the listing (401): it did not accept the grid proxy. Check it with rvr proxy, and make a new one with rvr proxy init."),
+                        (Some(_), _) => format!("{folder} refused the listing (403, {}). Either the grid proxy does not give access there, or the storage is refusing requests while it is busy, as EOS does under heavy load: if rvr proxy shows a valid proxy, try again later.", waited(self.waits)),
+                    },
+                    e => format!("{folder} could not be listed: {}", why(&e)),
                 })
             }
-            Err(e) => return Err(format!("{folder} could not be listed: {}", why(&e))),
         };
         Ok(entries(&text))
     }
@@ -1336,6 +1352,24 @@ mod tests {
         server.script(|_| server::Answer::Short);
         let file = HttpsFile::reading(&storage, "f.root", &server.url("/f.root"), 40 << 20);
         assert!(matches!(file.read_ranges(&[(0, 100), (30 << 20, 100)]), Err(hep_root::Error::Remote(_))));
+    }
+
+    // SPEC 6.2.6, 7.4.1
+    #[test]
+    fn a_listing_cut_short_as_it_came_is_asked_again() {
+        let (server, mut storage) = served(1);
+        storage.waits = &[0];
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        server.script(move |_| match asked.fetch_add(1, Ordering::SeqCst) {
+            0 => server::Answer::Short,
+            _ => server::Answer::Serve,
+        });
+        assert_eq!(storage.list(&server.url("/")).unwrap().len(), 1);
+        let (server, mut storage) = served(1);
+        storage.waits = &[0];
+        server.script(|_| server::Answer::Short);
+        let failed = storage.list(&server.url("/")).unwrap_err();
+        assert!(failed.contains("could not be listed: its storage's answer ended before every byte asked came (") && !failed.contains("https://docs.rs"), "{failed}");
     }
 
     // SPEC 7.4.3

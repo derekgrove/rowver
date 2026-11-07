@@ -63,6 +63,24 @@ def _needs(module, what):
         raise ImportError(f"{what} needs {module}: pip install {module}") from None
 
 
+def _whole(text):
+    """A whole number of JSON text: an int, or a Decimal past the digits Python turns into an int."""
+    try:
+        return int(text)
+    except ValueError:
+        import decimal
+
+        return decimal.Decimal(text)
+
+
+def _once(pairs):
+    """A JSON object's members as a dict, refused when it holds a name twice (a dict keeps one)."""
+    held = dict(pairs)
+    if len(held) != len(pairs):
+        raise ValueError("a member is held twice")
+    return held
+
+
 class File:
     """An open .rvr file. Its header is read and checked when it opens; each column, stored or
     derived, is read when it is first asked for, and kept until `forget` lets it go."""
@@ -70,7 +88,11 @@ class File:
     def __init__(self, path):
         self.path = str(path)
         self._file = _File(self.path)
-        self.header = _json.loads(self._file.header_text)
+        try:
+            self.header = _json.loads(self._file.header_text)
+        except ValueError:
+            # A whole number of more digits than Python turns into an int (a tool key may hold one).
+            self.header = _json.loads(self._file.header_text, parse_int=_whole)
         self._held = {}
 
     @property
@@ -261,19 +283,43 @@ def open(path):
     return File(path)
 
 
+def _dumps(value):
+    """`value` as JSON text, a Decimal written as its digits, as `open` and `drop_tool` give one."""
+    import decimal
+    import uuid
+
+    held, mark = [], f"rowver-decimal-{uuid.uuid4()}-"
+
+    def number(o):
+        if isinstance(o, decimal.Decimal) and not o.is_finite():
+            raise ValueError(f"Out of range Decimal values are not JSON compliant: {o}")
+        if isinstance(o, decimal.Decimal):
+            held.append(str(o))
+            return f"{mark}{len(held) - 1}"
+        raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+    text = _json.dumps(value, allow_nan=False, default=number)
+    for at, digits in enumerate(held):
+        text = text.replace(f'"{mark}{at}"', digits, 1)
+    return text
+
+
 def set_tool(path, key, value):
     """Make the dict `value` the tool key `key` of the file at `path` (NaN and infinity raise ValueError)."""
-    _set_tool(str(path), key, _json.dumps(value, allow_nan=False).encode())
+    _set_tool(str(path), key, _dumps(value).encode())
 
 
-def drop_tool(path, key):
-    """Drop the tool key `key` of the file at `path`: its object, or its text where json.loads cannot read it."""
-    text = _drop_tool(str(path), key)
-    # The file is changed: the text, its only copy, is given back whatever json.loads makes of it.
-    try:
-        return _json.loads(text)
-    except Exception:
-        return text
+def drop_tool(path, key, *keys):
+    """Drop the tool keys named from the file at `path` in one change: each object (or text), alone or as a tuple."""
+    texts = _drop_tool(str(path), [key, *keys])
+    # The file is changed: each text, its only copy, is given back whatever json.loads makes of it.
+    def loaded(text):
+        try:
+            return _json.loads(text, parse_int=_whole, object_pairs_hook=_once)
+        except Exception:
+            return text
+    objects = tuple(loaded(text) for text in texts)
+    return objects if keys else objects[0]
 
 
 def validate(path):
