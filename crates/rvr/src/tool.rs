@@ -19,6 +19,10 @@ pub(crate) const USAGE: &str = "usage:
 /// `rvr tool` with its options: the exit status (2 for a wrong use of it).
 pub fn main(options: &Options) -> u8 {
     let words = options.plain();
+    // A word with a dash is a key's name only after FILE: anywhere else, a flag mistyped.
+    if let Some(word) = words.iter().enumerate().find(|(at, word)| *at != 1 && crate::options::short(word)).map(|(_, word)| word) {
+        return crate::wrong("tool", &format!("{word} is not one of its flags (a tool key whose name begins with - is named right after FILE)"));
+    }
     let acts: Vec<&str> = ["--set", "--get", "--drop"].into_iter().filter(|flag| options.has(flag)).collect();
     let (file, force) = (Path::new(words[0]), options.has("--force"));
     let done = match (words.get(1), acts.as_slice(), words.len()) {
@@ -85,6 +89,7 @@ fn list(file: &Path) -> Result<(), String> {
     };
     let (said, under) = match &why {
         rowver::Error::Breaks { fact, under, .. } => (fact.clone(), under.clone()),
+        rowver::Error::Tool { fact, key } => (fact.clone(), Some(key.clone())),
         other => (other.to_string(), None),
     };
     let names: Vec<&str> = keys.iter().map(|(name, _)| name.as_str()).collect();

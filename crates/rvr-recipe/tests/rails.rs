@@ -48,10 +48,10 @@ fn a_recipe_with_many_problems_is_refused_with_all_of_them() {
     let said = refused("[define]\na = \"1 +\"\nb = \"a * 2\"\n");
     assert_eq!(said, ["[define] a: Expected a value at the end (column 4)"]);
     assert_eq!(refused("title = 3\n"), ["title must be text, as title = \"my study\""]);
-    assert_eq!(refused("[columns]\n\"good-pt\" = \"Jet_pt\"\n"), ["[columns] good-pt: a column is named with one plain name, such as ht, and not sample, entry or file"]);
+    assert_eq!(refused("[columns]\n\"good-pt\" = \"Jet_pt\"\n"), ["[columns] good-pt: a column is named with one plain name, such as ht, and not sample, entry, file, events_read, events_total or events_missing"]);
     assert_eq!(refused("[keep]\nx = 3\n"), ["[keep] x must be a condition in quotes, or { if = \"…\", apply = \"…\" }"]);
-    // A branch stored as it is has a name every column may have: not sample, entry or file.
-    assert_eq!(refused("[columns]\nbranches = [\"Jet_pt\", \"entry\"]\n"), ["[columns] branches lists entry, a name every row has already (sample, entry, file): store the branch under another name, as entry_branch = \"branch('entry')\""]);
+    // A branch stored as it is has a name every column may have: not one a row or sample has already.
+    assert_eq!(refused("[columns]\nbranches = [\"Jet_pt\", \"entry\"]\n"), ["[columns] branches lists entry, a name every row or sample has already (sample, entry, file, events_read, events_total or events_missing): store the branch under another name, as entry_branch = \"branch('entry')\""]);
     // Every problem on one line, for a sentence that holds them.
     let both = Recipe::read(&complete("titel = 1\nx = 2\n")).unwrap_err();
     assert!(both.0.contains('\n') && !both.line().contains('\n') && both.line().contains("\"titel\"; it takes") && both.line().contains("; A recipe has no key \"x\""), "{}", both.line());

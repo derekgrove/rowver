@@ -55,8 +55,6 @@ impl<K: Eq + std::hash::Hash, V: Clone> Once<K, V> {
 /// The grid proxy to present, and what to say of it.
 pub(crate) struct Proxy {
     pub path: Option<String>,
-    /// Why there is none that works, and what to run; empty when there is one.
-    pub said: String,
     /// That it ends soon, when it does: said before remote work.
     pub short: Option<String>,
     /// A folder of extra certificate authorities, when one is named.
@@ -89,26 +87,11 @@ pub(crate) fn proxy() -> Proxy {
     if status.usable() {
         return Proxy {
             path: status.path,
-            said: String::new(),
             short,
             ca,
         };
     }
-    let next = if crate::proxy::renewable(&status) {
-        " Run rvr proxy init to make one."
-    } else {
-        ""
-    };
-    let said = format!(
-        "No usable grid proxy: {}. Remote files need one; local files do not.{next}",
-        status.message
-    );
-    Proxy {
-        path: None,
-        said,
-        short,
-        ca,
-    }
+    Proxy { path: None, short, ca }
 }
 
 /// The samples samples.toml at `path` makes, or every problem with it; at a terminal, what it
@@ -217,7 +200,7 @@ pub(crate) fn first_file(path: &Path, named: Option<&str>) -> Result<(samples::S
     let names: Vec<&str> = made.iter().map(|s| s.name.as_str()).collect();
     let sample = made[crate::open::sample_at(&names, named, "samples.toml")?].clone();
     let proxy = proxy();
-    let mut ctx = Context::new(path.parent().map(Path::to_path_buf).unwrap_or_default(), proxy.path, proxy.said, proxy.ca);
+    let mut ctx = Context::new(path.parent().map(Path::to_path_buf).unwrap_or_default(), proxy.path, proxy.ca);
     ctx.pins = false;
     let first = std::sync::OnceLock::new();
     let resolved = resolve::resolve(&ctx, &sample, &|locked, list| {
@@ -297,7 +280,7 @@ fn resolve_all(path: &Path) -> Result<(), String> {
         eprintln!("rvr: {short}");
     }
     let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
-    let ctx = Context::new(base, proxy.path, proxy.said, proxy.ca);
+    let ctx = Context::new(base, proxy.path, proxy.ca);
     let started = std::time::Instant::now();
     let next = std::sync::atomic::AtomicUsize::new(0);
     type Resolved = Result<(lock::Sample, Branches), String>;
@@ -415,7 +398,7 @@ pub(crate) fn read_lock(path: &Path) -> Result<Lock, String> {
 /// that could not be asked, with why. Both empty when every file is as recorded.
 pub(crate) fn differing(lock: &Lock, base: &Path) -> (Vec<String>, Vec<String>) {
     let proxy = proxy();
-    let ctx = Context::new(base.to_path_buf(), proxy.path, proxy.said, proxy.ca);
+    let ctx = Context::new(base.to_path_buf(), proxy.path, proxy.ca);
     let files: BTreeMap<&str, &lock::File> = lock.samples.iter().flat_map(|s| s.files.iter().map(|f| (f.at.as_str(), f))).collect();
     let (mut changed, mut unasked) = (Vec::new(), Vec::new());
     for (at, f) in &files {

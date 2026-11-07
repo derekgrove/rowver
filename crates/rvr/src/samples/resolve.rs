@@ -236,14 +236,10 @@ impl Context {
     pub fn new(
         base: PathBuf,
         proxy: Option<String>,
-        proxy_said: String,
         ca: Option<String>,
     ) -> Self {
         let storage = Storage::new(proxy.as_deref(), ca.as_deref());
-        let offline = match &storage {
-            Err(e) => e.clone(),
-            Ok(_) => proxy_said,
-        };
+        let offline = storage.as_ref().err().cloned().unwrap_or_default();
         Context {
             base,
             storage: storage.ok(),
@@ -324,6 +320,20 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool, each: &mut dyn
         let entries = storage.list(folder)?;
         let found: Vec<_> = entries.iter().filter(|e| wanted(&e.name)).collect();
         if found.is_empty() {
+            // A storage may list a name percent-encoded, as in a URL, and a lock pins it as listed:
+            // one that would match with its escapes decoded, either side, is told how to be written.
+            let plain = |n: &str| crate::samples::remote::decoded(n).unwrap_or_else(|| n.to_owned());
+            // A pattern is not decoded: its %2A would become a wildcard.
+            let alike = |listed: &str| match pattern(name) {
+                true => matches(name, &plain(listed)),
+                false => plain(name) == plain(listed),
+            };
+            if let Some(e) = entries.iter().find(|e| alike(&e.name)) {
+                return Err(match pattern(name) {
+                    true => format!("{asked} matched no file: a name is matched as its storage spells it, with or without %-escapes as in a URL, and it spells one {}: write the pattern so", e.name),
+                    false => format!("{asked} matched no file: a name is matched as its storage spells it, with or without %-escapes as in a URL, and it spells this one {}: write it so", e.name),
+                });
+            }
             let near = meant(name, entries.iter().map(|e| e.name.as_str()));
             return Err(format!("{asked} matched no file ({} files in that folder).{near}", entries.len()));
         }

@@ -17,7 +17,8 @@ pub fn main(dir: &str) -> Result<(), String> {
     }
     let files = [
         ("samples.toml", SAMPLES.to_string()),
-        ("recipe.toml", RECIPE.replace("{study}", &study)),
+        // The title a TOML string, whatever the folder's name holds: a quote.
+        ("recipe.toml", RECIPE.replace("\"{study}\"", &toml::Value::from(study.as_str()).to_string())),
         (".gitignore", GITIGNORE.to_string()),
     ];
     let there: Vec<&str> = files

@@ -479,7 +479,7 @@ fn opens(header: &Value, path: &Path, advice: &str) -> Result<()> {
 fn checked_text(header: &Value, advice: &str) -> Result<(Vec<u8>, u32)> {
     let text = serde_json::to_vec(header)?;
     let length = crate::write::length(text.len(), advice)?;
-    crate::rvr::checked_header(&text)?;
+    crate::rvr::checked_to_write(&text)?;
     Ok((text, length))
 }
 
@@ -729,6 +729,7 @@ impl<'a> Change<'a> {
                     Err(e) if e.kind() == ErrorKind::ReadOnlyFilesystem => {
                         return Err(invalid(format!("{} cannot be changed: its filesystem is read-only, so neither it nor a new file beside it can be written: copy it to a disk you may write, and change the copy", path.display())));
                     }
+                    Err(e) if e.kind() == ErrorKind::PermissionDenied => return Err(invalid(shut(path, "the new file that replaces it"))),
                     staged => staged.map_err(|e| crate::about(path, e.into()))?,
                 };
                 if let Err(e) = crate::write::copied(&self.locked.file, 0, self.start, path, &mut out, &at) {
@@ -755,15 +756,30 @@ impl<'a> Change<'a> {
         let sum = Sha256::digest(&kept);
         kept.extend(sum);
         let at = journal(&self.locked.path);
-        let written = File::create(&at).and_then(|mut out| std::io::Write::write_all(&mut out, &kept).and_then(|()| out.sync_all()));
+        // A file in the way at the journal's place is said, not the folder.
+        let there = at.symlink_metadata().is_ok();
+        let made = File::create(&at);
+        let ours = made.is_ok();
+        let written = made.and_then(|mut out| std::io::Write::write_all(&mut out, &kept).and_then(|()| out.sync_all()));
         if let Err(e) = written {
-            let _ = std::fs::remove_file(&at);
-            return Err(crate::about(&at, e.into()));
+            if ours {
+                let _ = std::fs::remove_file(&at);
+            }
+            return Err(match e.kind() {
+                ErrorKind::PermissionDenied if !there => invalid(shut(&self.locked.path, "the journal of the change")),
+                _ => crate::about(&at, e.into()),
+            });
         }
         synced(&self.locked.path);
         stop(2);
         Ok(())
     }
+}
+
+/// Why the file at `path` cannot be changed when its folder may not be written, where `what` goes first.
+fn shut(path: &Path, what: &str) -> String {
+    let folder = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    format!("{} cannot be changed: its folder may not be written, and {what} is written there first: give yourself the right to write it (chmod u+w {}, if it is yours), or copy the file to a folder you may write, and change the copy", path.display(), folder.display())
 }
 
 impl Drop for Change<'_> {

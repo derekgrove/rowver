@@ -218,7 +218,7 @@ fn unread(shared: &Shared, input: &Input, to_read: &[(u64, u64, usize)], failed:
 fn opened(shared: &Shared, input: &Input) -> Result<(RootFile<Held>, Tree, u64), Failed> {
     let at = &input.file.at;
     let then = if input.kept.is_some() { "press again" } else { "run rvr press --fill" };
-    let file = open(&shared.reach, &input.file, &input.read_at, then)?;
+    let file = open(&shared.reach, &input.file, &input.read_at, (then, "rvr press"))?;
     let tree = file.tree_at(&input.tree).map_err(|e| match e {
         hep_root::Error::KeyNotFound(_) => Failed::new(Fault::Changed, format!("{at}: it has no tree {:?}, which samples.lock recorded. Run rvr samples resolve samples.toml and review the new lock.", input.tree)),
         e => Failed::new(fault_of(&e, file.source().inner().seen()), format!("{at}: its tree {:?}: {e}", input.tree)),
@@ -290,7 +290,7 @@ fn columns(shared: &Shared, scope: &Scope, events: usize, gathered: &mut [Gather
 }
 
 /// An error over picked rows as one over the run's rows: its event, and the rows of its part.
-fn unpicked(positions: &[usize]) -> impl Fn((rvr_recipe::Error, Range<usize>)) -> (rvr_recipe::Error, Range<usize>) + '_ {
+pub(crate) fn unpicked(positions: &[usize]) -> impl Fn((rvr_recipe::Error, Range<usize>)) -> (rvr_recipe::Error, Range<usize>) + '_ {
     move |(error, part)| {
         let event = error.1.map(|row| positions[row]);
         let error = error.of_event(event);

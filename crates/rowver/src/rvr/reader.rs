@@ -276,11 +276,7 @@ impl Reader {
     /// Read the arrays of the file at `path` that is being written, through `file`, its `end` bytes
     /// from byte 8, under `header`, checked as `open` checks it, before the header is written.
     pub(crate) fn laid(path: &Path, file: Arc<File>, written: u64, header: Value) -> Result<Self> {
-        let (_, end) = super::checked(&serde_json::to_vec(&header)?).map_err(|e| match e {
-            crate::Error::Breaks { fact, under: Some(key), .. } if !super::TOP.contains(&key.as_str()) => invalid(format!("the header rowver was about to write breaks docs/FORMAT.md §1: {fact}, in the tool key {key} it was given: change that tool key's data to follow §1")),
-            crate::Error::Breaks { fact, .. } => invalid(format!("the header rowver was about to write breaks docs/FORMAT.md §1: {fact}, in what it was given to write: change that to follow §1")),
-            e => e,
-        })?;
+        let end = super::checked_to_write(&serde_json::to_vec(&header)?)?;
         super::arrays::fill(end, usize::try_from(written).map_err(|_| invalid(crate::change::LONG))?)?;
         let parts = vec![Part { from: Reading::Laid(file.into()), start: 8, length: written }];
         Ok(Self::made(path.to_path_buf(), header, parts))

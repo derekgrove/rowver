@@ -182,7 +182,7 @@ pub fn main(a: &str, b: &str) -> u8 {
     let mut said = Vec::new();
     for (path, (_, checked)) in [(a, &first), (b, &second)] {
         if let Err(why) = checked {
-            said.push(format!("{path}: its header fails its checks, and is compared all the same: {why}"));
+            said.push(format!("{path}: its header fails its checks, and is compared all the same: {}", rowver::words(std::path::Path::new(path), why)));
         }
     }
     for (empty, full) in [((a, &first.0), (b, &second.0)), ((b, &second.0), (a, &first.0))] {

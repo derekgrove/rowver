@@ -111,7 +111,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "reproduce", flags: &[("--study", Value, None), ("--workers", Value, None), ("--texts", No, None)], words: (1, 2, "a file and at most one folder"), dashes: false, usage: reproduce::USAGE },
     Command { name: "empty", flags: &[("--study", Value, None), ("--anyway", No, None), ("--force", No, Some("-f"))], words: (1, usize::MAX, "the files to empty"), dashes: false, usage: empty::USAGE },
     Command { name: "refill", flags: &[("--study", Value, None), ("--workers", Value, None)], words: (1, 1, "one file"), dashes: false, usage: empty::USAGE },
-    Command { name: "tool", flags: &[("--set", Value, None), ("--get", No, None), ("--drop", No, None), ("--force", No, Some("-f"))], words: (1, 3, "a file, then a tool key and what to do with it"), dashes: false, usage: tool::USAGE },
+    Command { name: "tool", flags: &[("--set", Value, None), ("--get", No, None), ("--drop", No, None), ("--force", No, Some("-f"))], words: (1, 3, "a file, then a tool key and what to do with it"), dashes: true, usage: tool::USAGE },
     Command { name: "key new", flags: &[], words: (0, 1, "at most one name"), dashes: false, usage: key::USAGE },
     Command { name: "key show", flags: &[], words: (0, 0, "no words"), dashes: false, usage: key::USAGE },
     Command { name: "key trust", flags: &[], words: (2, usize::MAX, "a key and its owner's name"), dashes: false, usage: key::USAGE },
@@ -423,7 +423,7 @@ fn header(file: &str) -> u8 {
     }
     match rowver::rvr::Reader::inspect(file).map(|(_, checked)| checked) {
         Ok(Ok(())) => 0,
-        Ok(Err(why)) => report("header", Err(format!("{file}: its header is printed as the file holds it, but it fails its checks: {why}"))),
+        Ok(Err(why)) => report("header", Err(format!("{file}: its header is printed as the file holds it, but it fails its checks: {}", rowver::words(Path::new(file), &why)))),
         Err(e) => report("header", Err(rowver::plain(file, &e))),
     }
 }
@@ -437,7 +437,7 @@ fn validate(words: &[&str], complete: bool) -> u8 {
         let restored = rowver::change::restore(file).map(|restored| told(Path::new(file), restored));
         let checked = restored.and_then(|()| rowver::rvr::validate_file(file)).map_err(|e| match e {
             rowver::Error::Io(e) => rowver::plain_it(&e),
-            e => e.to_string(),
+            e => rowver::words(Path::new(file), &e),
         });
         let compared = checked.map(|summary| {
             let derived = match (summary.derived, summary.empty) {

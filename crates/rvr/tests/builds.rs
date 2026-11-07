@@ -48,20 +48,23 @@ fn a_build_of_no_known_commit_presses_whole_files_only() {
         let (_, said) = run(&rvr, &dir, &[], &["--version"]);
         assert!(said.contains(&format!("; commit {commit})")), "{said}");
         assert_eq!(run(&rvr, &dir, &[], &["samples", "resolve", "samples.toml"]).0, 0);
-        // Stopped part way, it keeps no journal: pressing again starts from the first file.
+        // Another build's stopped press is not carried on, and it says so; stopped part way, it
+        // keeps no journal: pressing again starts from the first file.
+        assert_eq!(common::rvr_with(&dir, &[("RVR_STOP_AFTER", "1")], &["press", "--workers", "1"]).0, 1);
         let (code, said) = run(&rvr, &dir, &[("RVR_STOP_AFTER", "1")], &["press", "--workers", "1"]);
-        assert_eq!(code, 1, "{said}");
+        assert!(code == 1 && said.contains("Starting over: the press that stopped in ") && said.contains(".partial was another press: "), "{said}");
         let (code, said) = run(&rvr, &dir, &[], &["press", "--workers", "1"]);
         assert_eq!(code, 0, "{said}");
         assert!(!said.contains("Picking up") && said.contains("  1/2 "), "{said}");
         let (_, header) = run(&rvr, &dir, &[], &["header", &name]);
         let header: serde_json::Value = serde_json::from_str(&header).unwrap();
         assert_eq!(header["made"]["toolchain"]["commit"], commit);
-        // A column added: every column is pressed, and it says why.
+        // A column added: it says why every column would be pressed, and presses them with --full.
         std::fs::write(dir.join("recipe.toml"), RECIPE.replace("[\"nJet\"]", "[\"nJet\", \"Jet_pt\"]")).unwrap();
         let (code, said) = run(&rvr, &dir, &[], &["press"]);
+        assert!(code == 2 && said.contains("such a build builds on no file") && said.contains("Give --full to press every column without asking"), "{said}");
+        let (code, said) = run(&rvr, &dir, &[], &["press", "--full"]);
         assert_eq!(code, 0, "{said}");
-        assert!(said.contains(&format!("Pressing every column: {name} cannot be built on, as this rvr was built from")), "{said}");
     }
 }
 

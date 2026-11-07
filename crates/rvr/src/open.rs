@@ -124,10 +124,10 @@ pub(crate) fn changed(file: &File, bytes: Option<u64>, adler32: Option<String>) 
 }
 
 /// Check one input against the lock and open it from `read_at` (its path, or its door's HTTPS URL),
-/// a failure said by the lock's name for it; one gone says to put it back and `then`.
-pub(crate) fn open(reach: &Reach, file: &File, read_at: &str, then: &str) -> Result<RootFile<Held>, Failed> {
+/// a failure said by the lock's name for it; one gone says to put it back and `then`, or to resolve again and run `command`.
+pub(crate) fn open(reach: &Reach, file: &File, read_at: &str, (then, command): (&str, &str)) -> Result<RootFile<Held>, Failed> {
     let at = &file.at;
-    // No usable grid proxy is not the file's fault: every remote file would fail the same.
+    // Storage that could not be set up is not the file's fault: every remote file would fail the same.
     let offline = || Failed::new(Fault::Save, format!("{at}: {}", reach.offline));
     let again = Some((READING, reach.watch.clone()));
     if !read_at.contains("://") {
@@ -140,7 +140,7 @@ pub(crate) fn open(reach: &Reach, file: &File, read_at: &str, then: &str) -> Res
                 "{at} cannot be read: its folder is not there either (a disk not mounted?)"
             )),
             std::io::ErrorKind::NotFound => Failed::new(Fault::Gone, format!(
-                "{at} no longer exists: put it back and {then} (if it moved, run rvr samples resolve samples.toml again, then rvr press)."
+                "{at} no longer exists: put it back and {then} (if it moved, run rvr samples resolve samples.toml again, then {command})."
             )),
             _ => Failed::new(Fault::Save, rowver::plain_io(at, &e)),
         })?;
@@ -212,7 +212,7 @@ pub(crate) fn first_readable<'a>(lock: &'a Lock, sample: usize, dir: &Path) -> R
         true => crate::samples::remote::https(&file.at)?,
         false => file.at.clone(),
     };
-    open(&reach, file, &url, "run rvr press --fill").map(|root| (root, file)).map_err(|failed| failed.why)
+    open(&reach, file, &url, ("run rvr try again", "rvr try")).map(|root| (root, file)).map_err(|failed| failed.why)
 }
 
 /// Open a checked input and refuse one whose ROOT UUID is not the lock's; `again`, `seen` and
@@ -277,7 +277,7 @@ pub(crate) fn hint(error: &rvr_recipe::Error, branches: &[String], recipe: &Reci
 }
 
 /// Connect to what the files need: the storage behind the grid proxy, for remote files. With no
-/// remote file, nothing; with no usable proxy, the reason a remote file cannot be read.
+/// remote file, nothing; with storage that cannot be set up, the reason a remote file cannot be read.
 pub(crate) fn connect(files: &[(usize, &File)], watch: &Arc<Watch>) -> (Option<Storage>, String) {
     if !files.iter().any(|(_, f)| f.at.contains("://")) {
         return (None, String::new());
@@ -292,7 +292,7 @@ pub(crate) fn connect(files: &[(usize, &File)], watch: &Arc<Watch>) -> (Option<S
         Ok(mut storage) => {
             storage.waits = READING;
             storage.watch = watch.clone();
-            (Some(storage), proxy.said)
+            (Some(storage), String::new())
         }
         Err(why) => (None, why),
     }

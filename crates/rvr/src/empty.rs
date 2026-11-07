@@ -223,7 +223,7 @@ fn settle(file: &Path, (locked, shell): (&rowver::change::Locked, &Reader), stag
         Ok(summary) if !summary.empty => {}
         Ok(_) => return Err("the refilled file holds no arrays".into()),
         Err(e @ (rowver::Error::Io(_) | rowver::Error::File(..))) => return Err(rowver::plain(out, &e)),
-        Err(e) => return Err(format!("{}, the file refilled, does not check out: {e}", out.display())),
+        Err(e) => return Err(format!("{}, the file refilled, does not check out: {}", out.display(), rowver::words(out, &e))),
     }
     Ok(said)
 }

@@ -55,7 +55,7 @@ impl Options {
 }
 
 /// Whether a word reads as a short flag, as `-y`: a dash, then letters alone.
-fn short(word: &str) -> bool {
+pub(crate) fn short(word: &str) -> bool {
     word.strip_prefix('-').is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphabetic()))
 }
 
@@ -85,6 +85,11 @@ pub fn read(command: &Command, args: &[&str]) -> Result<Options, String> {
     let mut args = args.iter().copied().peekable();
     let names: Vec<&str> = command.flags.iter().map(|(name, _, _)| *name).collect();
     while let Some(word) = args.next() {
+        // rvr tool's word right after FILE is KEY, unless it is one of its flags in full (SPEC §5.1.2).
+        if command.name == "tool" && options.words.len() == 1 && !names.contains(&word.split_once('=').map_or(word, |(flag, _)| flag)) {
+            options.words.push(word.to_owned());
+            continue;
+        }
         // A short flag is its long one (SPEC §5.1.2): the one flag, however it is written.
         let Some(&(name, takes, short)) = command.flags.iter().find(|(name, _, short)| *name == word || *short == Some(word)) else {
             if word.starts_with("--") || (short(word) && !command.dashes) {

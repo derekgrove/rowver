@@ -415,8 +415,11 @@ mod tests {
         for text in ["-0", r#"{"a": 1, "a": 2}"#, &deep] {
             let said = said(text);
             assert!(said.starts_with("the header breaks docs/FORMAT.md §1: "), "{said}");
-            assert!(said.ends_with("): the program that wrote it does not follow the format; press its study again with rvr"), "{said}");
+            assert!(said.contains("): the program that wrote it does not follow the format; "), "{said}");
         }
+        // One under a tool key is mended by dropping that key; any other by pressing again.
+        assert!(said(r#"{"a": 1, "a": 2}"#).ends_with("; rvr tool on the file says whether dropping a tool key lets it open"), "{}", said(r#"{"a": 1, "a": 2}"#));
+        assert!(said("-0").ends_with("; press its study again with rvr"), "{}", said("-0"));
         assert!(said(&deep).contains(" is nested 65 arrays and objects deep, more than 64 (line 1, column 66)"), "{}", said(&deep));
         // Only Strict's own refusals break §1; text that does not parse is not JSON.
         for text in [r#"{"a": "#, "{\"a\": 1} x", "[1,]", "\u{feff}{}", r#"{"a": "\ud800"}"#] {

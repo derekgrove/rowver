@@ -37,7 +37,7 @@ pub enum Error {
     #[error("the header is not JSON as docs/FORMAT.md §1 reads it ({0}): the file is damaged, or the program that wrote it does not follow the format; copy it again, or press its study again with rvr")]
     Json(#[from] serde_json::Error),
     /// A header's JSON parses, but breaks a rule of docs/FORMAT.md §1.
-    #[error("the header breaks docs/FORMAT.md §1: {fact} (line {line}, column {column}): the program that wrote it does not follow the format; press its study again with rvr")]
+    #[error("{}", breaks(fact, under.as_deref(), (*line, *column), None))]
     Breaks {
         /// What breaks the rule, and where in the header.
         fact: String,
@@ -48,6 +48,24 @@ pub enum Error {
         /// The column of that line.
         column: usize,
     },
+    /// A top-level key that is no field of the format breaks the header: why, and the key.
+    #[error("{fact}: {}", rvr::dropping(None))]
+    Tool {
+        /// What breaks the rule.
+        fact: String,
+        /// The key, which dropping takes out.
+        key: String,
+    },
+}
+
+/// A header that breaks docs/FORMAT.md §1 by `fact` at `(line, column)`, under the top-level key
+/// `under`, and what mends it, of the file at `path`.
+fn breaks(fact: &str, under: Option<&str>, (line, column): (usize, usize), path: Option<&Path>) -> String {
+    let mend = match under {
+        Some(key) if !rvr::TOP.contains(&key) => rvr::dropping(path),
+        _ => "the program that wrote it does not follow the format; press its study again with rvr".into(),
+    };
+    format!("the header breaks docs/FORMAT.md §1: {fact} (line {line}, column {column}): {mend}")
 }
 
 /// A value, or the `Error` that stopped it.
@@ -58,7 +76,16 @@ pub fn plain(path: impl AsRef<Path>, error: &Error) -> String {
     match error {
         Error::Io(e) => plain_io(path, e),
         e @ Error::File(..) => e.to_string(),
-        e => named(path.as_ref(), &e.to_string()),
+        e => named(path.as_ref(), &words(path.as_ref(), e)),
+    }
+}
+
+/// `error` in words, its advice naming `path` where it runs a command on the file.
+pub fn words(path: &Path, error: &Error) -> String {
+    match error {
+        Error::Breaks { fact, under, line, column } => breaks(fact, under.as_deref(), (*line, *column), Some(path)),
+        Error::Tool { fact, .. } => format!("{fact}: {}", rvr::dropping(Some(path))),
+        e => e.to_string(),
     }
 }
 
@@ -88,7 +115,7 @@ pub(crate) fn about(path: &Path, error: Error) -> Error {
             None => Error::File(path.to_path_buf(), e),
         },
         Error::Invalid(why) => Error::Invalid(named(path, &why)),
-        e @ (Error::Json(_) | Error::Breaks { .. }) => Error::Invalid(named(path, &e.to_string())),
+        e @ (Error::Json(_) | Error::Breaks { .. } | Error::Tool { .. }) => Error::Invalid(named(path, &words(path, &e))),
         e => e,
     }
 }

@@ -1,7 +1,6 @@
 //! The records of `data.cols` (docs/FORMAT.md §4): each one's fields, kind and name, its
 //! `by_sample`, and the forms of its facts.
 
-use super::samples::RESERVED;
 use super::{checksum, count, exactly, facts, field, list, nonempty, text, MEND};
 use crate::numeric::width;
 use crate::{invalid, Result};
@@ -36,8 +35,8 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
     for (index, record) in columns.iter().enumerate() {
         let name = nonempty(record, &format!("data.cols[{index}]"), "name")?;
         let place = format!("data.cols[{name:?}]");
-        if RESERVED.contains(&name) {
-            return Err(invalid(format!("{place}: no column is named sample, entry or file, names the format gives (docs/FORMAT.md §4): name it otherwise in the recipe, and press again")));
+        if rvr_recipe::taken(name) {
+            return Err(invalid(format!("{place}: no column is named {}, names the format gives (docs/FORMAT.md §4): name it otherwise in the recipe, and press again", rvr_recipe::given())));
         }
         if !names.insert(name) {
             return Err(invalid(format!("{place}: two columns have this name, and each has its own (docs/FORMAT.md §4): {MEND}")));

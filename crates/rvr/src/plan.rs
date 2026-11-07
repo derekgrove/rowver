@@ -527,12 +527,23 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
     })
 }
 
-/// Refuse a target that leads to anything but a file, links followed, before anything is read or asked (SPEC §8.12).
+/// Refuse a target that leads to anything but an `.rvr` file, links followed, before anything is read or asked (SPEC §8.12).
 pub fn a_file_or_none(target: &std::path::Path) -> Result<(), String> {
     let what = match std::fs::metadata(target) {
         Ok(there) if there.is_dir() => "a folder",
         Ok(there) if !there.is_file() => "a pipe, socket or device",
-        _ => return Ok(()),
+        Ok(there) => {
+            // One that cannot be read is said by what reads it next; an empty one holds nothing to lose.
+            let mut head = [0_u8; 8];
+            return match std::fs::File::open(target).map(|mut file| std::io::Read::read_exact(&mut file, &mut head)) {
+                Ok(Ok(())) if &head == rowver::rvr::MAGIC => Ok(()),
+                _ if there.len() == 0 => Ok(()),
+                Ok(Ok(())) => Err(format!("{} is not an .rvr file (it does not begin as one does), and rvr press writes only over an .rvr file: move it away, or name another file with --out", target.display())),
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => Err(format!("{} is not an .rvr file (it is shorter than one's first bytes), and rvr press writes only over an .rvr file: move it away, or name another file with --out", target.display())),
+                Ok(Err(_)) | Err(_) => Ok(()),
+            };
+        }
+        Err(_) => return Ok(()),
     };
     Err(format!("{} is {what}, not a file: move it away, or name a file with --out", target.display()))
 }

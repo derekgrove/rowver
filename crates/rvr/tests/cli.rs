@@ -166,6 +166,12 @@ fn new_makes_a_study_that_expands_and_never_overwrites() {
     let line = recipe.lines().find(|l| l.starts_with("chunk_rows")).unwrap_or_default();
     assert!(line.starts_with("chunk_rows = 65536") && recipe.contains("change it only knowing why"), "{recipe}");
     assert_eq!(rvr_recipe::Recipe::read(&recipe).map(|r| r.chunk_rows), Ok(Some(65_536)));
+    // A folder named with quotes is the recipe's title as it is.
+    let odd = dir.0.join("say \"hi\" now");
+    assert_eq!(rvr(&["new", odd.to_str().unwrap()]).0, 0);
+    let text = std::fs::read_to_string(odd.join("recipe.toml")).unwrap();
+    let title = text.parse::<toml::Table>().unwrap()["title"].clone();
+    assert_eq!(title.as_str(), Some("say \"hi\" now"));
     // The .gitignore leaves out exactly what SPEC 5.3.3 names.
     let ignored = std::fs::read_to_string(study.join(".gitignore")).unwrap();
     let lines: Vec<&str> = ignored.lines().filter(|l| !l.starts_with('#')).collect();

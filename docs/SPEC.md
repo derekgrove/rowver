@@ -286,7 +286,9 @@ the snapshot of the WLCG registry in the `wlcg-doors` crate rvr is built with (0
 
 **3.8.2** `*` (any run of characters, also none) and `?` (one character: one Unicode scalar value, whatever its bytes) may appear in the file
 name, not in its folder. Nothing else is special. A name is matched whole, byte for byte, case
-counting.
+counting; a remote one as its storage lists it, which may be percent-encoded as in a URL
+(`a%20b.root`): a name that matches nothing but would with the escapes on either side decoded is
+refused, naming the spelling to write.
 
 **3.8.3** An entry matches files in its folder in byte order of their names. A pattern that matches
 no file is refused, with the nearest names in that folder. A local symbolic link to a regular file
@@ -329,8 +331,8 @@ bounds are the program's own.
 the language. A column `branches` names keeps the branch's name as the file spells it. The other
 rules of names (which are reserved, which may not repeat) are the recipe reference's.
 
-**4.1.4** No two columns share a name; none is `sample`, `entry` or `file`; none shares a name with a
-derived column.
+**4.1.4** No two columns share a name; none is `sample`, `entry`, `file`, `events_read`,
+`events_total` or `events_missing`; none shares a name with a derived column.
 
 **4.1.5** The recipe validator (`Recipe::read`) refuses a recipe with every problem it finds, one a
 line, each naming its place (`[columns] ht: …`). It checks every expression as the recipe reference
@@ -415,8 +417,9 @@ stops the press there, not after every file is read. A press that builds on colu
 copied columns are not read, works them out once at the end (§4.6.4).
 
 **4.6.4** A derived column that fails when worked out over the whole file leaves the file written
-without its derived columns; the press says so and exits 1. Mending `[derived]` and pressing again
-reads no input (§8).
+without its derived columns; the press says so and exits 1. A press that adds columns in place
+(§8.2) keeps the derived columns the file held whose expressions the recipe still has, and leaves
+out only the new ones, naming them. Mending `[derived]` and pressing again reads no input (§8).
 
 ## 5. The commands and their options
 
@@ -432,7 +435,8 @@ nothing.
 
 **5.1.2** A flag is `--NAME`, with its value, when it takes one, as the next argument (an argument
 that begins with `--` is not a value); `--NAME=VALUE` is not read. `-f`, for `--force` (`rvr empty`, `rvr tool`), is
-the only short flag. `--fill [KINDS]` takes the next argument as its KINDS exactly when every
+the only short flag. In `rvr tool` the argument right after FILE is KEY, even one that begins with
+`-` (`-f`, `--x`), unless it is one of its flags written in full. `--fill [KINDS]` takes the next argument as its KINDS exactly when every
 comma-separated part of it is a kind of hole (§7.3.1), whatever folders there are; otherwise that
 argument is a word (the study folder). An argument after `--fill` that is not kinds, but holds a
 comma or has a part a slip of a letter or two from a kind, and is no folder there, is wrong use,
@@ -711,7 +715,7 @@ last answer was `403` (with a proxy).
 | answer | the core |
 |---|---|
 | `404`, `410` | makes a `gone` hole |
-| `401`; a certificate rvr does not trust; `403` with no proxy | stops: every file there would fail the same |
+| `401`; a certificate rvr does not trust; `403` with no proxy | stops: every file there would fail the same; a `401` or `403` with no proxy says one is needed (`…: it needs a grid proxy, and there is none usable (rvr proxy says why, and what to run)`) |
 | `200` to a range request (the storage ignored the range); any other `4xx` | makes an `unreachable` hole |
 
 **7.4.4** Waits end as soon as the press stops for another reason.
@@ -747,8 +751,10 @@ that another program is changing the file.
 **7.5.3** At most every 2 seconds while files finish, the spool and then the journal are made safe
 on disk (a checkpoint). A press stopped by anything (Ctrl-C, a killed process, a laptop asleep, a
 failure that is not a file's own, a data error) loses at most the files finished since the last
-checkpoint. A press that builds on columns (§8.2) and is stopped by a file it cannot read keeps
-nothing, since only `rvr press --full` goes on from there.
+checkpoint. A press that builds on columns (§8.2) and is stopped by a file that will not be read as
+it is (a hole of any kind but `unreachable` and `refused`, §7.4) keeps nothing, since only `rvr press
+--full` goes on from there; one stopped by a file it could not reach, or that was refused it, keeps
+what it read, as any other press does.
 
 **7.5.4** The next press with the same Plan (the same three texts, event choices, columns read, file
 built on, toolchain and number of files) carries on from the files finished at the last checkpoint,
@@ -760,7 +766,9 @@ program's own: a press carries on only from one its own build wrote.
 over, removing what a stopped press left.
 
 **7.5.6** A build whose commit is `unknown` or ends in `-dirty` (§12) keeps no journal, so a press it
-makes cannot be carried on.
+makes cannot be carried on; nor do `rvr refill` and `rvr reproduce`. Each starts over from what a
+stopped press left, saying so: how it differs when it was another press (§7.5.5), else `Starting
+over: the press that stopped in FOLDER is not carried on: this press keeps no journal (…)`.
 
 **7.5.7** The staging folder goes once the file is in place. A press stopped after that, before
 its folder went, leaves the folder: the next press of the file removes it and says so, and
@@ -945,7 +953,8 @@ is asked, by the header's own rules: DATA.json is one JSON object by FORMAT.md �
 whole number written `-0`, no lone surrogate, and arrays and objects nested at most 64 deep, counted
 from the key's place in the header, where its object is 2 deep); `KEY` is a tool key's name and no
 slip of the format's own keys (§11); and the header with it is at most 2^32 − 1 bytes. The object is
-written compactly, each number as DATA.json writes it; a new key goes after the header's last one,
+written compactly, each number as DATA.json writes it but for an exponent, which is written `e` with
+its sign (`1E2` as `1e+2`, `0e0` as `0e+0`); a new key goes after the header's last one,
 and a key replaced stays where it lay. A key already
 there is replaced only once you say so, the question naming both sizes as the header holds them. A
 DATA.json the rules refuse is told against it, as `DATA.json: the tool key KEY is not JSON … (line
@@ -1039,7 +1048,10 @@ path leads to nothing, links followed, and names nothing or what it named as the
 to nothing: the same kind, device and inode). The file then replaces a link to nothing, the link
 itself. A target that leads to anything but a file, links followed, is refused before anything is
 read (`FILE is a folder, not a file: move it away, or name a file with --out`, or `a pipe, socket or
-device`, exit 1), by `rvr status` too. Anything another program put there meanwhile is left as it
+device`, exit 1), by `rvr status` too, and so is a file that does not begin with the magic, which
+the press would write over (`FILE is not an .rvr file (it does not begin as one does), and rvr press
+writes only over an .rvr file: move it away, or name another file with --out`); an empty file,
+holding nothing, is written over. Anything another program put there meanwhile is left as it
 is, and the press stops, keeping what it read (exit 1), `FILE was put there by another program while
 rvr pressed it, and is left as it is: move it away`. A reader takes no lock.
 
@@ -1059,7 +1071,11 @@ changed in place (WHY): wrote it anew and moved it over.` (WHY: `you may not wri
 filesystem is read-only`, or `its filesystem gives no lock: …`). On a read-only filesystem the new
 file cannot be written either, and the change is refused: `FILE cannot be changed: its filesystem
 is read-only, so neither it nor a new file beside it can be written: copy it to a disk you may
-write, and change the copy`; a file there is still read and pressed from. A press that would write
+write, and change the copy`; a file there is still read and pressed from. In a folder that may not
+be written, neither the journal nor a new file can go beside the file, and the change is refused
+before the file is touched: `FILE cannot be changed: its folder may not be written, and the journal
+of the change (or the new file that replaces it) is written there first: give yourself the right to
+write it (chmod u+w FOLDER), or copy the file to a folder you may write, and change the copy`. A press that would write
 such a file is refused before it stages anything, `FILE lies on a read-only filesystem: rvr press
 cannot write it or a new file beside it; copy the study to a disk you may write` (rvr status says
 that line in place of the one above; a file current has nothing to press, and is not refused). A press decides this before it

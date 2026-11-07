@@ -361,7 +361,7 @@
     {
       "rule": "RECIPE the-keys-exactly: a plain name",
       "rust_says": [
-        "[columns] two words: a column is named with one plain name, such as ht, and not sample, entry or file"
+        "[columns] two words: a column is named with one plain name, such as ht, and not sample, entry, file, events_read, events_total or events_missing"
       ],
       "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\n\"two words\" = \"MET_pt\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
       "verdict": "refused"
@@ -369,7 +369,7 @@
     {
       "rule": "RECIPE the-keys-exactly: no word of the language",
       "rust_says": [
-        "[columns] and: a column is named with one plain name, such as ht, and not sample, entry or file"
+        "[columns] and: a column is named with one plain name, such as ht, and not sample, entry, file, events_read, events_total or events_missing"
       ],
       "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nand = \"MET_pt\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
       "verdict": "refused"
@@ -377,15 +377,24 @@
     {
       "rule": "RECIPE the-keys-exactly: no column named entry",
       "rust_says": [
-        "[columns] entry: a column is named with one plain name, such as ht, and not sample, entry or file"
+        "[columns] entry: a column is named with one plain name, such as ht, and not sample, entry, file, events_read, events_total or events_missing"
       ],
       "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nentry = \"MET_pt\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
       "verdict": "refused"
     },
     {
+      "rule": "RECIPE the-keys-exactly: no column named as a sample's count",
+      "rust_says": [
+        "[columns] branches lists events_read, a name every row or sample has already (sample, entry, file, events_read, events_total or events_missing): store the branch under another name, as events_read_branch = \"branch('events_read')\"",
+        "[columns] events_total: a column is named with one plain name, such as ht, and not sample, entry, file, events_read, events_total or events_missing"
+      ],
+      "text": "format = \"rvr-recipe\"\nversion = 1\n[columns]\nbranches = [\"events_read\"]\nevents_total = \"MET_pt\"\n\n[define]\n\n[keep]\n\n[totals]\n\n[derived]\n\n",
+      "verdict": "refused"
+    },
+    {
       "rule": "RECIPE the-keys-exactly: no total named events_read",
       "rust_says": [
-        "[totals] events_read: a total is named with one plain name, such as sumw, and not sample, entry, file, events_read, events_total, events_missing"
+        "[totals] events_read: a total is named with one plain name, such as sumw, and not sample, entry, file, events_read, events_total or events_missing"
       ],
       "text": "format = \"rvr-recipe\"\nversion = 1\n[totals]\nevents_read = \"MET_pt\"\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET_pt\"]\n\n[derived]\n\n",
       "verdict": "refused"

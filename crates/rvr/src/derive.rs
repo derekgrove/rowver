@@ -16,25 +16,48 @@ pub(crate) const USAGE: &str = "usage:
   rvr derive FILE --rename OLD NEW
       give a derived column another name; its expression stays as it is";
 
-/// Take the derived columns `names` out of a press's header, and empty the `[derived]` table of
-/// the recipe it carries: what a press read, kept when its derived columns failed.
+/// Take the derived columns `names` out of a press's header and out of the `[derived]` table of
+/// the recipe it carries: what a press read, kept when those derived columns failed.
 pub(crate) fn without(header: &mut Value, names: Vec<String>) -> Result<(), String> {
     let text = header["made"]["recipe"]["text"].as_str().unwrap_or_default().to_owned();
-    // A [derived] table not written a line per column is emptied in the recipe's TOML instead,
-    // written again whole: the recipe loses its comments and layout.
-    let text = edited(&text, &dropping(names), &[]).or_else(|_| {
-        let mut table: toml::Table = text.parse().map_err(|e: toml::de::Error| e.to_string())?;
-        table.insert("derived".into(), toml::Table::new().into());
-        toml::to_string(&table).map_err(|e| e.to_string())
-    })?;
+    let recipe = Recipe::read(&text).map_err(|e| e.line())?;
+    let kept: Vec<(String, String)> = recipe.derived.iter().filter(|(name, _)| !names.contains(name)).cloned().collect();
+    // A [derived] table not written a line per column is changed in the recipe's TOML instead,
+    // written again whole: the recipe loses its comments and layout, not its order.
+    let text = edited(&text, &dropping(names.clone()), &kept).or_else(|_| written_again(&text, &recipe, &kept))?;
     let made = &mut header["made"];
     made["recipe"]["text"] = text.as_str().into();
     made["recipe"]["sha256"] = rowver::write::text_checksum(&text).into();
     made["sha256"] = rowver::write::made_checksum(made).map_err(|e| e.to_string())?.into();
-    if let Some(root) = header.as_object_mut() {
-        root.shift_remove("derived");
+    if let Some(columns) = header.get_mut("derived").and_then(|d| d.get_mut("columns")).and_then(Value::as_array_mut) {
+        columns.retain(|record| !names.iter().any(|name| record["name"] == name.as_str()));
+    }
+    if header["derived"]["columns"].as_array().is_none_or(Vec::is_empty) {
+        if let Some(root) = header.as_object_mut() {
+            root.shift_remove("derived");
+        }
     }
     Ok(())
+}
+
+/// A recipe's TOML written again with `[derived]` holding `kept`: every table, and every key in it, in
+/// the order read, a value that is a table written inline; refused unless it reads as the same recipe.
+fn written_again(text: &str, recipe: &Recipe, kept: &[(String, String)]) -> Result<String, String> {
+    let mut root: toml::Table = text.parse().map_err(|e: toml::de::Error| e.to_string())?;
+    root.insert("derived".into(), kept.iter().map(|(name, expression)| (name.clone(), toml::Value::from(expression.as_str()))).collect::<toml::Table>().into());
+    let key = |key: &str| match !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        true => key.to_owned(),
+        false => toml::Value::from(key).to_string(),
+    };
+    let mut out: String = root.iter().filter(|(_, value)| !value.is_table()).map(|(name, value)| format!("{} = {value}\n", key(name))).collect();
+    for (name, table) in root.iter().filter_map(|(name, value)| value.as_table().map(|table| (name, table))) {
+        out.push_str(&format!("\n[{}]\n", key(name)));
+        out.extend(table.iter().map(|(name, value)| format!("{} = {value}\n", key(name))));
+    }
+    match Recipe::read(&out) {
+        Ok(again) if again == (Recipe { derived: kept.to_vec(), ..recipe.clone() }) => Ok(out),
+        _ => Err("rvr could not write the recipe the file carries again without those derived columns, reading as the same recipe".into()),
+    }
 }
 
 /// Sign `header` when there is a key.
@@ -49,7 +72,7 @@ pub(crate) fn signed(header: &mut Value, signer: Option<&[u8; 32]>) -> Result<()
 pub(crate) fn sealed(header: &mut Value, signer: Option<&[u8; 32]>) -> Result<(), String> {
     signed(header, signer)?;
     let text = serde_json::to_vec(header).map_err(|e| e.to_string())?;
-    rowver::rvr::checked_header(&text).map(drop).map_err(|e| format!("it would not be valid: {e}"))
+    rowver::rvr::checked_to_write(&text).map(drop).map_err(|e| e.to_string())
 }
 
 /// Write `from` again at `to` with `header`, sealed.

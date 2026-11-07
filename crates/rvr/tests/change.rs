@@ -60,6 +60,11 @@ fn tool_lists_sets_gets_and_drops_tool_keys_asking_first() {
     let (code, said) = rvr(&dir, &["tool", &file, "my-tool", "--get", "out.json"]);
     assert_eq!((code, said.as_str()), (0, format!("Wrote the tool key my-tool of {file} to out.json (25 bytes).\n").as_str()));
     assert_eq!(std::fs::read_to_string(dir.join("out.json")).unwrap(), "{\"note\":\"μ\",\"n\":[1,2.5]}\n");
+    // Each number as DATA.json writes it, but for an exponent, written e with its sign.
+    std::fs::write(dir.join("spelt.json"), r#"{"a": 10.50, "b": 1E2, "c": 2e-3}"#).unwrap();
+    assert_eq!(rvr(&dir, &["tool", &file, "spelt", "--set", "spelt.json"]).0, 0);
+    assert_eq!(rvr(&dir, &["tool", &file, "spelt", "--get"]).1, "{\"a\":10.50,\"b\":1e+2,\"c\":2e-3}\n");
+    assert_eq!(rvr(&dir, &["tool", &file, "spelt", "--drop", "--force"]).0, 0);
     // A file there already, perhaps edited by hand, is written over only once you say so.
     std::fs::write(dir.join("out.json"), "edited\n").unwrap();
     let (code, said) = rvr(&dir, &["tool", &file, "my-tool", "--get", "out.json"]);
@@ -105,7 +110,7 @@ fn tool_lists_sets_gets_and_drops_tool_keys_asking_first() {
     }
 }
 
-// SPEC 8.11
+// SPEC 5.1.2, 8.11
 #[test]
 fn a_file_a_tool_key_keeps_from_opening_has_its_keys_listed_and_written_out_and_the_drop_mends_it() {
     let (dir, file) = pressed("too-deep", &recipe("branches = [\"nJet\"]", ""));
@@ -113,9 +118,11 @@ fn a_file_a_tool_key_keeps_from_opening_has_its_keys_listed_and_written_out_and_
     // Written by another program: nested 70 deep counted from the header (its object 2, and 68 arrays).
     let deep = format!("{{\"d\":{}{}}}", "[".repeat(68), "]".repeat(68));
     reheadered(&path, &path, |header| header["deep"] = serde_json::from_str(&deep).unwrap());
-    assert_eq!(rvr(&dir, &["validate", &file]).0, 1);
+    let (code, said) = rvr(&dir, &["validate", &file]);
+    assert!(code == 1 && said.contains(&format!("rvr tool {file} says whether dropping a tool key lets it open")), "{said}");
     let (code, said) = rvr(&dir, &["tool", &file]);
     assert!(code == 0 && said.starts_with(&format!("{file} has 1 tool key:\n  deep ({} bytes)\n{file} does not open (", deep.len())), "{said}");
+    assert_eq!(said.matches("--drop").count(), 1, "{said}");
     assert!(said.trim_end().ends_with(&format!("): rvr tool {file} deep --drop takes out the key that breaks it")), "{said}");
     assert_eq!(rvr(&dir, &["tool", &file, "deep", "--get"]), (0, format!("{deep}\n")));
     // Set over, the key that breaks it is replaced in one step, in a copy.
@@ -134,6 +141,27 @@ fn a_file_a_tool_key_keeps_from_opening_has_its_keys_listed_and_written_out_and_
     reheadered(&path, &path, |header| header["made"]["study"] = json!("another"));
     let (code, said) = rvr(&dir, &["tool", &file]);
     assert!(code == 0 && said.contains(&format!("{file} does not open (")) && !said.contains("--drop"), "{said}");
+    // A key whose name begins with a dash is named all the same.
+    let (dir, file) = pressed("dashed", &recipe("branches = [\"nJet\"]", ""));
+    let path = dir.join(&file);
+    reheadered(&path, &path, |header| header["-x"] = json!(3));
+    let (code, said) = rvr(&dir, &["tool", &file]);
+    assert!(code == 0 && said.contains(&format!("rvr tool {file} -x --drop takes out the key that breaks it")), "{said}");
+    let (code, said) = rvr(&dir, &["tool", &file, "-x", "--get", "-F"]);
+    assert!(code == 2 && said.contains("-F is not one of its flags") && !dir.join("-F").exists(), "{said}");
+    assert_eq!(rvr(&dir, &["tool", &file, "-x", "--drop", "-f"]).0, 0);
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    // Right after FILE, even a name that is a short flag, or begins as a long one, is KEY (SPEC 5.1.2).
+    for key in ["-f", "--x"] {
+        reheadered(&path, &path, |header| header[key] = json!(3));
+        let (code, said) = rvr(&dir, &["tool", &file]);
+        assert!(code == 0 && said.contains(&format!("rvr tool {file} {key} --drop takes out the key that breaks it")), "{said}");
+        for look in [vec!["header", &file], vec!["dump", &file], vec!["diff", &file, &file]] {
+            assert!(rvr(&dir, &look).1.contains(&format!("rvr tool {file} says whether dropping a tool key lets it open")), "{look:?}");
+        }
+        assert_eq!(rvr(&dir, &["tool", &file, key, "--drop", "-f"]).0, 0, "{key}");
+        assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    }
 }
 
 // SPEC 8.11
@@ -405,6 +433,25 @@ fn a_file_that_may_not_be_written_is_changed_anew_and_moved_over() {
     assert_ne!(inode(&path), ino);
     assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o444);
     assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    // In a folder that may not be written, the folder is said, for the journal or the new file.
+    std::fs::create_dir(dir.join("shut")).unwrap();
+    std::fs::copy(&path, dir.join("shut/f.rvr")).unwrap();
+    std::fs::set_permissions(dir.join("shut"), std::fs::Permissions::from_mode(0o555)).unwrap();
+    /// The folder opened again however the test ends, so that its study can be removed.
+    struct Opened(std::path::PathBuf);
+    impl Drop for Opened {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+    let _opened = Opened(dir.join("shut"));
+    for (mode, what) in [(0o644, "the journal of the change"), (0o444, "the new file that replaces it")] {
+        std::fs::set_permissions(dir.join("shut/f.rvr"), std::fs::Permissions::from_mode(mode)).unwrap();
+        let before = std::fs::read(dir.join("shut/f.rvr")).unwrap();
+        let (code, said) = rvr(&dir, &["tool", "shut/f.rvr", "k", "--set", "data.json"]);
+        assert!(code == 1 && said.contains(&format!("shut/f.rvr cannot be changed: its folder may not be written, and {what} is written there first: give yourself the right to write it (chmod u+w shut, if it is yours)")), "{said}");
+        assert_eq!(std::fs::read(dir.join("shut/f.rvr")).unwrap(), before);
+    }
 }
 
 // SPEC 8.12

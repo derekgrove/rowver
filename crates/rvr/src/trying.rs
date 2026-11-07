@@ -7,7 +7,7 @@ use crate::open::{entries as located, first_readable, hint, sample_in, Branches}
 use crate::options::Options;
 use crate::plan::Choose;
 use rowver::rvr::derived::fields;
-use rvr_recipe::{per_event, Array, Columns, Constant, Scope, Store, Values};
+use rvr_recipe::{per_event, Array, Columns, Constant, Picked, Scope, Store, Values};
 use std::path::Path;
 
 pub(crate) const USAGE: &str = "usage:
@@ -71,18 +71,25 @@ fn run(options: &Options, wanted: usize) -> Result<(), String> {
         let within = |(error, part): (rvr_recipe::Error, std::ops::Range<usize>)| format!("{shown_name}, {}: {}{}", located(&error, first, &part), error.0, hint(&error, &names, &recipe));
         // In fewer entries at a time where their pairs would be too many together.
         let branches = Branches::over(&root, &tree, first as i64, last as i64);
-        let mut work = |run: &dyn Columns, from: usize, to: usize| {
-            let scope = Scope::new(run, &metadata, &recipe.defines);
-            let keep = match only_kept {
-                true => kept(&recipe, &scope, vec![true; to - from], &mut vec![0; recipe.keep.len()]),
-                false => Ok(vec![true; to - from]),
-            };
-            keep.and_then(|keep| Ok((keep, scope.evaluate(&expression).and_then(|value| per_event(value, to - from))?)))
+        // The cuts first, then the expression over the events they keep alone, as a press works a column out.
+        let keep = match only_kept {
+            true => {
+                let mut cuts = |run: &dyn Columns, from: usize, to: usize| kept(&recipe, &Scope::new(run, &metadata, &recipe.defines), vec![true; to - from], &mut vec![0; recipe.keep.len()]);
+                rvr_recipe::over_runs(&branches, entries, &mut cuts).map_err(within)?.concat()
+            }
+            false => vec![true; entries],
         };
-        let runs = rvr_recipe::over_runs(&branches, entries, &mut work).map_err(within)?;
-        let (keeps, results): (Vec<Vec<bool>>, Vec<Array>) = runs.into_iter().unzip();
-        let keep = keeps.concat();
-        let result = Array::joined(results).map_err(|e| within((e, 0..entries)))?;
+        let at: Vec<usize> = keep.iter().enumerate().filter(|(_, keep)| **keep).map(|(at, _)| at).take(wanted - shown).collect();
+        if at.is_empty() {
+            first = last;
+            continue;
+        }
+        let mut work = |run: &dyn Columns, from: usize, to: usize| Scope::new(run, &metadata, &recipe.defines).evaluate(&expression).and_then(|value| per_event(value, to - from));
+        let results = match at.len() == entries {
+            true => rvr_recipe::over_runs(&branches, entries, &mut work).map_err(within)?,
+            false => rvr_recipe::over_runs(&Picked::new(&branches, &at, entries), at.len(), &mut work).map_err(crate::take::unpicked(&at)).map_err(within)?,
+        };
+        let result = Array::joined(results).map_err(|e| within(crate::take::unpicked(&at)((e, 0..at.len()))))?;
         // Shown as a column of it would hold them: a branch alone as read, any other each NaN the one quiet NaN.
         let result = if recipe.alone(&expression) { result } else { result.settled() };
         if kind.is_none() {
@@ -90,11 +97,9 @@ fn run(options: &Options, wanted: usize) -> Result<(), String> {
             println!("{}: {shown_name}, tree {} ({described})", sample.name, sample.tree);
             kind = Some(described);
         }
-        for (offset, keep) in keep.iter().enumerate() {
-            if *keep && shown < wanted {
-                println!("  entry {:>8}   {}", first + offset as u64, value(&result, offset));
-                shown += 1;
-            }
+        for (row, offset) in at.iter().enumerate() {
+            println!("  entry {:>8}   {}", first + *offset as u64, value(&result, row));
+            shown += 1;
         }
         first = last;
     }

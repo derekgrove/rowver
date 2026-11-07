@@ -40,6 +40,7 @@ fn refusals() -> Vec<(&'static str, String)> {
         ("the-keys-exactly: a plain name", recipe("[columns]\n\"two words\" = \"MET_pt\"\n")),
         ("the-keys-exactly: no word of the language", recipe("[columns]\nand = \"MET_pt\"\n")),
         ("the-keys-exactly: no column named entry", recipe("[columns]\nentry = \"MET_pt\"\n")),
+        ("the-keys-exactly: no column named as a sample's count", recipe("[columns]\nbranches = [\"events_read\"]\nevents_total = \"MET_pt\"\n")),
         ("the-keys-exactly: no total named events_read", recipe("[totals]\nevents_read = \"MET_pt\"\n")),
         ("the-keys-exactly: no two columns alike", recipe("[columns]\nbranches = [\"MET_pt\", \"MET_pt\"]\n")),
         ("the-keys-exactly: a defined name uses those above it", recipe("[define]\na = \"b * 2\"\nb = \"MET_pt\"\n")),

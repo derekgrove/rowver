@@ -63,7 +63,7 @@ fn holes(record: &Value, place: &str, limit: u64) -> Result<Vec<(u64, u64)>> {
         let kind = text(hole, &place, "kind")?;
         if !super::HOLE_KINDS.contains(&kind) {
             return Err(invalid(format!(
-                "{place}.kind is {kind:?}, not one of {} (docs/FORMAT.md §6.2): a newer rowver may write it; update rowver",
+                "{place}.kind is {kind:?}, not one of {} (docs/FORMAT.md §6.2): {MEND}",
                 super::HOLE_KINDS.join(", ")
             )));
         }

@@ -1,7 +1,7 @@
 //! Read and check `.rvr` files: a header on opening, the whole file in full validation.
 
 use crate::write::data_checksum;
-use crate::{invalid, Result, VERSION};
+use crate::{invalid, Error, Result, VERSION};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -24,7 +24,7 @@ pub use snapshot::{study_name, toolchain};
 pub use texts::{derived_kinds, kinds};
 
 /// The eight bytes every `.rvr` file starts and ends with.
-pub(crate) const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
+pub const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
 
 /// The kinds of hole a file records (docs/FORMAT.md, "Holes"); a reader refuses any other.
 pub const HOLE_KINDS: [&str; 5] = ["unreachable", "damaged", "gone", "changed", "refused"];
@@ -259,7 +259,7 @@ fn version(header: &Value) -> Result<()> {
 }
 
 /// The top level's own keys; any other is a tool's.
-const TOP: [&str; 5] = ["rowver", "data", "made", "derived", "signature"];
+pub(crate) const TOP: [&str; 5] = ["rowver", "data", "made", "derived", "signature"];
 
 /// A whole number with its thousands apart by commas: `50,000`.
 pub fn grouped(n: u64) -> String {
@@ -353,11 +353,28 @@ pub fn checked_header(text: &[u8]) -> Result<Value> {
     checked(text).map(|(header, _)| header)
 }
 
+/// `checked_header` of a header about to be written, saying what in what it was given to change:
+/// where the arrays its records lay out end.
+pub fn checked_to_write(text: &[u8]) -> Result<u64> {
+    checked(text).map(|(_, end)| end).map_err(|e| match e {
+        Error::Breaks { fact, under: Some(key), .. } if !TOP.contains(&key.as_str()) => invalid(format!("the header rowver was about to write breaks docs/FORMAT.md §1: {fact}, in the tool key {key} it was given: change that tool key's data to follow §1")),
+        Error::Breaks { fact, .. } => invalid(format!("the header rowver was about to write breaks docs/FORMAT.md §1: {fact}, in what it was given to write: change that to follow §1")),
+        Error::Tool { fact, key } => invalid(format!("the header rowver was about to write is refused: {fact}: change the tool key {key:?} it was given, as docs/FORMAT.md §11 says")),
+        e => e,
+    })
+}
+
 /// `checked_header`, and where the arrays its records lay out end.
 fn checked(text: &[u8]) -> Result<(Value, u64)> {
     let header = crate::json::strict(text)?;
     let end = checks(&header)?;
     Ok((header, end))
+}
+
+/// How a header a tool key breaks is mended, of the file at `path` (FILE when unknown).
+pub(crate) fn dropping(path: Option<&std::path::Path>) -> String {
+    let on = path.map_or_else(|| "on the file".to_owned(), |path| path.display().to_string());
+    format!("the program that wrote it does not follow the format; rvr tool {on} says whether dropping a tool key lets it open")
 }
 
 /// Every check `checked_header` makes, of a header parsed as `json::strict` parses it; where
@@ -366,14 +383,21 @@ fn checks(header: &Value) -> Result<u64> {
     let root = header.as_object().ok_or_else(|| invalid(format!("the header must be one JSON object: {MEND}")))?;
     version(header)?;
     for (key, value) in root {
-        if let Some(near) = slip(key) {
-            return Err(invalid(format!("the top-level key {key:?} is a slip of {near}, one of the format's own keys, not a tool key (docs/FORMAT.md §11): write it {near}, or give the tool key a name further from it")));
+        let tool = |fact: String| Error::Tool { fact, key: key.clone() };
+        match slip(key) {
+            // A slip standing for a key every header has, dropped, leaves a header without it.
+            Some(near) if ["rowver", "data", "made"].contains(&near) && !root.contains_key(near) => return Err(invalid(format!("the top-level key {key:?} is a slip of {near}, one of the format's own keys, and the header has no {near} (docs/FORMAT.md §2, §11): {MEND}"))),
+            Some(near) => return Err(tool(format!("the top-level key {key:?} is a slip of {near}, one of the format's own keys, not a tool key (docs/FORMAT.md §11)"))),
+            None => {}
         }
         if !TOP.contains(&key.as_str()) && !tool_name(key) {
-            return Err(invalid(format!("the top-level key {key:?} is no field of the format and not a tool key's name (one or more ASCII letters, digits, _, - and ., docs/FORMAT.md §11): rename the tool key")));
+            return Err(tool(format!("the top-level key {key:?} is no field of the format and not a tool key's name (one or more ASCII letters, digits, _, - and ., docs/FORMAT.md §11)")));
         }
         if key != "rowver" && !value.is_object() {
-            return Err(invalid(format!("{key} must be an object (docs/FORMAT.md §2, §11): {MEND}")));
+            return Err(match TOP.contains(&key.as_str()) {
+                true => invalid(format!("{key} must be an object (docs/FORMAT.md §2, §11): {MEND}")),
+                false => tool(format!("{key} must be an object (docs/FORMAT.md §2, §11)")),
+            });
         }
     }
     let data = object(header, "", "data")?;
@@ -555,7 +579,7 @@ fn exactly(value: &Value, place: &str, keys: &[&str], optional: &[&str]) -> Resu
     let held = held.ok_or_else(|| invalid(format!("{place} must be an object: {MEND}")))?;
     if let Some(key) = held.keys().find(|key| !keys.contains(&key.as_str())) {
         return Err(invalid(format!(
-            "{place} has a field {key:?}, which the format does not give it ({}): a newer rowver may write it (update rowver), or take it out",
+            "{place} has a field {key:?}, which the format does not give it ({}): {MEND}",
             keys.join(", ")
         )));
     }

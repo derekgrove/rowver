@@ -456,3 +456,30 @@ fn a_full_disk_stops_the_press_keeping_what_it_read_and_the_next_carries_on() {
     }
     assert!(stopped >= 3, "the disk filled only {stopped} times");
 }
+
+// SPEC 6.2.3
+#[test]
+fn a_storage_name_percent_encoded_is_matched_as_listed_and_said_so() {
+    let server = Server::start();
+    let bytes = std::fs::read(common::fixture("uproot_flat.root")).unwrap();
+    server.put("/enc/a%20b.root", bytes.clone());
+    server.put("/enc/c.root", bytes);
+    let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n[[sample]]\nname = \"far\"\nfiles = {:?}\n", server.url("/enc/a b.root"));
+    let dir = common::study("encoded", &samples, RECIPE);
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains("a b.root matched no file: a name is matched as its storage spells it, with or without %-escapes as in a URL, and it spells this one a%20b.root: write it so"), "{said}");
+    std::fs::write(dir.join("samples.toml"), samples.replace("a b.root", "a b*.root")).unwrap();
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains("a b*.root matched no file: a name is matched as its storage spells it, with or without %-escapes as in a URL, and it spells one a%20b.root: write the pattern so"), "{said}");
+    // Escapes where the storage spells none are told the other way.
+    std::fs::write(dir.join("samples.toml"), samples.replace("a b.root", "c%2Eroot")).unwrap();
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains("c%2Eroot matched no file: a name is matched as its storage spells it") && said.contains("it spells this one c.root: write it so"), "{said}");
+    std::fs::write(dir.join("samples.toml"), samples.replace("a b.root", "a%20b.root")).unwrap();
+    let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
+    assert!(code == 0 && said.contains("also hold 1 .root file no sample reads") && said.contains("/enc/c.root") && !said.contains("a%20b.root"), "{said}");
+    let lock = std::fs::read_to_string(dir.join("samples.lock")).unwrap();
+    assert!(lock.contains("/enc/a%20b.root"), "{lock}");
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+}

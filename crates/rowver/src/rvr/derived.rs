@@ -24,15 +24,15 @@ pub(super) fn validate(derived: &Value, data: &Value) -> Result<()> {
         return Err(invalid("derived.columns is empty, and a file with no derived column has no derived key (docs/FORMAT.md §10): take it out"));
     }
     let samples = list(data, "data", "samples")?.len();
-    let mut names: HashSet<&str> = super::samples::RESERVED.into();
+    let mut names: HashSet<&str> = HashSet::new();
     for column in list(data, "data", "cols")?.iter().chain(list(data, "data", "sample_cols")?) {
         names.insert(column["name"].as_str().unwrap_or_default());
     }
     for (index, record) in records.iter().enumerate() {
         let name = nonempty(record, &format!("derived.columns[{index}]"), "name")?;
         let place = format!("derived.columns[{name:?}]");
-        if !names.insert(name) {
-            return Err(invalid(format!("{place}: a derived column's name is one no stored, sample or other derived column has, nor sample, entry or file (docs/FORMAT.md §10): rename it with rvr derive")));
+        if rvr_recipe::taken(name) || !names.insert(name) {
+            return Err(invalid(format!("{place}: a derived column's name is one no stored, sample or other derived column has, nor {} (docs/FORMAT.md §10): rename it with rvr derive", rvr_recipe::given())));
         }
         if text(record, &place, "expression")?.trim().is_empty() {
             return Err(invalid(format!("{place}.expression is blank, and a derived column is kept as the expression that computes it (docs/FORMAT.md §10): {MEND}")));

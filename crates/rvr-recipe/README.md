@@ -105,8 +105,8 @@ known key nearest to it when there is one ("Did you mean: keep?"):
 
 Every `NAME` is a **plain name**: a letter or `_`, then letters, digits and `_`, and not one of the
 words `and`, `or`, `not`, `in`, `true`, `false`, `pi`, `inf`. A defined name is not `sample`; a
-column, total or derived column is not `sample`, `entry` or `file`, and a total is not
-`events_read`, `events_total` or `events_missing`. No two columns share a name (a branch listed
+column, total or derived column is not `sample`, `entry`, `file`, `events_read`, `events_total` or
+`events_missing`. No two columns share a name (a branch listed
 twice is two), and a total or derived column has a name no column, defined name, total or earlier
 derived column has. A defined name uses only the names defined above it; a derived column uses only
 the stored columns and the derived columns above it. Every expression is written as text in quotes.

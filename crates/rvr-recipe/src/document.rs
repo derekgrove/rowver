@@ -91,6 +91,17 @@ pub const RESERVED: [&str; 3] = ["sample", "entry", "file"];
 /// The metadata a press gives every sample beside the keys of samples.toml, which no expression sees.
 pub const ADDED: [&str; 3] = ["events_read", "events_total", "events_missing"];
 
+/// Whether a column, total or derived column may not be named `name`: one of `RESERVED` and `ADDED`.
+pub fn taken(name: &str) -> bool {
+    RESERVED.contains(&name) || ADDED.contains(&name)
+}
+
+/// The names a column may not have, `RESERVED` and `ADDED`, in words: "sample, entry, … or events_missing".
+pub fn given() -> String {
+    let names: Vec<&str> = RESERVED.iter().chain(&ADDED).copied().collect();
+    format!("{} or {}", names[..names.len() - 1].join(", "), names[names.len() - 1])
+}
+
 /// Whether text is one plain name, as an expression would read it.
 pub fn plain(text: &str) -> bool {
     matches!(parse(text), Ok(Expression::Name(name)) if name == text)
@@ -450,8 +461,8 @@ impl Reading {
                         self.said.push(format!("[columns] branches must be a list of branch names, and {branch} is not one"));
                         continue;
                     };
-                    if RESERVED.contains(&branch) {
-                        self.said.push(format!("[columns] branches lists {branch}, a name every row has already ({}): store the branch under another name, as {branch}_branch = \"branch('{branch}')\"", RESERVED.join(", ")));
+                    if taken(branch) {
+                        self.said.push(format!("[columns] branches lists {branch}, a name every row or sample has already ({}): store the branch under another name, as {branch}_branch = \"branch('{branch}')\"", given()));
                     }
                     if recipe.defines.contains_key(branch) {
                         self.said.push(format!("[columns] branches lists {branch}, a name [define] gives an expression: list branches only, and store the expression as a column of its own, such as {branch}_stored = \"{branch}\""));
@@ -463,8 +474,8 @@ impl Reading {
             }
             let place = format!("[columns] {name}");
             named.push(name.clone());
-            if !plain(name) || RESERVED.contains(&name.as_str()) {
-                self.say(&place, "a column is named with one plain name, such as ht, and not sample, entry or file");
+            if !plain(name) || taken(name) {
+                self.say(&place, format!("a column is named with one plain name, such as ht, and not {}", given()));
             }
             let value = match value {
                 Value::Table(column) => {
@@ -506,8 +517,8 @@ impl Reading {
         let Some(totals) = self.table(root, "totals") else { return };
         for (name, value) in totals {
             let place = format!("[totals] {name}");
-            if !plain(name) || RESERVED.contains(&name.as_str()) || ADDED.contains(&name.as_str()) {
-                self.say(&place, format!("a total is named with one plain name, such as sumw, and not {}", RESERVED.iter().chain(&ADDED).copied().collect::<Vec<_>>().join(", ")));
+            if !plain(name) || taken(name) {
+                self.say(&place, format!("a total is named with one plain name, such as sumw, and not {}", given()));
             }
             if recipe.columns.iter().any(|(n, _)| n == name) || recipe.defines.contains_key(name) {
                 self.say(&place, format!("{name} is already the name of a column or a line of [define]; give the total another"));
@@ -557,8 +568,8 @@ impl Reading {
         let every: BTreeSet<&String> = derived.keys().collect();
         for (name, value) in derived {
             let place = format!("[derived] {name}");
-            if !plain(name) || RESERVED.contains(&name.as_str()) {
-                self.say(&place, "a derived column is named with one plain name, such as ht_over_met");
+            if !plain(name) || taken(name) {
+                self.say(&place, format!("a derived column is named with one plain name, such as ht_over_met, and not {}", given()));
             }
             if held.contains(name) || recipe.defines.contains_key(name) || recipe.totals.iter().any(|t| &t.name == name) {
                 self.say(&place, format!("{name} is already the name of a column, a total or a line of [define]; give the derived column another"));

@@ -189,7 +189,7 @@ const TEXTS: [(&str, &str, &str); 3] = [
 pub fn main(file: &str, flags: &[&str], all: bool) -> Result<(), String> {
     let (reader, checked) = Reader::inspect(file).map_err(|e| rowver::plain(file, &e))?;
     if let Err(why) = &checked {
-        println!("{file} is not valid: {why}\n");
+        println!("{file} is not valid: {}\n", rowver::words(std::path::Path::new(file), why));
     }
     let mut header = reader.header().clone();
     let text = |key: &str| {

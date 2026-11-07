@@ -946,6 +946,17 @@ fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_co
     std::fs::write(dir.join("recipe.toml"), recipe.replace("weight * 1000", "weight * 2")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert!(code == 0 && said.contains("Nothing to read") && said.contains("2 columns and 1 derived"), "{said}");
+    // A new one that fails in place leaves out that one alone: the file keeps r.
+    let late = "s = \"if(sample.file == './flat_b.root', stored(weight * 1000, 'u1'), stored(weight, 'u1'))\"\n";
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("weight * 1000", "weight * 2") + late).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 1 && said.contains("is written without the new derived columns s, keeping those it held"), "{said}");
+    let derived = &common::header(&dir)["derived"]["columns"];
+    assert!(derived.as_array().unwrap().len() == 1 && derived[0]["name"] == "r", "{derived}");
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    std::fs::write(dir.join("recipe.toml"), recipe.replace("weight * 1000", "weight * 2") + &late.replace("weight * 1000", "weight * 3")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains("Nothing to read") && said.contains("2 columns and 2 derived"), "{said}");
     // So with derived columns written as an inline table, which cannot be edited a line at a time.
     let inline = "format = \"rvr-recipe\"\nversion = 1\nderived = { r = \"if(sample.file == './flat_b.root', stored(weight * 1000, 'u1'), stored(weight, 'u1'))\" }\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"weight\", \"nJet\"]\n\n[totals]\n";
     let dir = twice("late-inline", inline);
@@ -958,6 +969,18 @@ fn a_derived_column_that_fails_past_its_trial_leaves_the_file_without_derived_co
     std::fs::write(dir.join("recipe.toml"), inline.replace("weight * 1000", "weight * 2")).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert!(code == 0 && said.contains("Nothing to read") && said.contains("2 columns and 1 derived"), "{said}");
+    // Written again whole, the recipe keeps its tables' order and each key's: a column or cut
+    // written as a table stays where it was.
+    let tables = inline.replace("[keep]\n", "[keep]\nsome = { if = \"sample.name == 'flat'\", apply = \"nJet >= 0\" }\nall = \"nJet >= 0\"\n").replace("[columns]\n", "[columns]\nw2 = { value = \"weight * 2\", stored = \"f4\" }\n");
+    let at = twice("late-tables", &tables);
+    assert_eq!(rvr(&at, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&at, &["press", "--workers", "1"]);
+    assert!(code == 1 && said.contains("is written without its derived columns"), "{said}");
+    let (code, said) = rvr(&at, &["validate", &format!("{}.rvr", at.file_name().unwrap().to_str().unwrap())]);
+    assert!(code == 0 && said.contains("3 columns"), "{said}");
+    std::fs::write(at.join("recipe.toml"), tables.replace("weight * 1000", "weight * 2")).unwrap();
+    let (code, said) = rvr(&at, &["press"]);
+    assert!(code == 0 && said.contains("Nothing to read") && said.contains("3 columns and 1 derived"), "{said}");
     // rvr derive changes a [derived] table a line at a time, and says why it cannot change this one.
     let (code, said) = rvr(&dir, &["derive", &file, "y = weight * 3"]);
     assert!(code != 0 && said.contains("this one is written otherwise (inline"), "{said}");
@@ -1412,6 +1435,20 @@ fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
         assert!(code == 1 && said.contains(&format!("{name} is a pipe, socket or device, not a file: move it away, or name a file with --out")), "{said}");
     }
     std::fs::remove_file(dir.join(&name)).unwrap();
+    // A file that is not an .rvr file is never written over: the lock, an input; an empty one,
+    // which holds nothing, is.
+    for target in ["samples.lock", "a/flat.root"] {
+        let before = std::fs::read(dir.join(target)).unwrap();
+        for command in ["press", "status"] {
+            let (code, said) = rvr(&dir, &[command, "--out", target]);
+            assert!(code == 1 && said.contains(&format!("{target} is not an .rvr file (it does not begin as one does), and rvr press writes only over an .rvr file")) && !said.contains("/2 "), "{said}");
+        }
+        assert_eq!(std::fs::read(dir.join(target)).unwrap(), before, "{target}");
+    }
+    std::fs::write(dir.join("empty.rvr"), b"").unwrap();
+    let (code, said) = rvr(&dir, &["press", "--out", "empty.rvr"]);
+    assert!(code == 0 && rvr(&dir, &["validate", "empty.rvr"]).0 == 0, "{said}");
+    std::fs::remove_file(dir.join("empty.rvr")).unwrap();
     // A link to nothing there before the press is not another program's: the file is put in its place.
     std::os::unix::fs::symlink("nowhere.rvr", dir.join(&name)).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
@@ -1545,6 +1582,20 @@ branches = ["nJet"]
     assert!(said.contains("  entry        0   [65.3125]\n"), "{said}");
     assert!(!said.contains("entry        3"), "{said}");
     assert!(said.contains("4 shown of its 5 entries"), "{said}");
+    // With --kept it is worked out over the kept events alone, as a press works a column out: the
+    // event without a jet is not asked for one, and an error is at its own entry.
+    let (code, said) = rvr(&dir, &["try", "stored(nJet - 1, 'u1')", "--kept"]);
+    assert!(code == 0 && said.contains("  entry        4   0\n") && !said.contains("entry        3"), "{said}");
+    assert!(rvr(&dir, &["try", "stored(nJet - 1, 'u1')"]).1.contains("entry 3"));
+    let (code, said) = rvr(&dir, &["try", "stored(nJet - 3, 'u1')", "--kept"]);
+    assert!(code == 1 && said.contains("entry 4") && said.contains("-2"), "{said}");
+    // Only the kept events it shows are worked out, as without --kept.
+    let (code, said) = rvr(&dir, &["try", "stored(nJet - 3, 'u1')", "--kept", "--events", "3"]);
+    assert!(code == 0 && said.contains("  entry        2   0\n") && !said.contains("entry        4"), "{said}");
+    std::fs::rename(dir.join("uproot_flat.root"), dir.join("away.root")).unwrap();
+    let (code, said) = rvr(&dir, &["try", "nJet"]);
+    assert!(code == 1 && said.contains("uproot_flat.root no longer exists: put it back and run rvr try again"), "{said}");
+    std::fs::rename(dir.join("away.root"), dir.join("uproot_flat.root")).unwrap();
     let (code, said) = rvr(&dir, &["try", "nJett"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("There is no column named nJett. Did you mean: nJet"), "{said}");

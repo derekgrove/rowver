@@ -443,8 +443,8 @@ expression uses the stored columns, the derived columns above it, and `sample.KE
 metadata with its totals and `file`, without `events_read`, `events_total` and `events_missing`.
 The press works each one out on the first run of each sample that keeps an event, so that a value
 it cannot take stops the press there, and once more over the whole file, to record its kind,
-checksums and facts; one that fails then leaves the file written without its derived columns, and
-the press says so and exits 1. The rules are
+checksums and facts; one that fails then leaves the file written without its derived columns (in
+place, without the new ones alone), and the press says so and exits 1. The rules are
 [SPEC §4.6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#46-derived-columns) and
 [FORMAT §10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#10-derived-columns); `rvr derive` changes them in a pressed file
 alone.
@@ -1099,8 +1099,7 @@ valid proxy, local files and public storage still resolve.
 | `{lcp} is not defined here; defined: {lpc}` | a misspelt place, or a place missing from `[places]` |
 | `a name holds only ASCII letters, digits, _ and - …` | use the name it suggests, and put the text in `label` |
 | `recipe.toml: A recipe has no [totals] table: …` | add the table it names, empty if need be; at a terminal, `rvr press` offers to |
-| `… refused the listing (403). It needs a grid proxy: run rvr proxy init.` | run `rvr proxy init` |
-| `No usable grid proxy: …` | run `rvr proxy init` |
+| `…: it needs a grid proxy, and there is none usable (rvr proxy says why, and what to run)` | run `rvr proxy`, then what it says (most often `rvr proxy init`) |
 | `… holds your private key, and other accounts on this machine can read it` (from `proxy init`) | run the `chmod 600` given |
 | `…: the passphrase is wrong` (from `proxy init`) | type it again; it is the one you chose when you saved the certificate |
 | `… invalid peer certificate: UnknownIssuer` | an authority newer than rvr's: set `X509_CERT_DIR` to the grid authorities folder (`/etc/grid-security/certificates` where grid tools are installed) |

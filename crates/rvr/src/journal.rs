@@ -134,12 +134,19 @@ pub struct Picked {
     spool: Spool,
 }
 
-/// What an earlier press of this one (`press`) left in `staged`, or `None`, saying why it starts over.
-pub fn pick_up(staged: &Staged, press: &Value) -> Option<Picked> {
+/// What an earlier press of this one (`press`) left in `staged`, or `None`, saying why it starts
+/// over; a build that `carries` no press picks up nothing.
+pub fn pick_up(staged: &Staged, press: &Value, carries: bool) -> Option<Picked> {
     let folder = &staged.folder;
     let over = |why: &str| println!("Starting over: the press that stopped in {} {why}.", folder.display());
     match found(unfinished_in(&staged.journal), press) {
-        Found::Same(done) if !done.inputs.is_empty() => {
+        Found::Nothing => None,
+        Found::Same(done) if done.inputs.is_empty() => None,
+        Found::Same(_) if !carries => {
+            over("is not carried on: this press keeps no journal (rvr refill and rvr reproduce keep none, nor does a build of rvr whose commit is unknown or -dirty)");
+            None
+        }
+        Found::Same(done) => {
             let inputs = press["inputs"].as_u64().unwrap_or(0) as usize;
             let taken: Option<BTreeMap<usize, Taken>> = done
                 .inputs
@@ -159,7 +166,6 @@ pub fn pick_up(staged: &Staged, press: &Value) -> Option<Picked> {
             over(&format!("was another press: {why}"));
             None
         }
-        _ => None,
     }
 }
 
@@ -580,7 +586,7 @@ mod tests {
         // Written on from its checkpoint, what followed it is gone; a line waits for a checkpoint
         // no longer than `every`, with no input finishing after it.
         let staged = Staged::lock(&target).unwrap();
-        let picked = pick_up(&staged, &press).unwrap();
+        let picked = pick_up(&staged, &press, true).unwrap();
         let (spool, journal) = stage(&target, &staged, &press, Some(picked)).unwrap();
         journal.finished(&line(1, &taken(6), json!([])));
         let (ticking, ended) = std::sync::mpsc::channel();

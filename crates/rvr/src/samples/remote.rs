@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 /// One file in a listed folder.
 #[derive(Debug, Clone)]
 pub struct Entry {
+    /// Its name as the listing spells it, percent-encoded as in a URL.
     pub name: String,
     pub bytes: u64,
 }
@@ -61,6 +62,24 @@ fn element<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
+/// A PROPFIND answer's text, read whole: a folder of a million files lists in some hundreds of MiB.
+fn listing(reply: ureq::Response, folder: &str) -> Result<String, String> {
+    const MOST: u64 = 1 << 30;
+    let over = || format!("{folder} could not be listed: its listing is over 1 GiB, the most rvr reads of one folder; split its files among subfolders");
+    let said = reply.header("Content-Length").and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+    if said > MOST {
+        return Err(over());
+    }
+    // Room for what it says, up to 16 MiB: a body shorter than said grows no more.
+    let mut bytes = Vec::with_capacity(said.min(16 << 20) as usize);
+    std::io::Read::read_to_end(&mut std::io::Read::take(reply.into_reader(), MOST + 1), &mut bytes)
+        .map_err(|e| format!("{folder} could not be listed: its listing was cut short ({e}). Try again later."))?;
+    if bytes.len() as u64 > MOST {
+        return Err(over());
+    }
+    String::from_utf8(bytes).map_err(|_| format!("{folder} could not be listed: its storage's listing is not UTF-8 text, as WebDAV's XML is"))
+}
+
 /// The files (not folders) of a PROPFIND answer, sorted by name.
 fn entries(xml: &str) -> Vec<Entry> {
     let mut entries = Vec::new();
@@ -81,12 +100,29 @@ fn entries(xml: &str) -> Vec<Entry> {
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(0);
         entries.push(Entry {
-            name: name.to_string(),
+            name: name.to_owned(),
             bytes,
         });
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     entries
+}
+
+/// A URL's percent-encoded name decoded, if it decodes to UTF-8.
+pub(crate) fn decoded(name: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(name.len());
+    let mut rest = name.as_bytes();
+    while let Some((&first, after)) = rest.split_first() {
+        rest = after;
+        if first != b'%' {
+            bytes.push(first);
+            continue;
+        }
+        let hex = std::str::from_utf8(rest.get(..2)?).ok().filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()))?;
+        bytes.push(u8::from_str_radix(hex, 16).ok()?);
+        rest = &rest[2..];
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// `location` as an absolute URL, read against the URL that answered with it (RFC 3986 §5.2,
@@ -636,7 +672,7 @@ impl Storage {
             return Err(format!("{folder}: {STOPPED}"));
         }
         let text = match reply {
-            Ok(r) if r.status() / 100 == 2 => r.into_string().map_err(|e| e.to_string())?,
+            Ok(r) if r.status() / 100 == 2 => listing(r, folder)?,
             Ok(r) => {
                 return Err(format!(
                     "{folder} could not be listed: its storage answered {} {} (redirected too \
@@ -651,7 +687,7 @@ impl Storage {
             }
             Err(ureq::Error::Status(code @ (401 | 403), _)) => {
                 return Err(match (&self.proxy, code) {
-                    (None, _) => format!("{folder} refused the listing ({code}). It needs a grid proxy: run rvr proxy init."),
+                    (None, _) => format!("{folder} refused the listing ({code}): {UNPROXIED}."),
                     (Some(_), 401) => format!("{folder} refused the listing (401): it did not accept the grid proxy. Check it with rvr proxy, and make a new one with rvr proxy init."),
                     (Some(_), _) => format!("{folder} refused the listing (403, {}). Either the grid proxy does not give access there, or the storage is refusing requests while it is busy, as EOS does under heavy load: if rvr proxy shows a valid proxy, try again later.", waited(self.waits)),
                 })
@@ -677,6 +713,17 @@ impl Storage {
     /// The connection pool, for readers that outlive this borrow.
     pub fn agent(&self) -> ureq::Agent {
         self.agent.clone()
+    }
+}
+
+/// What storage that refuses a request without a grid proxy needs.
+const UNPROXIED: &str = "it needs a grid proxy, and there is none usable (rvr proxy says why, and what to run)";
+
+/// `why` a request failed, with what a 401 or 403 without a grid proxy needs.
+fn told(error: &ureq::Error, proxied: bool) -> String {
+    match error {
+        ureq::Error::Status(401 | 403, _) if !proxied => format!("{}: {UNPROXIED}", why(error)),
+        _ => why(error),
     }
 }
 
@@ -758,7 +805,7 @@ pub fn digest_seen(
         return Err(Failed::new(Fault::Stopped, format!("{shown}: {STOPPED}")));
     }
     let seen = reply.as_ref().err().map_or(Fault::Unreachable, |e| fault(e, proxied));
-    digested(shown, reply).map_err(|why| Failed::new(seen, why))
+    digested(shown, reply, proxied).map_err(|why| Failed::new(seen, why))
 }
 
 /// What a failed request means for its file.
@@ -792,10 +839,11 @@ fn head(agent: &ureq::Agent, at: &str, watch: &Watch) -> Result<ureq::Response, 
 fn digested(
     url: &str,
     reply: Result<ureq::Response, ureq::Error>,
+    proxied: bool,
 ) -> Result<(Option<u64>, Option<String>), String> {
     let reply = reply.map_err(|e| match e {
         ureq::Error::Status(404, _) => format!("{url} no longer exists"),
-        e => format!("{url} could not be asked: {}", why(&e)),
+        e => format!("{url} could not be asked: {}", told(&e, proxied)),
     })?;
     if reply.status() / 100 != 2 {
         return Err(format!(
@@ -908,7 +956,7 @@ impl HttpsFile {
             _ if self.watch.passing(error, self.proxied).is_some() => {
                 hep_root::Error::Remote(format!("{}: {}", self.shown, why(error)))
             }
-            _ => self.lasting(why(error)),
+            _ => self.lasting(told(error, self.proxied)),
         }
     }
 
@@ -1290,6 +1338,31 @@ mod tests {
         assert!(matches!(file.read_ranges(&[(0, 100), (30 << 20, 100)]), Err(hep_root::Error::Remote(_))));
     }
 
+    // SPEC 7.4.3
+    #[test]
+    fn storage_that_refuses_a_request_without_a_proxy_says_it_needs_one() {
+        let (server, storage) = served(100);
+        server.script(|_| server::Answer::Status(403));
+        let failed = storage.digest(&server.url("/f.root")).unwrap_err();
+        assert!(failed.why.ends_with(&format!("answered 403 Answer: {UNPROXIED}")) && matches!(failed.fault, Fault::Save), "{}", failed.why);
+        assert_eq!(storage.list(&server.url("/")).unwrap_err(), format!("{} refused the listing (403): {UNPROXIED}.", server.url("/")));
+        server.script(|_| server::Answer::Status(401));
+        let file = HttpsFile::reading(&storage, "f.root", &server.url("/f.root"), 100);
+        let said = file.read_ranges(&[(0, 10)]).unwrap_err().to_string();
+        assert!(said.ends_with(&format!("answered 401 Answer: {UNPROXIED}")), "{said}");
+    }
+
+    // SPEC 6.2.3
+    #[test]
+    fn a_folder_whose_listing_is_over_ten_mib_is_listed_whole() {
+        let (server, storage) = served(1);
+        for i in 0..70_000 {
+            server.put(&format!("/big/file_with_a_long_name_{i:06}.root"), Vec::new());
+        }
+        let found = storage.list(&server.url("/big")).unwrap();
+        assert_eq!((found.len(), found[69_999].name.as_str()), (70_000, "file_with_a_long_name_069999.root"));
+    }
+
     // SPEC 6.2.3
     #[test]
     fn listing_keeps_files_by_resourcetype() {
@@ -1302,6 +1375,7 @@ mod tests {
         let found = entries(xml);
         let names: Vec<&str> = found.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["a%2Bb%20c.root", "collection_2024.root"]);
+        assert_eq!((decoded("%e2%82%ac.root").as_deref(), decoded("50%.root"), decoded("%ff.root"), decoded("x%+1.root")), (Some("€.root"), None, None, None));
         assert_eq!(found[0].bytes, 7);
         assert_eq!(adler32_of("md5=x, adler32=3DA0195").as_deref(), Some("03da0195"));
         assert_eq!(adler32_of("adler32=not-hex"), None);

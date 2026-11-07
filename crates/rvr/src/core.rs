@@ -25,7 +25,7 @@ pub fn press(plan: Plan) -> Result<usize, String> {
     let started = std::time::Instant::now();
     let staged = Staged::lock(&plan.target)?;
     // A press is carried on unless it is a reproduction, or its build names no one build.
-    let mut picked = plan.carries.then(|| crate::journal::pick_up(&staged, &plan.identity)).flatten();
+    let mut picked = crate::journal::pick_up(&staged, &plan.identity, plan.carries);
     let resumed = picked.as_mut().map(|p| std::mem::take(&mut p.taken)).unwrap_or_default();
     let picked_up = !resumed.is_empty();
     let watch = Arc::new(Watch::press(second() * QUIET, second() * AGAIN));
@@ -97,7 +97,7 @@ pub fn press(plan: Plan) -> Result<usize, String> {
         Base::Holes(fill) | Base::Samples(fill) => {
             let names: Vec<&str> = plan.outputs().iter().map(|((name, _), _)| name.as_str()).collect();
             crate::fill::spool_old(&spool, fill, &names, &plan.laid, plan.workers).map_err(&stuck)?;
-            crate::fill::merged(&plan.work, &plan.lock, fill, &plan.laid, read, &plan.recipe)?
+            crate::fill::merged(&plan.work, &plan.lock, fill, &plan.laid, read, &plan.recipe, &stuck)?
         }
         Base::Columns(_) if plan.reads().is_empty() => copied(&plan, &spool).map_err(&stuck)?,
         _ => read,

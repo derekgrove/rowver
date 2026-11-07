@@ -207,12 +207,13 @@ A copied column keeps its branch's kind (the kind the lock lists, §6.3) unless 
 as another. A computed column has the kind its expression gives. There is no promotion rule. A
 float, flat or in a list, stored or derived (§10), may be any IEEE value: NaN and infinities
 included. A column that stores a branch alone (named in `branches`, or `NAME = "BRANCH"` or
-`branch(…)`, with no `stored` kind) keeps its values' bits, a NaN's sign and payload with them. In
-any other float column, stored or derived, a `stored` kind given included, each NaN is the one quiet
-NaN, `0x7FF8000000000000` in `f8` and `0x7FC00000` in `f4`, whatever the machine makes of `0/0`.
+`branch(…)`, brackets around either changing nothing, with no `stored` kind) keeps its values'
+bits, a NaN's sign and payload with them. In any other float column, stored or derived, a `stored`
+kind given included, each NaN is the one quiet NaN, `0x7FF8000000000000` in `f8` and `0x7FC00000` in `f4`, whatever the machine makes of `0/0`.
 
 A column's `name` is the name the recipe gives it (`made.recipe.columns`): nonempty, no two columns
-alike, and none `sample`, `entry` or `file`, nor the name of a derived column.
+alike, and none `sample`, `entry`, `file`, `events_read`, `events_total` or `events_missing`, nor
+the name of a derived column.
 
 **A flat column** is its name, its kind, the reference to its array `kind[rows]` (§7), and its
 facts:
@@ -919,7 +920,7 @@ choice. It is listed in `derived.columns`, in the order the recipe's `[derived]`
 
 | field | holds |
 |---|---|
-| `name` | what every tool calls it: a name no stored column, sample column or other derived column has, nor `sample`, `entry` or `file` |
+| `name` | what every tool calls it: a name no stored column, sample column or other derived column has, nor `sample`, `entry`, `file`, `events_read`, `events_total` or `events_missing` |
 | `expression` | the expression that computes it, as the recipe writes it: not blank |
 | `kind` and the rest | exactly what a stored column's record holds, without `at` and `size`: for a flat column `sha256`, `by_sample` and its facts (`lim`, `nice`, and `vals` where it applies, §4); for a jagged one `offsets` (`sha256`, `by_sample`) and `content` (`kind`, `count`, `sha256`, `by_sample`) |
 
