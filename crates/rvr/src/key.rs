@@ -1,9 +1,9 @@
 //! `rvr key`: the ed25519 key that signs every file you press, and the keys you trust.
 //!
 //! The key lives in `~/.config/rvr/key` (the folder is `$RVR_CONFIG` when set and not empty, else
-//! `$XDG_CONFIG_HOME/rvr` when that is), one line of 64 lowercase hexadecimal characters, readable
-//! by you alone; `trusted` beside it holds one line per trusted public key: the key, a space, and
-//! whose it is (`#` lines and blank lines passed over).
+//! `$XDG_CONFIG_HOME/rvr` when that is a full path), one line of 64 lowercase hexadecimal
+//! characters, readable by you alone; `trusted` beside it holds one line per trusted public key: the
+//! key, a space, and whose it is (`#` lines and blank lines passed over).
 
 use std::path::PathBuf;
 

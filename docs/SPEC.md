@@ -1031,8 +1031,16 @@ steps:
    bug, said so, and the file is left or put back as it was. Before it is written, the new header
    is checked as every reader checks one (FORMAT.md §12) and its length to fit the format; one
    refused leaves or puts the file back as it was: `FILE is as it was: the header the change would
-   write would not open (…), so it was not written`;
-4. the journal is removed and the folder synced.
+   write would not open (…), so it was not written`. A change that fails before its journal is
+   removed (a write, the cut or the sync refused), its new header written whole or not, is put
+   back as it was by the program making it;
+4. the journal is removed and the folder synced; one gone already counts as removed. A change
+   whose journal cannot be removed is put back, whatever it changed (one that adds arrays would be
+   put back as the file is next opened, as it is never known finished, below), and refused: `FILE
+   is as it was: the change was made, but its journal FILE-journal could not be removed (WHY), so
+   the change is put back: let files be removed from its folder, then try again`. The journal
+   stays until it can be removed: each command on the file meets it again, leaves the file as it
+   is, and stops while it cannot remove it.
 
 The file and its journal are synced with `fsync` (on macOS `F_FULLFSYNC`, which also empties the
 drive's cache); a folder's sync is asked for, and one a filesystem refuses is let be.
@@ -1121,7 +1129,8 @@ before its tail are only the magic every file begins with), the file must also s
 of this file: its length between the old and the new length, and every byte from the tail's start on the old tail's byte there, the new tail's, or 0 past
 the shorter of the two lengths (a page a crash did not keep, as the change or its putting back grew
 the file). When its tail is the new tail exactly, the change had
-finished but for removing its journal: the journal is let go and the file left as it is, the
+finished but for removing its journal: the file is synced (one that cannot be keeps its journal,
+and the command stops), then the journal is let go and the file left as it is, the
 command saying `Let go FILE-journal: the change to FILE had finished, so FILE is as the change made
 it.` on standard error. A journal that does not check out was
 cut short as it was written, before the file was touched, and is let go, the command saying `Let
