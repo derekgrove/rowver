@@ -93,6 +93,12 @@ fn init(hours: u32) -> Result<bool, String> {
     let named = |name: &str| std::env::var(name).ok();
     let source = Source::find(&globus, named("X509_USER_CERT"), named("X509_USER_KEY"))?;
     source.private()?;
+    // Said before the passphrase is asked.
+    let proxy = crate::samples::proxy();
+    if let Some(trust) = proxy.trust() {
+        eprintln!("rvr: {trust}");
+    }
+    let ca = proxy.ca;
     let passphrase = match source.encrypted()? {
         true => {
             voms_proxy::user::passphrase(&format!("Passphrase for {}: ", source.key().display()))
@@ -104,7 +110,6 @@ fn init(hours: u32) -> Result<bool, String> {
     voms_proxy::wipe(&mut passphrase.into_bytes());
     let user = user?;
     let seconds = i64::from(hours) * 3600;
-    let ca = crate::samples::proxy().ca;
     let server = voms_proxy::server::SERVERS
         .iter()
         .find(|(name, _)| *name == vo);

@@ -315,6 +315,17 @@ fn a_change_stopped_after_each_step_is_put_back_by_the_next_command() {
     // Not stopped, the change is made, and the journal is gone.
     assert_eq!(rvr(&dir, &["tool", &file, "k", "--set", "data.json"]).0, 0);
     assert_eq!((header(&dir, &file)["k"].clone(), journal(&path).exists()), (json!({"n": 1}), false));
+    // A change that shrank the file, whose putting back was cut short too, the file grown back to
+    // its old length with zeros past the new one, is put back.
+    let held = std::fs::read(&path).unwrap();
+    assert_eq!(rvr_with(&dir, &[("RVR_STOP_CHANGE", "3")], &["tool", &file, "k", "--drop", "-f"]).0, 99);
+    let shrunk = std::fs::metadata(&path).unwrap().len() as usize;
+    let mut torn = held[..shrunk].to_vec();
+    torn.resize(held.len(), 0);
+    std::fs::write(&path, &torn).unwrap();
+    let (code, said) = rvr(&dir, &["validate", &file]);
+    assert!(code == 0 && said.contains(&format!("Put {file} back as it was")), "{said}");
+    assert_eq!((std::fs::read(&path).unwrap(), journal(&path).exists()), (held, false));
     // A journal, and a new file written anew that a stop leaves, are no wider open than the file,
     // and open to its owner: a private file's are private, a group's the group's to read.
     use std::os::unix::fs::PermissionsExt;

@@ -401,7 +401,7 @@ fn defines_apart(recipe: &Recipe, lock: &Lock) -> Vec<String> {
 fn columns(data: &Value, lock: &Lock, recipe: &Recipe) -> Result<()> {
     let wanted = kinds(recipe, lock).map_err(|e| invalid(format!("made.recipe.text, over made.lock.text's branch lists: {}", e.to_string().replace('\n', "; "))))?;
     // A derived column is of one kind in every sample, those that kept no row too (docs/FORMAT.md §10).
-    derived_kinds(recipe, lock, &wanted).map_err(|e| invalid(format!("made.recipe.text's [derived], over made.lock.text: {}: {MEND}", e.to_string().replace('\n', "; "))))?;
+    derived_kinds(recipe, lock, &wanted).map_err(|e| invalid(format!("made.recipe.text's [derived], over made.lock.text: {}. {}", e.to_string().replace('\n', "; ").trim_end_matches('.'), super::DERIVED_MEND)))?;
     let records = data["cols"].as_array().map_or(&[][..], Vec::as_slice);
     for (((name, _), &(kind, listed)), record) in recipe.columns.iter().zip(&wanted).zip(records) {
         let (have, have_listed) = match record["kind"].as_str() {

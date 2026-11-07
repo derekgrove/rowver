@@ -277,7 +277,7 @@ impl Run<'_, '_> {
         }
         let place = self.store.place(name);
         if !self.store.working.borrow_mut().insert(name.to_owned()) {
-            return Err(invalid(format!("{place} uses itself, directly or through other derived columns: rvr derive drops one of them")));
+            return Err(invalid(format!("{place} uses itself, directly or through other derived columns. {}", super::DERIVED_MEND)));
         }
         let worked = self.store.parsed(name, expression).and_then(|parsed| {
             evaluate(&parsed, self, &self.metadata, self.last - self.first).map_err(|e| {
@@ -514,7 +514,7 @@ fn agrees(store: &Store, name: &str, expression: &str, again: &Map<String, Value
     // rvr derive changes only a file whose derived columns are what it records: a press of the study
     // the file carries (with the derived columns rvr derive added to it) makes it again.
     let path = crate::shell(&file.path().display().to_string());
-    Err(invalid(format!("{differs}: its header was changed, or the rowver that wrote it works the expression out differently. rvr reproduce {path} DIR --texts writes the study it carries into DIR, where rvr press presses it again, reading its inputs again, and records it as this rowver works it out.")))
+    Err(invalid(format!("{differs}: its header was changed, or the rowver that wrote it works the expression out differently. rvr reproduce {path} presses the study it carries again, as this rowver works it out, and compares the two (with --study FOLDER, the folder its lock's relative paths are from).")))
 }
 
 /// Rows `from..to` of derived columns `names` of a file, each checked against its record first (once an open file).

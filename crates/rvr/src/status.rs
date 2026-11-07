@@ -45,12 +45,17 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
     if crate::journal::under_way(&stopped) {
         println!("{}: a press is under way there now.", stopped.display());
     }
+    // A change to it cut short is put back first, or its journal refused, as rvr press does.
+    crate::restored(&target)?;
     // The file there, opened once for what is said of it here and for the Plan.
-    let at = At::open(&target);
+    let at = At::read(&target);
     let header = match &at {
         At::Opened(file, _) => file.header().clone(),
-        At::Missing => return missing(dir, study, target, texts, choice),
-        At::Unopened(e) => return Err(rowver::plain(&target, e)),
+        // One that cannot be read stops a press, as here; so does one a change to which is under
+        // way, or was cut short since it was put back.
+        At::Unopened(e) if matches!(e, rowver::Error::Io(_)) || rowver::change::journal(&target).exists() => return Err(rowver::plain(&target, e)),
+        // None there, or one that does not open, which a press builds nothing on (SPEC §8.12).
+        _ => return anew(dir, study, target, texts, choice, at),
     };
     // The Plan rvr press would make, with these options, of the file there.
     let place = Place { base: dir, study, target: target.clone(), at, locked: None, found: None };
@@ -127,10 +132,16 @@ fn run(dir: Option<PathBuf>, out: Option<PathBuf>, choice: Choice, every: bool) 
     Ok(matches!(plan.from, Base::Current(0)))
 }
 
-/// With no file at the target: what rvr press would read (the Plan's reads), or why it would
-/// refuse, then that there is no file yet. Never current.
-fn missing(dir: PathBuf, study: String, target: PathBuf, texts: crate::texts::Texts, choice: Choice) -> Result<bool, String> {
-    let place = Place { base: dir, study, target: target.clone(), at: At::Missing, locked: None, found: None };
+/// With no file at the target (`at`), or one that does not open: what rvr press would read (the
+/// Plan's reads), or why it would refuse, then that there is no file yet, or why it does not open.
+/// Never current.
+fn anew(dir: PathBuf, study: String, target: PathBuf, texts: crate::texts::Texts, choice: Choice, at: At) -> Result<bool, String> {
+    let unopened = matches!(at, At::Unopened(_));
+    let there = match &at {
+        At::Unopened(e) => format!("{} does not open: {e}", target.display()),
+        _ => format!("{} is not there yet: rvr press makes it.", target.display()),
+    };
+    let place = Place { base: dir, study, target: target.clone(), at, locked: None, found: None };
     let asked = Asked { choose: Choose::Options(choice), on: On::Earlier, workers: 1, sign: true };
     let stopped = crate::journal::folder(&target);
     match crate::plan::build(place, texts, asked) {
@@ -161,9 +172,13 @@ fn missing(dir: PathBuf, study: String, target: PathBuf, texts: crate::texts::Te
                 println!("{note}");
             }
             refused(&why);
+            // A file there that does not open, when the refusal says it, is not said again.
+            if unopened && why.contains(&format!("{} does not open", target.display())) {
+                return Ok(false);
+            }
         }
     }
-    println!("{} is not there yet: rvr press makes it.", target.display());
+    println!("{there}");
     Ok(false)
 }
 

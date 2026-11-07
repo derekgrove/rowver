@@ -910,7 +910,8 @@ fn settled(file: &File, path: &Path, (name, size, start, after, tail, new): &Kep
         return Ok(Restored::PutBack);
     };
     // A change that writes only a header leaves the file between its two lengths, each byte of its
-    // tail the old tail's, the new one's, or 0 past the old length (a page a crash did not keep).
+    // tail the old tail's, the new one's, or 0 past the shorter length (a page a crash did not keep,
+    // as the change or its putting back grew the file).
     if length < (*size).min(*after) || length > (*size).max(*after) || named(file, *start)?.as_slice() != *name {
         return Err(refused());
     }
@@ -919,7 +920,7 @@ fn settled(file: &File, path: &Path, (name, size, start, after, tail, new): &Kep
     if now == *new {
         return Ok(Restored::Finished);
     }
-    let torn = now.iter().enumerate().all(|(at, byte)| tail.get(at) == Some(byte) || new.get(at) == Some(byte) || (*byte == 0 && start + at as u64 >= *size));
+    let torn = now.iter().enumerate().all(|(at, byte)| tail.get(at) == Some(byte) || new.get(at) == Some(byte) || (*byte == 0 && start + at as u64 >= (*size).min(*after)));
     if !torn {
         return Err(refused());
     }

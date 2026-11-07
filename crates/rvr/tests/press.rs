@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{rvr, rvr_at_home, study, Study};
+use common::{rvr, rvr_at_home, rvr_with, study, Study};
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
@@ -594,7 +594,10 @@ per_jet = "ht / nJet"
     looped["derived"]["columns"][0]["expression"] = "per_jet + 1".into();
     rowver::write::rewrite(dir.join(&file), dir.join("looped.rvr"), &looped).unwrap();
     let (_, said) = rvr(&dir, &["dump", "looped.rvr", "--columns"]);
-    assert!(said.contains("uses itself, directly or through other derived columns"), "{said}");
+    assert!(said.contains("uses itself, directly or through other derived columns. This rvr press refuses such a [derived]"), "{said}");
+    // Its study can be written out, as the words say, to mend and press.
+    let (code, said) = rvr(&dir, &["reproduce", "looped.rvr", "looped", "--texts"]);
+    assert!(code == 0 && dir.join("looped/recipe.toml").exists(), "{said}");
     // A header without the derived columns its recipe lists is refused.
     let mut stripped = header.clone();
     stripped.as_object_mut().unwrap().shift_remove("derived");
@@ -775,9 +778,17 @@ double = "weight * 2"
     assert!(said.contains("  1/1            5 entries          4 kept   flat_c.root") && !said.contains("/2 "), "{said}");
     assert!(said.contains("Read 5 entries of the new sample c; kept after each cut:"), "{said}");
     same_as_full(&dir, &[]);
-    // Taken out and reordered, the samples left are copied and nothing is read.
+    // Taken out and reordered, the samples left are copied and nothing is read; so a new derived
+    // column that fails leaves the file as it was (SPEC 4.6.4).
     std::fs::write(dir.join("samples.toml"), samples_of(&["c", "a"])).unwrap();
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    std::fs::write(dir.join("recipe.toml"), format!("{recipe}bad = \"stored(weight * 1000, 'u1')\"\n")).unwrap();
+    let file = dir.join(common::name(&dir));
+    let before = std::fs::read(&file).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 1 && said.contains("is as it was: put right what is said above and press again"), "{said}");
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    std::fs::write(dir.join("recipe.toml"), recipe).unwrap();
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 0, "{said}");
     assert!(said.contains("holds the rows of every sample as samples.lock has them.\nNothing to read: every row is copied from it."), "{said}");
@@ -1507,6 +1518,22 @@ fn a_press_stopped_by_what_is_not_a_files_fault_keeps_what_it_read() {
         assert_eq!(std::fs::read(dir.join(target)).unwrap(), before, "{target}");
     }
     std::fs::write(dir.join("empty.rvr"), b"").unwrap();
+    let (code, said) = rvr(&dir, &["status", "--out", "empty.rvr"]);
+    assert!(code == 1 && said.contains("rvr press would press every column") && said.contains("empty.rvr does not open: "), "{said}");
+    // So of a file holding the magic alone, which a press writes over too.
+    std::fs::write(dir.join("magic.rvr"), b"\x89RVR\r\n\x1a\n").unwrap();
+    let (code, said) = rvr(&dir, &["status", "--out", "magic.rvr"]);
+    assert!(code == 1 && said.contains("rvr press would press every column"), "{said}");
+    std::fs::remove_file(dir.join("magic.rvr")).unwrap();
+    // One that cannot be read stops a press, and status says so.
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(dir.join("shut.rvr"), b"").unwrap();
+    std::fs::set_permissions(dir.join("shut.rvr"), std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (code, said) = rvr(&dir, &["status", "--out", "shut.rvr"]);
+    // Root reads it whatever its mode.
+    let readable = std::fs::File::open(dir.join("shut.rvr")).is_ok();
+    assert!(readable || (code == 1 && !said.contains("would press every column")), "{said}");
+    std::fs::remove_file(dir.join("shut.rvr")).unwrap();
     let (code, said) = rvr(&dir, &["press", "--out", "empty.rvr"]);
     assert!(code == 0 && rvr(&dir, &["validate", "empty.rvr"]).0 == 0, "{said}");
     std::fs::remove_file(dir.join("empty.rvr")).unwrap();
@@ -1963,6 +1990,15 @@ fn a_file_under_the_home_folder_is_pinned_and_read_as_samples_toml_writes_it() {
     assert!(lock.contains("at = \"~/data/uproot_flat.root\"\n"), "{lock}");
     let (code, said) = rvr_at_home(&dir, &home, &["press"]);
     assert_eq!(code, 0, "{said}");
+    // ~// is the home folder too, read where it was pinned; with HOME not set, ~ is refused.
+    let samples = std::fs::read_to_string(dir.join("samples.toml")).unwrap().replace("~/data", "~//data");
+    std::fs::write(dir.join("samples.toml"), samples).unwrap();
+    let (code, said) = rvr_at_home(&dir, &home, &["samples", "resolve", "samples.toml"]);
+    assert_eq!(code, 0, "{said}");
+    let (code, said) = rvr_at_home(&dir, &home, &["press", "--out", "again.rvr"]);
+    assert_eq!(code, 0, "{said}");
+    let (code, said) = rvr_with(&dir, &[("HOME", "")], &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains("~//data: HOME is not set to a full path, so rvr cannot tell which folder ~ is"), "{said}");
 }
 
 // SPEC 2.6, 4.4.2, 4.5.2, 4.5.4; RECIPE values-the-recipe-cannot-take

@@ -399,6 +399,16 @@ fn the_test_authority_is_trusted_only_through_x509_cert_dir() {
     let (code, said) = rvr_with(&dir, &[("X509_CERT_DIR", ""), ("X509_USER_PROXY", "none")], &["samples", "resolve", "samples.toml"]);
     assert_eq!(code, 1, "{said}");
     assert!(said.contains("UnknownIssuer") && !dir.join("samples.lock").exists(), "{said}");
+    // A folder not there is said; one named with spaces around it is the folder.
+    let missing = dir.join("missing");
+    let (code, said) = rvr_with(&dir, &[("X509_CERT_DIR", missing.to_str().unwrap()), ("X509_USER_PROXY", "none")], &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains(&format!("rvr: the certificate folder {} is not there, so rvr trusts only the authorities it carries", missing.display())), "{said}");
+    std::fs::create_dir(&missing).unwrap();
+    let (code, said) = rvr_with(&dir, &[("X509_CERT_DIR", missing.to_str().unwrap()), ("X509_USER_PROXY", "none")], &["samples", "resolve", "samples.toml"]);
+    assert!(code == 1 && said.contains("holds no certificate authority rvr can read (.pem or hash.0 files)"), "{said}");
+    let authority = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tls/authority");
+    let (code, said) = rvr_with(&dir, &[("X509_CERT_DIR", &format!(" {}\n", authority.display())), ("X509_USER_PROXY", "none")], &["samples", "resolve", "samples.toml"]);
+    assert_eq!(code, 0, "{said}");
 }
 
 // SPEC 6.3.1, 6.3.2
@@ -712,6 +722,13 @@ fn a_read_redirected_round_and_round_is_asked_again_after_each_wait() {
     // One that says nowhere to go is not asked again, nor said to have redirected.
     let (dir, _server, code, said) = pressed("round-nowhere", false, |request| match request.method.as_str() {
         "HEAD" => Answer::Status(302),
+        _ => Answer::Serve,
+    });
+    assert_eq!((code, hole(&dir).as_deref()), (3, Some("unreachable")), "{said}");
+    assert!(said.contains("answered 302 Answer without saying where to go") && !said.contains("waiting") && !said.contains("more than four"), "{said}");
+    // Nor is a read so answered.
+    let (dir, _server, code, said) = pressed("read-nowhere", false, |request| match request.method.as_str() {
+        "GET" => Answer::Status(302),
         _ => Answer::Serve,
     });
     assert_eq!((code, hole(&dir).as_deref()), (3, Some("unreachable")), "{said}");

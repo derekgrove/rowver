@@ -64,17 +64,15 @@ fn adler32(sum: u32, data: &[u8]) -> u32 {
 }
 
 /// Where a local path of samples.toml or the lock is: under `~/`, absolute, or relative to `base`.
-pub fn local(text: &str, base: &Path) -> PathBuf {
-    let home = |rest: &str| std::env::var("HOME").map(|h| PathBuf::from(h).join(rest)).unwrap_or_else(|_| PathBuf::from(text));
-    let expanded = match text.strip_prefix("~/") {
-        Some(rest) => home(rest),
-        None if text == "~" => home(""),
-        None => PathBuf::from(text),
+pub fn local(text: &str, base: &Path) -> Result<PathBuf, String> {
+    let rest = match text.strip_prefix("~/") {
+        Some(rest) => rest.trim_start_matches('/'),
+        None if text == "~" => "",
+        None => return Ok(base.join(text)),
     };
-    if expanded.is_absolute() {
-        expanded
-    } else {
-        base.join(expanded)
+    match std::env::var_os("HOME").map(PathBuf::from).filter(|home| home.is_absolute()) {
+        Some(home) => Ok(home.join(rest)),
+        None => Err(format!("{text}: HOME is not set to a full path, so rvr cannot tell which folder ~ is: set HOME, or name the file by its full path")),
     }
 }
 
@@ -295,7 +293,7 @@ impl Context {
                 Err(_) => PathBuf::from(at),
             },
             false => {
-                let path = local(at, &self.base);
+                let Ok(path) = local(at, &self.base) else { return rowver::study::lexical(Path::new(at)) };
                 path.canonicalize().unwrap_or_else(|_| rowver::study::lexical(&path))
             }
         }
@@ -365,7 +363,7 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool, each: &mut dyn
         }
         Ok(())
     } else {
-        let dir = local(folder, &ctx.base);
+        let dir = local(folder, &ctx.base)?;
         let names = ctx.listed(&dir).map_err(|e| format!("{asked}: the folder {folder} cannot be read: {e}"))?;
         let found: Vec<&String> = names.iter().filter(|n| wanted(n)).collect();
         if found.is_empty() {
@@ -462,9 +460,10 @@ mod tests {
     #[test]
     fn a_local_path_is_under_home_absolute_or_the_study_s() {
         let home = std::env::var("HOME").unwrap();
-        assert_eq!(local("~", Path::new("s")), PathBuf::from(&home));
-        assert_eq!(local("~/d/x.root", Path::new("s")), PathBuf::from(&home).join("d/x.root"));
-        assert_eq!((local("/d/x.root", Path::new("s")), local("d/x.root", Path::new("s"))), (PathBuf::from("/d/x.root"), PathBuf::from("s/d/x.root")));
+        let local = |text| local(text, Path::new("s")).unwrap();
+        assert_eq!(local("~"), PathBuf::from(&home));
+        assert_eq!((local("~/d/x.root"), local("~//d/x.root")), (PathBuf::from(&home).join("d/x.root"), PathBuf::from(&home).join("d/x.root")));
+        assert_eq!((local("/d/x.root"), local("d/x.root")), (PathBuf::from("/d/x.root"), PathBuf::from("s/d/x.root")));
         assert_eq!((split("/x.root"), split("x.root"), split("~/x.root")), (("/", "x.root"), (".", "x.root"), ("~", "x.root")));
     }
 

@@ -51,8 +51,10 @@ fn run(file: &Path, dir: Option<PathBuf>, study: Option<PathBuf>, workers: usize
     let local = local
         .filter(|f| !f.at.contains("://"))
         .map(|f| &f.at);
-    if let Some(missing) = local.into_iter().filter(|_| !texts_only).find(|at| !crate::samples::resolve::local(at, &base).exists()) {
-        return Err(format!("{missing}, which the lock names, is not in {}. The lock's relative paths are from the study folder: name it with --study FOLDER.", base.display()));
+    for missing in local.filter(|_| !texts_only) {
+        if !crate::samples::resolve::local(missing, &base)?.exists() {
+            return Err(format!("{missing}, which the lock names, is not in {}. The lock's relative paths are from the study folder: name it with --study FOLDER.", base.display()));
+        }
     }
     let dir = dir.unwrap_or_else(|| file.with_extension("reproduced"));
     let written = [("recipe.toml", &texts.recipe), ("samples.toml", &texts.samples), ("samples.lock", &texts.lock)];

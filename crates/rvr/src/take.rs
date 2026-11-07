@@ -440,10 +440,8 @@ fn read_runs(shared: &Shared, input: &Input, file: &RootFile<Held>, tree: &Tree,
                     // A local file that cannot be opened now at all (a mount gone) is not the file's
                     // fault; one that can, but not read there, is damaged there.
                     if !remote && matches!(fault, Fault::Damaged | Fault::Save) {
-                        failed.fault = match std::fs::File::open(resolve::local(at, shared.reach.dir)) {
-                            Ok(_) => Fault::Damaged,
-                            Err(_) => Fault::Save,
-                        };
+                        let opens = resolve::local(at, shared.reach.dir).is_ok_and(|path| std::fs::File::open(path).is_ok());
+                        failed.fault = if opens { Fault::Damaged } else { Fault::Save };
                     }
                     let failed = hole_or_end(failed, input)?;
                     // Only a damaged basket leaves the rest of the file worth reading: otherwise the

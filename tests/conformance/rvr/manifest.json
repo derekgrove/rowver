@@ -2463,7 +2463,7 @@
       "at": 4245017,
       "refused": "full",
       "rule": "FORMAT §10 F6 facts made again, compared as numbers",
-      "rust_says": "derived.columns[\"twice\"], worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr reproduce FILE.rvr DIR --texts writes the study it carries into DIR, where rvr press presses it again, reading its inputs again, and records it as this rowver works it out.",
+      "rust_says": "derived.columns[\"twice\"], worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr reproduce FILE.rvr presses the study it carries again, as this rowver works it out, and compares the two (with --study FOLDER, the folder its lock's relative paths are from).",
       "sha256": "802138ed598319fe491ee924a97fc1445f06afe1adc1c98e6ca900f8cd7ed491",
       "size": 16689,
       "verdict": "full"
@@ -2472,7 +2472,7 @@
       "at": 4261706,
       "refused": "full",
       "rule": "FORMAT §10 §8 checksums made again",
-      "rust_says": "derived.columns[\"muons\"], worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr reproduce FILE.rvr DIR --texts writes the study it carries into DIR, where rvr press presses it again, reading its inputs again, and records it as this rowver works it out.",
+      "rust_says": "derived.columns[\"muons\"], worked out here, is not what the file records of it (its checksums or facts differ): its header was changed, or the rowver that wrote it works the expression out differently. rvr reproduce FILE.rvr presses the study it carries again, as this rowver works it out, and compares the two (with --study FOLDER, the folder its lock's relative paths are from).",
       "sha256": "cb853a6fa3b3e4bee70dab6cce2ade31534dc88c05c8fa655ea8460b419d745e",
       "size": 16697,
       "verdict": "full"

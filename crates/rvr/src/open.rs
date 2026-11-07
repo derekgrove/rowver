@@ -132,7 +132,7 @@ pub(crate) fn open(reach: &Reach, file: &File, read_at: &str, (then, command): (
     let again = Some((READING, reach.watch.clone()));
     if !read_at.contains("://") {
         // A relative path is the lock's own: relative to the study folder.
-        let path = resolve::local(read_at, reach.dir);
+        let path = resolve::local(read_at, reach.dir).map_err(|why| Failed::new(Fault::Save, why))?;
         // A file whose folder is not there either may be on a disk not mounted: not the file's fault.
         let folder = path.parent().is_none_or(Path::exists);
         let meta = std::fs::metadata(&path).map_err(|e| match e.kind() {
@@ -283,11 +283,7 @@ pub(crate) fn connect(files: &[(usize, &File)], watch: &Arc<Watch>) -> (Option<S
         return (None, String::new());
     }
     let proxy = crate::samples::proxy();
-    // Said once, however many times a command connects.
-    static WARNED: std::sync::Once = std::sync::Once::new();
-    if let Some(short) = &proxy.short {
-        WARNED.call_once(|| eprintln!("rvr: {short}"));
-    }
+    proxy.say();
     match Storage::new(proxy.path.as_deref(), proxy.ca.as_deref()) {
         Ok(mut storage) => {
             storage.waits = READING;

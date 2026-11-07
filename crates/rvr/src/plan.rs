@@ -55,6 +55,11 @@ impl At {
         if let Err(why) = crate::restored(target) {
             return At::Unopened(rowver::Error::Invalid(why));
         }
+        At::read(target)
+    }
+
+    /// The file at `target` as it is now, a change to it cut short left as it is.
+    pub fn read(target: &std::path::Path) -> At {
         match rowver::rvr::Reader::inspect(target) {
             Ok((file, checked)) => At::Opened(Box::new(file), checked),
             Err(rowver::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => At::Missing,

@@ -25,24 +25,66 @@ pub fn folder(target: &Path) -> PathBuf {
     rowver::write::beside(target, ".partial")
 }
 
-/// Make the folder `folder`, staging `target`: no wider open than the file there, as what it holds may
-/// be a copy of it (each who may read it may open the folder, each who may write it write there).
+/// The mode of a folder staging `target`: no wider open than the file there, as what it holds may be
+/// a copy of it (each who may read it may open the folder, each who may write it write there).
+#[cfg(unix)]
+fn folder_mode(target: &Path) -> u32 {
+    match std::fs::metadata(target) {
+        Ok(there) => {
+            let mode = std::os::unix::fs::PermissionsExt::mode(&there.permissions()) & 0o666;
+            mode | (mode & 0o444) >> 2 | 0o700
+        }
+        Err(_) => 0o777,
+    }
+}
+
+/// Make the folder `folder`, staging `target`, as `folder_mode` says.
 fn private_folder(folder: &Path, target: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        let mode = match std::fs::metadata(target) {
-            Ok(there) => {
-                let mode = std::os::unix::fs::PermissionsExt::mode(&there.permissions()) & 0o666;
-                mode | (mode & 0o444) >> 2 | 0o700
-            }
-            Err(_) => 0o777,
-        };
-        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), mode).create(folder)
+        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), folder_mode(target)).create(folder)
     }
     #[cfg(not(unix))]
     {
         let _ = target;
         std::fs::create_dir(folder)
+    }
+}
+
+/// Narrow `folder`, staging `target` (`there` its metadata), to `folder_mode`, its other bits kept.
+fn narrow(folder: &Path, target: &Path, there: &std::fs::Metadata) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = there.permissions().mode() & 0o7777;
+        let wide = mode & 0o777 & !folder_mode(target);
+        if wide != 0 {
+            std::fs::set_permissions(folder, std::fs::Permissions::from_mode(mode & !wide))?;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (folder, target, there);
+    }
+    Ok(())
+}
+
+/// Refuse `folder`, there already, when it is a link or a file, or wider open than `target` and not
+/// to be narrowed; one gone since is asked again, as its journal is opened.
+fn own(folder: &Path, target: &Path) -> Result<(), String> {
+    let Ok(there) = std::fs::symlink_metadata(folder) else { return Ok(()) };
+    // What is there is emptied, so a link (to a folder elsewhere) or a file is not taken.
+    if !there.is_dir() {
+        let (folder, target) = (folder.display(), target.display());
+        return Err(format!("{folder} is a link or a file, not a folder, and rvr stages {target} only in a folder of its own, as it removes what that holds: remove {folder}, then try again."));
+    }
+    // What it holds may be a copy of the file: a folder wider open is narrowed, or refused.
+    match narrow(folder, target, &there) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            let (shown, file) = (folder.display(), target.display());
+            Err(format!("{shown} is wider open than {file}, and rvr stages a copy of it there, but it cannot be narrowed ({}): remove {shown}, or make it no wider open than the file, then try again.", rowver::described(&e)))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -97,7 +139,8 @@ impl Staged {
                     return Err(format!("{} cannot be written: the folder {} is not there. Make it, or give --out a path in a folder that is.", target.display(), parent(target).display()));
                 }
                 Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(failed(e)),
-                _ => {}
+                Ok(()) => {}
+                Err(_) => own(&folder, target)?,
             }
             let mut options = File::options();
             let journal = options.read(true).write(true).create(true).truncate(false);
@@ -568,6 +611,37 @@ mod tests {
         drop((journal, spool, staged));
         assert!(left(&folder(&target), &target, None).is_none());
         assert!(unfinished(&folder(&target)).is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // SPEC 7.5.1
+    #[cfg(unix)]
+    #[test]
+    fn a_press_stages_only_in_a_folder_of_its_own_no_wider_open_than_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("rvr-staged-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("elsewhere")).unwrap();
+        std::fs::write(dir.join("elsewhere/kept.txt"), b"kept").unwrap();
+        let target = dir.join("study.rvr");
+        std::fs::write(&target, b"").unwrap();
+        // A link to a folder, a link to nothing, and a file are refused, and what they lead to is kept.
+        for (link, to) in [(true, dir.join("elsewhere")), (true, dir.join("nowhere")), (false, PathBuf::new())] {
+            match link {
+                true => std::os::unix::fs::symlink(&to, folder(&target)).unwrap(),
+                false => std::fs::write(folder(&target), b"").unwrap(),
+            }
+            assert!(Staged::lock(&target).is_err_and(|why| why.contains("is a link or a file, not a folder")), "{to:?}");
+            std::fs::remove_file(folder(&target)).unwrap();
+        }
+        assert_eq!(std::fs::read(dir.join("elsewhere/kept.txt")).unwrap(), b"kept");
+        // A folder there is narrowed to the file's mode when locked.
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::create_dir(folder(&target)).unwrap();
+        std::fs::set_permissions(folder(&target), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let staged = Staged::lock(&target).unwrap();
+        assert_eq!(std::fs::metadata(&staged.folder).unwrap().permissions().mode() & 0o777, 0o700);
+        drop(staged);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

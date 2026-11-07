@@ -52,11 +52,38 @@ impl<K: Eq + std::hash::Hash, V: Clone> Once<K, V> {
     }
 }
 
+impl Proxy {
+    /// Say what is to be said before remote work (`said`, and `trust`), once however often it is asked.
+    pub fn say(&self) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static SAID: AtomicBool = AtomicBool::new(false);
+        if SAID.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let trust = self.trust();
+        self.said.iter().chain(&trust).for_each(|said| eprintln!("rvr: {said}"));
+    }
+
+    /// That the certificate folder adds no authority, when it adds none, and what to do.
+    pub fn trust(&self) -> Option<String> {
+        let ca = self.ca.as_ref()?;
+        let named = std::env::var("X509_CERT_DIR").is_ok_and(|ca| !ca.trim().is_empty());
+        let (what, mend) = match std::fs::read_dir(ca) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => ("is not there".to_owned(), "name a folder that is there in X509_CERT_DIR"),
+            Err(e) => (format!("cannot be read ({})", rowver::described(&e)), "make it readable, or name another in X509_CERT_DIR"),
+            Ok(_) if grid_trust::roots(Some(ca)).1.added == 0 => ("holds no certificate authority rvr can read (.pem or hash.0 files)".to_owned(), "name the folder that does in X509_CERT_DIR"),
+            Ok(_) => return None,
+        };
+        let unset = if named { ", or unset it" } else { "" };
+        Some(format!("the certificate folder {ca} {what}, so rvr trusts only the authorities it carries: {mend}{unset}."))
+    }
+}
+
 /// The grid proxy to present, and what to say of it.
 pub(crate) struct Proxy {
     pub path: Option<String>,
-    /// That it ends soon, when it does: said before remote work.
-    pub short: Option<String>,
+    /// What to say of it before remote work: that it ends soon, or its attributes have ended.
+    pub said: Vec<String>,
     /// A folder of extra certificate authorities, when one is named.
     pub ca: Option<String>,
 }
@@ -67,9 +94,8 @@ pub(crate) fn proxy() -> Proxy {
     let status = voms_proxy::status(&credentials);
     // Extra certificate authorities, when a folder of them is named; grid-trust already trusts the
     // public roots and CERN's grid authorities, which FNAL and CERN EOS are signed by.
-    let ca = std::env::var("X509_CERT_DIR")
-        .ok()
-        .or(credentials.authorities.clone());
+    // voms-proxy takes X509_CERT_DIR trimmed, else the usual folder when it is there.
+    let ca = credentials.authorities.clone();
     let short = crate::proxy::left_of(&status)
         .filter(|left| status.usable() && (0..crate::proxy::SHORT).contains(left));
     let short = short.map(|left| {
@@ -83,15 +109,10 @@ pub(crate) fn proxy() -> Proxy {
          it; run rvr proxy init for a new one."
             .to_owned()
     });
-    let short = ended.or(short);
-    if status.usable() {
-        return Proxy {
-            path: status.path,
-            short,
-            ca,
-        };
-    }
-    Proxy { path: None, short, ca }
+    let said = ended.or(short).into_iter().collect();
+    let usable = status.usable();
+    let path = status.path.filter(|_| usable);
+    Proxy { path, said, ca }
 }
 
 /// The samples samples.toml at `path` makes, or every problem with it; at a terminal, what it
@@ -200,6 +221,9 @@ pub(crate) fn first_file(path: &Path, named: Option<&str>) -> Result<(samples::S
     let names: Vec<&str> = made.iter().map(|s| s.name.as_str()).collect();
     let sample = made[crate::open::sample_at(&names, named, "samples.toml")?].clone();
     let proxy = proxy();
+    if sample.files.iter().any(|f| f.contains("://")) {
+        proxy.say();
+    }
     let mut ctx = Context::new(path.parent().map(Path::to_path_buf).unwrap_or_default(), proxy.path, proxy.ca);
     ctx.pins = false;
     let first = std::sync::OnceLock::new();
@@ -276,8 +300,8 @@ fn resolve_all(path: &Path) -> Result<(), String> {
     let (recipe_text, recipe) = recipe_beside(path)?;
     let proxy = proxy();
     let remote = made.iter().any(|s| s.files.iter().any(|f| f.contains("://")));
-    if let Some(short) = proxy.short.as_ref().filter(|_| remote) {
-        eprintln!("rvr: {short}");
+    if remote {
+        proxy.say();
     }
     let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let ctx = Context::new(base, proxy.path, proxy.ca);
@@ -366,7 +390,7 @@ fn unread(ctx: &Context, read: &BTreeMap<&str, u64>) {
     for folder in folders {
         let names: Vec<String> = match folder.contains("://") {
             true => ctx.storage.as_ref().and_then(|s| s.list(folder).ok()).unwrap_or_default().into_iter().map(|e| e.name).collect(),
-            false => ctx.listed(&resolve::local(folder, &ctx.base)).map(|names| names.to_vec()).unwrap_or_default(),
+            false => resolve::local(folder, &ctx.base).ok().and_then(|dir| ctx.listed(&dir).ok().map(|names| names.to_vec())).unwrap_or_default(),
         };
         for name in names.into_iter().filter(|n| n.ends_with(".root")) {
             let at = resolve::join(folder, &name);
@@ -398,8 +422,11 @@ pub(crate) fn read_lock(path: &Path) -> Result<Lock, String> {
 /// that could not be asked, with why. Both empty when every file is as recorded.
 pub(crate) fn differing(lock: &Lock, base: &Path) -> (Vec<String>, Vec<String>) {
     let proxy = proxy();
-    let ctx = Context::new(base.to_path_buf(), proxy.path, proxy.ca);
     let files: BTreeMap<&str, &lock::File> = lock.samples.iter().flat_map(|s| s.files.iter().map(|f| (f.at.as_str(), f))).collect();
+    if files.keys().any(|at| at.contains("://")) {
+        proxy.say();
+    }
+    let ctx = Context::new(base.to_path_buf(), proxy.path, proxy.ca);
     let (mut changed, mut unasked) = (Vec::new(), Vec::new());
     for (at, f) in &files {
         let now = if at.contains("://") {
@@ -412,16 +439,20 @@ pub(crate) fn differing(lock: &Lock, base: &Path) -> (Vec<String>, Vec<String>) 
                 Some(now) => now.map_err(|failed| failed.why),
             }
         } else {
-            let local = resolve::local(at, &ctx.base);
-            let folder = local.parent().is_none_or(Path::exists);
-            match std::fs::metadata(&local) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound && folder => {
-                    changed.push(format!("{at} no longer exists"));
-                    continue;
+            match resolve::local(at, &ctx.base) {
+                Err(why) => Err(why),
+                Ok(local) => {
+                    let folder = local.parent().is_none_or(Path::exists);
+                    match std::fs::metadata(&local) {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound && folder => {
+                            changed.push(format!("{at} no longer exists"));
+                            continue;
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!("{at}: its folder is not there either (a disk not mounted?)")),
+                        Err(e) => Err(format!("{at} could not be read: {e}")),
+                        Ok(m) => resolve::adler32_file(&local).map(|a| (Some(m.len()), Some(a))).map_err(|e| format!("{at} could not be read: {e}")),
+                    }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!("{at}: its folder is not there either (a disk not mounted?)")),
-                Err(e) => Err(format!("{at} could not be read: {e}")),
-                Ok(m) => resolve::adler32_file(&local).map(|a| (Some(m.len()), Some(a))).map_err(|e| format!("{at} could not be read: {e}")),
             }
         };
         match now {

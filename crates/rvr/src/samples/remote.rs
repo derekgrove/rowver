@@ -1167,7 +1167,7 @@ impl ByteSource for HttpsFile {
         }
         let range = format!("bytes={offset}-{}", offset + buf.len() as u64 - 1);
         let (to, reply) = self.ask(&range, &range, buf.len() as u64);
-        match reply {
+        match reply.and_then(moved) {
             Ok(reply) if reply.status() == 206 => {
                 *self.url.lock().unwrap() = to;
                 use std::io::Read;
@@ -1178,13 +1178,6 @@ impl ByteSource for HttpsFile {
                         self.seen.note(Fault::Unreachable);
                         hep_root::Error::Remote(format!("{}: {}", self.shown, broke(&e)))
                     })
-            }
-            Ok(reply) if (300..400).contains(&reply.status()) => {
-                self.seen.note(Fault::Unreachable);
-                Err(hep_root::Error::Remote(format!(
-                    "{}: its storage redirected more than four times, or without saying where to",
-                    self.shown
-                )))
             }
             Ok(reply) => Err({
                 self.seen.note(Fault::Unreachable);

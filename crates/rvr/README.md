@@ -1089,7 +1089,7 @@ rvr proxy init
 with no setup, the public web authorities, CERN's, and the 83 IGTF authorities (release 1.146, the
 set grid sites install as `ca-policy-lcg`), which sign the storage of most CMS sites, FNAL's dCache
 among them. `$X509_CERT_DIR`, else `/etc/grid-security/certificates` when it exists, adds others,
-for an authority newer than rvr ([SPEC §10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#10-keys-and-proxies)). Without a
+for an authority newer than rvr; one that cannot be read is said before remote work ([SPEC §10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#10-keys-and-proxies)). Without a
 valid proxy, local files and public storage still resolve.
 
 ## When something goes wrong

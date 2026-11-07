@@ -275,7 +275,7 @@ later key replacing an earlier one.
 
 | written as | is | read |
 |---|---|---|
-| `/path/file.root`, `~/path/file.root`, `path/file.root` | a file on this computer: absolute, under the home folder, or relative to the folder holding `samples.toml` | from the file system |
+| `/path/file.root`, `~/path/file.root`, `path/file.root` | a file on this computer: absolute, under the home folder (`$HOME`; `~//path` is `~/path`, and `~` is refused when HOME is not a full path), or relative to the folder holding `samples.toml` | from the file system |
 | `root://host[:port]//path/file.root` | a file at a grid storage | through that host's HTTPS door, from the WLCG door list built into rvr (below) |
 | `davs://host[:port]/path/file.root`, `https://host[:port]/path/file.root` | a file behind an HTTPS door | over HTTPS, as written (`davs` read as `https`) |
 
@@ -426,7 +426,7 @@ without its derived columns; the press says so and exits 1. A press that only ad
 in place or written anew for want of a lock or the right to write (§8.12), keeps the derived
 columns the file held whose expressions the recipe still has, and leaves out only the new ones,
 naming them, and, in place, whose signature it replaces; one built on the file that read nothing
-(its only new columns derived, or a column dropped) leaves the file as it was. Mending `[derived]` and pressing again reads no input (§8).
+(its only new columns derived, a column dropped, or a sample taken out) leaves the file as it was. Mending `[derived]` and pressing again reads no input (§8).
 
 ## 5. The commands and their options
 
@@ -747,7 +747,8 @@ the spool of their kept values, and the file it writes, its arrays packed into i
 and its header written last, so that no array is copied once packed. Nothing is put at the target
 until every file is read or made a hole and every array is packed: the file appears whole, or not
 at all (a press that adds columns to its target in place, §8.2, puts it back as it was if cut
-short, §8.12).
+short, §8.12). The folder is no wider open than the target, and a `FILE.partial` that is a link or
+a file is refused, as a press empties the folder it stages in.
 
 **7.5.2** While a press runs, it holds a lock on its journal; another press of the same target, and
 `rvr empty` or `rvr refill` of it, is refused while it is held. From its first read of the file at
@@ -1117,7 +1118,8 @@ file beside its journal is put back to the old file, a valid one. For a change t
 header (every change to an empty or rowless file, whose arrays take no bytes, so that the bytes
 before its tail are only the magic every file begins with), the file must also still be this change
 of this file: its length between the old and the new length, and every byte from the tail's start on the old tail's byte there, the new tail's, or 0 past
-the old length (a page a crash did not keep). When its tail is the new tail exactly, the change had
+the shorter of the two lengths (a page a crash did not keep, as the change or its putting back grew
+the file). When its tail is the new tail exactly, the change had
 finished but for removing its journal: the journal is let go and the file left as it is, the
 command saying `Let go FILE-journal: the change to FILE had finished, so FILE is as the change made
 it.` on standard error. A journal that does not check out was
@@ -1208,7 +1210,8 @@ much each sample holds of what it chose, and its holes by kind, in FORMAT.md §6
 press stopped part way, or under way. With no file at the target, it says what a press would read
 (`rvr press would press every column: S samples, F files, E entries.`, or why it would refuse; for
 a stopped press that `rvr press` carries on, the files left of it and their entries), then
-`FILE is not there yet: rvr press makes it.`, and exits 1. It exits 0 only when `rvr press` with the same options would
+`FILE is not there yet: rvr press makes it.`, and exits 1; of a file there that does not open but
+a press writes over (§8.12), the same, ending `FILE does not open: WHY`. It exits 0 only when `rvr press` with the same options would
 have nothing to do: the file current (§8.1) and without holes. Beyond the facts this lists, its
 words are the program's own.
 
@@ -1255,8 +1258,8 @@ the certificate's end), readable by you alone, through a file beside it put in i
 
 **10.6** A press or resolve that reads storage warns when the proxy, or its attributes, have less
 than 6 hours left. rvr trusts the public web authorities, CERN's, and the 83 IGTF authorities
-(release 1.146), with no setup; `$X509_CERT_DIR`, else `/etc/grid-security/certificates` when it
-exists, adds others.
+(release 1.146), with no setup; `$X509_CERT_DIR` when it is set and not empty, else
+`/etc/grid-security/certificates` when it exists, adds others, and one that cannot be read is said before remote work.
 
 ## 11. The Python package
 

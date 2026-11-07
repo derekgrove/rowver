@@ -289,7 +289,7 @@ pub(crate) fn write(plan: &Plan, mut done: Done) -> Result<usize, String> {
                 return Err(stuck(format!("{} could not be written: {why}", target.display())));
             }
             // Built on the file with nothing read, writing would keep nothing: it is left as it was.
-            if matches!(plan.from, Base::Columns(_)) && plan.reads().is_empty() {
+            if !matches!(plan.from, Base::Nothing) && plan.reads().is_empty() {
                 return Err(format!("{why}. {} is as it was: put right what is said above and press again.", target.display()));
             }
             header["derived"] = json!({ "columns": held });
