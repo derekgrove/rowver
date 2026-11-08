@@ -272,7 +272,8 @@ The headers show no difference in rows, samples, labels, columns, derived column
 analysis. [The examples](docs/examples/README.md) take one study of CMS Open Data from a first
 file to a finished plot: histograms in Python and ROOT, a column added later, data and simulation
 together, reading more events, sharing and signing, your own ntuples, and what to do when
-something goes wrong, every output from a real run.
+something goes wrong, every output from a real run. [The Python examples](docs/examples/python/README.md)
+work with a file's columns and plot them with matplotlib, hist and ROOT.
 
 To use your own data, edit `samples.toml` and `recipe.toml`, then repeat steps 3 to 5. Files on
 LPC EOS and most CERN EOS areas need a grid proxy first: `rvr proxy init` makes one from your

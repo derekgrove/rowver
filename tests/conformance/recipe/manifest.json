@@ -208,7 +208,7 @@
         ],
         "derived": [
           {
-            "expression": "first(Muon_pt, -1)",
+            "expression": "greatest(Muon_pt, -1)",
             "name": "leading_muon_pt"
           },
           {
@@ -230,7 +230,7 @@
         ]
       },
       "rule": "the example zmumu",
-      "text": "# Two muons of opposite charge, the pair's mass and pt, and a weight per event that scales each\n# simulated sample to the data's luminosity. The data file holds only muons, so nothing else is read.\nformat = \"rvr-recipe\"\nversion = 1\n\n[define]\ngood_muon = \"Muon_pt > 20 and abs(Muon_eta) < 2.4\"\n\n[keep]\ntwo_muons = \"count(good_muon) == 2\"\nopposite_charge = \"sum(Muon_charge[good_muon]) == 0\"\n\n[columns]\nbranches = [\"nMuon\", \"Muon_pt\"]\nmass = \"first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)\"\npt = \"first(pair_pt(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)\"\n\n# Every simulated event of these files weighs 1, so the sum of the weights is the number read.\n[totals]\nsumw = \"1\"\n\n# Worked out from what the file holds when it is read.\n[derived]\nleading_muon_pt = \"first(Muon_pt, -1)\"\nweight = \"if(sample.kind == 'data', 1.0, sample.xsec * 1000 * sample.lumi / sample.sumw)\"\n",
+      "text": "# Two muons of opposite charge, the pair's mass and pt, and a weight per event that scales each\n# simulated sample to the data's luminosity. The data file holds only muons, so nothing else is read.\nformat = \"rvr-recipe\"\nversion = 1\n\n[define]\ngood_muon = \"Muon_pt > 20 and abs(Muon_eta) < 2.4\"\n\n[keep]\ntwo_muons = \"count(good_muon) == 2\"\nopposite_charge = \"sum(Muon_charge[good_muon]) == 0\"\n\n[columns]\nbranches = [\"nMuon\", \"Muon_pt\"]\nmass = \"first(pair_mass(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)\"\npt = \"first(pair_pt(Muon_pt[good_muon], Muon_eta[good_muon], Muon_phi[good_muon], Muon_mass[good_muon]), -1)\"\n\n# Every simulated event of these files weighs 1, so the sum of the weights is the number read.\n[totals]\nsumw = \"1\"\n\n# Worked out from what the file holds when it is read.\n[derived]\nleading_muon_pt = \"greatest(Muon_pt, -1)\"\nweight = \"if(sample.kind == 'data', 1.0, sample.xsec * 1000 * sample.lumi / sample.sumw)\"\n",
       "verdict": "valid"
     },
     {

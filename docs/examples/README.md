@@ -194,7 +194,7 @@ Read 100,000 entries; kept after each cut:
   opposite_charge                       14,483
 Wrote zmumu.rvr (14,483 rows, 3 columns, 0.1 MB) in 2.6 s.
 $ rvr validate zmumu.rvr
-zmumu.rvr: valid, 14483 rows, 3 columns, read 100,000 of 30,458,871 entries, not signed
+zmumu.rvr: valid, 14,483 rows, 3 columns, read 100,000 of 30,458,871 entries, not signed
 ```
 
 rvr read only the branches the recipe uses, and only the first 100,000 events of the file's 30
@@ -313,7 +313,9 @@ h2.Draw("colz")
 c.SaveAs("mass_root.png")
 ```
 
-Both work the same in a Jupyter notebook; show the plot with `plt.show()` or `c.Draw()`.
+Both work the same in a Jupyter notebook; show the plot with `plt.show()` or `c.Draw()`. [The
+Python examples](python/README.md) do more with the file of step 7: its columns as NumPy, Awkward
+and pandas, and histograms with matplotlib, hist and ROOT.
 
 ## 5. Add a column you forgot
 
@@ -328,14 +330,14 @@ zmumu.rvr: pressed 2026-11-03T20:16:48Z by rvr 15.0.0
   samples.toml  as the file holds it
   samples.lock  as the file holds it
   events        as the file holds it
-rvr press would read only Muon_pt, for the events the file kept, and copy every other column from it.
+rvr press would read only Muon_pt, for the events the file kept, and add them to the file in place.
 
   DY  ████████████████████████ 100%   1 file
 $ rvr press
 zmumu.rvr has the events this recipe keeps (14,483) and 3 of its 4 columns.
 Reading only Muon_pt for those events, 1 file, 1 at a time:
   1/1      100,000 entries     14,483 kept   DYJetsToLL.root
-Wrote zmumu.rvr (14,483 rows, 4 columns, 0.3 MB) in 2.0 s.
+Wrote zmumu.rvr in place (14,483 rows, 4 columns, 0.2 MB) in 2.0 s.
 ```
 
 `Muon_pt` holds a list per event (every muon), which Python reads as an Awkward array. The file
@@ -348,15 +350,15 @@ zmumu.rvr is current: nothing to press.
 ```
 
 A column computed only from what the file already stores needs no ROOT file at all, and no room in
-the file either: put it under `[derived]`, as `leading_muon_pt = "first(Muon_pt, -1)"`. The file
+the file either: put it under `[derived]`, as `leading_muon_pt = "greatest(Muon_pt, -1)"`. The file
 keeps the expression, and the Python package works it out when you ask for
 `f["leading_muon_pt"]`. `rvr press` then opens no input:
 
 ```text
 $ rvr press
 zmumu.rvr has the events this recipe keeps (14,483) and 4 of its 4 columns.
-Nothing to read: every column is copied from it.
-Wrote zmumu.rvr (14,483 rows, 4 columns and 1 derived, 0.3 MB) in 0.0 s.
+Nothing to read: the new derived columns are added to it in place.
+Wrote zmumu.rvr in place (14,483 rows, 4 columns and 1 derived, 0.2 MB) in 0.0 s.
 ```
 
 `rvr derive zmumu.rvr 'NAME = EXPRESSION'` adds one to the file alone
@@ -444,7 +446,7 @@ nMuon           u4[26649]  [2, 2, 2, 2, 2, ...]
 Muon_pt         jagged f4[26649]  [[57.6067, 53.04508], [45.61478, 32.98454], [42.350727, 29.168762], ...]
 mass            f4[26649]  [113.64686, 88.297104, 88.33483, 91.27149, 93.55725, ...]
 pt              f4[26649]  [4.690069, 13.55605, 16.843533, 27.262497, 4.780898, ...]
-leading_muon_pt f4[26649]  derived = "first(Muon_pt, -1)"  [57.6067, 45.61478, 42.350727, 40.19343, 38.26939, ...]
+leading_muon_pt f4[26649]  derived = "greatest(Muon_pt, -1)"  [57.6067, 45.61478, 42.350727, 54.99594, 41.65154, ...]
 kind            text by sample[3]  data: "data", DY: "simulation", TT: "simulation"
 lumi            f8 by sample[3]  data: 11.6, DY: 11.6, TT: 11.6
 events_read     i8 by sample[3]  data: 100000, DY: 100000, TT: 100000
@@ -471,7 +473,7 @@ sumw = "1"
 
 # Worked out from what the file holds when it is read.
 [derived]
-leading_muon_pt = "first(Muon_pt, -1)"
+leading_muon_pt = "greatest(Muon_pt, -1)"
 weight = "if(sample.kind == 'data', 1.0, sample.xsec * 1000 * sample.lumi / sample.sumw)"
 ```
 
@@ -512,11 +514,13 @@ read, total = f.sample_columns["events_read"], f.sample_columns["events_total"]
 share = read[0] / total[0]
 
 bins = np.linspace(60, 120, 31)
-mass, weight, sample = f["mass"], f["weight"], f["sample"]
-counts, _ = np.histogram(mass[sample == 0], bins)
+mass, weight = f["mass"], f["weight"]
+# f.rows_of(name) is the slice of a sample's rows, which come together.
+data, dy, tt = f.rows_of("data"), f.rows_of("DY"), f.rows_of("TT")
+counts, _ = np.histogram(mass[data], bins)
 plt.errorbar((bins[1:] + bins[:-1]) / 2, counts, yerr=np.sqrt(counts), fmt="ko", label="data")
-plt.hist([mass[sample == 2], mass[sample == 1]], bins, stacked=True, label=["tt̄", "Drell-Yan"],
-         weights=[weight[sample == 2] * share, weight[sample == 1] * share])
+plt.hist([mass[tt], mass[dy]], bins, stacked=True, label=["tt̄", "Drell-Yan"],
+         weights=[weight[tt] * share, weight[dy] * share])
 plt.xlabel("dimuon mass [GeV]")
 plt.ylabel("events")
 plt.legend()
@@ -526,7 +530,9 @@ plt.savefig("stack.png")
 ![Data against Drell-Yan and tt̄](plots/stack.png)
 
 `f.to_pandas()`, `f.to_parquet("zmumu.parquet")` and `f.arrays()` (Awkward) give the same columns
-in other forms; the [Python README](../../crates/rowver-py/README.md) lists them.
+in other forms; the [Python README](../../crates/rowver-py/README.md) lists them. [The Python
+examples](python/README.md) work with this file's columns and plot them with matplotlib, hist and
+ROOT, each a script to run.
 
 ## 8. Read more events
 
@@ -596,7 +602,7 @@ Read 300,000 entries; kept after each cut:
 Signed with your key a916435b5d41b650…
 Wrote zmumu.rvr (26,649 rows, 4 columns and 2 derived, 0.5 MB) in 3.6 s.
 $ rvr validate zmumu.rvr
-zmumu.rvr: valid, 26649 rows, 4 columns, 2 derived, read 300,000 of 98,422,390 entries, signed by you
+zmumu.rvr: valid, 26,649 rows, 4 columns, 2 derived, read 300,000 of 98,422,390 entries, signed by you
 ```
 
 ## 10. Your own ntuples, and pressing on the LPC
@@ -655,7 +661,7 @@ rvr press: [columns] mass: There is no column named Muon_ptt. Did you mean: Muon
 ```
 
 A value in the data that the recipe cannot take stops the press, naming the file, the entry, the
-column and the value. Here a column was to hold the leading muon's pt in tenths of a GeV, in one
+column and the value. Here a column was to hold the first good muon's pt in tenths of a GeV, in one
 byte (`pt_tenths = { value = "first(Muon_pt[good_muon], 0) * 10", stored = "u1" }`), which holds 0
 to 255 only:
 
@@ -715,7 +721,7 @@ Read 7,071 entries in the holes; kept after each cut:
 Signed with your key a916435b5d41b650…
 Wrote three.rvr (317,070 rows, 7 columns, 0.8 MB) in 0.1 s.
 $ rvr validate three.rvr --complete
-three.rvr: valid, 317070 rows, 7 columns, read all 636,390 entries, signed by you
+three.rvr: valid, 317,070 rows, 7 columns, read all 636,390 entries, signed by you
 ```
 
 The filled file is the one a press of all 90 files writes. A press that stops part way (Ctrl-C, a

@@ -45,7 +45,15 @@ def _names(names, every):
     """Column names asked for: all of `every` when none, one name given alone, or a list."""
     if names is None:
         return list(every)
-    return [names] if isinstance(names, str) else list(names)
+    if isinstance(names, str):
+        return [names]
+    if isinstance(names, (bytes, bytearray)) or not hasattr(names, "__iter__"):
+        raise TypeError(f"{names!r} names no column: give a column's name, or a list of them")
+    names = list(names)
+    for name in names:
+        if not isinstance(name, str):
+            raise TypeError(f"{name!r} is not a column's name: name each column by its text")
+    return names
 
 
 def _arrow(values, offsets):
@@ -93,14 +101,39 @@ def _once(pairs):
 
 class File:
     """An open .rvr file. Its header is read and checked when it opens; each column, stored or
-    derived, is read when it is first asked for, and kept until `forget` lets it go."""
+    derived, is read when it is first asked for, and kept until `forget` (or `close`) lets it go."""
 
     def __init__(self, path):
         self.path = str(path)
         self._file = _File(self.path)
         # A tool key may hold a whole number past the digits Python turns into an int, or a number past a float.
         self.header = _json.loads(self._file.header_text, parse_int=_whole, parse_float=_real)
+        # What the header says, kept so that it still reads once the file is closed.
+        self._empty, self._holes, self._tools = self._file.empty, self._file.holes(), self._file.tools()
+        # What never changes, worked out once: the names f[name] reads, and each sample's rows.
+        self._keys = dict.fromkeys((*_ROW, *self.columns, *self.derived))
+        self._slices, start = {}, 0
+        for sample in self.header["data"]["samples"]:
+            self._slices[sample["name"]] = slice(start, start + sample["rows"])
+            start += sample["rows"]
         self._held = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *raised):
+        self.close()
+
+    def close(self):
+        """Let go of the open file and every column held; arrays handed out, and the header, stay."""
+        self._file, self._held = None, {}
+
+    def _open(self):
+        """The open file, or Error once it is closed."""
+        file = self._file  # read once: another thread may close it meanwhile
+        if file is None:
+            raise Error(f"{self.path} is closed: open it again with rowver.open to read its columns")
+        return file
 
     @property
     def rows(self):
@@ -156,12 +189,12 @@ class File:
         """What the press chose but could not read, per hole: {sample, file, entries, kind, why},
         `entries` as the file records them, (first, last) with `last` not among them."""
         return [{"sample": sample, "file": file, "entries": (first, last), "kind": kind, "why": why}
-                for sample, file, first, last, kind, why in self._file.holes()]
+                for sample, file, first, last, kind, why in self._holes]
 
     @property
     def tools(self):
         """Each tool key of the file (docs/FORMAT.md §11), by name: its object."""
-        return {key: self.header[key] for key in self._file.tools()}
+        return {key: self.header[key] for key in self._tools}
 
     @property
     def complete(self):
@@ -172,22 +205,39 @@ class File:
     def empty(self):
         """Whether the file is empty: its header alone, its columns let go by `rvr empty`
         (`rvr refill` presses them again). Its header reads; its columns raise Error."""
-        return self._file.empty
+        return self._empty
+
+    def rows_of(self, sample):
+        """The rows of the sample of this name, as a slice: a sample's rows come together."""
+        if not isinstance(sample, str) or sample not in self._slices:
+            raise KeyError(f"{sample}: not a sample of {self.path}; it has {', '.join(self.samples)}")
+        return self._slices[sample]
+
+    def keys(self):
+        """The names `f[name]` reads: sample and entry, then the stored columns, then the derived."""
+        return list(self._keys)
+
+    # Not iterable: len(f) is its rows, which list(f) would take for the number of names to make
+    # room for. f.keys() names the columns.
+    __iter__ = __reversed__ = None
 
     def __len__(self):
         return self.rows
 
     def __contains__(self, name):
-        return name in self.columns or name in self.derived or name in _ROW
+        return isinstance(name, str) and name in self._keys
 
     def __repr__(self):
         derived = f", {len(self.derived)} derived" if self.derived else ""
         empty = ", empty" if self.empty else ""
-        return f"<rowver.File {self.path!r}: {self.rows} rows, {len(self.columns)} columns{derived}, {len(self.samples)} samples{empty}>"
+        closed = ", closed" if self._file is None else ""
+        return f"<rowver.File {self.path!r}: {self.rows} rows, {len(self.columns)} columns{derived}, {len(self.samples)} samples{empty}{closed}>"
 
     def __getitem__(self, name):
         """A column by name: a NumPy array, or an Awkward array for a list column. `sample` is
         each row's index into `samples`, and `entry` its entry number in its file's tree."""
+        if not isinstance(name, str):
+            raise TypeError(f"f[...] takes one column's name, not {name!r}: f.read, f.arrays and f.to_pandas take a list of names, and f[name][a:b] or f.slice(name, a, b) gives rows a to b")
         values, offsets = self.read([name])[name]
         if offsets is None:
             return values
@@ -200,28 +250,37 @@ class File:
         offsets), where `offsets` is None for a one-value-per-row column and otherwise says that
         row r holds values[offsets[r]:offsets[r + 1]]. The arrays are read-only."""
         names = _names(names, self.columns + self.derived)
-        unknown = [n for n in names if n not in self]
+        unknown = [n for n in names if n not in self._keys]
         if unknown:
             raise KeyError(f"{', '.join(map(str, unknown))}: not a column of {self.path}; it has {', '.join(self.columns + self.derived)}")
-        wanted = [n for n in dict.fromkeys(names) if n not in self._held and n not in _ROW]
-        for name, (kind, raw, offsets) in zip(wanted, self._file.columns(wanted)):
-            if offsets is not None:
-                offsets.flags.writeable = False
-            self._held[name] = (_typed(raw, kind), offsets)
-        for name in _ROW:
-            if name in names and name not in self._held:
-                values = getattr(self._file, name)()
-                values.flags.writeable = False
-                self._held[name] = (values, None)
-        return {n: self._held[n] for n in names}
+        # Another thread's close() or forget() meanwhile changes nothing here: what is held and the
+        # open file are taken once, and what is read goes into the dict held when this read began.
+        held = self._held
+        got = {n: held.get(n) for n in dict.fromkeys(names)}
+        missing = [n for n, kept in got.items() if kept is None]
+        if missing:
+            file = self._open()
+            wanted = [n for n in missing if n not in _ROW]
+            for name, (kind, raw, offsets) in zip(wanted, file.columns(wanted) if wanted else []):
+                if offsets is not None:
+                    offsets.flags.writeable = False
+                got[name] = held[name] = (_typed(raw, kind), offsets)
+            for name in _ROW:
+                if name in missing:
+                    values = getattr(file, name)()
+                    values.flags.writeable = False
+                    got[name] = held[name] = (values, None)
+        return {n: got[n] for n in names}
 
     def slice(self, name, start, stop):
         """Rows `start` to `stop` (not included) of a column, as `f[name]` gives it: only the chunks
         of the file that hold them read, each checked against its chunk table; a derived column is
         checked against its record first, once for the open file, over every row."""
+        if not isinstance(name, str):
+            raise TypeError(f"{name!r} is not a column's name: name each column by its text")
         if name not in self:
             raise KeyError(f"{name}: not a column of {self.path}; it has {', '.join(self.columns + self.derived)}")
-        kind, raw, offsets = self._file.slice(name, start, stop)
+        kind, raw, offsets = self._open().slice(name, start, stop)
         values = _typed(raw, kind)
         if offsets is None:
             return values

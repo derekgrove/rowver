@@ -9,10 +9,12 @@ import rowver
 f = rowver.open("higgs_tautau.rvr")
 f                         # <rowver.File 'higgs_tautau.rvr': 2248 rows, 11 columns, 1 derived, 2 samples>
 f.samples, f.columns      # names, in the file's order
-f["MET_pt"]               # NumPy array, one value per row (no copy)
+f["MET_pt"]               # NumPy array, one value per row (no copy, read-only: .copy() to change it)
 f["Muon_pt"]              # Awkward array, a list per row
 f["sample"], f["entry"]   # each row's sample index, and its entry in its file's tree
+f["MET_pt"][f.rows_of("GluGluToHToTauTau")]  # one sample's rows: a slice, as a sample's rows come together
 len(f), "MET_pt" in f     # rows; whether it has a column of that name (sample and entry too)
+f.keys()                  # every name f[...] reads: sample, entry, the columns, then the derived ones
 f.path, f.header          # where it is; its JSON header, as a dict
 f.derived                 # the derived columns: kept as expressions, worked out when first asked for
 f["mean_jet_pt"]          # a derived column, read as any other, checked against what the file records
@@ -33,7 +35,13 @@ f.arrays(["MET_pt"])      # sample, entry, then the columns named
 f.to_arrow()              # a pyarrow Table (list columns as Arrow lists), sample and entry first
 f.to_pandas()             # a pandas DataFrame, sample (a categorical) and entry first
 f.to_parquet("out.parquet")
+
+with rowver.open("higgs_tautau.rvr") as f:  # f.close() at the end: what it read stays,
+    met = f["MET_pt"]                        # its header still reads, a column then raises Error
 ```
+
+[The examples](https://gitlab.cern.ch/dgrove/rowver/-/tree/v15.0.0/docs/examples/python) work with
+the columns of a file, and plot them with matplotlib, hist and ROOT.
 
 Every column asked for at once (`f.read([...])`, `arrays`, `to_*`) is read in parallel. Only
 NumPy is required; Awkward, pyarrow and pandas are used when installed
@@ -42,7 +50,7 @@ path that is not there `FileNotFoundError`; a file changed while it is read rais
 saying so. `rowver.validate(path)` checks every array and works out every derived column, as
 `rvr validate` does, and gives `(rows, columns)`. An open `File` holds one open file, through
 which it reads, so a file renamed over it meanwhile is read as it was; dropping the `File`
-(`del f`) lets it go (a system allows a few hundred open files: 256 in a macOS shell). These, `rowver.open` and `rowver.File` are the
+(`f.close()`, or `del f`) lets it go (a system allows a few hundred open files: 256 in a macOS shell). These, `rowver.open` and `rowver.File` are the
 whole package; every other name in it begins with `_`.
 
 ## Building

@@ -61,7 +61,7 @@ hard_pt = "Jet_pt[Jet_pt > 30]"
 
 
 def has(module):
-    """Whether an optional package is installed."""
+    """Whether an optional package is installed and imports."""
     try:
         __import__(module)
         return True
@@ -75,21 +75,20 @@ class Pressed(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.dir = pathlib.Path(tempfile.mkdtemp(prefix="rowver-py-")) / "flat"
+        # Cleanups, unlike tearDownClass, run when setUpClass fails too.
+        cls.addClassCleanup(shutil.rmtree, cls.dir.parent)
         cls.dir.mkdir()
-        cls.config = mock.patch.dict(os.environ, {"RVR_CONFIG": str(cls.dir.parent / "config")})
-        cls.config.start()
+        config = mock.patch.dict(os.environ, {"RVR_CONFIG": str(cls.dir.parent / "config")})
+        config.start()
+        cls.addClassCleanup(config.stop)
         shutil.copy(FIXTURES / "uproot_flat.root", cls.dir)
         (cls.dir / "samples.toml").write_text(SAMPLES)
         (cls.dir / "recipe.toml").write_text(RECIPE)
-        assert rvr(["samples", "resolve", str(cls.dir / "samples.toml")]) == 0
-        assert rvr(["press", str(cls.dir)]) == 0
+        for args in (["samples", "resolve", str(cls.dir / "samples.toml")], ["press", str(cls.dir)]):
+            if rvr(args) != 0:
+                raise RuntimeError(f"rvr {' '.join(args)} failed: its words are above")
         cls.path = cls.dir / "flat.rvr"
         cls.file = rowver.open(cls.path)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.config.stop()
-        shutil.rmtree(cls.dir.parent)
 
     # SPEC 4.5.1, 7.8.1, 11.3, 11.7; FORMAT 5
     def test_the_file_says_what_it_holds(self):
@@ -223,9 +222,50 @@ class Pressed(unittest.TestCase):
         self.assertEqual(public, {"Error", "File", "open", "validate", "set_tool", "drop_tool"})
         documented = {"path", "header", "rows", "samples", "labels", "columns", "derived", "sample_columns", "recipe",
                       "study", "signed_by", "holes", "complete", "empty", "tools", "read", "slice", "forget", "arrays",
-                      "to_arrow", "to_pandas", "to_parquet"}
+                      "to_arrow", "to_pandas", "to_parquet", "keys", "rows_of", "close"}
         self.assertEqual({n for n in dir(self.file) if not n.startswith("_")}, documented)
         self.assertIn("sample", self.file)
+
+    # SPEC 11.3, 11.4
+    def test_its_names_are_gone_through_as_a_table_s_and_a_sample_s_rows_are_a_slice(self):
+        f = self.file
+        names = ["sample", "entry", *f.columns, *f.derived]
+        self.assertEqual(f.keys(), names)
+        self.assertEqual({n for n in names if n in f}, set(names))
+        self.assertNotIn(["weight"], f)
+        # Not iterable: list(f) would make room for len(f), its rows.
+        for going in [iter, reversed]:
+            with self.assertRaises(TypeError):
+                going(f)
+        self.assertEqual(f.rows_of("flat"), slice(0, 4))
+        np.testing.assert_array_equal(f["weight"][f.rows_of("flat")], f["weight"])
+        with self.assertRaisesRegex(KeyError, "other: not a sample of .*; it has flat"):
+            f.rows_of("other")
+        for asked in [0, ["weight", "ht"], ("weight",)]:
+            with self.assertRaisesRegex(TypeError, "takes one column's name"):
+                f[asked]
+        for asked in [[0], ["weight", b"ht"]]:
+            with self.assertRaisesRegex(TypeError, "is not a column's name"):
+                f.read(asked)
+        for asked in [b"ht", 5]:
+            with self.assertRaisesRegex(TypeError, "names no column"):
+                f.read(asked)
+        with self.assertRaisesRegex(TypeError, "is not a column's name"):
+            f.slice(0, 0, 1)
+
+    # SPEC 11.5
+    def test_a_closed_file_keeps_its_header_and_the_arrays_it_handed_out(self):
+        with rowver.open(self.path) as f:
+            weight = f["weight"]
+            self.assertIn("weight", f._held)
+        self.assertEqual((f._file, f._held), (None, {}))
+        np.testing.assert_array_equal(weight, [1.0, 0.5, 2.25, 0.75])
+        self.assertEqual((f.rows, f.columns, f.holes, f.empty, f.complete, f.tools, f.read([])), (4, self.file.columns, [], False, True, {}, {}))
+        self.assertTrue(repr(f).endswith(", closed>"))
+        for read in [lambda: f["weight"], lambda: f["sample"], lambda: f.slice("ht", 0, 1), lambda: f.read()]:
+            with self.assertRaisesRegex(rowver.Error, "flat.rvr is closed: open it again with rowver.open"):
+                read()
+        f.close()
 
     # SPEC 11.4
     def test_a_file_replaced_by_rename_after_it_was_opened_is_read_as_it_was(self):
@@ -589,6 +629,9 @@ class Conformance(unittest.TestCase):
                 if want["empty"]:
                     continue
                 self.assertEqual(f["sample"].tolist(), want["sample"])
+                # Each sample's rows are the slice rows_of gives, in the order of the samples.
+                every = range(f.rows)
+                self.assertEqual([at for at, name in enumerate(f.samples) for _ in every[f.rows_of(name)]], want["sample"])
                 self.assertEqual(f["entry"].tolist(), want["entry"])
                 for name, column in want["columns"].items():
                     if ("offsets" in column) != lists:

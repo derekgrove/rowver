@@ -1288,13 +1288,20 @@ value per sample), `recipe`, `study` (the three texts by file name), `signed_by`
 `None`), `holes` (`[{sample, file, entries: (first, last), kind, why}]`, `last` not included),
 `complete`, `empty` and `tools` (each tool key's object, by its name); and `path`, `header` (the JSON
 header, as `json.loads` reads it, but for a whole number past the digits Python turns into an int, or
-a number past a float (one a float would make infinite, or 0 though it is not), which a tool key may hold: a `Decimal`), `len(f)` (its rows) and `name in f`.
+a number past a float (one a float would make infinite, or 0 though it is not), which a tool key may hold: a `Decimal`), `len(f)` (its rows),
+`f.keys()` (the names `f[name]` reads: `sample` and `entry`, then `columns`, then `derived`), which
+`name in f` looks in (a `File` is not iterable: `iter(f)` raises `TypeError`), and `f.rows_of(sample)`, the rows of the sample of
+that name as a `slice` (a sample's rows come together, FORMAT.md §3; an unknown name raises `KeyError`).
 
 **11.4** `f[name]` reads a column: a flat one as a read-only NumPy array (not copied), a list one as
 an Awkward array, `sample` as `int32`, `entry` as `int64`, a derived one worked out and checked
-against its record. An unknown name raises `KeyError`, listing the columns.
+against its record. An unknown name raises `KeyError`, listing the columns; anything but a name
+(a list of them, or a number), there or among the names any other reader is given, `TypeError`.
 
 **11.5** A column read is held until `f.forget(name, …)` (or `f.forget()`, every one) lets it go.
+`f.close()`, which leaving `with rowver.open(path) as f:` calls, lets go of the open file and every
+column held: arrays handed out stay as they are, and all §11.3 gives still reads; a column then asked
+for raises `rowver.Error`.
 Columns asked for together (`f.read([…])`, `arrays`, `to_*`) are read in parallel.
 
 **11.6** `f.arrays()` gives an Awkward record array; `f.to_arrow()` a pyarrow Table and

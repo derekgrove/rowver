@@ -7,8 +7,9 @@
 #
 # FOLDER (made if missing) gets the studies, and each step's output in FOLDER/out/NN_step.txt.
 # RVR is the rvr binary (default: rvr). It reads CMS Open Data over HTTPS, so it needs the network
-# but no grid proxy. PY (default: python) is the command that runs the Python snippets, with rowver
-# and matplotlib. SKIM is the local ROOT file (tree SMS_300_200) the holes study of section 11
+# but no grid proxy. PY (default: python) is the command that runs the Python snippets and the
+# examples in python/, with rowver, awkward, pandas, pyarrow, matplotlib, hist, mplhep and uproot
+# (and ROOT, or that example is skipped); an example that fails stops the run. SKIM is the local ROOT file (tree SMS_300_200) the holes study of section 11
 # links 90 times; unset, that part is skipped. Nothing is written outside FOLDER (RVR_CONFIG and
 # matplotlib's caches point inside it); delete FOLDER after.
 set -u
@@ -17,6 +18,7 @@ DIR=${1:?usage: walkthrough.sh FOLDER [RVR]}
 RVR=${2:-rvr}
 PY=${PY:-python}
 SKIM=${SKIM:-}
+EXAMPLES="$(cd "$(dirname "$0")" && pwd)/python"
 case $SKIM in "" | /*) ;; *) SKIM="$PWD/$SKIM" ;; esac
 command -v "$RVR" > /dev/null || { echo "no rvr at $RVR: give the rvr binary as the second argument." >&2; exit 2; }
 case $RVR in */*) RVR="$(cd "$(dirname "$RVR")" && pwd)/$(basename "$RVR")" ;; esac
@@ -169,7 +171,7 @@ py 5_muon_pt_type <<'EOF'
 import rowver
 print(type(rowver.open("zmumu.rvr")["Muon_pt"]))
 EOF
-edit recipe.toml 's/^\[derived\]$/[derived]\nleading_muon_pt = "first(Muon_pt, -1)"/'
+edit recipe.toml 's/^\[derived\]$/[derived]\nleading_muon_pt = "greatest(Muon_pt, -1)"/'
 run 5_press_derived press
 
 # 6. Add data and another background
@@ -233,7 +235,7 @@ sumw = "1"
 
 # Worked out from what the file holds when it is read.
 [derived]
-leading_muon_pt = "first(Muon_pt, -1)"
+leading_muon_pt = "greatest(Muon_pt, -1)"
 weight = "if(sample.kind == 'data', 1.0, sample.xsec * 1000 * sample.lumi / sample.sumw)"
 EOF
 run 7_press press
@@ -250,16 +252,33 @@ read, total = f.sample_columns["events_read"], f.sample_columns["events_total"]
 share = read[0] / total[0]
 
 bins = np.linspace(60, 120, 31)
-mass, weight, sample = f["mass"], f["weight"], f["sample"]
-counts, _ = np.histogram(mass[sample == 0], bins)
+mass, weight = f["mass"], f["weight"]
+# f.rows_of(name) is the slice of a sample's rows, which come together.
+data, dy, tt = f.rows_of("data"), f.rows_of("DY"), f.rows_of("TT")
+counts, _ = np.histogram(mass[data], bins)
 plt.errorbar((bins[1:] + bins[:-1]) / 2, counts, yerr=np.sqrt(counts), fmt="ko", label="data")
-plt.hist([mass[sample == 2], mass[sample == 1]], bins, stacked=True, label=["tt̄", "Drell-Yan"],
-         weights=[weight[sample == 2] * share, weight[sample == 1] * share])
+plt.hist([mass[tt], mass[dy]], bins, stacked=True, label=["tt̄", "Drell-Yan"],
+         weights=[weight[tt] * share, weight[dy] * share])
 plt.xlabel("dimuon mass [GeV]")
 plt.ylabel("events")
 plt.legend()
 plt.savefig("stack.png")
 EOF
+# The Python examples (python/README.md here) on this file: their plots and the yields they print.
+for example in columns matplotlib_hists hist_hists root_hists; do
+  next "7_example_$example"
+  if [ $example = root_hists ] && ! $PY -c "import ROOT" > /dev/null 2>&1; then
+    echo "skipped: $PY has no ROOT" > "$f"
+  else
+    ROOT_RDF_SNAPSHOT_INFO=0 $PY "$EXAMPLES/$example.py" < /dev/null > "$f" 2>&1
+    code=$?
+    echo "(exit $code)" >> "$f"
+    cat "$f"
+    [ $code = 0 ] || { echo "the example $example failed: $f" >&2; exit 1; }
+    continue
+  fi
+  cat "$f"
+done
 
 # 8. Read more events
 run 8_plan_all samples plan samples.lock --events all
