@@ -178,7 +178,7 @@ fn every_table_written_reads_back_value_for_value_and_validates() {
         for (column, (bytes, counts)) in table.columns.iter().zip(&expected) {
             let held = reader.column(&column.name).unwrap().unwrap();
             let offsets = counts.as_ref().map(|c| std::iter::once(0).chain(c.iter().scan(0, |at, n| { *at += n; Some(*at) })).collect::<Vec<usize>>());
-            if held.bytes != *bytes || held.offsets != offsets || held.kind != column.kind {
+            if held.bytes != *bytes || held.offsets.as_deref() != offsets.as_ref() || held.kind != column.kind {
                 wrong.push(format!("seed {seed}: {} reads back otherwise", column.name));
             }
             let record = header["data"]["cols"].as_array().unwrap().iter().find(|c| c["name"] == column.name.as_str()).unwrap();

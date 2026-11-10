@@ -862,7 +862,9 @@ defined name they use, however deep), are read, for the events the file kept, fr
 hold one of them; a file of which the earlier file kept no event is not opened, as no input that
 gives nothing is (§8.3). When columns were only added, stored or derived, none dropped or changed,
 they are added to the file itself (§8.12): their records take their places in the recipe's order,
-their arrays are written after the file's own, which stay where they are and are not read, and the
+their arrays are written after the file's own, which stay where they are and are not read (a new
+list column of the same lists as one the file holds shares that one's offsets array, and only its
+content is written: docs/FORMAT.md §7), and the
 press says it wrote the file `in place`; of the file it reads only its `sample` and `entry` arrays,
 for the events it kept, and the columns its new derived columns read. Stored columns it has kept
 but in another order are not only added (derived columns, which have no arrays, may move). Otherwise it writes a new file: every other column is copied from the file, checked against its record as it is, and a column

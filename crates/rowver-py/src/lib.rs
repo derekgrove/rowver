@@ -29,14 +29,13 @@ type Column<'py> = (
 );
 
 fn handed(py: Python<'_>, held: Held) -> Column<'_> {
-    let offsets = held.offsets.map(|offsets| {
-        offsets
-            .into_iter()
-            .map(|o| o as i64)
-            .collect::<Vec<_>>()
-            .into_pyarray(py)
-    });
+    let offsets = held.offsets.map(|offsets| counted(py, &offsets));
     (held.kind, held.bytes.into_pyarray(py), offsets)
+}
+
+/// A list column's offsets as NumPy holds them.
+fn counted<'py>(py: Python<'py>, offsets: &[usize]) -> Bound<'py, PyArray1<i64>> {
+    offsets.iter().map(|o| *o as i64).collect::<Vec<_>>().into_pyarray(py)
 }
 
 /// A row number as Python gives it, any whole number: past what an i64 holds, the most one holds of its sign.
@@ -139,11 +138,20 @@ impl File {
             let mut worked: std::collections::HashMap<&String, _> = derived.iter().zip(worked).collect();
             Ok::<_, String>(names.iter().zip(stored).map(|(name, held)| worked.remove(name).or(held)).collect::<Vec<_>>())
         });
-        Ok(read
-            .map_err(failed)?
-            .into_iter()
-            .map(|held| held.map(|h| handed(py, h)))
-            .collect())
+        // List columns that share their offsets (docs/FORMAT.md §7) are handed one array of them.
+        let mut shared: Vec<(std::sync::Arc<Vec<usize>>, Bound<'py, PyArray1<i64>>)> = Vec::new();
+        let mut one = |mut held: Held| {
+            let offsets = held.offsets.take().map(|offsets| match shared.iter().find(|(known, _)| std::sync::Arc::ptr_eq(known, &offsets)) {
+                Some((_, array)) => array.clone(),
+                None => {
+                    let array = counted(py, &offsets);
+                    shared.push((offsets, array.clone()));
+                    array
+                }
+            });
+            (held.kind, held.bytes.into_pyarray(py), offsets)
+        };
+        Ok(read.map_err(failed)?.into_iter().map(|held| held.map(&mut one)).collect())
     }
 }
 

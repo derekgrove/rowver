@@ -42,7 +42,8 @@ pub(crate) fn records(data: &Value) -> Vec<(&Value, Place<'_>, &str)> {
     out
 }
 
-/// Check the arrays, in any order, fill the bytes from `at` 0 with no gap and no overlap, each at
+/// Check the arrays, in any order, fill the bytes from `at` 0 with no gap and no overlap (list
+/// columns that record one offsets array alike share it), each at
 /// least its chunk table and a frame of 13 bytes a lane per chunk (docs/FORMAT.md §7, §12), and
 /// `sample`'s and `entry`'s fields; where they end.
 pub(super) fn layout(data: &Value) -> Result<u64> {
@@ -50,7 +51,11 @@ pub(super) fn layout(data: &Value) -> Result<u64> {
     exactly(&data["entry"], "data.entry", &["at", "size", "sha256", "by_sample"], &[])?;
     let chunks = crate::chunks::count(data).ok_or_else(|| invalid(format!("data.samples' rows add up past what a count holds (2^64): {MEND}")))?;
     let mut placed = Vec::new();
+    // The offsets arrays met, by where they lie: a list column's may be an earlier one's (§7).
+    let mut offsets: std::collections::HashMap<(u64, u64), &Value> = std::collections::HashMap::new();
+    let mut alike: std::collections::HashMap<&str, (u64, String)> = std::collections::HashMap::new();
     for (record, place, kind) in records(data) {
+        let listed = matches!(place, Place::Column(_, _, Some("offsets")));
         let place = place.to_string();
         checksum(record, &place)?;
         let (at, size) = (count(record, &place, "at")? as u64, count(record, &place, "size")? as u64);
@@ -61,6 +66,19 @@ pub(super) fn layout(data: &Value) -> Result<u64> {
         }
         if size < least {
             return Err(invalid(format!("{place}.size is {size}, and its {chunks} chunks take at least {least} bytes: a chunk table of {} bytes, and a frame of 13 bytes or more a lane per chunk (docs/FORMAT.md §7): {MEND}", chunks.saturating_mul(8 * w + 32))));
+        }
+        // One array recorded alike by each column that shares it takes its bytes once.
+        if listed && size > 0 {
+            // Equal offsets are one array: two arrays of one `sha256` are the same lists kept twice.
+            let (first, column) = alike.entry(record["sha256"].as_str().unwrap_or_default()).or_insert_with(|| (at, place.clone()));
+            if *first != at {
+                return Err(invalid(format!("{place} holds the offsets {column} holds (their sha256 is one) as an array of its own at {at}: list columns of the same lists share one offsets array, recorded alike by each (docs/FORMAT.md §4): {MEND}")));
+            }
+            match offsets.get(&(at, size)) {
+                Some(first) if *first == record => continue,
+                Some(_) => {}
+                None => drop(offsets.insert((at, size), record)),
+            }
         }
         placed.push((at, size, place));
     }
@@ -84,7 +102,7 @@ pub(super) fn fill(end: u64, length: usize) -> Result<()> {
     Ok(())
 }
 
-/// Where the arrays a `data` section lays out end; `None` past what a count holds.
+/// Where the arrays a `data` section lays out end: the furthest end of any; `None` past what a count holds.
 pub(crate) fn end(data: &Value) -> Option<u64> {
-    records(data).iter().try_fold(0_u64, |sum, (record, _, _)| sum.checked_add(record["size"].as_u64().unwrap_or(0)))
+    records(data).iter().try_fold(0_u64, |end, (record, _, _)| Some(end.max(record["at"].as_u64().unwrap_or(0).checked_add(record["size"].as_u64().unwrap_or(0))?)))
 }

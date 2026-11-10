@@ -160,7 +160,10 @@ chunks of a column in parallel. The frames are written and read by the reference
 built into rvr. On 4.4 M rows of one real CMS NanoAOD file (25 columns, 13 of them lists) the lanes
 as frames of their own make the arrays 472 MB, where one frame a chunk of the same lanes makes 480 MB
 and one of the values as they are 627 MB; their 1.6 GB of values decode in 0.17 s, 0.16 s and
-0.20 s on ten threads (Apple M5, 2026-11-10).
+0.20 s on ten threads (Apple M5, 2026-11-10). List columns of the same lists (the `Jet_*` of one
+collection) share one offsets array, written once and read once when they are read together: that
+file's 13 list columns hold 3 offsets arrays, 12.5 MB where 13 would be 55.4 MB, and the file is
+429 MB.
 
 ## 4. Integrity, provenance and reproducibility
 

@@ -443,45 +443,61 @@ fn read_body(file: &Reader, reads: &identity::Reads, worked: &[bool]) -> Result<
     let mut check = identity::Rows::new(header, reads)?;
     let mut first: Vec<reader::Whole> = vec![(&data["sample"], "i4", "data.sample".into(), (&per[..]).into()), (&data["entry"], "i8", "data.entry".into(), (&per[..]).into())];
     let mut columns = Vec::new();
+    // Each flat column's facts made again, each list column's offsets put together (not kept):
+    // one for each array after the first two, `of` its column and `owner` each column's. List
+    // columns that share one offsets array (docs/FORMAT.md §7) check it once.
+    let mut made: Vec<std::result::Result<crate::write::facts::Facts, reader::Stitched>> = Vec::new();
+    let (mut of, mut owner) = (Vec::new(), Vec::new());
     for record in list(data, "data", "cols")? {
         let name = text(record, "data.cols", "name")?;
         let place = format!("data.cols[{name:?}]");
         let kind = text(record, &place, "kind")?;
-        match kind == "jagged" {
-            true => first.push((&record["offsets"], "i8", format!("{place}.offsets"), (&more[..]).into())),
-            false => first.push((record, kind, place.clone(), (&per[..]).into())),
+        let offsets = &record["offsets"];
+        let shared = kind == "jagged" && offsets["size"].as_u64() > Some(0);
+        match first.iter().position(|(held, ..)| shared && *held == offsets) {
+            Some(a) => owner.push(a - 2),
+            None => {
+                owner.push(made.len());
+                of.push(columns.len());
+                match kind == "jagged" {
+                    true => first.push((offsets, "i8", format!("{place}.offsets"), (&more[..]).into())),
+                    false => first.push((record, kind, place.clone(), (&per[..]).into())),
+                }
+                made.push(match kind {
+                    "jagged" => Err(reader::Stitched::new(false)),
+                    kind => Ok(crate::write::facts::Facts::new(kind)),
+                });
+            }
         }
         columns.push((record, place, kind));
     }
-    // Each flat column's facts made again, each list column's offsets put together (not kept).
-    let mut made: Vec<std::result::Result<crate::write::facts::Facts, reader::Stitched>> = columns.iter().map(|(_, _, kind)| match *kind {
-        "jagged" => Err(reader::Stitched::new(false)),
-        kind => Ok(crate::write::facts::Facts::new(kind)),
-    }).collect();
     file.each_chunks(&first, &mut |a, k, values, _| match a {
         0 => check.sample(rows[k].0, rows[k].1, &values),
         1 => check.entry(rows[k].1, &values),
-        a => match &mut made[a - 2] {
-            Ok(facts) => {
-                truth(&values, columns[a - 2].2, &columns[a - 2].1)?;
-                if worked[a - 2] {
-                    quiet(&values, columns[a - 2].2, &columns[a - 2].1)?;
+        a => match (&mut made[a - 2], &columns[of[a - 2]]) {
+            (Ok(facts), (_, place, kind)) => {
+                truth(&values, kind, place)?;
+                if worked[of[a - 2]] {
+                    quiet(&values, kind, place)?;
                 }
                 facts.add(&values)
             }
-            Err(stitched) => stitched.add(&values, &first[a].2),
+            (Err(stitched), _) => stitched.add(&values, &first[a].2),
         },
     })?;
+    let mut made: Vec<_> = made.into_iter().map(Some).collect();
     let (mut contents, mut quieted): (Vec<reader::Whole>, Vec<bool>) = (Vec::new(), Vec::new());
-    for (((record, place, kind), made), worked) in columns.iter().zip(made).zip(worked) {
-        match made {
-            Ok(facts) => facts::agree(record, &facts.finish(), kind, place)?,
-            Err(stitched) => {
+    for (c, (record, place, kind)) in columns.iter().enumerate() {
+        match &mut made[owner[c]] {
+            Some(Err(stitched)) => {
                 let content = &record["content"];
                 reader::ends(stitched.end, content, place)?;
-                contents.push((content, text(content, place, "kind")?, format!("{place}.content"), stitched.members.into()));
-                quieted.push(*worked);
+                contents.push((content, text(content, place, "kind")?, format!("{place}.content"), stitched.members.clone().into()));
+                quieted.push(worked[c]);
             }
+            flat => if let Some(Ok(facts)) = flat.take() {
+                facts::agree(record, &facts.finish(), kind, place)?;
+            },
         }
     }
     file.each_chunks(&contents, &mut |a, _, values, _| {

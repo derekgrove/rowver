@@ -82,10 +82,10 @@ fn add(whole: &mut Option<Held>, array: Array) {
     let held = whole.get_or_insert_with(|| Held {
         kind: values.kind.name().into(),
         bytes: Vec::new(),
-        offsets: offsets.as_ref().map(|_| vec![0]),
+        offsets: offsets.as_ref().map(|_| Arc::new(vec![0])),
     });
     let bytes = values.to_bytes();
-    match (&mut held.offsets, &offsets) {
+    match (held.offsets.as_mut().map(Arc::make_mut), &offsets) {
         // A run's lists need not begin at its first value: only the values they hold are kept.
         (Some(all), Some(run)) => {
             let (from, to) = (run.first().copied().unwrap_or(0), run.last().copied().unwrap_or(0));
@@ -180,7 +180,7 @@ impl<'a> Store<'a> {
     fn none_of(record: &Value) -> Held {
         let jagged = record["kind"] == "jagged";
         let kind = if jagged { &record["content"]["kind"] } else { &record["kind"] };
-        Held { kind: kind.as_str().unwrap_or_default().into(), bytes: Vec::new(), offsets: jagged.then(|| vec![0]) }
+        Held { kind: kind.as_str().unwrap_or_default().into(), bytes: Vec::new(), offsets: jagged.then(|| Arc::new(vec![0])) }
     }
 
     /// What a refusal calls derived column `name`: its place in the header, or for one being
@@ -360,7 +360,7 @@ fn held_of(array: &Array) -> Held {
         Array::Event(values) | Array::Object { values, .. } => values.kind.name().to_owned(),
         Array::Constant(_) => unreachable!("per_event gives one value per row"),
     };
-    let offsets = counts.map(|counts| std::iter::once(0).chain(counts.iter().scan(0, |at, n| { *at += n; Some(*at) })).collect());
+    let offsets = counts.map(|counts| std::iter::once(0).chain(counts.iter().scan(0, |at, n| { *at += n; Some(*at) })).collect::<Vec<_>>()).map(Arc::new);
     Held { kind, bytes, offsets }
 }
 

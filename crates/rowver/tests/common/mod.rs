@@ -94,7 +94,9 @@ pub fn pack(pieces: Vec<Piece>, files: Vec<Value>) -> rowver::Result<(Value, Vec
     }
     // Each array's bytes where its record lays it (FORMAT §7), in record order.
     let at = |record: &Value, key: &str| record[key].as_u64().unwrap() as usize;
-    let arrays = records.into_iter().map(|r| rest[at(r, "at")..at(r, "at") + at(r, "size")].to_vec()).collect();
+    // An offsets array list columns share (FORMAT §4) is recorded by each, and held once.
+    let mut seen = std::collections::HashSet::new();
+    let arrays = records.into_iter().filter(|r| at(r, "size") == 0 || seen.insert(at(r, "at"))).map(|r| rest[at(r, "at")..at(r, "at") + at(r, "size")].to_vec()).collect();
     Ok((data, arrays))
 }
 

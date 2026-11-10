@@ -69,7 +69,7 @@ fn reader_gives_the_columns_the_fixture_holds() {
             Values::Flat(flat) => assert_eq!((&held.kind, &held.bytes, &held.offsets), (&flat.kind, &flat.bytes, &None), "{name}"),
             Values::Jagged { counts, content } => {
                 let offsets: Vec<usize> = std::iter::once(0).chain(counts.iter().scan(0, |at, n| { *at += n; Some(*at) })).collect();
-                assert_eq!((&held.kind, &held.bytes, held.offsets.as_ref()), (&content.kind, &content.bytes, Some(&offsets)), "{name}");
+                assert_eq!((&held.kind, &held.bytes, held.offsets.as_deref()), (&content.kind, &content.bytes, Some(&offsets)), "{name}");
             }
         }
     }

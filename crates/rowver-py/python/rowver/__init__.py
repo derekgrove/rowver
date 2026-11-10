@@ -9,6 +9,7 @@ Arrow tables, pandas data frames or Parquet. `rvr`, the command that makes them,
 """
 
 import json as _json
+import weakref as _weakref
 
 import numpy as _np
 
@@ -117,6 +118,11 @@ class File:
             self._slices[sample["name"]] = slice(start, start + sample["rows"])
             start += sample["rows"]
         self._held = {}
+        # List columns of the same lists share one offsets array in the file (docs/FORMAT.md §4),
+        # and here: each such array by where it lies, while a column read still holds it.
+        self._shared = {c["name"]: (c["offsets"]["at"], c["offsets"]["size"])
+                        for c in self.header["data"]["cols"] if c["kind"] == "jagged" and c["offsets"]["size"]}
+        self._offsets = _weakref.WeakValueDictionary()
 
     def __enter__(self):
         return self
@@ -264,6 +270,8 @@ class File:
             for name, (kind, raw, offsets) in zip(wanted, file.columns(wanted) if wanted else []):
                 if offsets is not None:
                     offsets.flags.writeable = False
+                    if name in self._shared:
+                        offsets = self._offsets.setdefault(self._shared[name], offsets)
                 got[name] = held[name] = (_typed(raw, kind), offsets)
             for name in _ROW:
                 if name in missing:

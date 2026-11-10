@@ -167,8 +167,9 @@ pub struct Held {
     pub kind: String,
     /// The values, little-endian.
     pub bytes: Vec<u8>,
-    /// For a list column, row `r` holds values `offsets[r]..offsets[r + 1]`.
-    pub offsets: Option<Vec<usize>>,
+    /// For a list column, row `r` holds values `offsets[r]..offsets[r + 1]`: one allocation for
+    /// the list columns read together that share their offsets array (docs/FORMAT.md §7).
+    pub offsets: Option<Arc<Vec<usize>>>,
 }
 
 impl Held {
@@ -191,7 +192,7 @@ impl Held {
     /// Its rows `from..to`: their values, and a list column's offsets counted from 0.
     pub fn rows(&self, from: usize, to: usize) -> Result<Held> {
         let (bytes, offsets) = self.part(from, to)?;
-        Ok(Held { kind: self.kind.clone(), bytes: bytes.to_vec(), offsets })
+        Ok(Held { kind: self.kind.clone(), bytes: bytes.to_vec(), offsets: offsets.map(Arc::new) })
     }
 }
 
@@ -525,14 +526,22 @@ impl Reader {
         let rows = self.chunks()?;
         let (per, more) = (Self::rows_of(&rows), rows.iter().map(|c| c.2 - c.1 + 1).collect::<Vec<_>>());
         // The flat columns' arrays and the list columns' offsets, then the list columns' content.
-        let (mut first, mut at): (Vec<Whole>, Vec<usize>) = (Vec::new(), Vec::new());
+        // Each column asked for, and its array among `first`: list columns that share one offsets
+        // array (docs/FORMAT.md §7) read it once.
+        let (mut first, mut owner): (Vec<Whole>, Vec<(usize, usize)>) = (Vec::new(), Vec::new());
         for (index, (record, place)) in records.iter().zip(&places).enumerate().filter_map(|(i, (r, p))| Some((i, (r.as_ref()?, p)))) {
             let jagged = record["kind"] == "jagged";
+            let offsets = &record["offsets"];
+            let shared = jagged && offsets["size"].as_u64() > Some(0);
+            if let Some(a) = first.iter().position(|(held, ..)| shared && *held == offsets) {
+                owner.push((index, a));
+                continue;
+            }
+            owner.push((index, first.len()));
             first.push(match jagged {
-                true => (&record["offsets"], "i8", format!("{place}.offsets"), (&more[..]).into()),
+                true => (offsets, "i8", format!("{place}.offsets"), (&more[..]).into()),
                 false => (*record, text(record, place, "kind")?, place.clone(), (&per[..]).into()),
             });
-            at.push(index);
         }
         let mut held: Vec<Option<Held>> = vec![None; names.len()];
         let mut stitched: Vec<Option<Stitched>> = first.iter().map(|(_, kind, label, _)| (label.ends_with(".offsets") && *kind == "i8").then(|| Stitched::new(true))).collect();
@@ -549,17 +558,18 @@ impl Reader {
         })?;
         let mut contents: Vec<Whole> = Vec::new();
         let mut content_at = Vec::new();
-        for (a, ((index, values), stitched)) in at.iter().zip(bytes).zip(stitched).enumerate() {
+        let kept: Vec<_> = stitched.iter_mut().map(|s| s.as_mut().and_then(|s| s.kept.take()).map(Arc::new)).collect();
+        for (index, a) in &owner {
             let (record, place) = (records[*index].unwrap_or(&Value::Null), &places[*index]);
-            let Some(stitched) = stitched else {
-                held[*index] = Some(Held { kind: first[a].1.to_owned(), bytes: values, offsets: None });
+            let Some(offsets) = &stitched[*a] else {
+                held[*index] = Some(Held { kind: first[*a].1.to_owned(), bytes: std::mem::take(&mut bytes[*a]), offsets: None });
                 continue;
             };
             let content = &record["content"];
-            ends(stitched.end, content, place)?;
+            ends(offsets.end, content, place)?;
             let kind = text(content, place, "kind")?;
-            contents.push((content, kind, format!("{place}.content"), stitched.members.into()));
-            held[*index] = Some(Held { kind: kind.to_owned(), bytes: Vec::new(), offsets: stitched.kept });
+            contents.push((content, kind, format!("{place}.content"), offsets.members.clone().into()));
+            held[*index] = Some(Held { kind: kind.to_owned(), bytes: Vec::new(), offsets: kept[*a].clone() });
             content_at.push(*index);
         }
         self.each_chunks(&contents, &mut |a, _, values, whole| {
@@ -662,7 +672,7 @@ impl Reader {
         let stitched = self.offsets_of(&record["offsets"], &rows, &format!("{place}.offsets"), None)?;
         ends(stitched.end, content, &place)?;
         let bytes = self.array(content, kind, &format!("{place}.content"), &stitched.members)?;
-        Ok(Held { kind: kind.to_owned(), bytes, offsets: stitched.kept })
+        Ok(Held { kind: kind.to_owned(), bytes, offsets: stitched.kept.map(Arc::new) })
     }
 
     /// Rows `from..to` of a row column, stored or derived, or `None` when there is none: only the chunks holding them read and checked.
@@ -695,7 +705,7 @@ impl Reader {
         let stitched = self.offsets_of(&record["offsets"], &rows, &format!("{place}.offsets"), Some(wanted.clone()))?;
         let start = wanted.start;
         self.each_chunk(content, kind, &format!("{place}.content"), &|k| stitched.members.get(k - start).copied().unwrap_or(0), Some(wanted), &mut gather)?;
-        Held { kind: kind.to_owned(), bytes, offsets: stitched.kept }.rows(from - first, to - first)
+        Held { kind: kind.to_owned(), bytes, offsets: stitched.kept.map(Arc::new) }.rows(from - first, to - first)
     }
 
     /// A list column's offsets from its chunks (only those `wanted`, when given, counted from the

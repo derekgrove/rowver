@@ -135,7 +135,7 @@ arrays take no bytes (S = 20 + L) while its arrays' records name bytes.
 The top level has exactly `rowver` (the whole number 15), `data`, `made`, an optional `derived`, an
 optional `signature`, and zero or more tool keys (§11). Nothing else. Once the press has written
 `data`, only a press that builds on the file adds to it: the records of new columns, whose arrays
-lie after the file's own (SPEC.md §8.2), and `data.sha256` again; nothing else changes it.
+lie after the file's own but for offsets they share with a column it holds (§7, SPEC.md §8.2), and `data.sha256` again; nothing else changes it.
 
 ## 3. Rows: `data`
 
@@ -242,6 +242,14 @@ content   [65.3125, 19.96875, 16.421875,              row 0 = content[0:3]
            120.5,                                     row 3 = content[10:11]
            … the same again for rows 4 to 7]          f4[count] = f4[22]
 ```
+
+**List columns of the same lists share their offsets.** Every list column whose rows hold as many
+members as an earlier one's (`Jet_pt`, `Jet_eta` and `Jet_phi`, read from one collection) records
+that column's offsets array as its own: the same `at`, `size`, `sha256` and `by_sample`. The array
+lies in the file once, and a reader that has read it for one column has it for the others. A press
+shares whenever two columns' offsets are equal (their `sha256` is), a column added to a file with
+those the file holds too, and a reader refuses, on opening, two offsets arrays of one `sha256`
+(but arrays of no bytes): equal offsets are one array.
 
 A flat column's record has exactly `name`, `kind`, `at`, `size`, `sha256`, `by_sample`, `lim`,
 `nice`, and `vals` when §4's rule below gives it. A jagged column's has exactly `name`, `kind`
@@ -771,15 +779,20 @@ An array reference is `{"at", "size", "sha256"}`, with `by_sample` on every arra
   chunks) has the whole offsets `[0]`.
 
 The records are in **record order**: `sample`, `entry`, then each column in `cols` order, a jagged
-column as its offsets then its content. The arrays may lie in any order: together they fill the
+column as its offsets then its content. An offsets array that list columns share (§4) is one array,
+recorded alike by each of them: records that differ in any field are of different arrays. The
+arrays may lie in any order: together they fill the
 space from byte 8 to the header's first byte exactly, each of its bytes in exactly one array, so
 that, taken in the order of their `at`, each array begins where the one before it ends, the first at
 `at` 0 and the last ending at the header (an array of no bytes, as every array of a file of no rows,
 lies at `at` 0). A reader checks this on opening from the records alone (§12), and refuses a gap
-between two arrays, an array that overlaps another, and an array past the header. A press lays the
+between two arrays, an array that overlaps another (two offsets records of one `at` that differ
+otherwise among them), and an array past the header. Only offsets are shared: no other two records
+name the same bytes. A press lays the
 arrays in record order, one after another from `at` 0; a press that adds columns to a file it builds
 on writes their arrays after the file's own, so they lie after arrays whose records come after
-theirs (SPEC.md §8.2). In `tiny.rvr`, pressed whole:
+theirs, and a new list column of lists the file holds records their offsets array, where it lies
+(SPEC.md §8.2). In `tiny.rvr`, pressed whole:
 
 | array | `at` | `size` |
 |---|---|---|
@@ -818,7 +831,7 @@ signature. `data.chunk_rows` is the recipe's `chunk_rows`, or 65,536 when it giv
 |---|---|---|
 | chunk SHA-256 | the chunk's values as little-endian bytes (§7's table of what a chunk holds) | every chunk of every array, in its chunk table |
 | array `sha256` | the ASCII text of the array's chunk SHA-256s (64 hex characters each) joined, in chunk order; for an array of no chunks, the SHA-256 of nothing | every array |
-| `data.sha256` | the ASCII text of every array's `sha256` joined, with nothing between them, in record order (§7), wherever the arrays lie | `data` |
+| `data.sha256` | the ASCII text of every array record's `sha256` joined, with nothing between them, in record order (§7), wherever the arrays lie (a shared offsets array's once for each column that records it) | `data` |
 | `by_sample` | one SHA-256 per sample, of that sample's part of the array (below) | `entry`, every flat column, both arrays of every jagged column |
 | `made.sha256` | the canonical JSON (below) of `made` without its own `sha256`, as UTF-8 | `made` |
 | a derived column's `sha256` and `by_sample` | its values as they are worked out, cut at the file's chunks as a stored column's array is: its chunk SHA-256s give its `sha256` and `by_sample` as for an array | each derived column |
@@ -982,7 +995,8 @@ study's texts:
 - §1: the file at least 20 bytes, the magic at its start and its end, the header's length within the
   file, the header's JSON rules, `rowver: 15`, and the arrays filling the space from byte 8 to the
   header exactly, from their records (§7: in any order, no gap and no overlap; in an empty file,
-  laid out as a whole file's are, the space they would fill gone); each array's `size` at least its
+  laid out as a whole file's are, the space they would fill gone; no two offsets arrays of one
+  `sha256`, §4); each array's `size` at least its
   chunk table's `chunks × (8w + 32)` bytes plus 13 bytes a lane per chunk (the least a frame §7
   allows takes: its magic 4, a frame header of 2, one block header 3 and the content checksum 4),
   and 0 for an array of no chunks;

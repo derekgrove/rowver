@@ -1195,7 +1195,7 @@ fn contents(bytes: &[u8]) -> Value {
             }).collect();
             let mut column = json!({"kind": held.kind, "values": values});
             if let Some(offsets) = held.offsets {
-                column["offsets"] = json!(offsets);
+                column["offsets"] = json!(&*offsets);
             }
             columns.insert(name, column);
         }
@@ -1203,6 +1203,79 @@ fn contents(bytes: &[u8]) -> Value {
     let empty = reader.empty();
     let (sample, entry) = match empty { true => (json!(null), json!(null)), false => (json!(reader.sample().unwrap()), json!(reader.entry().unwrap())) };
     json!({"rows": reader.rows().unwrap(), "empty": empty, "sample": sample, "entry": entry, "columns": columns})
+}
+
+/// A generated file (seed 7's table) whose second list column holds the first's lists: the two
+/// share one offsets array (FORMAT §4).
+fn shared() -> Vec<u8> {
+    let (header, arrays) = shared_parts();
+    to_bytes(&header, &arrays)
+}
+
+/// `shared`, as its header and its arrays.
+fn shared_parts() -> (Value, Vec<Vec<u8>>) {
+    use rowver::write::Values;
+    let mut rng = common::gen::Rng::new(7);
+    let table = common::gen::table(&mut rng, 8);
+    let mut values = common::gen::filled(&mut rng, &table);
+    let lists: Vec<usize> = table.columns.iter().enumerate().filter(|(_, c)| c.jagged).map(|(at, _)| at).collect();
+    for sample in &mut values {
+        let Values::Jagged { counts, .. } = &sample[lists[0]] else { panic!("a list column") };
+        let counts = counts.clone();
+        sample[lists[1]] = Values::Jagged { content: common::gen::values(&mut rng, &table.columns[lists[1]].kind, counts.iter().sum()), counts };
+    }
+    common::gen::file(&table, values)
+}
+
+/// Where the column `name` is among a header's columns.
+fn first_list(header: &Value, name: &str) -> usize {
+    header["data"]["cols"].as_array().unwrap().iter().position(|c| c["name"] == name).unwrap()
+}
+
+// FORMAT 4, 7
+#[test]
+fn list_columns_of_the_same_lists_record_one_offsets_array_and_no_other_two_records_one_place() {
+    let (header, arrays) = shared_parts();
+    let lists: Vec<&Value> = header["data"]["cols"].as_array().unwrap().iter().filter(|c| c["kind"] == "jagged").collect();
+    assert!(lists[0]["offsets"]["size"].as_u64() > Some(0));
+    assert_eq!(lists[0]["offsets"], lists[1]["offsets"]);
+    assert_ne!(lists[0]["offsets"]["at"], lists[2]["offsets"]["at"]);
+    assert_eq!(checked_with(&to_bytes(&header, &arrays), false), (Ok(()), Ok(())));
+    // The two columns' lists read alike, each with its own content.
+    let path = common::written(&to_bytes(&header, &arrays), "shared");
+    let reader = rowver::rvr::Reader::open(&path).unwrap();
+    let names: Vec<String> = lists.iter().map(|c| c["name"].as_str().unwrap().to_owned()).collect();
+    let together = reader.stored_columns(&names).unwrap();
+    for (name, held) in names.iter().zip(&together) {
+        assert_eq!(held.as_ref(), reader.column(name).unwrap().as_ref(), "{name}");
+    }
+    let offsets = |a: usize| together[a].as_ref().unwrap().offsets.clone().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&offsets(0), &offsets(1)), "offsets read once are handed over once");
+    // Records of one place that differ are two arrays, which overlap.
+    let at = header["data"]["cols"].as_array().unwrap().iter().position(|c| c["name"] == names[1]).unwrap();
+    let mut other = header.clone();
+    other["data"]["cols"][at]["offsets"]["by_sample"][0] = ZEROS.into();
+    let (opened, _) = checked_with(&to_bytes(&sealed(other), &arrays), false);
+    assert!(opened.unwrap_err().contains("no gap and no overlap"));
+    // Equal offsets kept as two arrays are refused: the table's two list columns, each with its
+    // own offsets array, recorded with one sha256.
+    let mut rng = common::gen::Rng::new(7);
+    let table = common::gen::table(&mut rng, 8);
+    let filled = common::gen::filled(&mut rng, &table);
+    let (mut twice, kept) = common::gen::file(&table, filled);
+    let sha256 = twice["data"]["cols"][first_list(&twice, &names[0])]["offsets"]["sha256"].clone();
+    let second = first_list(&twice, &names[1]);
+    twice["data"]["cols"][second]["offsets"]["sha256"] = sha256;
+    let (opened, _) = checked_with(&to_bytes(&sealed(twice), &kept), false);
+    assert!(opened.unwrap_err().contains("share one offsets array"));
+    // Only offsets are shared: a content array recorded where another lies overlaps it.
+    let mut other = header.clone();
+    let first = other["data"]["cols"].as_array().unwrap().iter().position(|c| c["name"] == names[0]).unwrap();
+    let (place, size) = (other["data"]["cols"][first]["content"]["at"].clone(), other["data"]["cols"][first]["content"]["size"].clone());
+    other["data"]["cols"][at]["content"]["at"] = place;
+    other["data"]["cols"][at]["content"]["size"] = size;
+    let (opened, _) = checked_with(&to_bytes(&sealed(other), &arrays), false);
+    assert!(opened.unwrap_err().contains("no gap and no overlap"));
 }
 
 // FORMAT 12, example; SPEC 9.1
@@ -1233,6 +1306,7 @@ fn the_conformance_corpus_holds_what_this_reader_says() {
         let (header, arrays) = common::gen::file(&table, values);
         named.push((format!("generated-{seed}"), to_bytes(&header, &arrays)));
     }
+    named.push(("generated-shared".into(), shared()));
     for (name, bytes) in named {
         let path = format!("valid/{name}.rvr");
         valid.push(json!({"file": path, "verdict": "valid", "signed": name.ends_with("signed"), "contents": contents(&bytes)}));

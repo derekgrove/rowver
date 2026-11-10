@@ -219,7 +219,12 @@ pub(crate) fn added(file: Option<std::sync::Arc<std::fs::File>>, at: u64, data: 
     let cut = crate::chunks::of(data)?;
     let samples = data["samples"].as_array().map_or(0, Vec::len);
     let ready = columns.into_iter().map(|(name, source)| column::Ready::of(source, &name).map(|ready| (name, ready))).collect::<Result<Vec<_>>>()?;
-    let (records, end) = packing(column::Out::new(file, at), &cut, samples, None, &ready, workers, path)?;
+    // A new list column whose offsets are those of one the file has shares that array.
+    let mut out = column::Out::new(file, at);
+    for held in data["cols"].as_array().into_iter().flatten().filter_map(|c| c["offsets"].as_object()) {
+        out.share(held);
+    }
+    let (records, end) = packing(out, &cut, samples, None, &ready, workers, path)?;
     Ok((records.into_iter().map(Value::Object).collect(), end))
 }
 
@@ -514,8 +519,14 @@ pub fn refilled(shell: &crate::change::Locked, from: impl AsRef<Path>, to: impl 
     let written = |e: std::io::Error| about(to, e.into());
     let mut out = std::io::BufWriter::new(std::fs::File::create(to).map_err(written)?);
     out.write_all(crate::rvr::MAGIC).map_err(written)?;
-    for (_, at, size) in spans {
+    // An offsets array list columns share is recorded by each, and written once.
+    let mut end = 0;
+    for (shell_at, at, size) in spans {
+        if shell_at < end {
+            continue;
+        }
         copied(&source, 8 + at, size, from, &mut out, to)?;
+        end = shell_at + size;
     }
     framing(&mut out, &text, FEWER).map_err(|e| about(to, e))?;
     out.flush().map_err(written)

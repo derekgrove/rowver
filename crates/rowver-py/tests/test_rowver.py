@@ -655,6 +655,26 @@ class Conformance(unittest.TestCase):
     def test_every_list_column_of_the_corpus_reads_as_its_manifest_says(self):
         self.check(lists=True)
 
+    # FORMAT 4, 7
+    def test_list_columns_of_the_same_lists_are_handed_one_offsets_array(self):
+        f = rowver.open(str(CORPUS / "valid" / "generated-shared.rvr"))
+        lists = [c for c in f.header["data"]["cols"] if c["kind"] == "jagged"]
+        a, b, c = (c["name"] for c in lists[:3])
+        self.assertEqual(lists[0]["offsets"], lists[1]["offsets"])
+        # Read together or one after another, the two hold the same array; the third its own.
+        read = f.read([a, c])
+        self.assertIs(f.read([b])[b][1], read[a][1])
+        self.assertIsNot(read[c][1], read[a][1])
+        g = rowver.open(f.path)
+        both = g.read([a, b])
+        self.assertIs(both[a][1], both[b][1])
+        np.testing.assert_array_equal(both[a][1], read[a][1])
+        # Let go of, it is read again.
+        offsets = both[a][1].copy()
+        del both
+        g.forget()
+        np.testing.assert_array_equal(g.read([b])[b][1], offsets)
+
     # FORMAT 12
     @unittest.skipUnless(zstd(), "no zstd here: Python 3.14, the zstandard package, or the zstd command")
     def test_every_case_of_the_corpus_has_its_verdict(self):

@@ -468,6 +468,47 @@ fn a_file_a_column_was_added_to_in_place_is_refilled_byte_for_byte() {
     assert_eq!(std::fs::read(&path).unwrap(), before, "refilled, byte for byte as it was");
 }
 
+// FORMAT 4, 7; SPEC 8.2, 8.10
+#[test]
+fn list_columns_of_the_same_lists_share_one_offsets_array_however_the_file_is_made() {
+    // Jet_pt, Jet_eta and a computed list of as many members; Muon_charge's lists are others.
+    let (dir, file) = pressed("shared-offsets", &recipe("branches = [\"Jet_pt\", \"Muon_charge\", \"Jet_eta\"]\ntwice = \"Jet_pt * 2\"", ""));
+    let path = dir.join(&file);
+    let offsets = |h: &Value, name: &str| h["data"]["cols"].as_array().unwrap().iter().find(|c| c["name"] == name).unwrap()["offsets"].clone();
+    let h = header(&dir, &file);
+    let jets = offsets(&h, "Jet_pt");
+    assert!(jets["size"].as_u64() > Some(0));
+    assert_eq!((offsets(&h, "Jet_eta"), offsets(&h, "twice")), (jets.clone(), jets.clone()));
+    assert_ne!(offsets(&h, "Muon_charge")["at"], jets["at"]);
+    let (code, said) = rvr(&dir, &["validate", &file]);
+    assert_eq!(code, 0, "{said}");
+    // A column added in place shares the array the file holds, and the file is refilled as it was.
+    std::fs::write(dir.join("recipe.toml"), recipe("branches = [\"Jet_pt\", \"Muon_charge\", \"Jet_eta\"]\ntwice = \"Jet_pt * 2\"\nhalf = \"Jet_eta / 2\"", "")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && said.contains("in place"), "{said}");
+    let h = header(&dir, &file);
+    assert_eq!(offsets(&h, "half"), jets);
+    assert_eq!(rvr(&dir, &["validate", &file]).0, 0);
+    let before = std::fs::read(&path).unwrap();
+    assert_eq!(rvr(&dir, &["empty", &file, "-f"]).0, 0);
+    let (code, said) = rvr(&dir, &["refill", &file]);
+    assert!(code == 0 && said.contains("is as it was"), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "refilled, byte for byte as it was");
+    // Pressed whole, and built on with a column dropped (its others copied), it shares alike.
+    let (code, said) = rvr(&dir, &["press", "--full"]);
+    assert_eq!(code, 0, "{said}");
+    let whole = header(&dir, &file);
+    assert_eq!((offsets(&whole, "half"), offsets(&whole, "Jet_eta")), (offsets(&whole, "Jet_pt"), offsets(&whole, "Jet_pt")));
+    assert_eq!(whole["data"]["sha256"], h["data"]["sha256"]);
+    std::fs::write(dir.join("recipe.toml"), recipe("branches = [\"Muon_charge\", \"Jet_eta\"]\ntwice = \"Jet_pt * 2\"", "")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    let fewer = header(&dir, &file);
+    assert_eq!(offsets(&fewer, "twice"), offsets(&fewer, "Jet_eta"));
+    let (code, said) = rvr(&dir, &["validate", &file]);
+    assert_eq!(code, 0, "{said}");
+}
+
 // SPEC 8.11, 8.12
 #[test]
 fn a_file_that_may_not_be_written_is_changed_anew_and_moved_over() {

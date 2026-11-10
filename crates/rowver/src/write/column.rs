@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use crate::parallel::{Pending, Pool};
 use std::borrow::Cow;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -156,6 +156,9 @@ pub(crate) struct Out {
     /// How many chunks wait among what is coming, and their values' bytes.
     chunks: usize,
     waiting: usize,
+    /// The offsets arrays written or known, by `sha256`: each one's record, for the next list
+    /// column of the same offsets to share (docs/FORMAT.md §7).
+    shared: HashMap<String, Map<String, Value>>,
 }
 
 /// An array written through `Out`: where it begins, its frames' bytes, its chunk table, its chunks'
@@ -201,7 +204,14 @@ impl Out {
     /// Arrays written into `file` from its byte 8 + `at`; with no file, only their bytes counted.
     pub(crate) fn new(file: Option<Arc<std::fs::File>>, at: u64) -> Self {
         let file = std::io::BufWriter::with_capacity(1 << 20, Placed { file, at: 8 + at });
-        Self { file, at, arrays: Vec::new(), coming: VecDeque::new(), chunks: 0, waiting: 0 }
+        Self { file, at, arrays: Vec::new(), coming: VecDeque::new(), chunks: 0, waiting: 0, shared: HashMap::new() }
+    }
+
+    /// An offsets array a file already holds, by its record there: one a new list column may share.
+    pub(crate) fn share(&mut self, record: &Map<String, Value>) {
+        if let Some(sha256) = record.get("sha256").and_then(Value::as_str).filter(|_| record.get("size").and_then(Value::as_u64) > Some(0)) {
+            self.shared.entry(sha256.to_owned()).or_insert_with(|| record.clone());
+        }
     }
 
     /// A new array: its id, for the chunks handed over for it.
@@ -801,9 +811,21 @@ pub(super) fn column<'e>(name: &str, pieces: &'e dyn Pieces, rows: &[Rows], samp
         record.append(&mut cutting.finish(samples)?);
         return Ok(record);
     }
-    let mut offsets = Cutting::offsets(name, pieces.kind(), rows, (&mut *out, pack))?;
-    fed(pieces, &mut offsets, pool, none)?;
-    let offsets = offsets.finish(samples)?;
+    // Its offsets measured first, from its counts: those of an earlier list column are that one's
+    // array, shared, and written once (docs/FORMAT.md §7).
+    let mut measured = Cutting::made(name, pieces.kind(), rows, Cut::Offsets(Chunked::new("i8", None)?))?;
+    fed(pieces, &mut measured, pool, none)?;
+    let sha256 = measured.finish(samples)?.get("sha256").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let offsets = match out.shared.get(&sha256).filter(|_| !rows.is_empty()) {
+        Some(shared) => shared.clone(),
+        None => {
+            let mut offsets = Cutting::offsets(name, pieces.kind(), rows, (&mut *out, pack))?;
+            fed(pieces, &mut offsets, pool, none)?;
+            let offsets = offsets.finish(samples)?;
+            out.shared.insert(sha256, offsets.clone());
+            offsets
+        }
+    };
     let mut content = Cutting::content(name, pieces.kind(), rows, (out, pack))?;
     fed(pieces, &mut content, pool, none)?;
     record.insert("kind".into(), "jagged".into());
@@ -871,7 +893,11 @@ pub(super) fn copied<'e>(name: &str, reader: &'e Reader, from: &str, rows: &[Row
     let (offsets, content) = (&held["offsets"], &held["content"]);
     // The offsets first, a few chunks ahead on the pool: they give each content chunk's values.
     let chunks = reader.array_chunks(offsets, "i8", &format!("{place}.offsets")).map_err(|e| refused(e, &unlike))?;
-    let id = copying.out.array();
+    // Offsets an earlier list column wrote or the file holds are that array, shared: read here
+    // only for each content chunk's values.
+    let sha256 = offsets["sha256"].as_str().unwrap_or_default().to_owned();
+    let shared = copying.out.shared.get(&sha256).filter(|_| !rows.is_empty()).cloned();
+    let id = shared.is_none().then(|| copying.out.array());
     let (mut members, mut coming) = (Vec::with_capacity(rows.len()), VecDeque::new());
     for k in 0..rows.len() {
         while coming.len() < pool.workers() && k + coming.len() < rows.len() {
@@ -882,10 +908,19 @@ pub(super) fn copied<'e>(name: &str, reader: &'e Reader, from: &str, rows: &[Row
         let read = coming.pop_front().and_then(Pending::wait).ok_or_else(|| invalid("a bug in rowver: a thread reading a column stopped; please report it"))?;
         let (digest, frames, values) = read.map_err(|e| refused(e, &damaged))?;
         members.push(crate::chunks::offsets(&values, name).map_err(|_| invalid(&*unlike))?.1);
-        copying.out.hand(Coming::Chunk(id, values.len(), Pending::Done(Ok((digest, frames)))), pool.workers())?;
+        if let Some(id) = id {
+            copying.out.hand(Coming::Chunk(id, values.len(), Pending::Done(Ok((digest, frames)))), pool.workers())?;
+        }
     }
-    let mut placed = offsets.as_object().cloned().unwrap_or_default();
-    placed.extend(copying.out.ended(id, Some(samples), pool.workers())?);
+    let placed = match id {
+        None => shared.unwrap_or_default(),
+        Some(id) => {
+            let mut placed = offsets.as_object().cloned().unwrap_or_default();
+            placed.extend(copying.out.ended(id, Some(samples), pool.workers())?);
+            copying.out.shared.insert(sha256, placed.clone());
+            placed
+        }
+    };
     record.insert("offsets".into(), Value::Object(placed));
     let total = members.iter().try_fold(0_u64, |sum, m| sum.checked_add(*m as u64));
     if total.is_none() || total != content["count"].as_u64() {
