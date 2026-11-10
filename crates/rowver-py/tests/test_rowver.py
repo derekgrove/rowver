@@ -613,6 +613,38 @@ def decoded(column):
     return np.array(column["values"], dtype="?" if kind == "b1" else kind)
 
 
+class Trusting(unittest.TestCase):
+    def test_a_read_leaves_a_chunks_sha256_to_validate_and_refuses_a_frame_that_changed(self):
+        """FORMAT 12: a chunk whose lanes changed places still has whole frames, so a read hands
+        its values on and validate refuses it; a frame whose bytes changed is refused by a read."""
+        with tempfile.TemporaryDirectory(prefix="rowver-py-") as folder:
+            whole = (CORPUS / "valid" / "fixture.rvr").read_bytes()
+            with rowver.open(CORPUS / "valid" / "fixture.rvr") as f:
+                record = next(c for c in f.header["data"]["cols"] if c["name"] == "nlep")
+                before = f["nlep"].tolist()
+            # The array from byte 8 + at: chunk 0's four lane frames, the other chunk's, then a
+            # table of four lane sizes and a SHA-256 per chunk.
+            start, end = 8 + record["at"], 8 + record["at"] + record["size"]
+            table = end - 2 * (4 * 8 + 32)
+            first, second = (int.from_bytes(whole[table + 8 * lane:table + 8 * lane + 8], "little") for lane in (0, 1))
+            lanes = whole[start:start + first], whole[start + first:start + first + second]
+            self.assertNotEqual(*lanes)
+            swapped = bytearray(whole)
+            swapped[start:start + first + second] = lanes[1] + lanes[0]
+            swapped[table:table + 16] = whole[table + 8:table + 16] + whole[table:table + 8]
+            path = pathlib.Path(folder) / "swapped.rvr"
+            path.write_bytes(swapped)
+            with rowver.open(path) as f:
+                self.assertNotEqual(f["nlep"].tolist(), before)
+            with self.assertRaisesRegex(rowver.Error, "SHA-256 its chunk table states"):
+                rowver.validate(path)
+            damaged = bytearray(whole)
+            damaged[start + first - 1] ^= 1
+            path.write_bytes(damaged)
+            with rowver.open(path) as f, self.assertRaisesRegex(rowver.Error, "content checksum"):
+                f["nlep"]
+
+
 class Conformance(unittest.TestCase):
     """The conformance corpus (tests/conformance/rvr), read through the Python package."""
 

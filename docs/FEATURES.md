@@ -171,7 +171,9 @@ file's 13 list columns hold 3 offsets arrays, 12.5 MB where 13 would be 55.4 MB,
 
 - Every chunk carries, in its array's chunk table, the SHA-256 of its uncompressed values; every
   array carries the SHA-256 of its chunks' SHA-256s, so it is checked from the table with nothing
-  decompressed.
+  decompressed. Every frame also carries Zstandard's own 32-bit content checksum: reading a
+  column, the Python package checks its chunk table and each frame's checksum and leaves the
+  chunks' SHA-256s to `rowver.validate`; `rvr validate` and every command that writes check them.
 - `data.sha256` hashes the concatenated array checksums in the order of their records, wherever the
   arrays lie. It fingerprints all the data without decompressing anything.
 - Every per-row array also carries `by_sample`: one SHA-256 per sample, of that sample's chunks'
@@ -222,8 +224,8 @@ study's texts:
 - that the sample columns and the metadata agree, in both directions;
 - `data.sha256`, and the signature.
 
-Every reader refuses a file that fails any of these checks. Each column is also checked against
-its checksum when it is first read.
+Every reader refuses a file that fails any of these checks. Each column's chunk table is also checked
+against its checksum when it is first read, and each chunk as §4.1 says.
 
 `rvr validate` goes further. It decompresses every array and checks its length and checksum, and
 every `by_sample`. It checks that the rows add up and belong to the recorded files, that every

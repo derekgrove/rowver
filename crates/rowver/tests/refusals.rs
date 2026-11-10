@@ -1227,6 +1227,21 @@ fn shared_parts() -> (Value, Vec<Vec<u8>>) {
     common::gen::file(&table, values)
 }
 
+// FORMAT 12
+#[test]
+fn a_trusting_reader_leaves_a_chunks_sha256_to_full_validation_and_no_frames_checksum() {
+    // Lanes in another order: every frame is whole, and the values are not the chunk's SHA-256's.
+    let path = written(&bytes_of(rebuilt(10.), Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0.swap(2, 3)))), "trusting");
+    let said = |read: rowver::Result<Option<rowver::rvr::Held>>| read.map(drop).map_err(|e| e.to_string());
+    assert!(said(Reader::open(&path).unwrap().column("MET")).unwrap_err().contains("are not the SHA-256"));
+    assert_eq!(said(Reader::open(&path).unwrap().trusting().column("MET")), Ok(()));
+    assert_eq!(said(Reader::open(&path).unwrap().trusting().stored_columns(&["MET".into()]).map(|mut c| c.pop().flatten())), Ok(()));
+    assert!(validate_file(&path).unwrap_err().to_string().contains("are not the SHA-256"));
+    // A frame whose bytes changed is refused by its own checksum.
+    let path = written(&bytes_of(rebuilt(10.), Arrays(|h, a| edit(h, a, 3, 4, |c| *c[0].0[0].last_mut().unwrap() ^= 1))), "trusting-frame");
+    assert!(said(Reader::open(&path).unwrap().trusting().column("MET")).unwrap_err().contains("content checksum"));
+}
+
 /// Where the column `name` is among a header's columns.
 fn first_list(header: &Value, name: &str) -> usize {
     header["data"]["cols"].as_array().unwrap().iter().position(|c| c["name"] == name).unwrap()

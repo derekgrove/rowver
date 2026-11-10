@@ -43,7 +43,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   `samples.toml` (`study::lock::agree`).
 
 Arrays are cut in chunks of rows, each chunk's byte lanes compressed with Zstandard and
-checked against its chunk table's SHA-256; a column's chunks decode in parallel, and
+checked against its chunk table's SHA-256 (a `Reader::trusting` leaves that to `validate_file`,
+and relies on each frame's own checksum); a column's chunks decode in parallel, and
 `Reader::slice` reads any rows of a column alone. The format is specified in
 [docs/FORMAT.md](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md).
 

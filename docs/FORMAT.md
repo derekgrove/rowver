@@ -1028,8 +1028,11 @@ study's texts:
 
 **When it reads a column**, or rows of it, it checks the array's chunk table (its size, the lane
 sizes adding up to the frames' bytes, the array's `sha256` and its `by_sample` from the table's
-chunk SHA-256s) and each chunk it decodes: its lanes' frames (§7), their lengths, the chunk's
-SHA-256.
+chunk SHA-256s) and each chunk it decodes: its lanes' frames (§7), their content checksums, their
+lengths, and the chunk's SHA-256. A reader that only hands values on (the Python package;
+`Reader::trusting` in Rust) may leave the chunk's SHA-256 to full validation: every frame's content
+checksum still refuses bytes that changed. A reader that writes an `.rvr` file from what it read (a press that
+builds on a file, `rvr refill`) checks it.
 
 **Full validation** (`rvr validate`, `rowver::rvr::validate_file`, and `rowver.validate` in Python,
 all the same checks) does all of the above and:

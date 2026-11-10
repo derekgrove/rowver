@@ -65,7 +65,7 @@ impl File {
     #[new]
     fn new(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
         match py.detach(|| Reader::open(&path)) {
-            Ok(reader) => Ok(File { reader }),
+            Ok(reader) => Ok(File { reader: reader.trusting() }),
             Err(rowver::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(pyo3::exceptions::PyFileNotFoundError::new_err(rowver::plain_io(&path, &e))),
             Err(e) => Err(failed(rowver::plain(&path, &e))),
         }

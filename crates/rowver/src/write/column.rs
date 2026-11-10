@@ -214,6 +214,23 @@ impl Out {
         }
     }
 
+    /// The end of the offsets array `id`, as `ended` hands it over; or, when an array written
+    /// holds the same offsets, that one's record, and this one's bytes given back to the next array.
+    fn ended_or_shared(&mut self, id: usize, samples: Option<usize>, workers: usize) -> Result<Map<String, Value>> {
+        self.settle()?;
+        let sha256 = chunks::joined(&self.arrays[id].hashes);
+        if let Some(shared) = self.shared.get(&sha256).cloned() {
+            if let Some(start) = std::mem::take(&mut self.arrays[id]).start {
+                self.file.flush()?;
+                (self.file.get_mut().at, self.at) = (8 + start, start);
+            }
+            return Ok(shared);
+        }
+        let record = self.ended(id, samples, workers)?;
+        self.shared.insert(sha256, record.clone());
+        Ok(record)
+    }
+
     /// A new array: its id, for the chunks handed over for it.
     fn array(&mut self) -> usize {
         self.arrays.push(Array::default());
@@ -358,6 +375,8 @@ struct Chunked<'o> {
     w: usize,
     out: Option<(&'o mut Out, Packer<'o>, usize)>,
     hashes: Vec<[u8; 32]>,
+    /// A list column's offsets, written: shared when an array written is equal (docs/FORMAT.md §7).
+    share: bool,
 }
 
 impl<'o> Chunked<'o> {
@@ -366,7 +385,7 @@ impl<'o> Chunked<'o> {
             let id = out.array();
             (out, packer, id)
         });
-        Ok(Self { w: width(kind)?, out, hashes: Vec::new() })
+        Ok(Self { w: width(kind)?, out, hashes: Vec::new(), share: false })
     }
 
     /// The next chunk's values, little-endian, and its byte lanes when they are at hand.
@@ -391,7 +410,10 @@ impl<'o> Chunked<'o> {
     /// checksums kept for `Out::placed` to give once it is written.
     fn finish(self, rows: &[Rows], samples: Option<usize>) -> Result<Map<String, Value>> {
         if let Some((out, packer, id)) = self.out {
-            return out.ended(id, samples, packer.workers);
+            return match self.share {
+                true => out.ended_or_shared(id, samples, packer.workers),
+                false => out.ended(id, samples, packer.workers),
+            };
         }
         let mut record = Map::new();
         let (sha256, by_sample) = chunks::sums(rows, &self.hashes, samples.unwrap_or(0));
@@ -440,7 +462,7 @@ impl<'o> Cutting<'o> {
 
     /// A list column `name` of values of `kind` over the chunks `rows`, its offsets written to `out`.
     fn offsets(name: &str, kind: &str, rows: &[Rows], out: (&'o mut Out, Packer<'o>)) -> Result<Self> {
-        Self::made(name, kind, rows, Cut::Offsets(Chunked::new("i8", Some(out))?))
+        Self::made(name, kind, rows, Cut::Offsets(Chunked { share: !rows.is_empty(), ..Chunked::new("i8", Some(out))? }))
     }
 
     /// A list column `name` of values of `kind` over the chunks `rows`, its content written to `out`.
@@ -811,21 +833,10 @@ pub(super) fn column<'e>(name: &str, pieces: &'e dyn Pieces, rows: &[Rows], samp
         record.append(&mut cutting.finish(samples)?);
         return Ok(record);
     }
-    // Its offsets measured first, from its counts: those of an earlier list column are that one's
-    // array, shared, and written once (docs/FORMAT.md §7).
-    let mut measured = Cutting::made(name, pieces.kind(), rows, Cut::Offsets(Chunked::new("i8", None)?))?;
-    fed(pieces, &mut measured, pool, none)?;
-    let sha256 = measured.finish(samples)?.get("sha256").and_then(Value::as_str).unwrap_or_default().to_owned();
-    let offsets = match out.shared.get(&sha256).filter(|_| !rows.is_empty()) {
-        Some(shared) => shared.clone(),
-        None => {
-            let mut offsets = Cutting::offsets(name, pieces.kind(), rows, (&mut *out, pack))?;
-            fed(pieces, &mut offsets, pool, none)?;
-            let offsets = offsets.finish(samples)?;
-            out.shared.insert(sha256, offsets.clone());
-            offsets
-        }
-    };
+    // Its offsets: those of an earlier list column are that one's array, shared (docs/FORMAT.md §7).
+    let mut offsets = Cutting::offsets(name, pieces.kind(), rows, (&mut *out, pack))?;
+    fed(pieces, &mut offsets, pool, none)?;
+    let offsets = offsets.finish(samples)?;
     let mut content = Cutting::content(name, pieces.kind(), rows, (out, pack))?;
     fed(pieces, &mut content, pool, none)?;
     record.insert("kind".into(), "jagged".into());

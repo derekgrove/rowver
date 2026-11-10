@@ -48,7 +48,8 @@ NumPy is required; Awkward, pyarrow and pandas are used when installed
 (`pip install "rowver[all]"`). A file whose header does not check out raises `rowver.Error`, a
 path that is not there `FileNotFoundError`; a file changed while it is read raises `rowver.Error`
 saying so. `rowver.validate(path)` checks every array and works out every derived column, as
-`rvr validate` does, and gives `(rows, columns)`. An open `File` holds one open file, through
+`rvr validate` does, and gives `(rows, columns)`. Reading a column checks its chunk table and
+every compressed frame's own checksum, and leaves each chunk's SHA-256 to `rowver.validate`. An open `File` holds one open file, through
 which it reads, so a file renamed over it meanwhile is read as it was; dropping the `File`
 (`f.close()`, or `del f`) lets it go (a system allows a few hundred open files: 256 in a macOS shell). These, `rowver.open` and `rowver.File` are the
 whole package; every other name in it begins with `_`.

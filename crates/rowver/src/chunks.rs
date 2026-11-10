@@ -57,7 +57,7 @@ pub(crate) fn entry(w: usize) -> usize {
 }
 
 /// The SHA-256 of these SHA-256s' hex texts joined: an array's `sha256`, or one sample's `by_sample`.
-fn joined<'a>(sums: impl IntoIterator<Item = &'a [u8; 32]>) -> String {
+pub(crate) fn joined<'a>(sums: impl IntoIterator<Item = &'a [u8; 32]>) -> String {
     let mut hash = Sha256::new();
     for sum in sums {
         hash.update(hex(sum).as_bytes());
@@ -163,8 +163,8 @@ pub(crate) fn agree(record: &Value, table: &Table, chunks: &[Rows], samples: usi
 }
 
 /// Chunk `k`'s `n` values from its frames: each lane decoded to `n` bytes as §7 says, the lanes
-/// put back together, and the values checked against the chunk's SHA-256.
-pub(crate) fn decode(frames: &[u8], table: &Table, k: usize, n: usize, place: &str) -> Result<Vec<u8>> {
+/// put back together, and with `check` the values checked against the chunk's SHA-256.
+pub(crate) fn decode(frames: &[u8], table: &Table, k: usize, n: usize, place: &str, check: bool) -> Result<Vec<u8>> {
     let w = table.w;
     let mut lanes = Vec::with_capacity(w);
     let mut at = 0_usize;
@@ -178,7 +178,7 @@ pub(crate) fn decode(frames: &[u8], table: &Table, k: usize, n: usize, place: &s
         1 => lanes.pop().unwrap_or_default(),
         _ => crate::codec::merge(&lanes, w, n),
     };
-    if Sha256::digest(&values)[..] != table.sums[k] {
+    if check && Sha256::digest(&values)[..] != table.sums[k] {
         return Err(invalid(format!("{place}: a chunk's values are not the SHA-256 its chunk table states (docs/FORMAT.md §8): the file is damaged; copy it again, or press its study again")));
     }
     Ok(values)

@@ -2,7 +2,8 @@
 //!
 //! Documentation: `docs/FORMAT.md` ("Arrays", "Checksums").
 //! Every fact of the header is checked when the file is opened (`checked_header`), and each
-//! array against its `sha256` when it is read. Per-sample array checksums, column facts and
+//! array against its `sha256` when it is read (a `trusting` reader leaves the chunks' SHA-256s
+//! to `validate_file`). Per-sample array checksums, column facts and
 //! the event choice need every array; `validate_file` checks those.
 
 use super::{count, text};
@@ -31,6 +32,8 @@ pub struct Reader {
     places: HashMap<usize, usize>,
     /// The chunk tables a read of some chunks of an array checked, kept for the next, by place.
     tables: Mutex<HashMap<usize, Arc<Table>>>,
+    /// Whether each chunk read is checked against its SHA-256: not by a `trusting` reader.
+    sums: bool,
     /// The derived columns checked against their records.
     checked: Mutex<HashSet<String>>,
     /// The tail it was read from, when it was read under a file's lock (`Locked::inspect`).
@@ -153,7 +156,7 @@ impl ArrayChunks<'_> {
             let (from, to) = self.table.span(k);
             let mut frames = vec![0; (to - from) as usize];
             Span { at: self.span.at + from, end: self.span.at + to, ..self.span.clone() }.read_exact(&mut frames)?;
-            let values = crate::chunks::decode(&frames, &self.table, k, n, &self.label)?;
+            let values = crate::chunks::decode(&frames, &self.table, k, n, &self.label, true)?;
             Ok((self.table.sum(k), crate::chunks::Frames::Together(frames, self.table.sizes(k).to_vec()), values))
         };
         read().map_err(|e| if self.part.changed() { changed(self.path) } else { e })
@@ -286,10 +289,16 @@ impl Reader {
     /// A reader of `header`'s arrays in `parts`.
     fn made(path: PathBuf, header: Value, parts: Vec<Part>) -> Self {
         let empty = parts.iter().all(|part| part.length == 0) && super::arrays::end(&header["data"]).is_none_or(|end| end > 0);
-        let mut reader = Self { path, header, parts, empty, chunks: Default::default(), places: HashMap::new(), tables: Default::default(), checked: Default::default(), seen: None };
+        let mut reader = Self { path, header, parts, empty, chunks: Default::default(), places: HashMap::new(), tables: Default::default(), sums: true, checked: Default::default(), seen: None };
         // The records lie in the header's own allocations, which stay where they are as it moves.
         reader.places = super::arrays::records(&reader.header["data"]).iter().enumerate().map(|(at, (record, _, _))| (*record as *const Value as usize, at)).collect();
         reader
+    }
+
+    /// This reader, its reads leaving each chunk's SHA-256 to `validate_file` (docs/FORMAT.md §12).
+    pub fn trusting(mut self) -> Self {
+        self.sums = false;
+        self
     }
 
     /// Whether the file is empty: its header alone, its arrays let go by `write::empty` (a file of
@@ -454,7 +463,7 @@ impl Reader {
     }
 
     /// Each chunk of one array of `kind` (only those `wanted`, when given), in order, `n(k)` values
-    /// in chunk `k`: decoded in one pool of threads a few ahead of `each`, checked, and handed to
+    /// in chunk `k`: decoded in one pool of threads a few ahead of `each`, checked (its SHA-256 unless `trusting`), and handed to
     /// it, its table checked first (and kept for the next read of some of its chunks); a file
     /// changed in place since it was opened is said to be.
     pub(crate) fn each_chunk(&self, record: &Value, kind: &str, label: &str, n: &dyn Fn(usize) -> usize, wanted: Option<std::ops::Range<usize>>, each: &mut dyn FnMut(usize, Vec<u8>) -> Result<()>) -> Result<()> {
@@ -469,7 +478,7 @@ impl Reader {
                 let (from, to) = table.span(k);
                 let mut frames = vec![0; (to - from) as usize];
                 Span { at: span.at + from, end: span.at + to, ..span.clone() }.read_exact(&mut frames)?;
-                let decoded = crate::chunks::decode(&frames, &table, k, counts[at], label)?;
+                let decoded = crate::chunks::decode(&frames, &table, k, counts[at], label, self.sums)?;
                 Ok((k, decoded))
             }, |(k, values)| each(k, values))
         };
@@ -477,7 +486,7 @@ impl Reader {
     }
 
     /// Every chunk of every one of `arrays`, decoded in one pool of threads a few ahead of `each`,
-    /// which is handed them in order, each checked; each array's table read with its first chunk
+    /// which is handed them in order, each checked (its SHA-256 unless `trusting`); each array's table read with its first chunk
     /// and let go after its last.
     pub(crate) fn each_chunks(&self, arrays: &[Whole], each: &mut Chunked) -> Result<()> {
         let chunks = self.chunks()?.len();
@@ -502,7 +511,7 @@ impl Reader {
                 let mut frames = vec![0; (to - from) as usize];
                 Span { at: span.at + from, end: span.at + to, ..span.clone() }.read_exact(&mut frames)?;
                 let count = |k: usize| n.get(k).copied().unwrap_or(0);
-                let decoded = crate::chunks::decode(&frames, &table, k, count(k), label)?;
+                let decoded = crate::chunks::decode(&frames, &table, k, count(k), label, self.sums)?;
                 Ok((a, k, decoded, (k == 0).then(|| crate::chunks::decoded(&table, &count))))
             };
             read().map_err(|e| if part.changed() { changed(&self.path) } else { e })

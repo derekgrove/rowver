@@ -282,7 +282,8 @@ class File:
 
     def slice(self, name, start, stop):
         """Rows `start` to `stop` (not included) of a column, as `f[name]` gives it: only the chunks
-        of the file that hold them read, each checked against its chunk table; a derived column is
+        of the file that hold them read, each frame checked by its own checksum (a chunk's SHA-256
+        is left to `rowver.validate`); a derived column is
         checked against its record first, once for the open file, over every row."""
         if not isinstance(name, str):
             raise TypeError(f"{name!r} is not a column's name: name each column by its text")

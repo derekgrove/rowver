@@ -1316,7 +1316,8 @@ dictionary in `to_arrow()`) and `entry` first;
 
 **11.8** `f.slice(name, start, stop)` reads rows `start` to `stop` (not included) of a column, as
 `f[name]` gives it (`sample` and `entry` too), decoding only the chunks of the file that hold them,
-each checked against its chunk table (FORMAT.md §7, §12); a derived column is checked against its
+each frame checked by its content checksum (FORMAT.md §7, §12: the Python package leaves a chunk's
+SHA-256 to `rowver.validate`, here and in `f[name]`); a derived column is checked against its
 record first, as `f[name]` checks it, once for the open file (its record is of every row, so that
 first slice works it out over every row, holding none): rows past the file, or `start` after `stop`,
 raise `rowver.Error`, an unknown name `KeyError`.
