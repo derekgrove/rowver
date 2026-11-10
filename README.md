@@ -33,8 +33,8 @@ and last bytes of `tiny.rvr`, the running example of
 [the format](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md):
 
 ```text
-00000000: 8952 5652 0d0a 1a0a 28b5 2ffd 0438 2300  .RVR....(./..8#.
-0000238c: 3722 7d7d de1b 0000 8952 5652 0d0a 1a0a  7"}}.....RVR....
+00000000: 8952 5652 0d0a 1a0a 28b5 2ffd 2404 2100  .RVR....(./.$.!.
+000023ea: 6122 7d7d de1b 0000 8952 5652 0d0a 1a0a  a"}}.....RVR....
 ```
 
 The header is plain JSON (`rvr header FILE` prints it). Here is the header of `higgs_tautau.rvr`,

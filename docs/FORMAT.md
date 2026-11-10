@@ -5,7 +5,7 @@ and writes all of it and is the reference builder; `rvr press` writes pressed fi
 [The features](FEATURES.md) describe what the tools around the format do.
 
 **The running example.** Every example below is from one real file, `tiny.rvr`, unless it says
-otherwise. It is 9,116 bytes, pressed from two copies of a five-entry test ntuple
+otherwise. It is 9,210 bytes, pressed from two copies of a five-entry test ntuple
 (`crates/rvr/tests/fixtures/uproot_flat.root`, tree `analysis`; one sample each, `signal` and
 `background`) with this recipe, and signed with a throwaway key:
 
@@ -44,24 +44,24 @@ Checksums are cut to their first 8 hex digits here; a file holds all 64.
 ```
 
 `S` is the file's size in bytes and `L` the header's length. The first and last 16 bytes of
-`tiny.rvr` (S = 9,116):
+`tiny.rvr` (S = 9,210):
 
 ```
-00000000: 8952 5652 0d0a 1a0a 28b5 2ffd 0438 2300  .RVR....(./..8#.
+00000000: 8952 5652 0d0a 1a0a 28b5 2ffd 2404 2100  .RVR....(./.$.!.
           └──────magic──────┘ └arrays…
-0000238c: 3722 7d7d de1b 0000 8952 5652 0d0a 1a0a  7"}}.....RVR....
+000023ea: 6122 7d7d de1b 0000 8952 5652 0d0a 1a0a  a"}}.....RVR....
           …header┘ └length─┘ └──────magic──────┘
 ```
 
 - **The magic** is `89 52 56 52 0D 0A 1A 0A` (`\x89RVR\r\n\x1a\n`): a high byte, the letters
   `RVR`, then CR LF, Ctrl-Z and LF. A transfer that strips the eighth bit or rewrites line endings
   therefore breaks the file visibly. It opens the file and ends it.
-- **The arrays** start at byte 8 and fill the space up to the header exactly: 1,962 bytes here,
-  bytes 8 to 1,969. Each is cut in chunks of rows that line up across every array, each chunk
+- **The arrays** start at byte 8 and fill the space up to the header exactly: 2,056 bytes here,
+  bytes 8 to 2,063. Each is cut in chunks of rows that line up across every array, each chunk
   compressed on its own (§7), so a reader decompresses only the arrays, and only the rows, it needs,
   in parallel.
 - **The header length** is the four bytes before the last 8: `DE 1B 00 00`, that is 0x1BDE = 7,134
-  bytes. The header is the `L` bytes before them, from byte S − 12 − L: here bytes 1,970 to 9,103.
+  bytes. The header is the `L` bytes before them, from byte S − 12 − L: here bytes 2,064 to 9,197.
   (A header's length is its writer's: this one holds what built it, `made.toolchain`, whose
   commit and compiler another build writes otherwise.)
 
@@ -160,8 +160,8 @@ rows because their files are copies of one ntuple.
             {"name": "background", "label": "Background", "rows": 4}],
 "files":   [{"sample": "signal", "path": "./signal.root", "rows": 4},
             {"sample": "background", "path": "./background.root", "rows": 4}],
-"sample":  {"at": 0,   "size": 240, "sha256": "0b8e189d"},
-"entry":   {"at": 240, "size": 430, "sha256": "d618105e", "by_sample": ["904543e2", "904543e2"]},
+"sample":  {"at": 0,   "size": 264, "sha256": "0b8e189d"},
+"entry":   {"at": 264, "size": 464, "sha256": "d618105e", "by_sample": ["904543e2", "904543e2"]},
 ```
 
 | field | holds |
@@ -221,7 +221,7 @@ the name of a derived column.
 facts:
 
 ```json
-{"name": "nJet", "kind": "i4", "at": 670, "size": 254, "sha256": "d9237950",
+{"name": "nJet", "kind": "i4", "at": 728, "size": 264, "sha256": "d9237950",
  "by_sample": ["84697797", "84697797"], "lim": [1, 4], "nice": [1, 4], "vals": [1, 3, 4]}
 ```
 
@@ -229,8 +229,8 @@ facts:
 
 ```json
 {"name": "Jet_pt", "kind": "jagged",
- "offsets": {"at": 924, "size": 432, "sha256": "af72e3c9", "by_sample": ["439e0157", "439e0157"]},
- "content": {"kind": "f4", "count": 22, "at": 1356, "size": 324, "sha256": "69fa98c7",
+ "offsets": {"at": 992, "size": 480, "sha256": "af72e3c9", "by_sample": ["439e0157", "439e0157"]},
+ "content": {"kind": "f4", "count": 22, "at": 1472, "size": 320, "sha256": "69fa98c7",
              "by_sample": ["bcda9316", "bcda9316"]}}
 ```
 
@@ -796,16 +796,16 @@ theirs, and a new list column of lists the file holds records their offsets arra
 
 | array | `at` | `size` |
 |---|---|---|
-| `sample` | 0 | 240 |
-| `entry` | 240 | 430 |
-| `nJet` | 670 | 254 |
-| `Jet_pt` offsets | 924 | 432 |
-| `Jet_pt` content | 1356 | 324 |
-| `ht` | 1680 | 282 |
-| | 1962 | the end of the arrays: the header's first byte is byte 8 + 1,962 = 1,970 |
+| `sample` | 0 | 264 |
+| `entry` | 264 | 464 |
+| `nJet` | 728 | 264 |
+| `Jet_pt` offsets | 992 | 480 |
+| `Jet_pt` content | 1472 | 320 |
+| `ht` | 1792 | 264 |
+| | 2056 | the end of the arrays: the header's first byte is byte 8 + 2,056 = 2,064 |
 
-Each array of `tiny.rvr` is two chunks, one a sample: `nJet`'s 254 bytes are each chunk's four lane
-frames, of 21, 14, 14 and 14 bytes, then its table of two entries of 64 bytes (each lane's size as
+Each array of `tiny.rvr` is two chunks, one a sample: `nJet`'s 264 bytes are each chunk's four lane
+frames, of 17 bytes each, then its table of two entries of 64 bytes (each lane's size as
 a `u8`, then the chunk's SHA-256, `af095d9c…` for both chunks).
 
 The `sample` array of `tiny.rvr`'s first chunk, step by step:
@@ -814,7 +814,7 @@ The `sample` array of `tiny.rvr`'s first chunk, step by step:
 values      0  0  0  0                                                i4[4], rows 0-3
 bytes       00000000 00000000 00000000 00000000
 lanes       lane 0: 00 00 00 00   lanes 1, 2, 3: 00 00 00 00 each
-stored      four zstd frames of 14 bytes, one a lane, then (after the second chunk's) the table
+stored      four zstd frames of 17 bytes, one a lane, then (after the second chunk's) the table
 ```
 
 **Choosing R.** `chunk_rows` is set by the recipe (its optional `chunk_rows` key, the recipe

@@ -243,7 +243,7 @@ reproduced file holds the same data.
 
 The same study gives back a file's space without losing the file. `rvr empty FILE` keeps the header
 byte for byte, with the study, every checksum and the signature, and lets the arrays go: on the
-2.1 M-row bench, a 51.2 MB file keeps a 122.6 kB header (0.24%). It first checks that every input the
+2.1 M-row bench, a 36.8 MB file keeps a 122.5 kB header (0.33%). It first checks that every input the
 lock names is as the lock recorded it, since only the inputs hold the events, refuses a file with
 holes, and asks before it empties (`--force`, or `-f`, does not ask;
 [SPEC §8](SPEC.md#8-building-on-a-file)). `rvr refill FILE`
@@ -432,7 +432,7 @@ array is then packed from the spool a chunk at a time, the chunks compressed on 
 written straight into the file, one array after another: no array is copied once packed. Memory therefore does not grow with the
 number of kept events: pressing 12 million rows of 31 columns from 1,698 files (4 workers) peaks at
 0.14 GB, and 3 million rows from 425 files at 0.10 GB. The cost is free disk space for the spool: on
-the 2.1 M-row bench it peaked at 470 MB beside a 51.2 MB file, as the bench's 300 copies of one file
+the 2.1 M-row bench it peaked at 423 MB beside a 36.8 MB file, as the bench's 300 copies of one file
 compress far better whole than a piece at a time.
 Nothing is put in place until every file has been read or recorded as a hole, so the output
 appears whole or not at all.
@@ -597,12 +597,12 @@ otherwise the press copies every stored column from the earlier file and works t
 columns out from it.
 
 The trade is space for time, the analyst's to choose column by column. On the 2.1 M-row bench (300
-copies of the TChiWZ skim, Apple M5, 2026-11-04), seven typical computed columns take 70 bytes per
+copies of the TChiWZ skim, Apple M5, 2026-11-10), seven typical computed columns take 70 bytes per
 row stored (uncompressed; the bench's copies compress far better than real data would), 35% more
 than the ten columns they are computed from. Kept as derived columns they cost nothing in the
-file, 0.4 s more at press time to measure them (4.2 s against 3.8 s); a whole Python run that
-works all seven out takes 1.1 s, where one that reads them stored takes 0.08 s and one that only
-opens the file 0.05 s, and a simple one such as `sum(PT_jet)` takes 0.11 s.
+file, 0.03 s more at press time to measure them (2.35 s against 2.32 s); a whole Python run that
+works all seven out takes 0.22 s, where one that reads them stored takes 0.07 s and one that only
+opens the file 0.05 s, and a simple one such as `sum(PT_jet)` takes 0.06 s.
 
 ## 10. Reading files from programs
 
@@ -668,7 +668,7 @@ events with exactly two leptons and MET above 150 GeV, and stores 7 branches (`M
 | `--fill` of one file's hole in the 30-file study | 0.09 s, against 0.18 s for a full press |
 | journal and checkpoints | at most 1% (2.1 M-row bench: 3.55 s with, 3.52 s without; 90 files on one worker: 2.06 s with and without) |
 | progress display | within the run-to-run spread (0.199 s with, 0.195 s without; 90 files on one worker: 2.064 s with, 2.068 s without) |
-| seven computed columns on the 2.1 M-row bench: stored, or kept as derived columns | stored: 70 bytes per row (uncompressed), a Python run that reads them 0.08 s; derived: no bytes, 0.4 s more to press, a Python run that works them out 1.1 s |
+| seven computed columns on the 2.1 M-row bench: stored, or kept as derived columns | stored: 70 bytes per row (uncompressed), a Python run that reads them 0.07 s; derived: no bytes, 0.03 s more to press, a Python run that works them out 0.22 s |
 | 12 M rows of 31 columns from 1,698 files, 4 workers | 0.14 GB peak memory (0.10 GB for 3 M rows from 425 files) |
 | resolving the 9 files of the 8-sample CMS Open Data H → ττ study over HTTPS (median of five) | 2.9 s |
 
