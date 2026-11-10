@@ -36,7 +36,7 @@ z_window = (mass > 80) & (mass < 100)
 print(z_window.sum(), "events between 80 and 100 GeV")
 pt_over_m = f["pt"][z_window] / mass[z_window]
 
-# The arrays are read-only, shared with what f holds: copy one to change it.
+# The arrays are read-only, as f[name] is the same array while anything holds it: copy one to change it.
 clipped = mass.copy()
 clipped[clipped > 150] = 150
 
@@ -72,8 +72,8 @@ values = f.sample_columns  # each sample's metadata and counts, in the order of 
 print(values["xsec"])  # [None, 3503.7, 225.2]: the data have none
 print(values["events_read"], values["events_total"])
 
-# A per-sample value for every event: index it with the sample of each (None becomes nan).
-xsec = np.array(values["xsec"], dtype=float)[sample]
+# A per-sample value for every event is read by its name, as a column is (nan where a sample has none):
+xsec = f["xsec"]
 
 # The recipe's derived weight scales each simulated sample to the data's luminosity: data 1,
 # simulation xsec * lumi / the sum of the weights it read.
@@ -99,12 +99,12 @@ frame.to_csv("zmumu.csv", index=False)
 f.to_parquet("zmumu.parquet")  # every column, the list ones as Arrow lists
 
 # %% A large file
-# Each column is read when first asked for, and held until f.forget lets it go:
-f.forget("mass")
-# f.slice reads only part of a column, decoding only the chunks that hold those rows:
-rows = f.rows_of("TT")
-tt_mass = f.slice("mass", rows.start, rows.stop)
-# Closing lets go of the file and what f holds; arrays already read stay as they are.
+# Each column is read when asked for, and f keeps none in memory itself: what is held is what
+# your own variables hold. f.slice reads only part of a column, decoding only the chunks that
+# hold those rows, and sample= one sample's rows of several columns:
+tt_mass = f.slice("mass", f.rows_of("TT"))
+tt = f.arrays(["mass", "xsec"], sample="TT")  # xsec, a sample column, as a value per row
+# Closing lets go of the file; arrays already read stay as they are.
 f.close()
 with rowver.open(path) as f:
     pt = f["pt"]

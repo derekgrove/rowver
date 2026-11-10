@@ -45,10 +45,11 @@ f.labels                     # each sample's label, for a legend
 f.sample_columns["xsec"]     # one value per sample, in the order of f.samples
 ```
 
-- The arrays are read-only, as `f` holds them for the next time they are asked for: `.copy()` one
-  to change it.
-- A column is read the first time it is asked for, and held until `f.forget(name)` or `f.close()`
-  (or the end of a `with rowver.open(…) as f:` block); arrays already read stay as they are.
+- The arrays are read-only, as a column asked for again is the same array while anything holds
+  it: `.copy()` one to change it.
+- A column is read when it is asked for, and `f` keeps none in memory itself: memory is what your
+  own variables hold. `f.read(names, sample="TT")` (and `f.arrays`, `f.to_pandas`) reads one
+  sample's rows alone.
 - `f["sample"]` is each event's sample, an index into `f.samples`; a sample's rows come together,
   in the order of `f.samples`, so `f.rows_of(name)` is one slice of every column.
 - A list column becomes one value per object with `ak.flatten`; its event's weight goes with each

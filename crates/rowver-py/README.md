@@ -14,12 +14,14 @@ f["Muon_pt"]              # Awkward array, a list per row
 f["sample"], f["entry"]   # each row's sample index, and its entry in its file's tree
 f["MET_pt"][f.rows_of("GluGluToHToTauTau")]  # one sample's rows: a slice, as a sample's rows come together
 len(f), "MET_pt" in f     # rows; whether it has a column of that name (sample and entry too)
-f.keys()                  # every name f[...] reads: sample, entry, the columns, then the derived ones
+f.keys()                  # every name f[...] reads: sample, entry, the columns, the derived ones, the sample columns
+f.show()                  # the same, a line each with its kind (f.kinds) and a derived column's expression
+f["xsec"]                 # a sample column (one value per sample), as its sample's value in every row
 f.path, f.header          # where it is; its JSON header, as a dict
 f.derived                 # the derived columns: kept as expressions, worked out when first asked for
 f["mean_jet_pt"]          # a derived column, read as any other, checked against what the file records
-f.forget("mean_jet_pt")   # let it go from memory (f.forget(), every one); f holds each until then
 f.slice("MET_pt", 100, 200)  # rows 100 to 199 alone: only the chunks of the file that hold them read
+f.slice("MET_pt", -100)      # the last 100; f.slice(name, slice(a, b, step)) reads as a list's slice
 f.labels                  # each sample's label, what a plot shows
 f.sample_columns          # per-sample values: events_read, events_total, metadata
 f.recipe                  # the recipe.toml that made it
@@ -32,6 +34,7 @@ f.holes                   # what it could not read: [{"sample", "file", "entries
 
 f.arrays()                # every column as one Awkward record array, sample and entry first
 f.arrays(["MET_pt"])      # sample, entry, then the columns named
+f.arrays(["MET_pt"], sample="GluGluToHToTauTau")  # one sample's rows alone, only its chunks read (to_* too)
 f.to_arrow()              # a pyarrow Table (list columns as Arrow lists), sample and entry first
 f.to_pandas()             # a pandas DataFrame, sample (a categorical) and entry first
 f.to_parquet("out.parquet")
@@ -43,7 +46,10 @@ with rowver.open("higgs_tautau.rvr") as f:  # f.close() at the end: what it read
 [The examples](https://gitlab.cern.ch/dgrove/rowver/-/tree/v15.0.0/docs/examples/python) work with
 the columns of a file, and plot them with matplotlib, hist and ROOT.
 
-Every column asked for at once (`f.read([...])`, `arrays`, `to_*`) is read in parallel. Only
+A column is the same array each time it is asked for while anything holds it; the `File` keeps none
+in memory itself, so memory is what your own variables hold. A `File` pickles as its path (for
+multiprocessing, dask and the like), and a name it has no column of raises `KeyError` naming the
+nearest it has. Every column asked for at once (`f.read([...])`, `arrays`, `to_*`) is read in parallel. Only
 NumPy is required; Awkward, pyarrow and pandas are used when installed
 (`pip install "rowver[all]"`). A file whose header does not check out raises `rowver.Error`, a
 path that is not there `FileNotFoundError`; a file changed while it is read raises `rowver.Error`

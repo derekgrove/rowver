@@ -570,8 +570,8 @@ holes exits 3, and a command whose output pipe closed early exits 141
 
 A column can be stored, an array in the file, or **derived**: kept as the expression that computes
 it from the file's own columns, `ht_over_met = "ht / MET_pt"` under the recipe's `[derived]`. A
-reader works a derived column out when it is first asked for; the Python package then holds it, as
-it holds every column read, until `f.forget(...)` or `f.close()` lets it go, or the file object goes. The file holds
+reader works a derived column out when it is asked for (the Python package hands out the same array
+while anything still holds it, and keeps none itself). The file holds
 no array of it, only its expression and what the press measured of its values when it worked it out,
 once: its kind, its checksums (whole and per sample) and its facts (`lim`, `nice`, `vals`). A reader
 that works one out checks it against that record, so a derived column is as trustworthy as a stored
@@ -613,11 +613,12 @@ as an Awkward array. Several columns asked for together are read in parallel. A 
 to an Awkward record array, a pyarrow table, a pandas data frame (with the sample as a categorical)
 or Parquet ([SPEC §11](SPEC.md#11-the-python-package)). The package also exposes what the header says: the samples and their labels, the sample
 columns, the recipe and study texts, the signer, and the holes with a `complete` flag. A derived
-column is read as any other, `f["name"]`, worked out when first asked for and held from then on;
-`f.derived` names them, and `f.forget(...)` lets columns go from memory (`f.close()`, or the end of
-a `with rowver.open(…) as f:` block, every one, and the file). `f.keys()` names
-every column `f[name]` reads, and `f["mass"][f.rows_of("DY")]` is one sample's rows, as a sample's
-rows come together. [The Python examples](examples/python/README.md) work with a file's columns and
+column is read as any other, `f["name"]`, worked out when asked for;
+`f.derived` names them (`f.close()`, or the end of
+a `with rowver.open(…) as f:` block, lets go of the file). `f.keys()` names
+every column `f[name]` reads and `f.show()` prints them with their kinds; a sample column
+(`f["xsec"]`) reads as its sample's value in every row; `f["mass"][f.rows_of("DY")]` is one sample's rows, as a sample's
+rows come together, and `sample="DY"` reads them alone; a `File` pickles as its path. [The Python examples](examples/python/README.md) work with a file's columns and
 plot them with matplotlib, hist and ROOT. Only NumPy is required;
 Awkward, pandas and pyarrow are used when installed.
 

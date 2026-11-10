@@ -1291,31 +1291,44 @@ value per sample), `recipe`, `study` (the three texts by file name), `signed_by`
 `complete`, `empty` and `tools` (each tool key's object, by its name); and `path`, `header` (the JSON
 header, as `json.loads` reads it, but for a whole number past the digits Python turns into an int, or
 a number past a float (one a float would make infinite, or 0 though it is not), which a tool key may hold: a `Decimal`), `len(f)` (its rows),
-`f.keys()` (the names `f[name]` reads: `sample` and `entry`, then `columns`, then `derived`), which
-`name in f` looks in (a `File` is not iterable: `iter(f)` raises `TypeError`), and `f.rows_of(sample)`, the rows of the sample of
+`f.keys()` (the names `f[name]` reads: `sample` and `entry`, then `columns`, then `derived`, then the
+sample columns no column shares a name with), which
+`name in f` looks in and Jupyter completes `f["` from (a `File` is not iterable: `iter(f)` raises `TypeError`), `f.kinds` (each of
+those names' kind, as `rvr dump` says it: `f4`, `jagged f4`, `text`), `f.show()` (which prints them, a
+name a line, with a derived column's expression), and `f.rows_of(sample)`, the rows of the sample of
 that name as a `slice` (a sample's rows come together, FORMAT.md §3; an unknown name raises `KeyError`).
+A `File` pickles as its path, and is opened again where it is unpickled.
 
 **11.4** `f[name]` reads a column: a flat one as a read-only NumPy array (not copied), a list one as
 an Awkward array, `sample` as `int32`, `entry` as `int64`, a derived one worked out and checked
-against its record. An unknown name raises `KeyError`, listing the columns; anything but a name
+against its record, and a sample column as its sample's value in every row (text as objects, whole
+numbers as `int64`, truth values as `bool`, any other number, or one a sample has none of, as
+`float64`, NaN where there is none). An unknown name raises `KeyError`, naming the nearest names it has, or with none near, the
+columns; anything but a name
 (a list of them, or a number), there or among the names any other reader is given, `TypeError`.
 
-**11.5** A column read is held until `f.forget(name, …)` (or `f.forget()`, every one) lets it go.
-`f.close()`, which leaving `with rowver.open(path) as f:` calls, lets go of the open file and every
-column held: arrays handed out stay as they are, and all §11.3 gives still reads; a column then asked
+**11.5** A column read is the same array each time it is asked for, for as long as anything holds
+it: the `File` keeps none in memory itself, so one let go of is read (a derived one worked out) again
+when next asked for, as after `f.forget(name, …)` (or `f.forget()`, every one).
+`f.close()`, which leaving `with rowver.open(path) as f:` calls, lets go of the open file:
+arrays handed out stay as they are, and all §11.3 gives still reads; a column then asked
 for raises `rowver.Error`.
 Columns asked for together (`f.read([…])`, `arrays`, `to_*`) are read in parallel.
 
 **11.6** `f.arrays()` gives an Awkward record array; `f.to_arrow()` a pyarrow Table and
 `f.to_pandas()` a pandas DataFrame, each with `sample` (its names, as a categorical: an Arrow
 dictionary in `to_arrow()`) and `entry` first;
-`f.to_parquet(path)` writes `to_arrow()`.
+`f.to_parquet(path)` writes `to_arrow()`. Each takes the columns' names (a sample column's too), and
+with `sample=NAME` gives that sample's rows alone, reading only its chunks, as `f.read(names,
+sample=NAME)` does.
 
 **11.7** `rowver.validate(path)` checks the file in full, as `rvr validate` does, and returns its
 `(rows, columns)`, or raises `rowver.Error`.
 
 **11.8** `f.slice(name, start, stop)` reads rows `start` to `stop` (not included) of a column, as
-`f[name]` gives it (`sample` and `entry` too), decoding only the chunks of the file that hold them,
+`f[name]` gives it (`sample` and `entry` too; one left out is the file's first row, or its last; a
+negative one counts from the file's end, no further back than its first row; and `f.slice(name, slice(a, b, step))` reads as that slice
+of a list does), decoding only the chunks of the file that hold them,
 each frame checked by its content checksum (FORMAT.md §7, §12: the Python package leaves a chunk's
 SHA-256 to `rowver.validate`, here and in `f[name]`); a derived column is checked against its
 record first, as `f[name]` checks it, once for the open file (its record is of every row, so that

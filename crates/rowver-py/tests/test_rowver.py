@@ -36,7 +36,7 @@ name = "flat"
 label = "Flat ntuple"
 files = "uproot_flat.root"
 tree = "analysis"
-metadata = { xsec = 1.5 }
+metadata = { xsec = 1.5, tag = "a", flag = true }
 """
 
 RECIPE = """format = "rvr-recipe"
@@ -171,11 +171,79 @@ class Pressed(unittest.TestCase):
             self.assertEqual(f.slice(name, 1, 3).tolist(), f[name][1:3].tolist(), name)
             self.assertEqual(f.slice(name, 2, 2).tolist(), [], name)
         for name in ["ht", "sample", "entry", "ht_per_jet"]:
-            for start, stop in [(3, 9), (3, 1), (-1, 2), (0, -1), (-(2**70), 2), (0, 2**70)]:
+            for start, stop in [(3, 9), (3, 1), (-1, 2), (-9, 2), (-(2**70), 2), (0, 2**70)]:
                 with self.assertRaises(rowver.Error):
                     f.slice(name, start, stop)
         with self.assertRaises(KeyError):
             f.slice("nothing", 0, 1)
+
+    # SPEC 11.8
+    def test_a_slice_takes_rows_as_a_list_does(self):
+        f = self.file
+        whole = f["ht"].tolist()
+        self.assertEqual(f.slice("ht").tolist(), whole)
+        self.assertEqual(f.slice("ht", 1).tolist(), whole[1:])
+        self.assertEqual(f.slice("ht", None, 2).tolist(), whole[:2])
+        self.assertEqual(f.slice("ht", -3, -1).tolist(), whole[-3:-1])
+        for rows in [slice(None), slice(1, 3), slice(None, None, 2), slice(None, None, -1), slice(3, 0, -2), slice(2, 99), slice(3, 1)]:
+            self.assertEqual(f.slice("ht", rows).tolist(), whole[rows], rows)
+        self.assertEqual(f.slice("ht", np.int64(-3), np.int64(-1)).tolist(), whole[-3:-1])
+        with self.assertRaisesRegex(TypeError, "a slice, or a first and a last row"):
+            f.slice("ht", slice(1, 2), 3)
+        with self.assertRaisesRegex(rowver.Error, "rows -9 to 2 of ht are asked for, and the file has 4: a negative row counts from its end, back to -4"):
+            f.slice("ht", -9, 2)
+        with self.assertRaisesRegex(TypeError, "give whole numbers"):
+            f.slice("ht", 0.5, 2)
+
+    # SPEC 11.3, 11.4, 11.10
+    def test_a_sample_column_reads_per_row_and_a_sample_s_rows_alone(self):
+        f = self.file
+        np.testing.assert_array_equal(f["xsec"], [1.5] * 4)
+        self.assertEqual((f["events_read"].dtype, f["events_read"].tolist()), (np.int64, [5] * 4))
+        self.assertFalse(f["xsec"].flags.writeable)
+        self.assertEqual(f.slice("xsec", 1, 3).tolist(), [1.5, 1.5])
+        self.assertEqual((f["tag"].tolist(), f["flag"].dtype, f["ht"][f["flag"]].tolist()), (["a"] * 4, np.bool_, f["ht"].tolist()))
+        if has("awkward"):
+            self.assertEqual(f.arrays(["ht", "tag", "flag"], sample="flat")["tag"].tolist(), ["a"] * 4)
+        self.assertNotIn("xsec", f.read())
+        read = f.read(["ht", "sample", "xsec", "ht_per_jet"], sample="flat")
+        for name, (values, offsets) in read.items():
+            self.assertEqual((values.tolist(), offsets), (f[name].tolist(), None), name)
+        with self.assertRaisesRegex(KeyError, "other: not a sample"):
+            f.read(["ht"], sample="other")
+        if has("pandas"):
+            self.assertTrue(f.to_pandas(["ht", "xsec"], sample="flat").equals(f.to_pandas(["ht", "xsec"])))
+
+    # SPEC 11.2, 11.5
+    def test_it_says_its_kinds_pickles_as_its_path_and_holds_no_column_itself(self):
+        import contextlib
+        import io
+        import pickle
+        import weakref
+        f = rowver.open(self.path)
+        self.assertEqual({n: f.kinds[n] for n in ["sample", "ht", "Jet_pt", "ht_per_jet", "hard_pt", "xsec"]},
+                         {"sample": "i4", "ht": "f4", "Jet_pt": "jagged f4", "ht_per_jet": "f8", "hard_pt": "jagged f4", "xsec": "f8"})
+        self.assertEqual(list(f.kinds), f.keys())
+        said = io.StringIO()
+        with contextlib.redirect_stdout(said):
+            f.show()
+        lines = said.getvalue().splitlines()
+        self.assertEqual((lines[0], len(lines)), (repr(f), 1 + len(f.keys())))
+        self.assertRegex(said.getvalue(), r"(?m)^ht_per_jet +f8 += ht / nJet$")
+        self.assertRegex(said.getvalue(), r"(?m)^xsec +f8 +one value per sample$")
+        again = pickle.loads(pickle.dumps(rowver.open(os.path.relpath(self.path))))
+        self.assertEqual((again.path, again.keys()), (os.path.abspath(self.path), f.keys()))
+        np.testing.assert_array_equal(again["weight"], f["weight"])
+        # A column is one array while anything holds it, and let go with its last holder.
+        weight = f["weight"]
+        self.assertIs(f["weight"], weight)
+        gone = weakref.ref(weight)
+        del weight
+        self.assertIsNone(gone())
+        with self.assertRaisesRegex(KeyError, "wieght: not a column of .*; did you mean weight\? f.keys\(\) lists every one"):
+            f["wieght"]
+        with self.assertRaisesRegex(KeyError, "QQQQ: not a column of .*; it has sample, entry, .*xsec"):
+            f["QQQQ"]
 
     # SPEC 11.8
     @unittest.skipUnless(has("awkward"), "needs awkward")
@@ -206,7 +274,7 @@ class Pressed(unittest.TestCase):
 
     # SPEC 1.5, 11.2, 11.4; FORMAT 1
     def test_mistakes_are_said_plainly(self):
-        with self.assertRaisesRegex(KeyError, "not a column of .*; it has weight"):
+        with self.assertRaisesRegex(KeyError, "not a column of .*; it has sample, entry, weight"):
             self.file["MET"]
         with self.assertRaisesRegex(rowver.Error, "samples.toml: .*not an .rvr file"):
             rowver.open(self.dir / "samples.toml")
@@ -222,15 +290,16 @@ class Pressed(unittest.TestCase):
         self.assertEqual(public, {"Error", "File", "open", "validate", "set_tool", "drop_tool"})
         documented = {"path", "header", "rows", "samples", "labels", "columns", "derived", "sample_columns", "recipe",
                       "study", "signed_by", "holes", "complete", "empty", "tools", "read", "slice", "forget", "arrays",
-                      "to_arrow", "to_pandas", "to_parquet", "keys", "rows_of", "close"}
+                      "to_arrow", "to_pandas", "to_parquet", "keys", "rows_of", "close", "kinds", "show"}
         self.assertEqual({n for n in dir(self.file) if not n.startswith("_")}, documented)
         self.assertIn("sample", self.file)
 
     # SPEC 11.3, 11.4
     def test_its_names_are_gone_through_as_a_table_s_and_a_sample_s_rows_are_a_slice(self):
         f = self.file
-        names = ["sample", "entry", *f.columns, *f.derived]
+        names = ["sample", "entry", *f.columns, *f.derived, *f.sample_columns]
         self.assertEqual(f.keys(), names)
+        self.assertEqual(f._ipython_key_completions_(), names)
         self.assertEqual({n for n in names if n in f}, set(names))
         self.assertNotIn(["weight"], f)
         # Not iterable: list(f) would make room for len(f), its rows.

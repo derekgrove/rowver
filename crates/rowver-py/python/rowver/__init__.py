@@ -6,9 +6,13 @@ Arrow tables, pandas data frames or Parquet. `rvr`, the command that makes them,
     f["MET"]                 # a NumPy array, one value per row
     f["Jet_pt"]              # an Awkward array, a list per row
     f.to_pandas()            # every column, with each row's sample and entry
+    f.show()                 # every name f[name] reads, and its kind
 """
 
+import difflib as _difflib
 import json as _json
+import operator as _operator
+import os as _os
 import weakref as _weakref
 
 import numpy as _np
@@ -57,6 +61,28 @@ def _names(names, every):
     return names
 
 
+def _listed(values, offsets):
+    """One column as `f[name]` gives it: its values, or for a list column an Awkward array."""
+    if offsets is None:
+        return values
+    ak = _needs("awkward", "a list column")
+    return ak.Array(ak.contents.ListOffsetArray(ak.index.Index64(offsets), ak.contents.NumpyArray(values)))
+
+
+def _records(values, offsets):
+    """One column as a field of an Awkward record array: text (objects) as strings, None where there is none."""
+    if offsets is None and values.dtype == object:
+        import awkward as ak
+
+        return ak.Array(values.tolist())
+    return _listed(values, offsets)
+
+
+def _kind(record):
+    """A column's kind in words, as `rvr dump` says it: `f4`, or `jagged f4` for a list column."""
+    return f"jagged {record['content']['kind']}" if record["kind"] == "jagged" else record["kind"]
+
+
 def _arrow(values, offsets):
     """One column as Arrow: its values, or for a list column a list (64-bit offsets)."""
     import pyarrow as pa
@@ -102,7 +128,8 @@ def _once(pairs):
 
 class File:
     """An open .rvr file. Its header is read and checked when it opens; each column, stored or
-    derived, is read when it is first asked for, and kept until `forget` (or `close`) lets it go."""
+    derived, is read when it is asked for, and is the same array for as long as anything still
+    holds it: the file itself keeps none in memory. It pickles as its path, and opens again."""
 
     def __init__(self, path):
         self.path = str(path)
@@ -113,16 +140,26 @@ class File:
         self._empty, self._holes, self._tools = self._file.empty, self._file.holes(), self._file.tools()
         # What never changes, worked out once: the names f[name] reads, and each sample's rows.
         self._keys = dict.fromkeys((*_ROW, *self.columns, *self.derived))
+        # The sample columns f[name] gives a value per row of, and with them every name it reads.
+        self._per_sample = {c["name"]: c for c in self.header["data"].get("sample_cols", []) if c["name"] not in self._keys}
+        self._keys.update(dict.fromkeys(self._per_sample))
         self._slices, start = {}, 0
         for sample in self.header["data"]["samples"]:
             self._slices[sample["name"]] = slice(start, start + sample["rows"])
             start += sample["rows"]
+        # Each column handed out, by name, for as long as its arrays live: weak references to them.
         self._held = {}
         # List columns of the same lists share one offsets array in the file (docs/FORMAT.md §4),
         # and here: each such array by where it lies, while a column read still holds it.
         self._shared = {c["name"]: (c["offsets"]["at"], c["offsets"]["size"])
                         for c in self.header["data"]["cols"] if c["kind"] == "jagged" and c["offsets"]["size"]}
         self._offsets = _weakref.WeakValueDictionary()
+
+    def __reduce__(self):
+        return (File, (_os.path.abspath(self.path),))
+
+    def _ipython_key_completions_(self):
+        return self.keys()
 
     def __enter__(self):
         return self
@@ -131,7 +168,7 @@ class File:
         self.close()
 
     def close(self):
-        """Let go of the open file and every column held; arrays handed out, and the header, stay."""
+        """Let go of the open file; arrays handed out, and the header, stay."""
         self._file, self._held = None, {}
 
     def _open(self):
@@ -220,8 +257,60 @@ class File:
         return self._slices[sample]
 
     def keys(self):
-        """The names `f[name]` reads: sample and entry, then the stored columns, then the derived."""
+        """The names `f[name]` reads: sample and entry, the stored columns, the derived, then the
+        sample columns (one value per sample, given per row)."""
         return list(self._keys)
+
+    @property
+    def kinds(self):
+        """The kind of each name `f[name]` reads, as `rvr dump` says it: `f4`, `jagged f4`, `text`."""
+        kinds = {"sample": "i4", "entry": "i8"}
+        kinds.update((c["name"], _kind(c)) for c in self.header["data"]["cols"])
+        kinds.update((c["name"], _kind(c)) for c in self.header.get("derived", {}).get("columns", []))
+        kinds.update((name, c["kind"]) for name, c in self._per_sample.items())
+        return kinds
+
+    def show(self):
+        """Print every name `f[name]` reads: its kind, and what it is."""
+        what = {"sample": "each row's index into samples", "entry": "each row's entry in its file's tree"}
+        what.update((c["name"], f"= {c['expression']}") for c in self.header.get("derived", {}).get("columns", []))
+        what.update(dict.fromkeys(self._per_sample, "one value per sample"))
+        kinds = self.kinds
+        wide = max(map(len, kinds))
+        print(repr(self))
+        for name, kind in kinds.items():
+            print(f"{name:{wide}}  {kind:10}  {what.get(name, '')}".rstrip())
+
+    def _unknown(self, names):
+        """What a name that is no column raises: the nearest names, or all of them."""
+        near = [m for n in names for m in _difflib.get_close_matches(str(n), list(self._keys), 3)]
+        has = f"did you mean {' or '.join(dict.fromkeys(near))}? f.keys() lists every one" if near else f"it has {', '.join(self._keys)}"
+        return KeyError(f"{', '.join(map(str, names))}: not a column of {self.path}; {has}")
+
+    def _per_row(self, name, codes):
+        """A sample column's value for each row of these sample indices: text as objects, and
+        whole numbers as int64 and truth values as bool, or, as any other number, as float64 when
+        a sample has none, NaN for that sample."""
+        column = self._per_sample[name]
+        values = column["values"]
+        if column["kind"] == "text":
+            table = _np.array(values, dtype=object)
+        elif column["kind"] in ("i8", "b1") and None not in values:
+            table = _np.array(values, dtype=_np.int64 if column["kind"] == "i8" else _np.bool_)
+        else:
+            table = _np.array([_np.nan if v is None else float(v) for v in values], dtype=_np.float64)
+        rows = table[codes]
+        rows.flags.writeable = False
+        return rows
+
+    def _part(self, name, start, stop):
+        """Rows `start` to `stop` of one column, read from the chunks that hold them: (values, offsets)."""
+        if name in self._per_sample:
+            return self._per_row(name, self._part("sample", start, stop)[0]), None
+        kind, raw, offsets = self._open().slice(name, start, stop)
+        if offsets is not None:
+            offsets.flags.writeable = False
+        return _typed(raw, kind), offsets
 
     # Not iterable: len(f) is its rows, which list(f) would take for the number of names to make
     # room for. f.keys() names the columns.
@@ -244,80 +333,108 @@ class File:
         each row's index into `samples`, and `entry` its entry number in its file's tree."""
         if not isinstance(name, str):
             raise TypeError(f"f[...] takes one column's name, not {name!r}: f.read, f.arrays and f.to_pandas take a list of names, and f[name][a:b] or f.slice(name, a, b) gives rows a to b")
-        values, offsets = self.read([name])[name]
-        if offsets is None:
-            return values
-        ak = _needs("awkward", "a list column")
-        content = ak.contents.ListOffsetArray(ak.index.Index64(offsets), ak.contents.NumpyArray(values))
-        return ak.Array(content)
+        return _listed(*self.read([name])[name])
 
-    def read(self, names=None):
+    def _kept(self, name):
+        """The column of this name handed out before, while its arrays live: (values, offsets)."""
+        values, offsets = self._held.get(name, (None, None))
+        values, listed = values and values(), offsets is not None
+        offsets = offsets() if listed else None
+        return None if values is None or (listed and offsets is None) else (values, offsets)
+
+    def read(self, names=None, sample=None):
         """Columns by name (every one, stored and derived, when not given), the stored ones read at once on every core: name -> (values,
         offsets), where `offsets` is None for a one-value-per-row column and otherwise says that
-        row r holds values[offsets[r]:offsets[r + 1]]. The arrays are read-only."""
+        row r holds values[offsets[r]:offsets[r + 1]]. With `sample`, the rows of the sample of
+        that name alone, only its chunks read, a column after another. The arrays are read-only:
+        copy one to change it."""
         names = _names(names, self.columns + self.derived)
         unknown = [n for n in names if n not in self._keys]
         if unknown:
-            raise KeyError(f"{', '.join(map(str, unknown))}: not a column of {self.path}; it has {', '.join(self.columns + self.derived)}")
-        # Another thread's close() or forget() meanwhile changes nothing here: what is held and the
-        # open file are taken once, and what is read goes into the dict held when this read began.
+            raise self._unknown(unknown)
+        if sample is not None:
+            rows = self.rows_of(sample)
+            return {n: self._part(n, rows.start, rows.stop) for n in names}
+        # Another thread's close() or forget() meanwhile changes nothing here: the open file is
+        # taken once, and what is handed out is noted in the dict there when this read began.
         held = self._held
-        got = {n: held.get(n) for n in dict.fromkeys(names)}
+        got = {n: self._kept(n) for n in dict.fromkeys(names)}
         missing = [n for n, kept in got.items() if kept is None]
         if missing:
             file = self._open()
-            wanted = [n for n in missing if n not in _ROW]
+            wanted = [n for n in missing if n not in _ROW and n not in self._per_sample]
             for name, (kind, raw, offsets) in zip(wanted, file.columns(wanted) if wanted else []):
                 if offsets is not None:
                     offsets.flags.writeable = False
                     if name in self._shared:
                         offsets = self._offsets.setdefault(self._shared[name], offsets)
-                got[name] = held[name] = (_typed(raw, kind), offsets)
+                got[name] = (_typed(raw, kind), offsets)
             for name in _ROW:
                 if name in missing:
                     values = getattr(file, name)()
                     values.flags.writeable = False
-                    got[name] = held[name] = (values, None)
+                    got[name] = (values, None)
+            for name in missing:
+                if name in self._per_sample:
+                    codes = got["sample"][0] if got.get("sample") else self.read(["sample"])["sample"][0]
+                    got[name] = (self._per_row(name, codes), None)
+                values, offsets = got[name]
+                held[name] = (_weakref.ref(values), None if offsets is None else _weakref.ref(offsets))
         return {n: got[n] for n in names}
 
-    def slice(self, name, start, stop):
+    def slice(self, name, start=None, stop=None):
         """Rows `start` to `stop` (not included) of a column, as `f[name]` gives it: only the chunks
         of the file that hold them read, each frame checked by its own checksum (a chunk's SHA-256
-        is left to `rowver.validate`); a derived column is
-        checked against its record first, once for the open file, over every row."""
+        is left to `rowver.validate`); a derived column is checked against its record first, once
+        for the open file, over every row. A row left out is the file's first or last, a negative
+        one counts from its end, and a slice (`f.slice(name, slice(a, b, step))`) reads as one of
+        a list does."""
         if not isinstance(name, str):
             raise TypeError(f"{name!r} is not a column's name: name each column by its text")
         if name not in self:
-            raise KeyError(f"{name}: not a column of {self.path}; it has {', '.join(self.columns + self.derived)}")
-        kind, raw, offsets = self._open().slice(name, start, stop)
-        values = _typed(raw, kind)
-        if offsets is None:
-            return values
-        ak = _needs("awkward", "a list column")
-        return ak.Array(ak.contents.ListOffsetArray(ak.index.Index64(offsets), ak.contents.NumpyArray(values)))
+            raise self._unknown([name])
+        if isinstance(start, slice):
+            if stop is not None:
+                raise TypeError("f.slice takes a slice, or a first and a last row, not both")
+            rows = range(*start.indices(self.rows))
+            if len(rows) == 0:
+                return _listed(*self._part(name, 0, 0))
+            first = min(rows[0], rows[-1])
+            part = _listed(*self._part(name, first, max(rows[0], rows[-1]) + 1))
+            return part if rows.step == 1 else part[rows[0] - first::rows.step]
+        start, stop = (0 if start is None else start), (self.rows if stop is None else stop)
+        try:
+            asked = _operator.index(start), _operator.index(stop)
+        except TypeError:
+            raise TypeError(f"rows {start!r} to {stop!r} of {name} are asked for: give whole numbers, or leave one out") from None
+        if min(asked) < -self.rows:
+            raise Error(f"rows {asked[0]} to {asked[1]} of {name} are asked for, and the file has {self.rows}: a negative row counts from its end, back to -{self.rows}")
+        return _listed(*self._part(name, *(at + self.rows if at < 0 else at for at in asked)))
 
     def forget(self, *names):
-        """Let go of columns held in memory, the ones named or else every one: each is read, or
-        worked out, again when next asked for."""
+        """Let go of the columns handed out, the ones named or else every one: each is read, or
+        worked out, again when next asked for, a new array."""
         for name in names or list(self._held):
             self._held.pop(name, None)
 
-    def arrays(self, columns=None):
+    def arrays(self, columns=None, sample=None):
         """The columns (every one, stored and derived, when not given) as one Awkward record
-        array, a record per row, with `sample` (its name, a categorical) and `entry` first."""
+        array, a record per row, with `sample` (its name, a categorical) and `entry` first; with
+        `sample`, that sample's rows alone."""
         ak = _needs("awkward", "arrays()")
         names = [n for n in _names(columns, self.columns + self.derived) if n not in _ROW]
-        read = self.read([*_ROW, *names])  # at once: derived columns that share what they use work it out once
+        read = self.read([*_ROW, *names], sample)
         codes = ak.index.Index64(read["sample"][0].astype(_np.int64))
-        sample = ak.contents.IndexedArray(codes, ak.to_layout(self.samples), parameters={"__array__": "categorical"})
-        return ak.zip({"sample": ak.Array(sample), "entry": read["entry"][0], **{n: self[n] for n in names}}, depth_limit=1)
+        named = ak.contents.IndexedArray(codes, ak.to_layout(self.samples), parameters={"__array__": "categorical"})
+        return ak.zip({"sample": ak.Array(named), "entry": read["entry"][0], **{n: _records(*read[n]) for n in names}}, depth_limit=1)
 
-    def to_arrow(self, columns=None):
+    def to_arrow(self, columns=None, sample=None):
         """The columns (all when not given) as a pyarrow Table, with `sample` (each row's sample
-        name) and `entry` first; a list column is an Arrow large list."""
+        name) and `entry` first; a list column is an Arrow large list. With `sample`, that
+        sample's rows alone."""
         pa = _needs("pyarrow", "to_arrow()")
         names = [n for n in _names(columns, self.columns + self.derived) if n not in _ROW]
-        read = self.read([*_ROW, *names])
+        read = self.read([*_ROW, *names], sample)
         table = {
             "sample": pa.DictionaryArray.from_arrays(read["sample"][0], pa.array(self.samples)),
             "entry": read["entry"][0],
@@ -325,13 +442,13 @@ class File:
         table.update({n: _arrow(*read[n]) for n in names})
         return pa.table(table)
 
-    def to_pandas(self, columns=None):
+    def to_pandas(self, columns=None, sample=None):
         """The columns (all when not given) as a pandas DataFrame, with `sample` (a Categorical)
         and `entry` first. A flat column keeps its NumPy type; a list column needs pyarrow and is
-        held as Arrow lists."""
+        held as Arrow lists. With `sample`, that sample's rows alone."""
         pd = _needs("pandas", "to_pandas()")
         names = [n for n in _names(columns, self.columns + self.derived) if n not in _ROW]
-        read = self.read([*_ROW, *names])
+        read = self.read([*_ROW, *names], sample)
         frame = {
             "sample": pd.Categorical.from_codes(read["sample"][0], self.samples),
             "entry": read["entry"][0],
@@ -345,12 +462,12 @@ class File:
                 frame[name] = pd.arrays.ArrowExtensionArray(_arrow(values, offsets))
         return pd.DataFrame(frame)
 
-    def to_parquet(self, path, columns=None):
+    def to_parquet(self, path, columns=None, sample=None):
         """Write the columns (all when not given) to a Parquet file, as `to_arrow` gives them."""
         _needs("pyarrow", "to_parquet()")
         import pyarrow.parquet as pq
 
-        pq.write_table(self.to_arrow(columns), str(path))
+        pq.write_table(self.to_arrow(columns, sample), str(path))
 
 
 def open(path):
