@@ -2539,6 +2539,33 @@
       "sha256": "f274837724107b1549408cec556168e04809c6f0059b9804d72ad245dd39567e",
       "size": 12443,
       "verdict": "full"
+    },
+    {
+      "at": 4336425,
+      "refused": "opening",
+      "rule": "FORMAT §7 offsets records of one place that differ are two arrays",
+      "rust_says": "data.cols[\"c1\"].offsets.at is 1176, but the arrays before it end at 1952: the arrays fill the bytes from 8 to the header with no gap and no overlap, in any order (docs/FORMAT.md §7): press its study again with rvr press, which writes it as docs/FORMAT.md says",
+      "sha256": "38914c65e36dd9223b26c6f5932e40d7c8710d52602ffebd12dddaaca9c95aab",
+      "size": 12516,
+      "verdict": "opening"
+    },
+    {
+      "at": 4348941,
+      "refused": "opening",
+      "rule": "FORMAT §4 equal offsets are one array, not two",
+      "rust_says": "data.cols[\"c1\"].offsets holds the offsets data.cols[\"c0\"].offsets holds (their sha256 is one) as an array of its own at 2664: list columns of the same lists share one offsets array, recorded alike by each (docs/FORMAT.md §4): press its study again with rvr press, which writes it as docs/FORMAT.md says",
+      "sha256": "22c1ee0615c7ad152354a97881e6f83541de9b38ba3b8548fd7d1ba871f9102c",
+      "size": 13476,
+      "verdict": "opening"
+    },
+    {
+      "at": 4362417,
+      "refused": "opening",
+      "rule": "FORMAT §7 only offsets are shared",
+      "rust_says": "data.cols[\"c1\"].content.at is 1952, but the arrays before it end at 2664: the arrays fill the bytes from 8 to the header with no gap and no overlap, in any order (docs/FORMAT.md §7): press its study again with rvr press, which writes it as docs/FORMAT.md says",
+      "sha256": "fb514e5917e752545a61502753e0c0a66e9d1e8a751dd6c848dc8bbba23105ab",
+      "size": 12516,
+      "verdict": "opening"
     }
   ],
   "valid": [

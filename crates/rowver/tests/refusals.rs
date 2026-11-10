@@ -1242,11 +1242,6 @@ fn a_trusting_reader_leaves_a_chunks_sha256_to_full_validation_and_no_frames_che
     assert!(said(Reader::open(&path).unwrap().trusting().column("MET")).unwrap_err().contains("content checksum"));
 }
 
-/// Where the column `name` is among a header's columns.
-fn first_list(header: &Value, name: &str) -> usize {
-    header["data"]["cols"].as_array().unwrap().iter().position(|c| c["name"] == name).unwrap()
-}
-
 // FORMAT 4, 7
 #[test]
 fn list_columns_of_the_same_lists_record_one_offsets_array_and_no_other_two_records_one_place() {
@@ -1266,31 +1261,39 @@ fn list_columns_of_the_same_lists_record_one_offsets_array_and_no_other_two_reco
     }
     let offsets = |a: usize| together[a].as_ref().unwrap().offsets.clone().unwrap();
     assert!(std::sync::Arc::ptr_eq(&offsets(0), &offsets(1)), "offsets read once are handed over once");
+    for (rule, bytes, says) in shared_broken() {
+        let (opened, _) = checked_with(&bytes, false);
+        assert!(opened.unwrap_err().contains(says), "{rule}");
+    }
+}
+
+/// Each rule of shared offsets broken alone: its section and name, the file, and what a reader says on opening.
+fn shared_broken() -> Vec<(&'static str, Vec<u8>, &'static str)> {
+    let (header, arrays) = shared_parts();
+    let lists: Vec<usize> = header["data"]["cols"].as_array().unwrap().iter().enumerate().filter(|(_, c)| c["kind"] == "jagged").map(|(at, _)| at).collect();
+    let (first, at) = (lists[0], lists[1]);
     // Records of one place that differ are two arrays, which overlap.
-    let at = header["data"]["cols"].as_array().unwrap().iter().position(|c| c["name"] == names[1]).unwrap();
-    let mut other = header.clone();
-    other["data"]["cols"][at]["offsets"]["by_sample"][0] = ZEROS.into();
-    let (opened, _) = checked_with(&to_bytes(&sealed(other), &arrays), false);
-    assert!(opened.unwrap_err().contains("no gap and no overlap"));
-    // Equal offsets kept as two arrays are refused: the table's two list columns, each with its
-    // own offsets array, recorded with one sha256.
+    let mut differ = header.clone();
+    differ["data"]["cols"][at]["offsets"]["by_sample"][0] = ZEROS.into();
+    // Equal offsets kept as two arrays: the table's two list columns, each with its own offsets
+    // array, recorded with one sha256.
     let mut rng = common::gen::Rng::new(7);
     let table = common::gen::table(&mut rng, 8);
     let filled = common::gen::filled(&mut rng, &table);
     let (mut twice, kept) = common::gen::file(&table, filled);
-    let sha256 = twice["data"]["cols"][first_list(&twice, &names[0])]["offsets"]["sha256"].clone();
-    let second = first_list(&twice, &names[1]);
-    twice["data"]["cols"][second]["offsets"]["sha256"] = sha256;
-    let (opened, _) = checked_with(&to_bytes(&sealed(twice), &kept), false);
-    assert!(opened.unwrap_err().contains("share one offsets array"));
+    let named = |header: &Value, like: usize| header["data"]["cols"].as_array().unwrap().iter().position(|c| c["name"] == header["data"]["cols"][like]["name"] && c["kind"] == "jagged").unwrap();
+    let (one, other) = (named(&twice, first), named(&twice, at));
+    twice["data"]["cols"][other]["offsets"]["sha256"] = twice["data"]["cols"][one]["offsets"]["sha256"].clone();
     // Only offsets are shared: a content array recorded where another lies overlaps it.
-    let mut other = header.clone();
-    let first = other["data"]["cols"].as_array().unwrap().iter().position(|c| c["name"] == names[0]).unwrap();
-    let (place, size) = (other["data"]["cols"][first]["content"]["at"].clone(), other["data"]["cols"][first]["content"]["size"].clone());
-    other["data"]["cols"][at]["content"]["at"] = place;
-    other["data"]["cols"][at]["content"]["size"] = size;
-    let (opened, _) = checked_with(&to_bytes(&sealed(other), &arrays), false);
-    assert!(opened.unwrap_err().contains("no gap and no overlap"));
+    let mut content = header.clone();
+    for key in ["at", "size"] {
+        content["data"]["cols"][at]["content"][key] = content["data"]["cols"][first]["content"][key].clone();
+    }
+    vec![
+        ("§7 offsets records of one place that differ are two arrays", to_bytes(&sealed(differ), &arrays), "no gap and no overlap"),
+        ("§4 equal offsets are one array, not two", to_bytes(&sealed(twice), &kept), "share one offsets array"),
+        ("§7 only offsets are shared", to_bytes(&sealed(content), &arrays), "no gap and no overlap"),
+    ]
 }
 
 // FORMAT 12, example; SPEC 9.1
@@ -1352,6 +1355,9 @@ fn the_conformance_corpus_holds_what_this_reader_says() {
         for (section, rule, change, _) in rows {
             case(format!("FORMAT {section} {rule}"), when, bytes(change), matches!(change, Journaled));
         }
+    }
+    for (rule, bytes, _) in shared_broken() {
+        case(format!("FORMAT {rule}"), "opening", bytes, false);
     }
     for entry in &cases {
         let verdict = entry["verdict"].as_str().unwrap();

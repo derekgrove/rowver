@@ -8,11 +8,12 @@
 //! byte's bits: 1, each lane cut or padded with zeros to its chunk's values; 2, each list column's
 //! content.count and data.rows made to agree with the arrays and samples; 4, each flat column's
 //! facts made again from its values; 8, the arrays let go (an empty file); 16, the arrays laid in
-//! the file last record first (FORMAT §7 lets them lie in any order).
+//! the file last record first (FORMAT §7 lets them lie in any order). List columns whose offsets
+//! come out equal share one array, as FORMAT §4 has a writer do.
 //!
 //! Only the chunks and checksums are worked out apart from rowver: the test below holds that
 //! working to rowver's, every seed made a file full validation accepts. A flat column's facts
-//! (`rowver::write::derived`) and the derived records (`derived::records`) are rowver's own, so
+//! (`rowver::write::measured`) and the derived records (`derived::records`) are rowver's own, so
 //! this target cannot find a wrong fact or derived value; the C++ differential on its files does.
 
 use rowver::rvr::hex;
@@ -176,7 +177,9 @@ pub fn fixed(data: &[u8]) -> Option<(Value, Vec<u8>)> {
     let samples = header["data"]["samples"].as_array().map_or(0, Vec::len);
     let mut room = MOST_BYTES;
     let mut arrays: Vec<u8> = Vec::new();
-    let mut laid: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut laid: Vec<(Vec<String>, usize, Vec<u8>)> = Vec::new();
+    // The offsets arrays laid, by their sha256: list columns of equal offsets share one (FORMAT §4).
+    let mut alike: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut members: Vec<usize> = Vec::new();
     for (pointer, kind) in records(&header) {
         if !header.pointer(&pointer).is_some_and(Value::is_object) {
@@ -196,10 +199,14 @@ pub fn fixed(data: &[u8]) -> Option<(Value, Vec<u8>)> {
             members = packed.values.iter().map(|v| v.get(v.len().saturating_sub(8)..).and_then(|b| b.try_into().ok()).map_or(0, |b| i64::from_le_bytes(b).max(0) as usize)).collect();
         }
         let total = members.iter().try_fold(0_usize, |sum, m| sum.checked_add(*m))?;
+        let sha256 = joined(&packed.hashes);
+        let first = alike.get(&sha256).copied().filter(|_| offsets && !packed.bytes.is_empty());
+        // A sharing column records the first's array: where it lies and its bytes.
+        let (at, size) = first.map_or((arrays.len(), packed.bytes.len()), |first| (laid[first].1, laid[first].2.len()));
         let Some(record) = header.pointer_mut(&pointer).and_then(Value::as_object_mut) else { continue };
-        record.insert("at".into(), arrays.len().into());
-        record.insert("size".into(), packed.bytes.len().into());
-        record.insert("sha256".into(), joined(&packed.hashes).into());
+        record.insert("at".into(), at.into());
+        record.insert("size".into(), size.into());
+        record.insert("sha256".into(), sha256.clone().into());
         if record.contains_key("by_sample") {
             let mut by: Vec<Vec<&[u8; 32]>> = vec![Vec::new(); samples];
             for (chunk, hash) in cut.iter().zip(&packed.hashes) {
@@ -212,17 +219,27 @@ pub fn fixed(data: &[u8]) -> Option<(Value, Vec<u8>)> {
             record.insert("count".into(), total.into());
         }
         if faced && !offsets && !content && pointer.starts_with("/data/cols/") {
-            facts(record, &kind, &packed.values, &cut, samples, every as usize);
+            facts(record, &kind, &packed.values);
         }
-        arrays.extend(&packed.bytes);
-        laid.push((pointer.clone(), packed.bytes));
+        match first {
+            Some(first) => laid[first].0.push(pointer.clone()),
+            None => {
+                if offsets {
+                    alike.insert(sha256, laid.len());
+                }
+                arrays.extend(&packed.bytes);
+                laid.push((vec![pointer.clone()], at, packed.bytes));
+            }
+        }
     }
     if reversed {
         // Laid last record first, each record's `at` where its array now lies.
         arrays.clear();
-        for (pointer, bytes) in laid.iter().rev() {
-            if let Some(record) = header.pointer_mut(pointer).and_then(Value::as_object_mut) {
-                record.insert("at".into(), arrays.len().into());
+        for (pointers, _, bytes) in laid.iter().rev() {
+            for pointer in pointers {
+                if let Some(record) = header.pointer_mut(pointer).and_then(Value::as_object_mut) {
+                    record.insert("at".into(), arrays.len().into());
+                }
             }
             arrays.extend(bytes);
         }
@@ -255,13 +272,8 @@ pub fn fixed(data: &[u8]) -> Option<(Value, Vec<u8>)> {
 
 /// A flat column's facts made again from its values, as rowver measures a column of them; left as
 /// they are when it cannot measure them (a kind it refuses).
-fn facts(record: &mut serde_json::Map<String, Value>, kind: &str, values: &[Vec<u8>], cut: &[(usize, usize)], samples: usize, chunk_rows: usize) {
-    let held = rowver::rvr::Held { kind: kind.to_owned(), bytes: values.concat(), offsets: None };
-    let mut rows = vec![0; samples];
-    for (sample, n) in cut {
-        rows[*sample] += n;
-    }
-    let Ok(measured) = rowver::write::derived("x", "x", &held, &rows, chunk_rows) else { return };
+fn facts(record: &mut serde_json::Map<String, Value>, kind: &str, values: &[Vec<u8>]) {
+    let Ok(measured) = rowver::write::measured(kind, &values.concat()) else { return };
     for key in ["lim", "nice", "vals"] {
         match measured.get(key) {
             Some(value) => drop(record.insert(key.to_owned(), value.clone())),

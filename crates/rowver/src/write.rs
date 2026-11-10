@@ -307,6 +307,17 @@ impl Laid {
     }
 }
 
+/// A flat column's facts (`lim`, `nice`, `vals`) from its values' little-endian bytes.
+pub fn measured(kind: &str, bytes: &[u8]) -> Result<Map<String, Value>> {
+    let width = crate::numeric::width(kind)?;
+    if bytes.len() % width != 0 {
+        return Err(invalid(format!("{} bytes are not whole {kind} values of {width} bytes each: give every value's bytes", bytes.len())));
+    }
+    let mut seen = facts::Facts::new(kind);
+    seen.add(bytes)?;
+    Ok(seen.finish())
+}
+
 /// SHA-256 of every array's sha256, in record order, as one ASCII string; or the place of an array record with none.
 pub(crate) fn data_checksum(data: &Value) -> std::result::Result<String, String> {
     let mut all = String::new();
@@ -543,6 +554,15 @@ pub(crate) fn bounded(chunk_rows: usize) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn measured_gives_a_columns_facts_and_refuses_part_of_a_value() {
+        let bytes: Vec<u8> = [3_i32, 1, 3].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let facts = super::measured("i4", &bytes).unwrap();
+        assert_eq!((&facts["lim"], &facts["vals"]), (&serde_json::json!([1, 3]), &serde_json::json!([1, 3])));
+        assert!(super::measured("i4", &bytes[..3]).unwrap_err().to_string().contains("whole i4 values"));
+        assert!(super::measured("no kind", &bytes).is_err());
+    }
+
     /// A writer that fails every write.
     struct Full;
 
