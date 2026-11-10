@@ -1,7 +1,8 @@
 //! The `derived` section: the columns a file keeps as the expressions that compute them, each
 //! with the checksums and facts of its values. The records are checked with the header; the
 //! values are worked out here a run of rows at a time, each run within one chunk of the file and
-//! one file read, from the chunks of the columns they use, and measured chunk by chunk.
+//! one file read, from the chunks of the columns they use (the chunks in one pool of threads, a
+//! few ahead), and measured chunk by chunk, in row order.
 
 use super::{exactly, list, nonempty, text, Held, Reader, MEND};
 use crate::{invalid, Result};
@@ -171,9 +172,14 @@ impl<'a> Store<'a> {
     /// The store of a file's columns; with no chunks for work over no rows (`hollow`), which reads
     /// none, and for an empty file, whose chunks are never made.
     fn new(file: &'a Reader, derived: &'a [(String, String)], hollow: bool) -> Result<Self> {
-        let (chunk, parsed, working, failed) = Default::default();
         let chunks = if hollow || file.empty() { Arc::default() } else { file.chunks()? };
-        Ok(Store { file, derived, chunk, parsed, working, failed, chunks })
+        Ok(Self::over(file, derived, chunks))
+    }
+
+    /// A store of a file's columns over its `chunks`, nothing read yet.
+    fn over(file: &'a Reader, derived: &'a [(String, String)], chunks: Arc<Vec<Rows>>) -> Self {
+        let (chunk, parsed, working, failed) = Default::default();
+        Store { file, derived, chunk, parsed, working, failed, chunks }
     }
 
     /// A stored column of no rows, of the kind its record gives.
@@ -378,56 +384,72 @@ fn worked(store: &Store, names: &[(String, String)], mut ask: Ask) -> Result<Vec
     let header = store.file.header();
     let samples = header["data"]["samples"].as_array().map_or(0, Vec::len);
     let mut out: Vec<Worked> = names.iter().map(|_| Worked { measured: None, whole: None, shape: None }).collect();
-    let mut chunk = None;
     let measure = !hollow && range.is_none() && !ask.unmeasured;
     let (from, to) = range.unwrap_or((0, usize::MAX));
-    let cut = spans(header, &store.chunks, hollow)?.into_iter().filter_map(|span| {
+    let cut: Vec<Span> = spans(header, &store.chunks, hollow)?.into_iter().filter_map(|span| {
         let (first, last) = (span.first.max(from), span.last.min(to));
         (first < last || (span.first == span.last && range.is_none())).then_some(Span { first, last, ..span })
-    });
-    for span in cut {
-        // The chunk before, every run of it worked out, is let go.
-        if span.chunk != chunk {
-            store.chunk.borrow_mut().clear();
-            chunk = span.chunk;
-        }
-        let run = Run { store, chunk: span.chunk, first: span.first, last: span.last, sample: span.sample.into(), metadata: metadata(header, span.sample, span.path), held: RefCell::default() };
-        for ((name, expression), done) in names.iter().zip(&mut out) {
-            let values = run.derived(name, expression)?;
-            let (kind, listed) = match &values {
-                Array::Object { values, .. } => (values.kind, true),
-                Array::Event(values) => (values.kind, false),
-                Array::Constant(_) => unreachable!("per_event gives one value per row"),
-            };
-            if *done.shape.get_or_insert((kind, listed)) != (kind, listed) {
-                return Err(invalid(format!("sample {}: {} is not the same kind of column for every sample: give each sample's value the same type", span.sample, store.place(name))));
-            }
-            if measure {
-                let measuring = match &mut done.measured {
-                    Some(measuring) => measuring,
-                    measured => measured.insert(Measuring::new(name, kind.name(), listed, &store.chunks)?),
-                };
-                let (bytes, counts) = parts(&values);
-                measuring.take(&bytes, counts.as_deref()).map_err(|e| invalid(format!("derived column {e}")))?;
-            }
-            if whole {
-                add(&mut done.whole, values);
-            }
-        }
-        // A run of no rows, in no chunk, says only what kind each column is: nothing to hand on.
-        if let (Some(each), Some(k)) = (ask.each.as_mut(), span.chunk) {
-            let mut held = Vec::new();
-            for name in ["sample", "entry"].into_iter().chain(ask.stored.iter().map(String::as_str)) {
-                let record = store.file.record(name);
-                let at = store.chunks[k].1;
-                held.push(store.chunk(name, record, k)?.rows(span.first - at, span.last - at)?);
-            }
-            for (name, expression) in names {
-                held.push(held_of(&run.derived(name, expression)?));
-            }
-            each(span.first, span.last, held)?;
+    }).collect();
+    // The runs of one chunk are worked out together, the chunks in one pool of threads, each
+    // with a store of its own, and taken here in row order.
+    let mut groups: Vec<std::ops::Range<usize>> = Vec::new();
+    for (at, span) in cut.iter().enumerate() {
+        match groups.last_mut() {
+            Some(group) if span.chunk.is_some() && cut[group.start].chunk == span.chunk => group.end = at + 1,
+            _ => groups.push(at..at + 1),
         }
     }
+    let (file, derived, chunks, stored, handed) = (store.file, store.derived, &store.chunks, ask.stored, ask.each.is_some());
+    let work = |group: usize| -> Result<Vec<(Vec<Array>, Vec<Held>)>> {
+        let store = Store::over(file, derived, chunks.clone());
+        let run = |span: &Span| {
+            let run = Run { store: &store, chunk: span.chunk, first: span.first, last: span.last, sample: span.sample.into(), metadata: metadata(header, span.sample, span.path), held: RefCell::default() };
+            let values = names.iter().map(|(name, expression)| run.derived(name, expression)).collect::<Result<Vec<Array>>>()?;
+            // A run of no rows, in no chunk, says only what kind each column is: nothing to hand on.
+            let mut held = Vec::new();
+            if let (true, Some(k)) = (handed, span.chunk) {
+                for name in ["sample", "entry"].into_iter().chain(stored.iter().map(String::as_str)) {
+                    let at = store.chunks[k].1;
+                    held.push(store.chunk(name, file.record(name), k)?.rows(span.first - at, span.last - at)?);
+                }
+                held.extend(values.iter().map(held_of));
+            }
+            Ok((values, held))
+        };
+        cut[groups[group].clone()].iter().map(run).collect()
+    };
+    let mut spans = cut.iter();
+    // Runs handed on carry every column asked for: those are worked out one chunk at a time.
+    let workers = if handed { 1 } else { crate::parallel::cores() };
+    crate::parallel::ordered(groups.len(), workers, work, |runs| {
+        for ((values, held), span) in runs.into_iter().zip(&mut spans) {
+            for (((name, _), done), values) in names.iter().zip(&mut out).zip(values) {
+                let (kind, listed) = match &values {
+                    Array::Object { values, .. } => (values.kind, true),
+                    Array::Event(values) => (values.kind, false),
+                    Array::Constant(_) => unreachable!("per_event gives one value per row"),
+                };
+                if *done.shape.get_or_insert((kind, listed)) != (kind, listed) {
+                    return Err(invalid(format!("sample {}: {} is not the same kind of column for every sample: give each sample's value the same type", span.sample, store.place(name))));
+                }
+                if measure {
+                    let measuring = match &mut done.measured {
+                        Some(measuring) => measuring,
+                        measured => measured.insert(Measuring::new(name, kind.name(), listed, &store.chunks)?),
+                    };
+                    let (bytes, counts) = parts(&values);
+                    measuring.take(&bytes, counts.as_deref()).map_err(|e| invalid(format!("derived column {e}")))?;
+                }
+                if whole {
+                    add(&mut done.whole, values);
+                }
+            }
+            if let (Some(each), Some(_)) = (ask.each.as_mut(), span.chunk) {
+                each(span.first, span.last, held)?;
+            }
+        }
+        Ok(())
+    })?;
     out.into_iter()
         .map(|done| Ok((done.measured.map(|m| m.finish(samples)).transpose()?, done.whole)))
         .collect()

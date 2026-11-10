@@ -346,6 +346,17 @@ fn a_fill_copies_the_rows_it_keeps_a_chunk_at_a_time_and_makes_the_file_a_full_p
     assert!(full["data"]["chunk_rows"] == 1024 && full["data"]["rows"].as_u64() > Some(2048), "{}", full["data"]["rows"]);
     assert_eq!(filled["data"], full["data"]);
     assert_eq!(filled["derived"], full["derived"]);
+    // Its derived columns, worked out a chunk a thread, are the ones worked out a chunk at a time.
+    let reader = rowver::rvr::Reader::open(&file).unwrap();
+    for name in ["ht", "first"] {
+        let whole = reader.column(name).unwrap().unwrap();
+        let mut bytes = Vec::new();
+        for (from, to) in reader.chunk_spans().unwrap() {
+            bytes.extend(reader.slice(name, from, to).unwrap().unwrap().bytes);
+        }
+        assert_eq!(whole.bytes, bytes, "{name}");
+    }
+    assert_eq!(rvr(&dir, &["validate", &name(&dir)]).0, 0);
 }
 
 // SPEC 8.6
