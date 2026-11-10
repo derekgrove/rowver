@@ -379,6 +379,13 @@ compares it (`if = "sample.era == 3"`); an `if` that gives a field the sample la
 **4.3.3** The cutflow is the number of chosen events left after each cut, in order, summed over the
 files read.
 
+**4.3.4** A press, before it reads, and `rvr try`, of its expression and the defined names it uses,
+note on stderr (`Note: …`, one a line) what quietly comes out alike for every event: a `sample.KEY`
+that no sample of the lock has a value of (with the nearest keys it has), and a `sample.KEY` that is
+text in every sample that has it compared (`==`, `!=`, or `in` a list of fixed values) with numbers
+or true-or-false values alone, or the other way round, saying whether that is false or true. A note
+stops nothing.
+
 ### 4.4 Stored columns
 
 **4.4.1** A column `branches` names is copied with the branch's kind.
@@ -884,7 +891,11 @@ column is packed again, in the lock's order of samples; a sample it holds keeps 
 **8.5** Any other difference (other cuts, totals, event choices or `chunk_rows`, a sample whose files changed, a
 column changed together with the samples) means every column is pressed, and the
 press says why: `Pressing every column: FILE cannot be built on, as WHY.`, WHY in the program's own
-words. `--full` always presses every column.
+words. `--full` always presses every column. When this press reads fewer entries than the file at the
+target read (as `rvr press --events N` over a file of every event), it says so (`It read H entries,
+and this press reads R: the file it writes takes its place.`) and asks `Replace it? [y/N]`: anything
+but yes leaves the file as it was (exit 1), and with no one at a terminal nothing is pressed (exit 2).
+`--full` replaces it without asking, and `--out FILE` presses into another file.
 
 **8.6 Another build.** A file is built on only by the build that made it (`made.toolchain`: the
 same program, version, commit, compiler and platform), and a build whose commit is `unknown` or ends

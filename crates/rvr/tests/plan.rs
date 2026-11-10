@@ -109,7 +109,7 @@ fn a_data_error_stops_the_press_only_in_a_chosen_and_kept_event_and_keeps_what_w
     // A random choice of entries that leaves entry 3 out reads no error either, without the cut.
     std::fs::write(dir.join("recipe.toml"), recipe("", x)).unwrap();
     let seed = (1..100).find(|seed| !rowver::choice::per_file(&[5], 2, *seed)[0].contains(&3)).unwrap().to_string();
-    let (code, said) = rvr(&dir, &["press", "--events", "2", "--random", "--seed", &seed]);
+    let (code, said) = rvr(&dir, &["press", "--full", "--events", "2", "--random", "--seed", &seed]);
     assert_eq!(code, 0, "{said}");
     // Chosen and kept, it stops the press naming the file, the entry, the column and the value.
     let (code, said) = rvr(&dir, &["press"]);

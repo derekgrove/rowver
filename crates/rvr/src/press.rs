@@ -103,6 +103,11 @@ fn run(pressing: Pressing) -> Result<u8, String> {
         stopped.keep.set(false);
     }
     let at = locked.as_ref().map_or_else(|| crate::plan::At::open(&target), crate::plan::At::held);
+    // The entries the file there read, when it opens: a press that reads fewer asks first.
+    let held = match &at {
+        crate::plan::At::Opened(file, Ok(())) => Some(crate::entries_read(&file.header()["made"]).0),
+        _ => None,
+    };
     let place = Place { base: dir, study, at, target: target.clone(), locked, found };
     let asked = Asked { choose: Choose::Options(pressing.choice), on: pressing.on, workers: pressing.workers, sign: true };
     let plan = crate::plan::build(place, texts, asked)?;
@@ -121,7 +126,22 @@ fn run(pressing: Pressing) -> Result<u8, String> {
                 return Err(format!("{} is as it was: nothing was pressed.", target.display()));
             }
         }
-        (Some(why), false) => println!("Pressing every column: {} cannot be built on, as {why}.", target.display()),
+        (Some(why), false) => {
+            println!("Pressing every column: {} cannot be built on, as {why}.", target.display());
+            // A file of fewer events in place of a fuller one is asked first (SPEC §8.5).
+            let read: u64 = plan.lock.samples.iter().map(|s| s.events_read).sum();
+            if let Some(held) = held.filter(|held| *held > read) {
+                let (held, read) = (rowver::rvr::grouped(held), rowver::rvr::grouped(read));
+                println!("It read {held} entries, and this press reads {read}: the file it writes takes its place.");
+                if !crate::at_terminal() {
+                    eprintln!("rvr press: nothing was pressed: no one is at a terminal to answer whether to replace a file of more events. Give --full to replace it without asking, or --out FILE to press into another file.");
+                    return Ok(2);
+                }
+                if !crate::yes("Replace it? [y/N] ")? {
+                    return Err(format!("{} is as it was: nothing was pressed.", target.display()));
+                }
+            }
+        }
         (None, _) => {}
     }
     let holes = match plan.from {
@@ -134,7 +154,12 @@ fn run(pressing: Pressing) -> Result<u8, String> {
             println!("{} holds this study as it is, with {}: rvr press --fill reads them again (rvr press --full presses everything again).", target.display(), some(holes, "hole", "holes"));
             holes
         }
-        _ => crate::core::press(plan)?,
+        _ => {
+            for note in crate::agree::notes(crate::agree::expressions(&plan.recipe).iter(), &plan.recipe, &plan.lock) {
+                eprintln!("Note: recipe.toml: {note}");
+            }
+            crate::core::press(plan)?
+        }
     };
     Ok(if holes == 0 { 0 } else { 3 })
 }

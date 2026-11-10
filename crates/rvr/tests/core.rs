@@ -51,6 +51,31 @@ fn a_derived_column_that_fails_on_a_samples_first_run_stops_the_press_there() {
     assert!(!dir.join(name(&dir)).exists());
 }
 
+// SPEC 4.3.4
+#[test]
+fn a_sample_key_no_sample_has_or_compared_with_another_sort_of_value_is_noted() {
+    let one = samples("[[sample]]\nname = \"flat\"\nfiles = [\"uproot_flat.root\"]\nmetadata = { kind = \"sig\", era = 3, data = false, tags = [\"a\"] }\n");
+    let fine = "sample.era in [3, 4] or sample.kind in [3, 'sig'] or sample.data == 0 or sample.era == true";
+    let keep = format!("typo = \"sample.knd != 'bkg' or sample.tags == 'a'\"\nsort = \"sample.kind == 3 or sample.era != '3' or sample.era in ['3', '4'] or {fine}\"\n");
+    let dir = study("notes", &one, &recipe(&keep, "branches = [\"nJet\"]\n", "").replace("[define]\n", "[define]\nd = \"sample.knd == 1\"\n"));
+    assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
+    let (code, said) = rvr(&dir, &["press"]);
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("Note: recipe.toml: sample.knd is a key no sample of samples.toml has a value of, so every comparison with it is false, for every event. Did you mean: kind?"), "{said}");
+    assert!(said.contains("Note: recipe.toml: sample.tags is a key no sample of samples.toml has a value of"), "{said}");
+    assert!(said.contains("Note: recipe.toml: sample.kind is text in samples.toml, and is compared with a number: that is false for every event."), "{said}");
+    assert!(said.contains("Note: recipe.toml: sample.era is a number in samples.toml, and is compared with text: that is true for every event."), "{said}");
+    assert!(said.contains("Note: recipe.toml: sample.era is a number in samples.toml, and is compared with text: that is false for every event."), "{said}");
+    assert_eq!(said.matches("Note: ").count(), 5, "{said}");
+    // rvr try notes what its expression reads, through the names it uses.
+    let (code, said) = rvr(&dir, &["try", "d"]);
+    assert!(code == 0 && said.contains("Note: the expression: sample.knd is a key no sample"), "{said}");
+    // A recipe that names only what its samples have is pressed with no note.
+    std::fs::write(dir.join("recipe.toml"), recipe("sig = \"sample.kind == 'sig' and sample.era == 3\"\n", "branches = [\"nJet\"]\n", "")).unwrap();
+    let (code, said) = rvr(&dir, &["press"]);
+    assert!(code == 0 && !said.contains("Note"), "{said}");
+}
+
 // SPEC 7.1.2, 6.4.2
 #[test]
 fn the_choice_options_give_every_sample_the_rows_of_their_table() {
@@ -58,13 +83,22 @@ fn the_choice_options_give_every_sample_the_rows_of_their_table() {
     let dir = study("options", &random, &recipe("", "branches = [\"nJet\"]\n", ""));
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     let events = |flags: &[&str]| {
-        let (code, said) = rvr(&dir, &[&["press"], flags].concat());
+        let (code, said) = rvr(&dir, &[&["press", "--full"], flags].concat());
         assert_eq!(code, 0, "{flags:?}: {said}");
         header(&dir)["made"]["files"]["flat"]["events"].clone()
     };
     let random = |n: u64, seed: u64| serde_json::json!({"choose": "random", "n": n, "seed": seed, "algorithm": "splitmix64-selection-sampling"});
     assert_eq!(events(&[]), random(3, 4));
     assert_eq!(events(&["--events", "all"]), serde_json::json!({"choose": "all"}));
+    // A press of fewer events than the file there read asks first (SPEC 8.5): with no one to
+    // answer, it presses nothing; one of as many or more, and --full, press without asking.
+    let whole = std::fs::read(dir.join(name(&dir))).unwrap();
+    let (code, said) = rvr(&dir, &["press", "--events", "2"]);
+    assert!(code == 2 && said.contains("It read 5 entries, and this press reads 2") && said.contains("Give --full to replace it without asking, or --out FILE"), "{said}");
+    assert_eq!(std::fs::read(dir.join(name(&dir))).unwrap(), whole);
+    assert_eq!(events(&["--events", "2"]), serde_json::json!({"choose": "first", "n": 2}));
+    let (code, said) = rvr(&dir, &["press", "--events", "4"]);
+    assert!(code == 0 && !said.contains("takes its place"), "{said}");
     assert_eq!(events(&["--events", "2"]), serde_json::json!({"choose": "first", "n": 2}));
     assert_eq!(events(&["--events", "2", "--random"]), random(2, 1));
     assert_eq!(events(&["--events", "2", "--random", "--seed", "18446744073709551615"]), random(2, u64::MAX));

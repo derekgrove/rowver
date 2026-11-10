@@ -477,7 +477,7 @@ fn validate(words: &[&str], complete: bool) -> u8 {
 
 /// The entries a press read and the entries its samples hold: the sums of their `events_read` and
 /// `events_total`, which `validate_file` checked.
-fn entries_read(made: &serde_json::Value) -> (u64, u64) {
+pub(crate) fn entries_read(made: &serde_json::Value) -> (u64, u64) {
     let samples = made["files"].as_object().into_iter().flatten().map(|(_, sample)| &sample["metadata"]);
     samples.fold((0, 0), |(read, total), metadata| {
         (read + metadata["events_read"].as_u64().unwrap_or(0), total + metadata["events_total"].as_u64().unwrap_or(0))

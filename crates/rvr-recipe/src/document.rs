@@ -166,6 +166,30 @@ pub fn fields_of(expression: &Expression, found: &mut BTreeSet<String>) {
     }
 }
 
+/// Add each `==`, `!=` or `in` of a sample field with fixed values alone: the field, whether it
+/// is `!=`, and the values.
+pub fn compared(expression: &Expression, found: &mut Vec<(String, bool, Vec<crate::Constant>)>) {
+    use crate::Operator;
+    use Expression::{Binary, Constant, In, Sample};
+    match expression {
+        Binary(operator @ (Operator::Equal | Operator::NotEqual), left, right) => match (&**left, &**right) {
+            (Sample(field), Constant(value)) | (Constant(value), Sample(field)) => found.push((field.clone(), *operator == Operator::NotEqual, vec![value.clone()])),
+            _ => {}
+        },
+        In(left, list) => {
+            let fixed: Option<Vec<_>> = list.iter().map(|member| match member {
+                Constant(value) => Some(value.clone()),
+                _ => None,
+            }).collect();
+            if let (Sample(field), Some(values)) = (&**left, fixed) {
+                found.push((field.clone(), false, values));
+            }
+        }
+        _ => {}
+    }
+    expression.children().for_each(|child| compared(child, found));
+}
+
 /// Whether an expression names a branch by anything but text, as `branch(sample.KEY)`.
 fn by_sample(expression: &Expression) -> bool {
     matches!(expression, Expression::Call(function, arguments) if function == "branch" && named(arguments).is_none())

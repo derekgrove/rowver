@@ -45,6 +45,9 @@ fn run(options: &Options, wanted: usize) -> Result<(), String> {
     let (recipe, lock) = (checked.recipe, checked.lock);
     let index = sample_in(&lock, options.value("--sample"))?;
     let expression = recipe.expression(text).map_err(|e| format!("the expression: {}", e.0.replace('\n', "\nthe expression: ")))?;
+    for note in crate::agree::notes(crate::agree::with_defines(&expression, &recipe).into_iter(), &recipe, &lock) {
+        eprintln!("Note: the expression: {note}");
+    }
     let sample = &lock.samples[index];
     let (root, file) = first_readable(&lock, index, dir)?;
     let at = &file.at;

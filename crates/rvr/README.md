@@ -326,7 +326,9 @@ rvr press: recipe.toml: A recipe has no [totals] table: every recipe has its fiv
 
 When `rvr press` finds a file at its target made from the same study, it reads only what is new
 ([SPEC §8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file)); `rvr status` says beforehand what it would
-read, and `--full` always presses everything.
+read, and `--full` always presses everything. A press that reads fewer events than the file there
+read (`rvr press --events 50000` over a file of every event) asks before it replaces it; `--full`
+replaces it without asking, and `--out FILE` presses into another file.
 
 **A current file.** When the file holds the study as it is, `rvr press` leaves it byte for byte and
 exits 0; with holes, it says so and exits 3.

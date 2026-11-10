@@ -177,6 +177,10 @@ A field the sample doesn't have is **missing**, and has one rule: any comparison
 | as the condition of `if(…)` or of a cut | refused: `if(sample.isData, …)` needs every sample to have `isData` (give it to all of them in `[defaults]` of `samples.toml`), while `if(sample.isData == true, …)` takes a sample without it as false |
 | as a cut's own `if` | the cut does not apply to that sample |
 
+Because a comparison with a missing field is quietly false, `rvr press` and `rvr try` note a
+`sample.KEY` that no sample has, with the nearest keys the samples do have, and text compared with
+a number, or a number with text (`sample.kind == 3` where `kind` is text).
+
 A field's value is what `samples.toml` writes: a whole number (`xsec = 2`) is whole, a number with
 a `.` or an exponent (`xsec = 2.0`) a float, `true` or `false` a truth value, and text text; a list
 or table is missing. So `xsec = 2` and `xsec = 2.0` can give a column two kinds. `sample.file` is

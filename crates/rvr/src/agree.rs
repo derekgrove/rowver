@@ -9,6 +9,58 @@ use rowver::study::lock::Lock;
 use crate::plan::Shape;
 use rvr_recipe::Recipe;
 
+/// What `expressions` of a recipe quietly decide alike for every event over the lock's samples, a
+/// line each: a `sample.KEY` no sample has, and text compared with a number (or a number with text).
+pub fn notes<'e>(expressions: impl Iterator<Item = &'e rvr_recipe::Expression>, recipe: &Recipe, lock: &Lock) -> Vec<String> {
+    use rvr_recipe::Constant;
+    use serde_json::Value;
+    let (mut fields, mut compared) = (std::collections::BTreeSet::new(), Vec::new());
+    for expression in expressions {
+        rvr_recipe::fields_of(expression, &mut fields);
+        rvr_recipe::compared(expression, &mut compared);
+    }
+    // A key a sample holds a value of: a list or a table is none (the recipe README, "missing").
+    let valued = |v: &Value| matches!(v, Value::Number(_) | Value::String(_) | Value::Bool(_));
+    let keys: std::collections::BTreeSet<&str> = lock.samples.iter().flat_map(|s| s.metadata.iter().filter(|(_, v)| valued(v)).map(|(k, _)| k.as_str())).collect();
+    let known = |field: &str| field == "file" || ADDED.contains(&field) || keys.contains(field) || recipe.totals.iter().any(|total| total.name == field);
+    let mut said: Vec<String> = fields.iter().filter(|field| !known(field)).map(|field| {
+        format!("sample.{field} is a key no sample of samples.toml has a value of, so every comparison with it is false, for every event.{}", rvr_recipe::meant(field, keys.iter().copied()))
+    }).collect();
+    // Numbers and true-or-false values compare as numbers; text only with text.
+    for (field, unequal, values) in compared {
+        let texts: Vec<bool> = lock.samples.iter().filter_map(|s| s.metadata.get(&field).filter(|v| valued(v))).map(Value::is_string).collect();
+        let Some(text) = texts.first().copied().filter(|text| texts.iter().all(|t| t == text)) else { continue };
+        if values.is_empty() || values.iter().any(|v| matches!(v, Constant::Missing(_)) || matches!(v, Constant::Text(_)) == text) {
+            continue;
+        }
+        let (is, with) = if text { ("text", "a number") } else { ("a number", "text") };
+        let line = format!("sample.{field} is {is} in samples.toml, and is compared with {with}: that is {} for every event.", unequal);
+        if !said.contains(&line) {
+            said.push(line);
+        }
+    }
+    said
+}
+
+/// `expression` and the defined names it uses, however deep, as `notes` reads them.
+pub fn with_defines<'e>(expression: &'e rvr_recipe::Expression, recipe: &'e Recipe) -> Vec<&'e rvr_recipe::Expression> {
+    let (mut out, mut seen, mut at) = (vec![expression], std::collections::BTreeSet::new(), 0);
+    while at < out.len() {
+        let mut used = std::collections::BTreeSet::new();
+        rvr_recipe::uses(out[at], &mut used);
+        out.extend(used.into_iter().filter(|name| seen.insert(name.clone())).filter_map(|name| recipe.defines.get(&name)));
+        at += 1;
+    }
+    out
+}
+
+/// Every expression of a recipe: its defined names, cuts, columns, totals and derived columns.
+pub fn expressions(recipe: &Recipe) -> Vec<rvr_recipe::Expression> {
+    let derived = recipe.derived.iter().filter_map(|(_, text)| rvr_recipe::parse(text).ok());
+    let cuts = recipe.keep.iter().flat_map(|cut| cut.expressions());
+    recipe.defines.values().chain(cuts).chain(recipe.columns.iter().map(|(_, e)| e)).chain(recipe.totals.iter().map(|t| &t.value)).cloned().chain(derived).collect()
+}
+
 /// Whether `lock` was resolved from another samples.toml than `samples`.
 pub fn stale(samples: &str, lock: &Lock) -> bool {
     rowver::write::text_checksum(samples) != lock.samples_toml_sha256

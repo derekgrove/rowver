@@ -804,8 +804,9 @@ double = "weight * 2"
     let (code, said) = rvr(&dir, &["press"]);
     assert_eq!(code, 0, "{said}");
     assert!(said.contains("as samples.lock has changed since, and so have the columns (n new or changed): a press builds on a file for a change of either, not of both."), "{said}");
-    // A random choice is built on when it is the same, and the derived columns changed with it.
-    let (code, said) = rvr(&dir, &["press", "--events", "3", "--random", "--seed", "7"]);
+    // A random choice is built on when it is the same, and the derived columns changed with it
+    // (--full: the file there read more, and a press of fewer events asks first).
+    let (code, said) = rvr(&dir, &["press", "--full", "--events", "3", "--random", "--seed", "7"]);
     assert_eq!(code, 0, "{said}");
     std::fs::write(dir.join("samples.toml"), samples_of(&["c", "a", "d", "b", "e"]).replace("flat_e", "flat_*")).unwrap();
     std::fs::write(dir.join("recipe.toml"), recipe.replace("ht = ", "n = \"nJet * 2\"\nht = ").replace("weight * 2", "weight * 3")).unwrap();
@@ -1404,7 +1405,7 @@ fn a_staging_folder_left_once_its_file_was_in_place_is_removed_by_the_next_press
     assert!(code == 0 && said.contains(&format!("Removed {name}.partial: the press stopped there would make {name} as it is.")), "{said}");
     assert!(!staged.exists());
     // Any other stays, though it finished every file it read.
-    stopped_after(&dir, 2, &["--events", "8"]);
+    stopped_after(&dir, 2, &["--full", "--events", "8"]);
     let (code, said) = rvr(&dir, &["press"]);
     assert!(code == 0 && said.contains("is current: nothing to press.") && !said.contains("Removed"), "{said}");
     assert!(staged.join("journal.jsonl").exists());
