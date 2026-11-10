@@ -2,9 +2,29 @@
 //! and the byte lanes of values.
 
 use crate::{invalid, Result};
-use ruzstd::decoding::{BlockDecodingStrategy, FrameDecoder};
-use ruzstd::encoding::{compress_to_vec, CompressionLevel};
-use std::io::Read;
+use std::cell::RefCell;
+use zstd::zstd_safe::{self, CCtx, CParameter, DCtx};
+
+/// The zstd level every frame is written at.
+const LEVEL: i32 = 1;
+
+std::thread_local! {
+    /// This thread's compressor, at `LEVEL` and with a content checksum: each frame is one call of it.
+    static PACKER: RefCell<CCtx<'static>> = RefCell::new({
+        let mut packer = CCtx::create();
+        // A level and a flag zstd has: neither can fail.
+        packer.set_parameter(CParameter::CompressionLevel(LEVEL)).expect("zstd has this level");
+        packer.set_parameter(CParameter::ChecksumFlag(true)).expect("zstd has content checksums");
+        packer
+    });
+    /// This thread's decompressor.
+    static UNPACKER: RefCell<DCtx<'static>> = RefCell::new(DCtx::create());
+}
+
+/// Whether zstd's failure `code` is `kind`: a failure is its kind's number, negated.
+fn is(code: zstd_safe::ErrorCode, kind: zstd_safe::zstd_sys::ZSTD_ErrorCode) -> bool {
+    code == (kind as usize).wrapping_neg()
+}
 
 /// The most bytes a zstd frame of `size` bytes is let to declare: a 128 KiB block can be one
 /// byte repeated, so a damaged header cannot ask for more memory than its span could fill.
@@ -91,17 +111,42 @@ pub(crate) fn shuffle(raw: &[u8], w: usize) -> Vec<u8> {
 /// Values `w` bytes wide put back together from their byte lanes, `n` values each.
 pub(crate) fn merge<L: AsRef<[u8]>>(lanes: &[L], w: usize, n: usize) -> Vec<u8> {
     let mut values = vec![0; n * w];
-    for (lane, bytes) in lanes.iter().enumerate() {
-        for (to, byte) in values.iter_mut().skip(lane).step_by(w).zip(bytes.as_ref()) {
-            *to = *byte;
+    // Each width its own loop of known bounds; lanes that are not `w` of `n` bytes, as they come.
+    let whole = lanes.len() == w && lanes.iter().all(|lane| lane.as_ref().len() == n);
+    match w {
+        2 if whole => fill::<2, L>(&mut values, lanes),
+        4 if whole => fill::<4, L>(&mut values, lanes),
+        8 if whole => fill::<8, L>(&mut values, lanes),
+        _ => {
+            for (lane, bytes) in lanes.iter().enumerate() {
+                for (to, byte) in values.iter_mut().skip(lane).step_by(w).zip(bytes.as_ref()) {
+                    *to = *byte;
+                }
+            }
         }
     }
     values
 }
 
+/// `values`, `W` bytes each, filled from their `W` lanes of as many bytes as there are values.
+fn fill<const W: usize, L: AsRef<[u8]>>(values: &mut [u8], lanes: &[L]) {
+    let n = values.len() / W;
+    let lanes: [&[u8]; W] = std::array::from_fn(|lane| &lanes[lane].as_ref()[..n]);
+    for (at, value) in values.as_chunks_mut::<W>().0.iter_mut().enumerate() {
+        for (byte, lane) in value.iter_mut().zip(&lanes) {
+            *byte = lane[at];
+        }
+    }
+}
+
 /// Bytes stored as one frame.
 pub(crate) fn pack(raw: &[u8]) -> Vec<u8> {
-    compress_to_vec(raw, CompressionLevel::Fastest)
+    let mut out = Vec::with_capacity(zstd_safe::compress_bound(raw.len()));
+    let packed = PACKER.with_borrow_mut(|packer| packer.compress2(&mut out, raw));
+    // A buffer of the bound's size: it cannot fail.
+    packed.unwrap_or_else(|code| panic!("zstd could not compress {} bytes: {}", raw.len(), zstd_safe::get_error_name(code)));
+    out.shrink_to_fit();
+    out
 }
 
 /// The bytes of exactly one zstd frame (docs/FORMAT.md §7) that fills `packed` and gives exactly
@@ -111,33 +156,28 @@ pub(crate) fn unpack(packed: &[u8], expected: usize, place: &str, holds: &str) -
         return Err(broken(place, &format!("is too small to hold {holds}")));
     }
     frame(packed, expected, place, holds)?;
+    let fails = |code| broken(place, &format!("does not decode ({})", zstd_safe::get_error_name(code)));
+    let size = zstd_safe::find_frame_compressed_size(packed).map_err(fails)?;
+    if size != packed.len() {
+        return Err(broken(place, &format!("ends {} bytes before {holds} does: it is exactly one frame", packed.len() - size)));
+    }
     // One byte past the declared length, so a frame that holds more is caught.
-    let mut out = vec![0; expected + 1];
-    let mut decoder = FrameDecoder::new();
-    let mut input = packed;
-    let fails = |e: &dyn std::fmt::Display| broken(place, &format!("does not decode ({e})"));
-    decoder.init(&mut input).map_err(|e| fails(&e))?;
-    let mut written = 0;
-    loop {
-        decoder.decode_blocks(&mut input, BlockDecodingStrategy::UptoBytes(1 << 20)).map_err(|e| fails(&e))?;
-        written += decoder.read(&mut out[written..])?;
-        if decoder.can_collect() != 0 {
-            return Err(broken(place, &format!("decodes to more than the {expected} bytes {holds} holds")));
+    let mut out = Vec::with_capacity(expected + 1);
+    let written = UNPACKER.with_borrow_mut(|unpacker| unpacker.decompress(&mut out, packed));
+    let written = match written {
+        Ok(written) => written,
+        Err(code) => {
+            use zstd_safe::zstd_sys::ZSTD_ErrorCode as Kind;
+            return Err(match code {
+                code if is(code, Kind::ZSTD_error_dstSize_tooSmall) => broken(place, &format!("decodes to more than the {expected} bytes {holds} holds")),
+                code if is(code, Kind::ZSTD_error_checksum_wrong) => broken(place, "has a content checksum that is not that of its content"),
+                code => fails(code),
+            });
         }
-        if decoder.is_finished() {
-            break;
-        }
-    }
-    if !input.is_empty() {
-        return Err(broken(place, &format!("ends {} bytes before {holds} does: it is exactly one frame", input.len())));
-    }
-    if decoder.get_checksum_from_data() != decoder.get_calculated_checksum() {
-        return Err(broken(place, "has a content checksum that is not that of its content"));
-    }
+    };
     if written != expected {
         return Err(broken(place, &format!("decodes to {written} bytes, and {holds} holds {expected}")));
     }
-    out.truncate(expected);
     Ok(out)
 }
 
@@ -183,7 +223,9 @@ mod tests {
         let mut dictionary = good.clone();
         dictionary[4] |= 0x01;
         assert!(said(dictionary).contains("dictionary"));
-        let mut wide = good.clone();
+        // A frame with a window descriptor, as another zstd writes one: ruzstd's.
+        let mut wide = ruzstd::encoding::compress_to_vec(&raw[..], ruzstd::encoding::CompressionLevel::Fastest);
+        assert_eq!(unpack(&wide, raw.len(), "x", "its chunk's lane").unwrap(), raw);
         wide[5] = 18 << 3;
         assert!(said(wide).contains("window"));
     }

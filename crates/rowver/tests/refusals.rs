@@ -608,7 +608,7 @@ fn opening() -> Vec<Row> {
                 held["at"] = (held["at"].as_u64().unwrap() + 1).into();
             }
             region
-        }), "data.entry.at is 241, but the arrays before it end at 240: the arrays fill the bytes from 8 to the header with no gap and no overlap"),
+        }), "data.entry.at is 253, but the arrays before it end at 252: the arrays fill the bytes from 8 to the header with no gap and no overlap"),
         ("§7", "no arrays overlapping", Placed(|h, a| {
             // The sample array's last byte gone, every array after it a byte nearer: it overlaps the next.
             let mut region = a.concat();
@@ -618,7 +618,7 @@ fn opening() -> Vec<Row> {
                 held["at"] = (held["at"].as_u64().unwrap() - 1).into();
             }
             region
-        }), "data.entry.at is 239, but the arrays before it end at 240: the arrays fill the bytes from 8 to the header with no gap and no overlap"),
+        }), "data.entry.at is 251, but the arrays before it end at 252: the arrays fill the bytes from 8 to the header with no gap and no overlap"),
         ("§1", "no byte-order mark", Text(|t| t.insert(0, '\u{feff}')), "the header is not JSON as docs/FORMAT.md §1 reads it"),
         ("§1", "one JSON object", Text(|t| *t = format!("[{t}]")), "the header must be one JSON object"),
         ("§1", "no key twice", Text(|t| *t = t.replacen("{\"rows\":", "{\"rows\":5,\"rows\":", 1)), "the header breaks docs/FORMAT.md §1: data.rows is written twice (line 1, column "),
@@ -959,7 +959,7 @@ fn in_full() -> Vec<Row> {
         ("§7 F5", "a content checksum", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0][4] &= !4)), "data.cols[\"MET\"]: its zstd frame has no content checksum"),
         ("§7 F5", "the content checksum right", Arrays(|h, a| edit(h, a, 3, 4, |c| *c[0].0[0].last_mut().unwrap() ^= 1)), "data.cols[\"MET\"]: its zstd frame has a content checksum that is not that of its content"),
         ("§7 F5", "a declared content size exact", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0] = sized(&c[0].0[0], 4))), "data.cols[\"MET\"]: its zstd frame declares 4 bytes of content"),
-        ("§7", "a window of at most 2^27", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0][5] = 18 << 3)), "data.cols[\"MET\"]: its zstd frame asks for a window of 268435456 bytes"),
+        ("§7", "a window of at most 2^27", Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0[0] = vec![0x28, 0xB5, 0x2F, 0xFD, 0x04, 18 << 3, 1, 0, 0, 0, 0, 0, 0])), "data.cols[\"MET\"]: its zstd frame asks for a window of 268435456 bytes"),
         ("§7 §8", "a file of no rows: each array's sha256 that of no chunks", Rowless(|h| h["data"]["entry"]["sha256"] = sha(b"x").into()), "data.entry: its chunk table does not give the array's sha256"),
         ("§7 §8", "a file of no rows: each array's by_sample that of no chunks", Rowless(|h| h["data"]["cols"][1]["by_sample"][1] = sha(b"x").into()), "data.cols[\"MET\"]: its chunk table does not give by_sample[1]"),
         // §8 Checksums, against the chunk tables

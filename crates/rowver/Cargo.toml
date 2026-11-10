@@ -16,10 +16,13 @@ license.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip", "arbitrary_precision", "preserve_order"] }
 thiserror.workspace = true
-ruzstd.workspace = true
+zstd.workspace = true
 ed25519-dalek.workspace = true
 sha2.workspace = true
 zmij.workspace = true
 libm.workspace = true
 rvr-recipe.workspace = true
 toml.workspace = true
+
+[dev-dependencies]
+ruzstd.workspace = true

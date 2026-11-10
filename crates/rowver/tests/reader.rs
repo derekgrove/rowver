@@ -107,7 +107,7 @@ fn a_header_declaring_more_rows_than_its_arrays_hold_is_refused_not_allocated() 
     let huge = written(&to_bytes(&header, std::slice::from_ref(&arrays)), "huge");
     let (opened, most) = most_during(|| Reader::open(&huge));
     let Err(said) = opened else { panic!("opened") };
-    assert!(said.to_string().contains("data.sample.size is 240, and its 8388609 chunks take at least"), "{said}");
+    assert!(said.to_string().contains("data.sample.size is 252, and its 8388609 chunks take at least"), "{said}");
     assert!(most < 1 << 20, "opening held {most} bytes");
     // 2^62 rows of sample B: refused on opening, and an inspected file's columns refused to read,
     // with as little held.

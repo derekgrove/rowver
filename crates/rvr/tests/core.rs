@@ -177,15 +177,15 @@ fn the_running_example_of_format_md_is_what_a_press_writes() {
     let (text, arrays) = common::parts(&bytes);
     let h: Value = serde_json::from_slice(text).unwrap();
     // The header's length is the build's own (its commit and compiler are in it): FORMAT.md quotes one.
-    assert_eq!((arrays.len(), n), (1962, 8 + 1962 + text.len() + 12));
+    assert_eq!((arrays.len(), n), (2056, 8 + 2056 + text.len() + 12));
     assert_eq!(&bytes[n - 12..n - 8], (text.len() as u32).to_le_bytes());
     let d = &h["data"];
     let cut = |v: &Value| v.as_str().unwrap()[..8].to_owned();
     let at = |v: &Value| (v["at"].as_u64().unwrap(), v["size"].as_u64().unwrap());
     let cols = |name: &str| d["cols"].as_array().unwrap().iter().find(|c| c["name"] == name).unwrap().clone();
     let (njet, jet, ht) = (cols("nJet"), cols("Jet_pt"), cols("ht"));
-    assert_eq!([at(&d["sample"]), at(&d["entry"]), at(&njet), at(&jet["offsets"]), at(&jet["content"]), at(&ht)], [(0, 240), (240, 430), (670, 254), (924, 432), (1356, 324), (1680, 282)]);
-    assert_eq!(&arrays[..6], [0x28, 0xb5, 0x2f, 0xfd, 0x04, 0x38]);
+    assert_eq!([at(&d["sample"]), at(&d["entry"]), at(&njet), at(&jet["offsets"]), at(&jet["content"]), at(&ht)], [(0, 264), (264, 464), (728, 264), (992, 480), (1472, 320), (1792, 264)]);
+    assert_eq!(&arrays[..6], [0x28, 0xb5, 0x2f, 0xfd, 0x24, 0x04]);
     assert_eq!((&d["rows"], &d["chunk_rows"]), (&serde_json::json!(8), &serde_json::json!(65_536)));
     let hashes = [cut(&d["sample"]["sha256"]), cut(&d["entry"]["sha256"]), cut(&njet["sha256"]), cut(&jet["offsets"]["sha256"]), cut(&jet["content"]["sha256"]), cut(&ht["sha256"]), cut(&d["sha256"])];
     assert_eq!(hashes, ["0b8e189d", "d618105e", "d9237950", "af72e3c9", "69fa98c7", "e5fc4c13", "d943535f"]);

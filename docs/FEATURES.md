@@ -156,11 +156,11 @@ every value's first byte, then every value's second byte, and so on, which puts 
 changing bytes of neighbouring values together; each lane is compressed as one Zstandard frame
 [RFC 8878]. After an array's frames comes its chunk table: each frame's size and each chunk's
 SHA-256. A reader can therefore read, decompress and check any rows of any column alone, and the
-chunks of a column in parallel. Everything runs in pure Rust. On one real file (the TChiWZ skim,
-7,071 rows, one chunk) the lanes as frames of their own make it 11% smaller than one frame an array
-did (1.01 MB against 1.14 MB), and on 2.4 M rows of real CMS ntuples (four trees of three FNAL
-files) 0.3% smaller; the 2.1 M-row bench, 300 copies of one file, grows from 39.3 to
-51.2 MB, as its copies no longer match across chunks (Apple M5, 2026-11-04).
+chunks of a column in parallel. The frames are written and read by the reference Zstandard library,
+built into rvr. On 4.4 M rows of one real CMS NanoAOD file (25 columns, 13 of them lists) the lanes
+as frames of their own make the arrays 472 MB, where one frame a chunk of the same lanes makes 480 MB
+and one of the values as they are 627 MB; their 1.6 GB of values decode in 0.17 s, 0.16 s and
+0.20 s on ten threads (Apple M5, 2026-11-10).
 
 ## 4. Integrity, provenance and reproducibility
 

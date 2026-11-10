@@ -28,7 +28,9 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-# Arrays are zstd frames (pure Rust; the same version hep-root reads ROOT baskets with).
+# Arrays are zstd frames, written and read by the reference library (C, built in).
+zstd = { version = "0.14", default-features = false }
+# A second zstd, pure Rust, the tests write frames with (the version hep-root reads ROOT baskets with).
 ruzstd = "0.8"
 # Signed files.
 ed25519-dalek = "3"

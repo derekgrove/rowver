@@ -11,7 +11,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-# The rehashed target's (fuzz/src/rehash.rs): the versions fuzz/Cargo.lock already has through rowver.
+# The rehashed target's (fuzz/src/rehash.rs): ruzstd as rowver's own tests use it, the others as rowver does.
 ruzstd = "0.8"
 serde_json = "1"
 sha2 = "0.11"
