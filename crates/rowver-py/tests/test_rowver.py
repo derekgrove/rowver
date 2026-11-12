@@ -240,7 +240,7 @@ class Pressed(unittest.TestCase):
         gone = weakref.ref(weight)
         del weight
         self.assertIsNone(gone())
-        with self.assertRaisesRegex(KeyError, "wieght: not a column of .*; did you mean weight\? f.keys\(\) lists every one"):
+        with self.assertRaisesRegex(KeyError, r"wieght: not a column of .*; did you mean weight\? f.keys\(\) lists every one"):
             f["wieght"]
         with self.assertRaisesRegex(KeyError, "QQQQ: not a column of .*; it has sample, entry, .*xsec"):
             f["QQQQ"]
@@ -412,7 +412,8 @@ class Pressed(unittest.TestCase):
             header = whole[-12 - n:-12][:-1] + b',"' + key.encode() + b'":' + text + b"}"
             copy.write_bytes(whole[:-12 - n] + header + len(header).to_bytes(4, "little") + whole[-8:])
 
-        # Deeper than json.loads goes (Python 3.13 reads 9,998 deep): its text; a lone surrogate it reads.
+        # Deeper than json.loads goes: its text (Python 3.13 reads 9,998 deep; 3.14 as deep as its
+        # stack allows, and may read it all); a lone surrogate it reads.
         deep = '{"d":' + "[" * 100_000 + "]" * 100_000 + "}"
         lone = '{"s":"\\ud800 } ] \\" {"}'
         twice = '{"t":{"a":1,"a":2}}'
@@ -426,7 +427,15 @@ class Pressed(unittest.TestCase):
                     written(key, text)
                     with self.assertRaises(rowver.Error):
                         rowver.open(copy)
-                    self.assertEqual(rowver.drop_tool(copy, key), given)
+                    got = rowver.drop_tool(copy, key)
+                    if key == "deep" and isinstance(got, dict):
+                        # Read whole: walked, as == would go as deep as the lists do.
+                        levels, inner = 0, got.get("d")
+                        while isinstance(inner, list) and inner:
+                            levels, inner = levels + 1, inner[0]
+                        self.assertEqual((levels, inner), (99_999, []))
+                    else:
+                        self.assertEqual(got, given)
                     self.assertEqual(copy.read_bytes(), whole)
             # A whole number of more digits than Python turns into an int opens, as a Decimal.
             import decimal
