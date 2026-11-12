@@ -125,17 +125,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - run: |
-          if ! command -v rustup; then curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal; fi
-          . "$HOME/.cargo/env"
+          # The container has no rustup; macos-15's is Homebrew's, on PATH with no ~/.cargo/env. cargo is
+          # asked of rustup by toolchain, wherever its proxies lie.
+          if ! command -v rustup; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal
+            . "$HOME/.cargo/env"
+          fi
           rustup toolchain install $RUST --profile minimal && rustup default $RUST
           V=${TAG#v}; mkdir -p out
           if [ "${{ matrix.name }}" = macos ]; then
             for t in aarch64-apple-darwin x86_64-apple-darwin; do
-              rustup target add $t && cargo build --release --locked -p rvr --target $t
+              rustup target add --toolchain $RUST $t && rustup run $RUST cargo build --release --locked -p rvr --target $t
             done
             lipo -create -output out/rvr target/aarch64-apple-darwin/release/rvr target/x86_64-apple-darwin/release/rvr
           else
-            cargo build --release --locked -p rvr && cp target/release/rvr out/
+            rustup run $RUST cargo build --release --locked -p rvr && cp target/release/rvr out/
           fi
           bash .github/check-commit.sh out/rvr
           tar czf rvr-$V-${{ matrix.name }}.tar.gz -C out rvr
