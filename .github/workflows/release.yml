@@ -147,11 +147,17 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: "binary-${{ matrix.name }}", path: "rvr-*.tar.gz" }
 
-  # Nothing is published until every build and test above has passed. crates.io first, in the order
-  # the crates need each other; a version already there with the same contents was left out by plan.
+  # Nothing is published until every build and test above has passed, each job asked by name (the
+  # wheels through test-wheels, which needs them): a rehearsal published though no runner had taken
+  # one test job, needs.*.result holding neither failure nor cancelled. Nor in a run cancelled.
+  # crates.io first, in the order the crates need each other; a version already there with the same
+  # contents was left out by plan.
   crates-io:
     needs: [plan, test-wheels, sdist, binaries]
-    if: github.event_name == 'push' && needs.plan.outputs.crates != ''
+    if: >-
+      !cancelled() && github.event_name == 'push' && needs.plan.outputs.crates != '' &&
+      needs.plan.result == 'success' && needs.test-wheels.result == 'success' &&
+      needs.sdist.result == 'success' && needs.binaries.result == 'success'
     runs-on: ubuntu-24.04
     environment: release
     permissions: { contents: read, id-token: write }
@@ -172,12 +178,14 @@ jobs:
           done
         env: { CARGO_REGISTRY_TOKEN: "${{ steps.auth.outputs.token }}" }
 
-  # crates-io is skipped when no crate is new, or in a rehearsal; any other job not passing stops it.
+  # crates-io is skipped when no crate is new, or in a rehearsal; every other job must have passed.
   pypi:
     needs: [plan, test-wheels, sdist, binaries, crates-io]
     if: >-
-      always() && needs.plan.outputs.python == 'true' &&
-      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+      !cancelled() && needs.plan.outputs.python == 'true' &&
+      needs.plan.result == 'success' && needs.test-wheels.result == 'success' &&
+      needs.sdist.result == 'success' && needs.binaries.result == 'success' &&
+      (needs.crates-io.result == 'success' || needs.crates-io.result == 'skipped')
     runs-on: ubuntu-24.04
     environment: ${{ github.event_name == 'push' && 'pypi' || 'testpypi' }}
     permissions: { id-token: write }
@@ -197,8 +205,11 @@ jobs:
   gitlab-release:
     needs: [plan, test-wheels, sdist, binaries, crates-io, pypi]
     if: >-
-      always() && github.event_name == 'push' && needs.plan.result == 'success' &&
-      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+      !cancelled() && github.event_name == 'push' &&
+      needs.plan.result == 'success' && needs.test-wheels.result == 'success' &&
+      needs.sdist.result == 'success' && needs.binaries.result == 'success' &&
+      (needs.crates-io.result == 'success' || needs.crates-io.result == 'skipped') &&
+      (needs.pypi.result == 'success' || needs.pypi.result == 'skipped')
     runs-on: ubuntu-24.04
     environment: release
     steps:
