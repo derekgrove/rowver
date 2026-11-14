@@ -340,6 +340,19 @@ fn a_file_of_many_chunks_holds_and_slices_the_values_of_one_of_one_chunk() {
             assert_eq!(slice, whole.rows(from, to).unwrap(), "{name} rows {from} to {to}");
         }
     }
+    // Rows of several columns read together are each column's: sample and entry, a list column, a derived one, a name twice and one it has no column of among them.
+    let names: Vec<String> = ["event", "Jet_pt", "nothing", "ratio", "sample", "MET", "first", "ratio", "MET", "entry"].map(String::from).to_vec();
+    let wholes = small.columns(&names).unwrap();
+    assert_eq!(wholes.iter().map(Option::is_none).collect::<Vec<_>>(), names.iter().map(|name| name == "nothing").collect::<Vec<_>>());
+    assert_eq!(wholes[4].as_ref().unwrap().bytes, small.sample().unwrap().iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>());
+    assert_eq!(wholes[9].as_ref().unwrap().bytes, small.entry().unwrap().iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>());
+    for (from, to) in [(0, 1), (1000, 1100), (1023, 1025), (1024, 3072), (rows - 5, rows), (7, 7), (1024, 1024), (rows, rows), (0, rows)] {
+        let together = small.slices(&names, from, to).unwrap();
+        for ((name, held), whole) in names.iter().zip(together).zip(&wholes) {
+            assert_eq!(held, whole.as_ref().map(|whole| whole.rows(from, to).unwrap()), "{name} rows {from} to {to}");
+        }
+    }
+    assert!(small.slices(&names, 5, rows + 1).is_err() && small.slices(&names, 9, 3).is_err());
     let entries = small.entry().unwrap();
     assert_eq!(small.entry_slice(1020, 1030).unwrap(), entries[1020..1030]);
     assert!(small.slice("event", 5, rows + 1).is_err());

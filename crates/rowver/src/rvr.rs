@@ -471,7 +471,7 @@ fn read_body(file: &Reader, reads: &identity::Reads, worked: &[bool]) -> Result<
         }
         columns.push((record, place, kind));
     }
-    file.each_chunks(&first, &mut |a, k, values, _| match a {
+    file.each_chunks(&first, None, &mut |a, k, values, _| match a {
         0 => check.sample(rows[k].0, rows[k].1, &values),
         1 => check.entry(rows[k].1, &values),
         a => match (&mut made[a - 2], &columns[of[a - 2]]) {
@@ -500,7 +500,7 @@ fn read_body(file: &Reader, reads: &identity::Reads, worked: &[bool]) -> Result<
             },
         }
     }
-    file.each_chunks(&contents, &mut |a, _, values, _| {
+    file.each_chunks(&contents, None, &mut |a, _, values, _| {
         truth(&values, contents[a].1, &contents[a].2)?;
         match quieted[a] {
             true => quiet(&values, contents[a].1, &contents[a].2),

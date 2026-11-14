@@ -28,9 +28,22 @@ type Column<'py> = (
     Option<Bound<'py, PyArray1<i64>>>,
 );
 
-fn handed(py: Python<'_>, held: Held) -> Column<'_> {
-    let offsets = held.offsets.map(|offsets| counted(py, &offsets));
-    (held.kind, held.bytes.into_pyarray(py), offsets)
+/// Columns read together, handed to NumPy: list columns that share their offsets
+/// (docs/FORMAT.md §7) are handed one array of them.
+fn handed(py: Python<'_>, read: Vec<Option<Held>>) -> Vec<Option<Column<'_>>> {
+    let mut shared: Vec<(std::sync::Arc<Vec<usize>>, Bound<'_, PyArray1<i64>>)> = Vec::new();
+    let mut one = |mut held: Held| {
+        let offsets = held.offsets.take().map(|offsets| match shared.iter().find(|(known, _)| std::sync::Arc::ptr_eq(known, &offsets)) {
+            Some((_, array)) => array.clone(),
+            None => {
+                let array = counted(py, &offsets);
+                shared.push((offsets, array.clone()));
+                array
+            }
+        });
+        (held.kind, held.bytes.into_pyarray(py), offsets)
+    };
+    read.into_iter().map(|held| held.map(&mut one)).collect()
 }
 
 /// A list column's offsets as NumPy holds them.
@@ -94,64 +107,24 @@ impl File {
         self.reader.empty()
     }
 
-    /// Each row's index into the file's samples.
-    fn sample<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<i32>>> {
-        let values = py
-            .detach(|| self.reader.sample())
-            .map_err(|e| self.located(&e))?;
-        Ok(values.into_pyarray(py))
+    /// Rows `start..stop` of the columns (or `sample`, `entry`) of these names, the columns' chunks
+    /// that hold them decoded in one pool of threads; `None` for a name the file holds no column of.
+    fn rows<'py>(&self, py: Python<'py>, names: Vec<String>, start: &Bound<'py, PyAny>, stop: &Bound<'py, PyAny>) -> PyResult<Vec<Option<Column<'py>>>> {
+        let (start, stop) = self.reader.asked(&names.join(", "), row(start)?, row(stop)?).map_err(|e| self.located(&e))?;
+        let read = py.detach(|| self.reader.slices(&names, start, stop));
+        Ok(handed(py, read.map_err(|e| self.located(&e))?))
     }
 
-    /// Each row's entry number in its file's tree.
-    fn entry<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray1<i64>>> {
-        let values = py
-            .detach(|| self.reader.entry())
-            .map_err(|e| self.located(&e))?;
-        Ok(values.into_pyarray(py))
+    /// Each chunk's first row and the row after its last, in order (docs/FORMAT.md §7).
+    fn chunks(&self) -> PyResult<Vec<(usize, usize)>> {
+        self.reader.chunk_spans().map_err(|e| self.located(&e))
     }
 
-    /// Rows `start..stop` of the column (or `sample`, `entry`) of this name, only the chunks holding
-    /// them read; `None` for a name the file holds no column of.
-    fn slice<'py>(&self, py: Python<'py>, name: String, start: &Bound<'py, PyAny>, stop: &Bound<'py, PyAny>) -> PyResult<Option<Column<'py>>> {
-        let (start, stop) = self.reader.asked(&name, row(start)?, row(stop)?).map_err(|e| self.located(&e))?;
-        let read = py.detach(|| match name.as_str() {
-            "sample" => self.reader.sample_slice(start, stop).map(|v| Some(Held { kind: "i4".into(), bytes: v.iter().flat_map(|x| x.to_le_bytes()).collect(), offsets: None })),
-            "entry" => self.reader.entry_slice(start, stop).map(|v| Some(Held { kind: "i8".into(), bytes: v.iter().flat_map(|x| x.to_le_bytes()).collect(), offsets: None })),
-            _ => self.reader.slice(&name, start, stop),
-        });
-        Ok(read.map_err(|e| self.located(&e))?.map(|held| handed(py, held)))
-    }
-
-    /// The columns of these names: every chunk of the stored ones decoded in one pool of threads,
-    /// then the derived ones worked out together; `None` for a name the file holds no column of.
-    fn columns<'py>(
-        &self,
-        py: Python<'py>,
-        names: Vec<String>,
-    ) -> PyResult<Vec<Option<Column<'py>>>> {
-        let listed = rowver::rvr::derived::listed(self.reader.header());
-        let derived: Vec<String> = listed.into_iter().map(|(name, _)| name).filter(|name| names.contains(name)).collect();
-        let read = py.detach(|| {
-            let plain = |e: rowver::Error| rowver::plain(self.reader.path(), &e);
-            let stored = self.reader.stored_columns(&names).map_err(plain)?;
-            let worked = rowver::rvr::derived::columns(&self.reader, &derived).map_err(plain)?;
-            let mut worked: std::collections::HashMap<&String, _> = derived.iter().zip(worked).collect();
-            Ok::<_, String>(names.iter().zip(stored).map(|(name, held)| worked.remove(name).or(held)).collect::<Vec<_>>())
-        });
-        // List columns that share their offsets (docs/FORMAT.md §7) are handed one array of them.
-        let mut shared: Vec<(std::sync::Arc<Vec<usize>>, Bound<'py, PyArray1<i64>>)> = Vec::new();
-        let mut one = |mut held: Held| {
-            let offsets = held.offsets.take().map(|offsets| match shared.iter().find(|(known, _)| std::sync::Arc::ptr_eq(known, &offsets)) {
-                Some((_, array)) => array.clone(),
-                None => {
-                    let array = counted(py, &offsets);
-                    shared.push((offsets, array.clone()));
-                    array
-                }
-            });
-            (held.kind, held.bytes.into_pyarray(py), offsets)
-        };
-        Ok(read.map_err(failed)?.into_iter().map(|held| held.map(&mut one)).collect())
+    /// The columns (or `sample`, `entry`) of these names: every chunk of the stored ones decoded in one pool of
+    /// threads, then the derived ones worked out together; `None` for a name the file holds no column of.
+    fn columns<'py>(&self, py: Python<'py>, names: Vec<String>) -> PyResult<Vec<Option<Column<'py>>>> {
+        let read = py.detach(|| self.reader.columns(&names));
+        Ok(handed(py, read.map_err(|e| self.located(&e))?))
     }
 }
 

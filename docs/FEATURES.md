@@ -618,7 +618,8 @@ column is read as any other, `f["name"]`, worked out when asked for;
 a `with rowver.open(…) as f:` block, lets go of the file). `f.keys()` names
 every column `f[name]` reads and `f.show()` prints them with their kinds; a sample column
 (`f["xsec"]`) reads as its sample's value in every row; `f["mass"][f.rows_of("DY")]` is one sample's rows, as a sample's
-rows come together, and `sample="DY"` reads them alone; a `File` pickles as its path. [The Python examples](examples/python/README.md) work with a file's columns and
+rows come together, and `sample="DY"` reads them alone; `f.blocks(names)` gives a file too large
+to hold a block of rows at a time; a `File` pickles as its path. [The Python examples](examples/python/README.md) work with a file's columns and
 plot them with matplotlib, hist and ROOT. Only NumPy is required;
 Awkward, pandas and pyarrow are used when installed.
 

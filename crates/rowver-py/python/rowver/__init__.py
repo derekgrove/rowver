@@ -6,6 +6,7 @@ Arrow tables, pandas data frames or Parquet. `rvr`, the command that makes them,
     f["MET"]                 # a NumPy array, one value per row
     f["Jet_pt"]              # an Awkward array, a list per row
     f.to_pandas()            # every column, with each row's sample and entry
+    f.blocks(["MET"])        # the file a block of rows at a time, for one too large to hold
     f.show()                 # every name f[name] reads, and its kind
 """
 
@@ -44,6 +45,13 @@ def _typed(raw, kind):
         values = values.copy()
     values.flags.writeable = False
     return values
+
+
+def _read(kind, raw, offsets):
+    """A column as Rust handed it over: its values typed, and a list column's offsets, both read-only."""
+    if offsets is not None:
+        offsets.flags.writeable = False
+    return _typed(raw, kind), offsets
 
 
 def _names(names, every):
@@ -124,6 +132,10 @@ def _once(pairs):
     if len(held) != len(pairs):
         raise ValueError("a member is held twice")
     return held
+
+
+class _Block(dict):
+    """One block of `File.blocks`: its columns by name, and `rows`, the slice of the file's rows it holds."""
 
 
 class File:
@@ -303,14 +315,27 @@ class File:
         rows.flags.writeable = False
         return rows
 
+    def _known(self, names):
+        """The column names asked for (every stored and derived one when none is), or KeyError naming those it has no column of."""
+        names = _names(names, self.columns + self.derived)
+        unknown = [n for n in names if n not in self._keys]
+        if unknown:
+            raise self._unknown(unknown)
+        return names
+
+    def _parts(self, names, start, stop):
+        """Rows `start` to `stop` of these columns, read together from the chunks that hold them: name -> (values, offsets)."""
+        file, asked = self._open(), list(dict.fromkeys(names))
+        # A sample column is no column of the file's: asked for by its name all the same, so that rows refused name it.
+        got = {n: _read(*column) for n, column in zip(asked, file.rows(asked, start, stop)) if column is not None}
+        if any(n in self._per_sample for n in asked):
+            codes = got["sample"][0] if "sample" in got else _read(*file.rows(["sample"], start, stop)[0])[0]
+            got.update((n, (self._per_row(n, codes), None)) for n in asked if n in self._per_sample)
+        return {n: got[n] for n in names}
+
     def _part(self, name, start, stop):
-        """Rows `start` to `stop` of one column, read from the chunks that hold them: (values, offsets)."""
-        if name in self._per_sample:
-            return self._per_row(name, self._part("sample", start, stop)[0]), None
-        kind, raw, offsets = self._open().slice(name, start, stop)
-        if offsets is not None:
-            offsets.flags.writeable = False
-        return _typed(raw, kind), offsets
+        """Rows `start` to `stop` of one column: (values, offsets)."""
+        return self._parts([name], start, stop)[name]
 
     # Not iterable: len(f) is its rows, which list(f) would take for the number of names to make
     # room for. f.keys() names the columns.
@@ -346,15 +371,11 @@ class File:
         """Columns by name (every one, stored and derived, when not given), the stored ones read at once on every core: name -> (values,
         offsets), where `offsets` is None for a one-value-per-row column and otherwise says that
         row r holds values[offsets[r]:offsets[r + 1]]. With `sample`, the rows of the sample of
-        that name alone, only its chunks read, a column after another. The arrays are read-only:
-        copy one to change it."""
-        names = _names(names, self.columns + self.derived)
-        unknown = [n for n in names if n not in self._keys]
-        if unknown:
-            raise self._unknown(unknown)
+        that name alone, only its chunks read. The arrays are read-only: copy one to change it."""
+        names = self._known(names)
         if sample is not None:
             rows = self.rows_of(sample)
-            return {n: self._part(n, rows.start, rows.stop) for n in names}
+            return self._parts(names, rows.start, rows.stop)
         # Another thread's close() or forget() meanwhile changes nothing here: the open file is
         # taken once, and what is handed out is noted in the dict there when this read began.
         held = self._held
@@ -362,18 +383,12 @@ class File:
         missing = [n for n, kept in got.items() if kept is None]
         if missing:
             file = self._open()
-            wanted = [n for n in missing if n not in _ROW and n not in self._per_sample]
-            for name, (kind, raw, offsets) in zip(wanted, file.columns(wanted) if wanted else []):
-                if offsets is not None:
-                    offsets.flags.writeable = False
-                    if name in self._shared:
-                        offsets = self._offsets.setdefault(self._shared[name], offsets)
-                got[name] = (_typed(raw, kind), offsets)
-            for name in _ROW:
-                if name in missing:
-                    values = getattr(file, name)()
-                    values.flags.writeable = False
-                    got[name] = (values, None)
+            wanted = [n for n in missing if n not in self._per_sample]
+            for name, column in zip(wanted, file.columns(wanted) if wanted else []):
+                values, offsets = _read(*column)
+                if offsets is not None and name in self._shared:
+                    offsets = self._offsets.setdefault(self._shared[name], offsets)
+                got[name] = (values, offsets)
             for name in missing:
                 if name in self._per_sample:
                     codes = got["sample"][0] if got.get("sample") else self.read(["sample"])["sample"][0]
@@ -410,6 +425,40 @@ class File:
         if min(asked) < -self.rows:
             raise Error(f"rows {asked[0]} to {asked[1]} of {name} are asked for, and the file has {self.rows}: a negative row counts from its end, back to -{self.rows}")
         return _listed(*self._part(name, *(at + self.rows if at < 0 else at for at in asked)))
+
+    def blocks(self, names=None, rows=1 << 20, sample=None):
+        """The file a block of rows at a time, for one too large to hold: each block a dict of the
+        columns named (every one, stored and derived, when not given), each as `f.slice` gives it,
+        read together on every core, with `block.rows` the slice of the file's rows it holds. A
+        block is whole chunks of the file, no more than `rows` rows of them (one chunk at least);
+        with `sample`, that sample's rows alone. A `for` loop holds each block while the next is read."""
+        names = self._known(names)
+        kinds = self.kinds
+        if any(kinds[n].startswith("jagged") for n in names):
+            _needs("awkward", "a list column")
+        try:
+            most = _operator.index(rows)
+        except TypeError:
+            raise TypeError(f"blocks of {rows!r} rows are asked for: give a whole number of rows") from None
+        if most < 1:
+            raise ValueError(f"blocks of {most} rows are asked for: give 1 or more")
+        within = slice(0, self.rows) if sample is None else self.rows_of(sample)
+        chunks = [c for c in self._open().chunks() if within.start <= c[0] and c[1] <= within.stop]
+        return self._blocks(names, most, chunks)
+
+    def _blocks(self, names, most, chunks):
+        """Each block of `blocks`: these chunks' rows, no more than `most` to a block."""
+        at = 0
+        while at < len(chunks):
+            start, to = chunks[at][0], at + 1
+            while to < len(chunks) and chunks[to][1] - start <= most:
+                to += 1
+            at, rows = to, slice(start, chunks[to - 1][1])
+            block = _Block((n, _listed(*part)) for n, part in self._parts(names, rows.start, rows.stop).items())
+            block.rows = rows
+            yield block
+            # Not held here while the next is read.
+            del block
 
     def forget(self, *names):
         """Let go of the columns handed out, the ones named or else every one: each is read, or

@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+import weakref
 from unittest import mock
 
 import numpy as np
@@ -195,13 +196,15 @@ class Pressed(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "give whole numbers"):
             f.slice("ht", 0.5, 2)
 
-    # SPEC 11.3, 11.4, 11.10
+    # SPEC 11.3, 11.4, 11.6, 11.8
     def test_a_sample_column_reads_per_row_and_a_sample_s_rows_alone(self):
         f = self.file
         np.testing.assert_array_equal(f["xsec"], [1.5] * 4)
         self.assertEqual((f["events_read"].dtype, f["events_read"].tolist()), (np.int64, [5] * 4))
         self.assertFalse(f["xsec"].flags.writeable)
         self.assertEqual(f.slice("xsec", 1, 3).tolist(), [1.5, 1.5])
+        with self.assertRaisesRegex(rowver.Error, "rows 0 to 9 of xsec are asked for, and the file has 4"):
+            f.slice("xsec", 0, 9)
         self.assertEqual((f["tag"].tolist(), f["flag"].dtype, f["ht"][f["flag"]].tolist()), (["a"] * 4, np.bool_, f["ht"].tolist()))
         if has("awkward"):
             self.assertEqual(f.arrays(["ht", "tag", "flag"], sample="flat")["tag"].tolist(), ["a"] * 4)
@@ -289,7 +292,7 @@ class Pressed(unittest.TestCase):
         public = {n for n in dir(rowver) if not n.startswith("_")}
         self.assertEqual(public, {"Error", "File", "open", "validate", "set_tool", "drop_tool"})
         documented = {"path", "header", "rows", "samples", "labels", "columns", "derived", "sample_columns", "recipe",
-                      "study", "signed_by", "holes", "complete", "empty", "tools", "read", "slice", "forget", "arrays",
+                      "study", "signed_by", "holes", "complete", "empty", "tools", "read", "slice", "blocks", "forget", "arrays",
                       "to_arrow", "to_pandas", "to_parquet", "keys", "rows_of", "close", "kinds", "show"}
         self.assertEqual({n for n in dir(self.file) if not n.startswith("_")}, documented)
         self.assertIn("sample", self.file)
@@ -636,6 +639,88 @@ class Holed(unittest.TestCase):
             self.assertEqual(f.sample_columns["events_missing"], [5])
         finally:
             shutil.rmtree(dir.parent)
+
+
+class Blocks(unittest.TestCase):
+    """A file of two samples and several chunks of 1,024 rows, read a block of rows at a time."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = pathlib.Path(tempfile.mkdtemp(prefix="rowver-py-")) / "blocks"
+        cls.addClassCleanup(shutil.rmtree, cls.dir.parent)
+        cls.dir.mkdir()
+        config = mock.patch.dict(os.environ, {"RVR_CONFIG": str(cls.dir.parent / "config")})
+        config.start()
+        cls.addClassCleanup(config.stop)
+        for name in ("runs.root", "copy.root"):
+            shutil.copy(FIXTURES / "runs.root", cls.dir / name)
+        sample = '[[sample]]\nname = "{}"\nfiles = {}\ntree = "Events"\nmetadata = {{ xsec = {} }}\n'
+        (cls.dir / "samples.toml").write_text(
+            'format = "rvr-samples"\nversion = 1\n\n[places]\n\n[defaults]\n\n[eras]\n\n'
+            + sample.format("both", '["runs.root", "copy.root"]', 1.5) + "\n" + sample.format("one", '"runs.root"', 2.5))
+        (cls.dir / "recipe.toml").write_text(
+            'format = "rvr-recipe"\nversion = 1\nchunk_rows = 1024\n\n[define]\n\n[keep]\nsome = "nJet >= 1"\n\n'
+            '[columns]\nbranches = ["event", "Jet_pt", "Jet_eta", "MET"]\nht = "sum(Jet_pt)"\n\n[totals]\n\n'
+            '[derived]\nratio = "ht / MET"\n')
+        for args in (["samples", "resolve", str(cls.dir / "samples.toml")], ["press", str(cls.dir)]):
+            if rvr(args) != 0:
+                raise RuntimeError(f"rvr {' '.join(args)} failed: its words are above")
+        cls.file = rowver.open(cls.dir / "blocks.rvr")
+
+    # SPEC 11.10; FORMAT 7
+    def test_blocks_are_whole_chunks_that_hold_each_column_s_rows(self):
+        f = self.file
+        lists = ["Jet_pt", "Jet_eta"] if has("awkward") else []
+        names = ["sample", "entry", "MET", *lists, "ratio", "xsec"]
+        whole = {name: f[name] for name in names}
+        chunks = f._file.chunks()
+        self.assertGreater(len(chunks), 3)
+        for rows in (1, 1024, 2048, 2500, 10**9):
+            blocks = list(f.blocks(names, rows=rows))
+            # The blocks are the file's rows, in order, each cut where chunks are.
+            self.assertEqual([b.rows.start for b in blocks] + [f.rows], [0] + [b.rows.stop for b in blocks], rows)
+            self.assertLessEqual({edge for b in blocks for edge in (b.rows.start, b.rows.stop)}, {edge for chunk in chunks for edge in chunk})
+            for block in blocks:
+                self.assertEqual(list(block), names)
+                self.assertLessEqual(block.rows.stop - block.rows.start, max(rows, 1024))
+                for name in names:
+                    self.assertEqual(block[name].tolist(), whole[name][block.rows].tolist(), (name, block.rows))
+        # No more than a chunk to a block gives each chunk; room for every row, one block.
+        self.assertEqual([(b.rows.start, b.rows.stop) for b in f.blocks(["MET"], rows=1)], chunks)
+        self.assertEqual([b.rows for b in f.blocks(["MET"], rows=f.rows)], [slice(0, f.rows)])
+        # One sample's rows alone, and every stored and derived column when none is named.
+        self.assertEqual([b.rows.start for b in f.blocks(["MET"], rows=1, sample="one")], [c[0] for c in chunks if c[0] >= f.rows_of("one").start])
+        self.assertEqual(np.concatenate([b["xsec"] for b in f.blocks(["xsec"], sample="one")]).tolist(), [2.5] * len(f["MET"][f.rows_of("one")]))
+        if lists:
+            first = next(f.blocks())
+            self.assertEqual(list(first), f.columns + f.derived)
+            # List columns of the same lists hold one offsets array in a block too.
+            self.assertTrue(np.shares_memory(first["Jet_pt"].layout.offsets.data, first["Jet_eta"].layout.offsets.data))
+
+    # SPEC 11.10
+    def test_blocks_refuse_what_they_cannot_read_when_asked(self):
+        f = self.file
+        with self.assertRaisesRegex(KeyError, "did you mean MET"):
+            f.blocks(["MTE"])
+        with self.assertRaisesRegex(KeyError, "other: not a sample"):
+            f.blocks(["MET"], sample="other")
+        with self.assertRaisesRegex(TypeError, "give a whole number of rows"):
+            f.blocks(["MET"], rows=1.5)
+        with self.assertRaisesRegex(ValueError, "blocks of 0 rows are asked for: give 1 or more"):
+            f.blocks(["MET"], rows=0)
+        # A list column without Awkward is refused when asked, not at the first block.
+        with mock.patch.object(rowver, "_needs", side_effect=ImportError("a list column needs awkward")), self.assertRaisesRegex(ImportError, "needs awkward"):
+            f.blocks(["MET", "Jet_pt"])
+        # A block let go of is freed before the next is read; a file closed between two blocks says so at the next.
+        again = rowver.open(f.path)
+        blocks = again.blocks(["MET"], rows=1)
+        held, parts, freed = weakref.ref(next(blocks)["MET"]), again._parts, []
+        with mock.patch.object(again, "_parts", side_effect=lambda *asked: (freed.append(held() is None), parts(*asked))[1]):
+            next(blocks)
+        self.assertEqual(freed, [True])
+        again.close()
+        with self.assertRaisesRegex(rowver.Error, "is closed"):
+            next(blocks)
 
 
 class Command(unittest.TestCase):

@@ -462,102 +462,133 @@ impl Reader {
         Ok(ArrayChunks { path: &self.path, part, span, table, label: label.into() })
     }
 
-    /// Each chunk of one array of `kind` (only those `wanted`, when given), in order, `n(k)` values
-    /// in chunk `k`: decoded in one pool of threads a few ahead of `each`, checked (its SHA-256 unless `trusting`), and handed to
-    /// it, its table checked first (and kept for the next read of some of its chunks); a file
-    /// changed in place since it was opened is said to be.
-    pub(crate) fn each_chunk(&self, record: &Value, kind: &str, label: &str, n: &dyn Fn(usize) -> usize, wanted: Option<std::ops::Range<usize>>, each: &mut dyn FnMut(usize, Vec<u8>) -> Result<()>) -> Result<()> {
-        let (part, span) = self.part(record, label)?;
-        let read = || -> Result<()> {
-            let table = self.table(record, kind, label, &span, wanted.is_some())?;
-            let wanted = wanted.unwrap_or(0..table.len());
-            let first = wanted.start.min(table.len());
-            let counts: Vec<usize> = (first..wanted.end.min(table.len())).map(n).collect();
-            crate::parallel::ordered(counts.len(), crate::parallel::cores(), |at| {
-                let k = first + at;
-                let (from, to) = table.span(k);
-                let mut frames = vec![0; (to - from) as usize];
-                Span { at: span.at + from, end: span.at + to, ..span.clone() }.read_exact(&mut frames)?;
-                let decoded = crate::chunks::decode(&frames, &table, k, counts[at], label, self.sums)?;
-                Ok((k, decoded))
-            }, |(k, values)| each(k, values))
-        };
-        read().map_err(|e| if part.changed() { changed(&self.path) } else { e })
-    }
-
-    /// Every chunk of every one of `arrays`, decoded in one pool of threads a few ahead of `each`,
-    /// which is handed them in order, each checked (its SHA-256 unless `trusting`); each array's table read with its first chunk
-    /// and let go after its last.
-    pub(crate) fn each_chunks(&self, arrays: &[Whole], each: &mut Chunked) -> Result<()> {
-        let chunks = self.chunks()?.len();
+    /// Every chunk of every one of `arrays` (only those `wanted`, when given, each array's counts
+    /// then from the first of them), decoded in one pool of threads a few ahead of `each`, which is
+    /// handed them in order, each checked (its SHA-256 unless `trusting`); each array's table read
+    /// with its first chunk, and kept for the next read when only some chunks are wanted.
+    pub(crate) fn each_chunks(&self, arrays: &[Whole], wanted: Option<std::ops::Range<usize>>, each: &mut Chunked) -> Result<()> {
+        let keep = wanted.is_some();
+        let wanted = wanted.unwrap_or(0..self.chunks()?.len());
+        let (first, chunks) = (wanted.start, wanted.len());
         let placed = arrays.iter().map(|(record, _, label, _)| self.part(record, label)).collect::<Result<Vec<_>>>()?;
-        // A file of no rows has no chunks to read a table with: each is checked all the same.
+        // With no chunk to read a table with (a file of no rows, or no rows wanted), each is checked all the same.
         for ((record, kind, label, _), (part, span)) in arrays.iter().zip(&placed).filter(|_| chunks == 0) {
-            self.table(record, kind, label, span, false).map_err(|e| if part.changed() { changed(&self.path) } else { e })?;
+            self.table(record, kind, label, span, keep).map_err(|e| if part.changed() { changed(&self.path) } else { e })?;
         }
         let tables: Vec<Mutex<Option<Arc<Table>>>> = arrays.iter().map(|_| Mutex::new(None)).collect();
         let work = |at: usize| {
-            let (a, k) = (at / chunks, at % chunks);
+            let (a, k) = (at / chunks, first + at % chunks);
             let ((record, kind, label, n), (part, span)) = (&arrays[a], &placed[a]);
             let read = || -> Result<(usize, usize, Vec<u8>, Option<usize>)> {
                 let table = {
                     let mut held = tables[a].lock().unwrap_or_else(|e| e.into_inner());
                     match held.as_ref() {
                         Some(table) => table.clone(),
-                        None => held.insert(self.table(record, kind, label, span, false)?).clone(),
+                        None => held.insert(self.table(record, kind, label, span, keep)?).clone(),
                     }
                 };
                 let (from, to) = table.span(k);
                 let mut frames = vec![0; (to - from) as usize];
                 Span { at: span.at + from, end: span.at + to, ..span.clone() }.read_exact(&mut frames)?;
-                let count = |k: usize| n.get(k).copied().unwrap_or(0);
+                let count = |k: usize| k.checked_sub(first).and_then(|at| n.get(at)).copied().unwrap_or(0);
                 let decoded = crate::chunks::decode(&frames, &table, k, count(k), label, self.sums)?;
-                Ok((a, k, decoded, (k == 0).then(|| crate::chunks::decoded(&table, &count))))
+                Ok((a, k, decoded, (k == first).then(|| crate::chunks::decoded(&table, wanted.clone(), &count))))
             };
             read().map_err(|e| if part.changed() { changed(&self.path) } else { e })
         };
         crate::parallel::ordered(arrays.len() * chunks, crate::parallel::cores(), work, |(a, k, values, bytes)| {
-            // Every chunk of the array is read: none needs its table again.
-            if k + 1 == chunks {
+            // Every chunk wanted of the array is read: none needs its table again.
+            if k + 1 == wanted.end {
                 *tables[a].lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
             each(a, k, values, bytes)
         })
     }
 
-    /// Stored columns by name, every chunk of every one decoded in one pool of threads; `None` for a name it stores no column of.
+    /// Stored columns by name (`sample` and `entry` too), every chunk of every one decoded in one pool of threads; `None` for a name it stores no column of.
     pub fn stored_columns(&self, names: &[String]) -> Result<Vec<Option<Held>>> {
-        let places: Vec<String> = names.iter().map(|name| format!("data.cols[{name:?}]")).collect();
-        let records: Vec<Option<&Value>> = names.iter().map(|name| self.record(name)).collect();
+        self.together(names, None)
+    }
+
+    /// Row columns by name (`sample` and `entry` too), stored or derived, read together; `None` for a name there is no column of.
+    pub fn columns(&self, names: &[String]) -> Result<Vec<Option<Held>>> {
+        self.read(names, None)
+    }
+
+    /// Rows `from..to` of row columns by name, as `columns` reads them: only the chunks holding them read.
+    pub fn slices(&self, names: &[String], from: usize, to: usize) -> Result<Vec<Option<Held>>> {
+        self.read(names, Some((from, to)))
+    }
+
+    /// Row columns by name, whole or their `rows` alone: the stored ones read together, then the derived ones worked out together.
+    fn read(&self, names: &[String], rows: Option<(usize, usize)>) -> Result<Vec<Option<Held>>> {
+        let mut held = self.together(names, rows)?;
+        if held.iter().all(Option::is_some) {
+            return Ok(held);
+        }
+        let derived: Vec<String> = super::derived::listed(&self.header).into_iter().map(|(name, _)| name).filter(|name| names.contains(name) && self.record(name).is_none()).collect();
+        if derived.is_empty() {
+            return Ok(held);
+        }
+        let worked = match rows {
+            Some((from, to)) => super::derived::slice(self, &derived, from, to)?,
+            None => super::derived::columns(self, &derived)?,
+        };
+        let mut worked: HashMap<_, _> = derived.iter().zip(worked).collect();
+        for (at, (name, held)) in names.iter().zip(&mut held).enumerate().filter(|(_, (_, held))| held.is_none()) {
+            // A name asked for twice is copied for all but its last.
+            *held = if names[at + 1..].contains(name) { worked.get(name).cloned() } else { worked.remove(name) };
+        }
+        Ok(held)
+    }
+
+    /// Stored columns by name (`sample` and `entry` too), whole or their `rows` alone, the chunks
+    /// holding them decoded in one pool of threads; `None` for a name it stores no column of.
+    pub(super) fn together(&self, names: &[String], rows: Option<(usize, usize)>) -> Result<Vec<Option<Held>>> {
+        // `sample` and `entry` are arrays of every file, of a kind the format gives (docs/FORMAT.md §3).
+        let row = |name: &str| [("sample", "i4"), ("entry", "i8")].into_iter().find(|(which, _)| *which == name);
+        let places: Vec<String> = names.iter().map(|name| if row(name).is_some() { format!("data.{name}") } else { format!("data.cols[{name:?}]") }).collect();
+        let records: Vec<Option<&Value>> = names.iter().map(|name| if row(name).is_some() { Some(&self.data()[name.as_str()]) } else { self.record(name) }).collect();
         if records.iter().all(Option::is_none) {
             return Ok(vec![None; names.len()]);
         }
-        let rows = self.chunks()?;
-        let (per, more) = (Self::rows_of(&rows), rows.iter().map(|c| c.2 - c.1 + 1).collect::<Vec<_>>());
+        if let Some((from, to)) = rows {
+            self.within(&names.join(", "), from, to)?;
+        }
+        let chunks = self.chunks()?;
+        // The chunks read, and the rows they hold: all of them, or those holding the rows asked for.
+        let (wanted, first) = match rows {
+            Some((from, to)) => Self::wanted(&chunks, from, to),
+            None => (0..chunks.len(), 0),
+        };
+        let read = &chunks[wanted.clone()];
+        let end = read.last().map_or(first, |chunk| chunk.2);
+        let wanted = rows.map(|_| wanted);
+        let (per, more) = (Self::rows_of(read), read.iter().map(|c| c.2 - c.1 + 1).collect::<Vec<_>>());
         // The flat columns' arrays and the list columns' offsets, then the list columns' content.
-        // Each column asked for, and its array among `first`: list columns that share one offsets
+        // Each column asked for, and its array among `arrays`: list columns that share one offsets
         // array (docs/FORMAT.md §7) read it once.
-        let (mut first, mut owner): (Vec<Whole>, Vec<(usize, usize)>) = (Vec::new(), Vec::new());
+        let (mut arrays, mut owner): (Vec<Whole>, Vec<(usize, usize)>) = (Vec::new(), Vec::new());
         for (index, (record, place)) in records.iter().zip(&places).enumerate().filter_map(|(i, (r, p))| Some((i, (r.as_ref()?, p)))) {
             let jagged = record["kind"] == "jagged";
             let offsets = &record["offsets"];
             let shared = jagged && offsets["size"].as_u64() > Some(0);
-            if let Some(a) = first.iter().position(|(held, ..)| shared && *held == offsets) {
+            if let Some(a) = arrays.iter().position(|(held, ..)| shared && *held == offsets) {
                 owner.push((index, a));
                 continue;
             }
-            owner.push((index, first.len()));
-            first.push(match jagged {
+            owner.push((index, arrays.len()));
+            arrays.push(match jagged {
                 true => (offsets, "i8", format!("{place}.offsets"), (&more[..]).into()),
-                false => (*record, text(record, place, "kind")?, place.clone(), (&per[..]).into()),
+                false => (*record, match row(&names[index]) { Some((_, kind)) => kind, None => text(record, place, "kind")? }, place.clone(), (&per[..]).into()),
             });
         }
         let mut held: Vec<Option<Held>> = vec![None; names.len()];
-        let mut stitched: Vec<Option<Stitched>> = first.iter().map(|(_, kind, label, _)| (label.ends_with(".offsets") && *kind == "i8").then(|| Stitched::new(true))).collect();
-        let mut bytes: Vec<Vec<u8>> = first.iter().map(|_| Vec::new()).collect();
-        self.each_chunks(&first, &mut |a, _, values, whole| {
+        let mut stitched: Vec<Option<Stitched>> = arrays.iter().map(|(_, kind, label, _)| (label.ends_with(".offsets") && *kind == "i8").then(|| Stitched::new(true))).collect();
+        let mut bytes: Vec<Vec<u8>> = arrays.iter().map(|_| Vec::new()).collect();
+        self.each_chunks(&arrays, wanted.clone(), &mut |a, _, values, whole| {
             match &mut stitched[a] {
-                Some(stitched) => stitched.add(&values, &first[a].2)?,
+                Some(stitched) => stitched.add(&values, &arrays[a].2)?,
                 None => {
                     bytes[a].reserve(whole.unwrap_or(0));
                     bytes[a].extend_from_slice(&values);
@@ -571,17 +602,19 @@ impl Reader {
         for (index, a) in &owner {
             let (record, place) = (records[*index].unwrap_or(&Value::Null), &places[*index]);
             let Some(offsets) = &stitched[*a] else {
-                held[*index] = Some(Held { kind: first[*a].1.to_owned(), bytes: std::mem::take(&mut bytes[*a]), offsets: None });
+                held[*index] = Some(Held { kind: arrays[*a].1.to_owned(), bytes: std::mem::take(&mut bytes[*a]), offsets: None });
                 continue;
             };
             let content = &record["content"];
-            ends(offsets.end, content, place)?;
+            if rows.is_none() {
+                ends(offsets.end, content, place)?;
+            }
             let kind = text(content, place, "kind")?;
             contents.push((content, kind, format!("{place}.content"), offsets.members.clone().into()));
             held[*index] = Some(Held { kind: kind.to_owned(), bytes: Vec::new(), offsets: kept[*a].clone() });
             content_at.push(*index);
         }
-        self.each_chunks(&contents, &mut |a, _, values, whole| {
+        self.each_chunks(&contents, wanted, &mut |a, _, values, whole| {
             let column = held[content_at[a]].as_mut().map(|column| &mut column.bytes);
             if let Some(column) = column {
                 column.reserve(whole.unwrap_or(0));
@@ -589,13 +622,28 @@ impl Reader {
             }
             Ok(())
         })?;
+        // Rows that end within a chunk are cut from the chunks read: whole chunks are handed on as read.
+        if let Some((from, to)) = rows.filter(|rows| *rows != (first, end)) {
+            // Offsets shared as read stay one allocation, cut once.
+            let mut cut: Vec<(Arc<Vec<usize>>, Option<Arc<Vec<usize>>>)> = Vec::new();
+            for column in held.iter_mut().flatten() {
+                let read = column.offsets.clone();
+                *column = column.rows(from - first, to - first)?;
+                if let Some(read) = read {
+                    match cut.iter().find(|(known, _)| Arc::ptr_eq(known, &read)) {
+                        Some((_, shared)) => column.offsets = shared.clone(),
+                        None => cut.push((read, column.offsets.clone())),
+                    }
+                }
+            }
+        }
         Ok(held)
     }
 
     /// One array of `kind`, whole: its chunks' values, in order.
     pub(super) fn array(&self, record: &Value, kind: &str, label: &str, n: &[usize]) -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
-        self.each_chunks(&[(record, kind, label.to_owned(), n.into())], &mut |_, _, values, whole| {
+        self.each_chunks(&[(record, kind, label.to_owned(), n.into())], None, &mut |_, _, values, whole| {
             bytes.reserve(whole.unwrap_or(0));
             bytes.extend_from_slice(&values);
             Ok(())
@@ -608,11 +656,13 @@ impl Reader {
         rows.iter().map(|chunk| chunk.2 - chunk.1).collect()
     }
 
-    /// The chunks holding rows `from..to`, and the first row of the first of them.
+    /// The chunks holding rows `from..to`, and the first row of the first of them; for no rows, no chunk, and `from`.
     fn wanted(rows: &[Rows], from: usize, to: usize) -> (std::ops::Range<usize>, usize) {
-        let wanted = rows.partition_point(|c| c.2 <= from)..rows.partition_point(|c| c.1 < to);
-        let first = rows.get(wanted.start).map_or(from, |c| c.1);
-        (wanted, first)
+        let start = rows.partition_point(|c| c.2 <= from);
+        if from >= to {
+            return (start..start, from);
+        }
+        (start..rows.partition_point(|c| c.1 < to), rows.get(start).map_or(from, |c| c.1))
     }
 
     /// Each chunk's first and end row, in order (docs/FORMAT.md §7).
@@ -620,28 +670,15 @@ impl Reader {
         Ok(self.chunks()?.iter().map(|(_, first, end)| (*first, *end)).collect())
     }
 
-    /// Values `from..to` of the `sample` or `entry` array (`kind`), only the chunks holding them read.
-    fn array_slice(&self, which: &str, kind: &str, from: usize, to: usize) -> Result<Vec<u8>> {
-        self.within(which, from, to)?;
-        let rows = self.chunks()?;
-        let (wanted, first) = Self::wanted(&rows, from, to);
-        let mut bytes = Vec::new();
-        self.each_chunk(&self.data()[which], kind, &format!("data.{which}"), &|k| rows[k].2 - rows[k].1, Some(wanted), &mut |_, values| {
-            bytes.extend(values);
-            Ok(())
-        })?;
-        Ok(Held { kind: kind.into(), bytes, offsets: None }.rows(from - first, to - first)?.bytes)
-    }
-
     /// Rows `from..to`'s indices into `data.samples`.
     pub fn sample_slice(&self, from: usize, to: usize) -> Result<Vec<i32>> {
-        let bytes = self.array_slice("sample", "i4", from, to)?;
+        let bytes = self.together(&["sample".into()], Some((from, to)))?.pop().flatten().map(|held| held.bytes).unwrap_or_default();
         Ok(bytes.as_chunks::<4>().0.iter().map(|v| i32::from_le_bytes(*v)).collect())
     }
 
     /// Rows `from..to`'s entry numbers in their source trees.
     pub fn entry_slice(&self, from: usize, to: usize) -> Result<Vec<i64>> {
-        let bytes = self.array_slice("entry", "i8", from, to)?;
+        let bytes = self.together(&["entry".into()], Some((from, to)))?.pop().flatten().map(|held| held.bytes).unwrap_or_default();
         Ok(bytes.as_chunks::<8>().0.iter().map(|v| i64::from_le_bytes(*v)).collect())
     }
 
@@ -657,72 +694,14 @@ impl Reader {
         Ok(bytes.as_chunks::<8>().0.iter().map(|v| i64::from_le_bytes(*v)).collect())
     }
 
-    /// Read one row column, stored or derived (worked out and checked), or `None` when there is none.
+    /// Read one row column, stored or derived (worked out and checked), or `sample` or `entry`; `None` when there is none.
     pub fn column(&self, name: &str) -> Result<Option<Held>> {
-        let Some(record) = self.record(name) else {
-            if super::derived::listed(&self.header).iter().any(|(n, _)| n == name) {
-                return super::derived::columns(self, &[name.to_owned()]).map(|mut held| held.pop());
-            }
-            return Ok(None);
-        };
-        self.stored(name, record).map(Some)
+        Ok(self.columns(&[name.to_owned()])?.pop().flatten())
     }
 
-    /// The stored column `name`, read by its record.
-    pub(super) fn stored(&self, name: &str, record: &Value) -> Result<Held> {
-        let rows = self.chunks()?;
-        let place = format!("data.cols[{name:?}]");
-        let kind = text(record, &place, "kind")?;
-        if kind != "jagged" {
-            return Ok(Held { kind: kind.to_owned(), bytes: self.array(record, kind, &place, &Self::rows_of(&rows))?, offsets: None });
-        }
-        let content = &record["content"];
-        let kind = text(content, &place, "kind")?;
-        let stitched = self.offsets_of(&record["offsets"], &rows, &format!("{place}.offsets"), None)?;
-        ends(stitched.end, content, &place)?;
-        let bytes = self.array(content, kind, &format!("{place}.content"), &stitched.members)?;
-        Ok(Held { kind: kind.to_owned(), bytes, offsets: stitched.kept.map(Arc::new) })
-    }
-
-    /// Rows `from..to` of a row column, stored or derived, or `None` when there is none: only the chunks holding them read and checked.
+    /// Rows `from..to` of a row column, as `column` reads it: only the chunks holding them read and checked.
     pub fn slice(&self, name: &str, from: usize, to: usize) -> Result<Option<Held>> {
-        match self.record(name) {
-            Some(record) => self.stored_rows(name, record, from, to).map(Some),
-            None if super::derived::listed(&self.header).iter().any(|(n, _)| n == name) => Ok(super::derived::slice(self, &[name.to_owned()], from, to)?.pop()),
-            None => Ok(None),
-        }
-    }
-
-    /// Rows `from..to` of the stored column `name`, by its record.
-    pub(super) fn stored_rows(&self, name: &str, record: &Value, from: usize, to: usize) -> Result<Held> {
-        self.within(name, from, to)?;
-        let rows = self.chunks()?;
-        let place = format!("data.cols[{name:?}]");
-        let kind = text(record, &place, "kind")?;
-        let (wanted, first) = Self::wanted(&rows, from, to);
-        let mut bytes = Vec::new();
-        let mut gather = |_: usize, values: Vec<u8>| {
-            bytes.extend(values);
-            Ok(())
-        };
-        if kind != "jagged" {
-            self.each_chunk(record, kind, &place, &|k| rows[k].2 - rows[k].1, Some(wanted), &mut gather)?;
-            return Held { kind: kind.to_owned(), bytes, offsets: None }.rows(from - first, to - first);
-        }
-        let content = &record["content"];
-        let kind = text(content, &place, "kind")?;
-        let stitched = self.offsets_of(&record["offsets"], &rows, &format!("{place}.offsets"), Some(wanted.clone()))?;
-        let start = wanted.start;
-        self.each_chunk(content, kind, &format!("{place}.content"), &|k| stitched.members.get(k - start).copied().unwrap_or(0), Some(wanted), &mut gather)?;
-        Held { kind: kind.to_owned(), bytes, offsets: stitched.kept.map(Arc::new) }.rows(from - first, to - first)
-    }
-
-    /// A list column's offsets from its chunks (only those `wanted`, when given, counted from the
-    /// first of them; `[0]` for none): where they end, each chunk's members, and every offset.
-    pub(super) fn offsets_of(&self, record: &Value, rows: &[Rows], label: &str, wanted: Option<std::ops::Range<usize>>) -> Result<Stitched> {
-        let mut stitched = Stitched::new(true);
-        self.each_chunk(record, "i8", label, &|k| rows[k].2 - rows[k].1 + 1, wanted, &mut |_, values| stitched.add(&values, label))?;
-        Ok(stitched)
+        Ok(self.slices(&[name.to_owned()], from, to)?.pop().flatten())
     }
 }
 

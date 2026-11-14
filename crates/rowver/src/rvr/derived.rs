@@ -198,19 +198,15 @@ impl<'a> Store<'a> {
         }
     }
 
-    /// The rows of chunk `k` of the stored column `name` (or `sample` or `entry`, with no record),
-    /// read once while that chunk's runs are worked on.
-    fn chunk(&self, name: &str, record: Option<&Value>, k: usize) -> Result<Rc<Held>> {
+    /// The rows of chunk `k` of the stored column `name` (or `sample` or `entry`), read once while
+    /// that chunk's runs are worked on.
+    fn chunk(&self, name: &str, k: usize) -> Result<Rc<Held>> {
         if let Some((_, held)) = self.chunk.borrow().get(name).filter(|(at, _)| *at == k) {
             return Ok(held.clone());
         }
         let (first, end) = (self.chunks[k].1, self.chunks[k].2);
-        let held = Rc::new(match (record, name) {
-            (Some(record), _) => self.file.stored_rows(name, record, first, end)?,
-            (None, "sample") => Held { kind: "i4".into(), bytes: self.file.sample_slice(first, end)?.iter().flat_map(|v| v.to_le_bytes()).collect(), offsets: None },
-            (None, "entry") => Held { kind: "i8".into(), bytes: self.file.entry_slice(first, end)?.iter().flat_map(|v| v.to_le_bytes()).collect(), offsets: None },
-            (None, name) => return Err(invalid(format!("a bug in rowver: the rows of {name} were asked for, and the file holds no such column: please report it"))),
-        });
+        let held = self.file.together(&[name.to_owned()], Some((first, end)))?.pop().flatten();
+        let held = Rc::new(held.ok_or_else(|| invalid(format!("a bug in rowver: the rows of {name} were asked for, and the file holds no such column: please report it")))?);
         self.chunk.borrow_mut().insert(name.to_owned(), (k, held.clone()));
         Ok(held)
     }
@@ -265,7 +261,7 @@ impl Run<'_, '_> {
         if let Some(record) = self.store.file.record(name) {
             let (held, at) = match self.chunk {
                 None => (Rc::new(Store::none_of(record)), 0),
-                Some(k) => (self.store.chunk(name, Some(record), k).map_err(|e| self.failed(e))?, self.store.chunks[k].1),
+                Some(k) => (self.store.chunk(name, k).map_err(|e| self.failed(e))?, self.store.chunks[k].1),
             };
             return array_of(&held, self.first - at, self.last - at).map(Some);
         }
@@ -410,7 +406,7 @@ fn worked(store: &Store, names: &[(String, String)], mut ask: Ask) -> Result<Vec
             if let (true, Some(k)) = (handed, span.chunk) {
                 for name in ["sample", "entry"].into_iter().chain(stored.iter().map(String::as_str)) {
                     let at = store.chunks[k].1;
-                    held.push(store.chunk(name, file.record(name), k)?.rows(span.first - at, span.last - at)?);
+                    held.push(store.chunk(name, k)?.rows(span.first - at, span.last - at)?);
                 }
                 held.extend(values.iter().map(held_of));
             }

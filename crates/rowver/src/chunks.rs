@@ -94,11 +94,6 @@ pub(crate) struct Table {
 }
 
 impl Table {
-    /// How many chunks it has.
-    pub fn len(&self) -> usize {
-        self.sums.len()
-    }
-
     /// Where chunk `k`'s frames begin and end in the array.
     pub fn span(&self, k: usize) -> (u64, u64) {
         (self.starts[k], self.starts[k + 1])
@@ -184,11 +179,11 @@ pub(crate) fn decode(frames: &[u8], table: &Table, k: usize, n: usize, place: &s
     Ok(values)
 }
 
-/// The bytes an array's chunks decode to, `n(k)` values in chunk `k`: no more for a chunk than its
+/// The bytes an array's chunks `wanted` decode to, `n(k)` values in chunk `k`: no more for a chunk than its
 /// smallest frame could give, so a table that asks for more makes it refused, not held.
-pub(crate) fn decoded(table: &Table, n: &dyn Fn(usize) -> usize) -> usize {
+pub(crate) fn decoded(table: &Table, wanted: std::ops::Range<usize>, n: &dyn Fn(usize) -> usize) -> usize {
     let most = |k: usize| table.lanes[k * table.w..(k + 1) * table.w].iter().map(|lane| crate::codec::most(*lane as usize)).min().unwrap_or(0);
-    (0..table.len()).fold(0_usize, |sum, k| sum.saturating_add(n(k).min(most(k)).saturating_mul(table.w)))
+    wanted.fold(0_usize, |sum, k| sum.saturating_add(n(k).min(most(k)).saturating_mul(table.w)))
 }
 
 /// The values a chunk of a jagged column's offsets gives: `rows + 1` offsets, the first 0, never

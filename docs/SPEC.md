@@ -1360,6 +1360,20 @@ whole number past the digits Python turns into an int, or a number past a float,
 changes it (§8.12), first puts back a change to the file cut short, and raises `rowver.Error` saying
 what is wrong.
 
+**11.10** `f.blocks(names, rows=1048576, sample=None)` gives the file a block of rows at a time, so
+that a file too large to hold is read with a block or two in memory (a `for` loop holds each block
+while the next is read; one let go of first, with `del`, is freed before it): each block a dict of the columns named (every stored
+and derived one when none is; `sample`, `entry` and a sample column's name too), each as `f.slice`
+gives it (§11.8) and the block's read together in parallel, with `block.rows` the `slice` of the
+file's rows it holds. A block is whole chunks of the file (FORMAT.md §7), in order: as many as hold
+no more than `rows` rows together, and one at least, so that no chunk is cut between two blocks and
+a block of fewer rows than a chunk is that chunk (a derived column reads the columns it uses itself,
+besides the block's own read of them). The blocks are every row of the file once, or with
+`sample=NAME` every row of that sample; a file of no rows has none. An unknown name or sample
+raises `KeyError`, `rows` that is no whole number `TypeError`, one below 1 `ValueError` and a list
+column without Awkward `ImportError`, each when `blocks` is called; an empty file `rowver.Error` then, and a file closed since at the next
+block.
+
 ## 12. Builds and releases
 
 **12.1** A build of rvr records, in every file it writes (`made.toolchain`): the program (`rvr`), its
