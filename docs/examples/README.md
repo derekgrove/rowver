@@ -631,7 +631,7 @@ your logout, on a disk with room for the press's spool as well as the file it wr
 
 ```sh
 mkdir -p ~/bin && cd ~/bin
-curl -sL https://gitlab.cern.ch/api/v4/projects/dgrove%2Frowver/packages/generic/rvr/15.0.0/rvr-15.0.0-x86_64-linux.tar.gz | tar xz
+curl -sL https://gitlab.cern.ch/api/v4/projects/dgrove%2Frowver/packages/generic/rvr/15.0.1/rvr-15.0.1-x86_64-linux.tar.gz | tar xz
 ~/bin/rvr proxy init                 # reads ~/.globus there, as on a laptop
 cd ~/nobackup/zmumu                  # the study folder, copied there
 tmux new -s press                    # detach with Ctrl-b d; come back with tmux attach -t press

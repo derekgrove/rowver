@@ -2,7 +2,7 @@
 
 The command for RowVer studies: start a study, say what it reads, see exactly what it found, press
 it into one `.rvr` file, and look inside the files it makes. What every command does, exactly, is
-[the specification](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#5-the-commands-and-their-options); this page shows each
+[the specification](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#5-the-commands-and-their-options); this page shows each
 one at work.
 
 ```sh
@@ -18,7 +18,7 @@ rvr reproduce FILE          # press a file's own study again and compare
 rvr proxy init              # make a grid proxy from your certificate (for grid storage)
 ```
 
-New to `.rvr` files? [The examples](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/examples/README.md) make a first one from CMS Open
+New to `.rvr` files? [The examples](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/examples/README.md) make a first one from CMS Open
 Data and take it, step by step, to a plot.
 
 ## Install
@@ -28,21 +28,21 @@ pip install rowver
 ```
 
 installs the Python package `rowver` and, with it, the `rvr` command (Python 3.11 or later;
-[SPEC §11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#11-the-python-package)). Or download `rvr` alone from the
+[SPEC §11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#11-the-python-package)). Or download `rvr` alone from the
 [releases](https://gitlab.cern.ch/dgrove/rowver/-/releases): one file, no Rust needed. The Linux
 one runs on any x86_64 Linux with glibc 2.28 or later (el8 and el9, so the LPC and lxplus; Ubuntu
 20.04 on); the macOS one on Apple silicon and Intel. For example on the LPC:
 
 ```sh
 mkdir -p ~/bin && cd ~/bin
-curl -sL https://gitlab.cern.ch/api/v4/projects/dgrove%2Frowver/packages/generic/rvr/15.0.0/rvr-15.0.0-x86_64-linux.tar.gz | tar xz
+curl -sL https://gitlab.cern.ch/api/v4/projects/dgrove%2Frowver/packages/generic/rvr/15.0.1/rvr-15.0.1-x86_64-linux.tar.gz | tar xz
 ~/bin/rvr --version     # add ~/bin to PATH in ~/.bashrc to type just rvr
 ```
 
 (Downloaded with `curl`, the macOS binary opens as it is; one saved from a browser needs
 `xattr -d com.apple.quarantine rvr` first.) `rvr --version` says which `.rvr` version it reads and
 writes, and the commit it was built from. Building rvr yourself, from a checkout, is for
-developers: [docs/SETUP.md](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SETUP.md).
+developers: [docs/SETUP.md](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SETUP.md).
 
 ## Five minutes, no grid proxy
 
@@ -138,34 +138,34 @@ The headers show no difference in rows, samples, labels, columns, derived column
 
 | command | does | SPEC |
 |---|---|---|
-| `rvr new DIR` | writes a study that presses as it is | [5.3](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#53-rvr-new-dir) |
-| `rvr samples expand FILE [--json]` | lists the samples `samples.toml` makes, asking nothing of any storage | [6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#6-resolving-rvr-samples-and-sampleslock) |
-| `rvr samples resolve FILE` | finds every file and writes `samples.lock` | [6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#6-resolving-rvr-samples-and-sampleslock) |
-| `rvr samples check LOCK` | asks again whether every file is as the lock recorded it | [6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#6-resolving-rvr-samples-and-sampleslock) |
-| `rvr samples plan LOCK [--events N\|all] [--random] [--seed S]` | what a press would read, from the lock alone | [6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#6-resolving-rvr-samples-and-sampleslock) |
-| `rvr branches [DIR] [--sample NAME] [--find TEXT]` | the branches of a sample's first file | [5.4](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#54-rvr-branches) |
-| `rvr try "EXPRESSION" [DIR] [--events N] [--sample NAME] [--kept]` | an expression's values on a sample's first events | [5.5](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#55-rvr-try) |
-| `rvr press [DIR] [--events N\|all] [--random] [--seed S] [--out FILE] [--workers N] [--full] [--fill [KINDS]] [--restart]` | presses the study | [7](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#7-the-pressing-core), [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
-| `rvr status [DIR] [--out FILE] [--events N\|all] [--random] [--seed S] [--holes]` | whether the file holds the study as it is, and what a press would read | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
-| `rvr derive FILE 'NAME = EXPRESSION'… \| --drop NAME… \| --rename OLD NEW` | adds, drops or renames derived columns of a file | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
-| `rvr validate FILE… [--complete]` | checks files in full | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
-| `rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns] [--all]` | the inside of a file as text | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
-| `rvr header FILE` | the header as the file holds it | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
-| `rvr diff A B [--rows] [--key COLUMN,…] [--sample NAME]` | where two files differ: from their headers, or (`--rows`) event by event | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
-| `rvr reproduce FILE [DIR] [--study FOLDER] [--workers N] [--texts]` | presses a file's own study again and compares, or (`--texts`) writes its three texts | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files) |
-| `rvr empty FILE… [--study FOLDER] [--anyway] [--force \| -f]` | lets a file's arrays go, keeping its header | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
-| `rvr refill FILE [--study FOLDER] [--workers N]` | presses an empty file's arrays again | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
-| `rvr tool FILE [KEY --set DATA.json \| KEY --get [OUT.json] \| KEY... --drop] [--force \| -f]` | lists a file's tool keys, or sets or writes out one, or drops some, in the file itself | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file) |
-| `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME…` | the key that signs your files, and the keys you trust | [10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#10-keys-and-proxies) |
-| `rvr proxy`, `rvr proxy init [--hours H]` | the grid proxy, shown or made | [10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#10-keys-and-proxies) |
-| `rvr --version` | `rvr VERSION (reads and writes rowver 15; commit COMMIT)` | [12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#12-builds-and-releases) |
+| `rvr new DIR` | writes a study that presses as it is | [5.3](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#53-rvr-new-dir) |
+| `rvr samples expand FILE [--json]` | lists the samples `samples.toml` makes, asking nothing of any storage | [6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#6-resolving-rvr-samples-and-sampleslock) |
+| `rvr samples resolve FILE` | finds every file and writes `samples.lock` | [6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#6-resolving-rvr-samples-and-sampleslock) |
+| `rvr samples check LOCK` | asks again whether every file is as the lock recorded it | [6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#6-resolving-rvr-samples-and-sampleslock) |
+| `rvr samples plan LOCK [--events N\|all] [--random] [--seed S]` | what a press would read, from the lock alone | [6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#6-resolving-rvr-samples-and-sampleslock) |
+| `rvr branches [DIR] [--sample NAME] [--find TEXT]` | the branches of a sample's first file | [5.4](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#54-rvr-branches) |
+| `rvr try "EXPRESSION" [DIR] [--events N] [--sample NAME] [--kept]` | an expression's values on a sample's first events | [5.5](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#55-rvr-try) |
+| `rvr press [DIR] [--events N\|all] [--random] [--seed S] [--out FILE] [--workers N] [--full] [--fill [KINDS]] [--restart]` | presses the study | [7](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#7-the-pressing-core), [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#8-building-on-a-file) |
+| `rvr status [DIR] [--out FILE] [--events N\|all] [--random] [--seed S] [--holes]` | whether the file holds the study as it is, and what a press would read | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#9-inspecting-files) |
+| `rvr derive FILE 'NAME = EXPRESSION'… \| --drop NAME… \| --rename OLD NEW` | adds, drops or renames derived columns of a file | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#8-building-on-a-file) |
+| `rvr validate FILE… [--complete]` | checks files in full | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#9-inspecting-files) |
+| `rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns] [--all]` | the inside of a file as text | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#9-inspecting-files) |
+| `rvr header FILE` | the header as the file holds it | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#9-inspecting-files) |
+| `rvr diff A B [--rows] [--key COLUMN,…] [--sample NAME]` | where two files differ: from their headers, or (`--rows`) event by event | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#9-inspecting-files) |
+| `rvr reproduce FILE [DIR] [--study FOLDER] [--workers N] [--texts]` | presses a file's own study again and compares, or (`--texts`) writes its three texts | [9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#9-inspecting-files) |
+| `rvr empty FILE… [--study FOLDER] [--anyway] [--force \| -f]` | lets a file's arrays go, keeping its header | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#8-building-on-a-file) |
+| `rvr refill FILE [--study FOLDER] [--workers N]` | presses an empty file's arrays again | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#8-building-on-a-file) |
+| `rvr tool FILE [KEY --set DATA.json \| KEY --get [OUT.json] \| KEY... --drop] [--force \| -f]` | lists a file's tool keys, or sets or writes out one, or drops some, in the file itself | [8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#8-building-on-a-file) |
+| `rvr key new [NAME]`, `rvr key show`, `rvr key trust KEY NAME…` | the key that signs your files, and the keys you trust | [10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#10-keys-and-proxies) |
+| `rvr proxy`, `rvr proxy init [--hours H]` | the grid proxy, shown or made | [10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#10-keys-and-proxies) |
+| `rvr --version` | `rvr VERSION (reads and writes rowver 15; commit COMMIT)` | [12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#12-builds-and-releases) |
 | `rvr`, `rvr help`, `rvr --help` | the usage, every command and flag | |
 
 A command line is `rvr COMMAND` with its words and flags in any order (`rvr --holes status` is
 `rvr status --holes`). A flag's value is the argument after it (`--events 10`; `--events=10` is not
 read), and a count is a whole number from 1, with `_` allowed between two digits
 (`--events 50_000`). How a line is read, exactly, is
-[SPEC §5.1](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#51-every-command). What a command reports goes to standard output;
+[SPEC §5.1](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#51-every-command). What a command reports goes to standard output;
 the line that ends a failing command goes to standard error, as
 `rvr COMMAND: what is wrong, and how to fix it`. Wrong use does nothing, says what is wrong with the
 nearest command or flag, and prints the usage:
@@ -225,7 +225,7 @@ size, adler32 (when its storage gives one), ROOT UUID and entries, and for each 
 list of its first file, which a press checks every file against. No event is read. A file on this
 computer is read whole, for its adler32; a file on storage is asked of its HTTPS door (a listing per
 folder, a `HEAD` per file, and the bytes that open it). What it asks, exactly, is
-[SPEC §6.2](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#62-rvr-samples-resolve-file).
+[SPEC §6.2](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#62-rvr-samples-resolve-file).
 
 It is all or nothing: when a sample fails, or the recipe does not fit the samples (a branch no
 sample has, a defined name that is a branch's, a column of two kinds), no lock is written and the
@@ -255,7 +255,7 @@ pressed from it; a press checks again, as the recipe may change after resolve.
 Under the totals it lists the `.root` files in the folders it read that no sample reads: not an
 error, a check that none was forgotten. A `samples.toml` that leaves out `format`, `version`,
 `[places]`, `[defaults]` or `[eras]` is refused; at a terminal, resolve offers to write them in
-([SPEC §3.1](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#31-the-document)).
+([SPEC §3.1](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#31-the-document)).
 
 ### `rvr samples check samples.lock`
 
@@ -286,7 +286,7 @@ lock alone, asking nothing of any storage. Its options are the press's:
 | `--random` | its own N, chosen at random: a sample already random with its own seed, any other with seed 1; refused when a sample reads every entry |
 | `--seed S` | its own choice, with seed S for a random one; refused when no sample is random |
 
-`--events all --random` is refused ([SPEC §7.1](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#71-the-choice-of-events)). The
+`--events all --random` is refused ([SPEC §7.1](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#71-the-choice-of-events)). The
 first entries come from the first files; a random choice is spread over every file of a sample,
 which avoids the bias of reading only the start (the earliest runs of data, one batch of MC) but
 opens every file.
@@ -312,7 +312,7 @@ Before any file is opened, each input goes through its validator (`samples.toml`
 how they fit together; a study that does not pass is refused with every problem at once, one a
 line. What passes becomes one Plan, which the pressing core runs: from there a press fails only on
 what the files hold. How a press runs, and the few ways the core can fail, is
-[SPEC §2](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#2-how-a-press-runs).
+[SPEC §2](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#2-how-a-press-runs).
 
 ```text
 $ rvr press
@@ -320,12 +320,12 @@ rvr press: recipe.toml: A recipe has no [totals] table: every recipe has its fiv
 ```
 
 (At a terminal, `rvr press` offers to write the missing tables in and goes on:
-[SPEC §4.1](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#41-the-document).)
+[SPEC §4.1](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#41-the-document).)
 
 #### Building on the file there
 
 When `rvr press` finds a file at its target made from the same study, it reads only what is new
-([SPEC §8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file)); `rvr status` says beforehand what it would
+([SPEC §8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#8-building-on-a-file)); `rvr status` says beforehand what it would
 read, and `--full` always presses everything. A press that reads fewer events than the file there
 read (`rvr press --events 50000` over a file of every event) asks before it replaces it; `--full`
 replaces it without asking, and `--out FILE` presses into another file.
@@ -345,7 +345,7 @@ defined name they use), are read, for the events the file kept. When columns wer
 dropped or changed, they are added to the file itself: their arrays are written after its own,
 which are neither copied nor read, and its header after them, under the file's lock and a journal
 beside it, so that a press cut short is put back by the next rvr command
-([SPEC §8.12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file)). Otherwise, or when the file may not be written or
+([SPEC §8.12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#8-building-on-a-file)). Otherwise, or when the file may not be written or
 its filesystem has no locks (rvr then says so), every other column is copied from the file into a
 new one. Either way the file holds what a full press writes.
 
@@ -416,7 +416,7 @@ Pressing 2 samples, 3 files, 15 entries, 3 at a time:
 ```
 
 An rvr whose commit is `unknown` or ends in `-dirty`
-([SPEC §12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#12-builds-and-releases)) builds on no file (it asks, as for another
+([SPEC §12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#12-builds-and-releases)) builds on no file (it asks, as for another
 build) and keeps no journal: it presses whole files only.
 
 #### A value the recipe cannot take
@@ -425,7 +425,7 @@ A conversion out of the target kind's range, a mask or two lists whose lengths d
 event, an event past the pair limit, a whole number to a negative power, or a total that is not
 finite stops the press, naming the file, its entry, the column and the value; the press keeps what
 it read. It counts only in an event the choice chose, and for a stored column only in a kept one
-([SPEC §4.2](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#42-what-the-core-evaluates)). Floats may be NaN or infinite
+([SPEC §4.2](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#42-what-the-core-evaluates)). Floats may be NaN or infinite
 anywhere.
 
 ```text
@@ -448,8 +448,8 @@ it cannot take stops the press there, and once more over the whole file, to reco
 checksums and facts; one that fails then leaves the file written without its derived columns
 (without the new ones alone when the press only adds columns, or as it was when it read nothing),
 and the press says so and exits 1. The rules are
-[SPEC §4.6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#46-derived-columns) and
-[FORMAT §10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#10-derived-columns); `rvr derive` changes them in a pressed file
+[SPEC §4.6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#46-derived-columns) and
+[FORMAT §10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/FORMAT.md#10-derived-columns); `rvr derive` changes them in a pressed file
 alone.
 
 Which columns to store and which to derive is a choice of space against time. On 2.1 M rows (300
@@ -467,7 +467,7 @@ the events kept so far, the read rate and the time, redrawn every 200 ms and cut
 width; what happens meanwhile (a wait, a hole) is printed above the bars. Elsewhere (a log, a batch
 job) it prints one line per file as it finishes, with its holes, and all the holes again once the
 file is written, in the lock's order
-([SPEC §7.7](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#77-what-a-press-shows)).
+([SPEC §7.7](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#77-what-a-press-shows)).
 
 ```text
 $ rvr press
@@ -487,7 +487,7 @@ skim (30 files, on a terminal), 2.064 s against 2.068 s for 90 files with `--wor
 
 A file the press cannot read is not fatal: the file is written without those entries, and records
 a **hole** of them, with its kind and why
-([SPEC §7.3](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#73-holes), [FORMAT §6.2](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#62-holes)):
+([SPEC §7.3](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#73-holes), [FORMAT §6.2](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/FORMAT.md#62-holes)):
 
 | kind | the press found |
 |---|---|
@@ -527,7 +527,7 @@ holes, for scripts.
 **`rvr press --fill [KINDS]`** reads only the holes of the file at the target, and writes the file
 again with their rows in place, merged by entry within each file; `--fill damaged,unreachable`
 reads only holes of those kinds (how the word after `--fill` is read:
-[SPEC §5.1](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#51-every-command)). It presses the recipe the file carries, with its
+[SPEC §5.1](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#51-every-command)). It presses the recipe the file carries, with its
 event choices; the lock may have been resolved again for the files it fills (one put back, or
 another copy in its place). A hole that fails again stays a hole, with its new kind and why; when
 none can be read, the file is left as it was. On the TChiWZ skim (30 files, 212,130 entries) with
@@ -554,7 +554,7 @@ and so is one that became an `unreachable` or `refused` hole; a `damaged`, `gone
 stays. A press with another Plan starts over and says what differs; `--restart` always starts over.
 While a press runs it holds a lock on its journal, and another press of the same target, and
 `rvr empty` or `rvr refill` of it, is refused
-([SPEC §7.5](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#75-stopping-and-carrying-on)).
+([SPEC §7.5](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#75-stopping-and-carrying-on)).
 
 ```text
 $ rvr press --workers 1
@@ -584,22 +584,22 @@ files, default workers), 2.057 s with and without it (90 files, `--workers 1`), 
 What a press holds in memory does not grow with the events it keeps: each file's kept values go to
 a spool as they are read, and each column is packed from it a piece at a time, so a press needs free
 disk for the spool beside the file it writes: 423 MB beside the 36.8 MB file of 2.1 M rows, whose
-300 copies of one file compress far better whole than a piece at a time ([SPEC §7.6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#76-what-a-press-holds)).
+300 copies of one file compress far better whole than a piece at a time ([SPEC §7.6](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#76-what-a-press-holds)).
 Pressing 12 million rows of 31 columns from 1,698 files (4 workers) peaks at 0.14 GB of memory, and
 3 million rows from 425 files at 0.10 GB (Apple M5, 2026-11-03).
 
 The file carries the whole study (the three texts, every file read with its identity and how much
 of it was read, each sample's metadata with `events_read` and `events_total`, the totals, and what
 built rvr), and is signed when you have a key
-([SPEC §7.8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#78-what-a-press-writes)).
+([SPEC §7.8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#78-what-a-press-writes)).
 
 #### Files on storage
 
 A remote file is read over HTTPS from its door: a `root://` name through that host's HTTPS door,
 from the WLCG door list built into rvr; a `davs://` or `https://` name as written
-([SPEC §3.8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#38-where-files-are)). Only the branches the recipe uses are read,
+([SPEC §3.8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#38-where-files-are)). Only the branches the recipe uses are read,
 the baskets of each run asked for together in `multipart/byteranges` requests
-([SPEC §7.2](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#72-reading)). A random choice reads only the runs that hold a chosen
+([SPEC §7.2](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#72-reading)). A random choice reads only the runs that hold a chosen
 entry, and opens no file with none chosen.
 
 A storage under load refuses requests for minutes at a time (EOS answers `403`; others `429` or
@@ -608,7 +608,7 @@ A storage under load refuses requests for minutes at a time (EOS answers `403`; 
 `  waiting W s to ask again for FILE (K of 8 tries made): WHY`. A read whose eight tries fail makes
 an `unreachable` hole, or a `refused` one when the last answer was `403`. A `404` is a `gone` hole at
 once; a `401`, a certificate rvr does not trust, or a `403` with no proxy stops the press, as every
-file there would fail the same ([SPEC §7.4](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#74-when-a-storage-fails)).
+file there would fail the same ([SPEC §7.4](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#74-when-a-storage-fails)).
 
 A press that loses the network stops and keeps what it read, instead of making a hole of every
 file it could not reach. While a read waits, once no storage has answered anything for 120 s, rvr
@@ -721,7 +721,7 @@ new, changes the recipe the file carries to match (so `rvr reproduce` still pres
 writes its new header in the file itself (its arrays as they are, under its lock and a journal
 beside it), and signs the file again with your key, saying whose signature it replaces (or that the
 file is no longer signed). The study's own `recipe.toml` is not changed, and
-it says so ([SPEC §8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file)).
+it says so ([SPEC §8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#8-building-on-a-file)).
 
 ```text
 $ rvr derive flat.rvr 'lead = first(Jet_pt, -1)' 'lead_share = lead / ht'
@@ -740,7 +740,7 @@ rvr derive: flat.rvr already has a derived column named mean_jet_pt: an expressi
 
 ### `rvr validate FILE... [--complete]`
 
-Checks each file in full, as [FORMAT §12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#12-what-a-reader-checks) says:
+Checks each file in full, as [FORMAT §12](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/FORMAT.md#12-what-a-reader-checks) says:
 every array decompressed and checked, every derived column worked out and checked against its
 record, and the study's three texts parsed and checked against each other and the file. One line
 per file: `FILE: valid, …` (rows, columns, derived columns, entries read of those the samples hold,
@@ -783,7 +783,7 @@ values apart by tabs (its sample's name, its entry, then each stored column and 
 worked out, a list as `[a, b]`), then the sample columns. It holds every column decoded while the
 rows are written, so it needs memory for the file's columns. It goes alone or with `--columns`; with
 another part it is wrong use. A file whose header fails its checks is still shown, after a line
-saying why ([SPEC §9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#9-inspecting-files)).
+saying why ([SPEC §9](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#9-inspecting-files)).
 
 ```text
 $ rvr dump flat.rvr --columns --all
@@ -871,7 +871,7 @@ choices, and puts the arrays back once each has the checksum its record states: 
 the file is the one it was, byte for byte, its signature as it was; with a build that compresses
 otherwise, the header takes the arrays' new places and is signed again with your key, saying whose
 signature it replaces. Other values are refused, naming the columns, and the file stays empty
-([SPEC §8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file)). Relative paths in the lock are read from
+([SPEC §8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#8-building-on-a-file)). Relative paths in the lock are read from
 FILE's folder (a link's own, or the named file's when only that one holds them), or `--study FOLDER`.
 
 ```text
@@ -893,7 +893,7 @@ empty, with exit status 1. An empty file is the magic, its header, the header's 
 again: `rvr empty` writes it beside the file (as `FILE.empty-PID-N`, a name no other writer shares) and moves it over the file.
 
 `rvr derive`, `rvr empty` and `rvr refill` keep every tool key a file has (a top-level key of
-another tool's, [FORMAT §11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#11-tool-keys)) as it was, and so does a press
+another tool's, [FORMAT §11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/FORMAT.md#11-tool-keys)) as it was, and so does a press
 that replaces the file at its target (a fill, a build on its columns or samples, a full press): the
 new file carries them, those of a file whose arrays are damaged too. A file at the target whose
 header does not open has none to keep, and a press adds none of its own.
@@ -902,7 +902,7 @@ header does not open has none to keep, and a press adds none of its own.
 ### `rvr tool FILE`, `rvr tool FILE KEY --set DATA.json | --get [OUT.json] | --drop [--force | -f]`, `rvr tool FILE KEY... --drop`
 
 A tool key is a top-level key of the header that another tool keeps there, outside every checksum
-and the signature ([FORMAT §11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#11-tool-keys)). `rvr tool FILE` lists
+and the signature ([FORMAT §11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/FORMAT.md#11-tool-keys)). `rvr tool FILE` lists
 them with their sizes; `--set DATA.json` makes the JSON object in DATA.json the key KEY, checked
 first as the header's own rules check it (one JSON object, no key twice, no `-0`, no key
 `$serde_json::private::Number`, no lone surrogate, nested at most 64 deep counted from its place in the header; a tool key's name, no slip
@@ -917,7 +917,7 @@ ask first at a terminal, naming the sizes; `--force` (`-f`) does not ask, and is
 is at a terminal. Every change is made in the file itself, under its lock, its header written again
 after its arrays, which stay as they are; while it is made, another rvr that would write the file
 is refused. A file that may not be written, or on a filesystem with no locks, is written anew beside
-itself and moved over, keeping its permissions, and rvr says so. Its signature stays as it is ([SPEC §8.11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#8-building-on-a-file)).
+itself and moved over, keeping its permissions, and rvr says so. Its signature stays as it is ([SPEC §8.11](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#8-building-on-a-file)).
 
 ```text
 $ rvr tool flat.rvr
@@ -957,7 +957,7 @@ They trust your files with:
 under its name: trusting it by that name says so (exit 0), and by another is refused (exit 1),
 saying which line to take out. `rvr validate` names a signer from it: `signed by you`,
 `signed by NAME (trusted)`, or `signed by key K…, which you do not trust yet (rvr key trust KEY NAME)`
-([SPEC §10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#10-keys-and-proxies)).
+([SPEC §10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#10-keys-and-proxies)).
 
 ### `rvr proxy`, `rvr proxy init [--hours H]`
 
@@ -974,7 +974,7 @@ The grid proxy at /tmp/x509up_u501 does not exist. Run rvr proxy init to make on
 `rvr proxy init` makes a proxy for the VO cms with no other grid tool installed. It reads your
 certificate and key from `$X509_USER_CERT` and `$X509_USER_KEY`, else `~/.globus/usercert.pem` and
 `userkey.pem`, else `~/.globus/usercred.p12`, else the only `.p12` there (the exact order is
-[SPEC §10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#10-keys-and-proxies)). It refuses a key file with any permission for
+[SPEC §10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#10-keys-and-proxies)). It refuses a key file with any permission for
 its group or other accounts, giving the `chmod 600` that fixes it; asks the passphrase without
 showing it; asks CMS's VOMS server for your attributes; and writes a proxy valid for `--hours`
 (1 to 720, 192 when not given, never past the certificate's end), readable by you alone.
@@ -999,7 +999,7 @@ the proxy, or its attributes, have less than 6 hours left.
 ## samples.toml
 
 `samples.toml` says what a study reads. Every key, placeholder and file form is
-[SPEC §3](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#3-samplestoml); this is its example:
+[SPEC §3](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#3-samplestoml); this is its example:
 
 ```toml
 format = "rvr-samples"
@@ -1030,14 +1030,14 @@ It starts with `format` and `version` and has `[places]` (short names for long l
 metadata), each even when empty. Each `[[sample]]` takes exactly `name`, `label`, `files`, `tree`
 or `trees`, `eras`, `events`, `choose`, `seed` and `metadata`; any other key is refused with the
 nearest. `files` are paths on this computer, or `root://`, `davs://` or `https://` names on storage,
-with `*` and `?` in the file name ([SPEC §3.8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#38-where-files-are)). The entry
+with `*` and `?` in the file name ([SPEC §3.8](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#38-where-files-are)). The entry
 above makes two samples, `ST_s-channel_UL17` and `ST_s-channel_UL18`, labelled
 `ST s-channel (UL17)` and `ST s-channel (UL18)`.
 
 A sample's metadata travels in the `.rvr`, and a recipe reads it as `sample.KEY`. A key that holds
 one number, text or truth value per sample is also a sample column, one value per sample; a sample
 that lacks a number or a text has `null` there (which keys, exactly:
-[FORMAT §5](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md#5-sample-columns)):
+[FORMAT §5](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/FORMAT.md#5-sample-columns)):
 
 ```text
 xsec           f8 by sample[2]  flat: null, c: 3.5
@@ -1049,9 +1049,9 @@ where it differs.
 ## recipe.toml
 
 The recipe is TOML, with one expression per value, evaluated over whole columns of events. The
-[recipe reference](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/crates/rvr-recipe/README.md) is the language: every table, operator and function,
+[recipe reference](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/crates/rvr-recipe/README.md) is the language: every table, operator and function,
 each with an example and its result; how a press uses a recipe is
-[SPEC §4](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#4-recipetoml).
+[SPEC §4](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#4-recipetoml).
 
 ```toml
 format = "rvr-recipe"
@@ -1092,7 +1092,7 @@ rvr proxy init
 with no setup, the public web authorities, CERN's, and the 83 IGTF authorities (release 1.146, the
 set grid sites install as `ca-policy-lcg`), which sign the storage of most CMS sites, FNAL's dCache
 among them. `$X509_CERT_DIR`, else `/etc/grid-security/certificates` when it exists, adds others,
-for an authority newer than rvr; one that cannot be read is said before remote work ([SPEC §10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/SPEC.md#10-keys-and-proxies)). Without a
+for an authority newer than rvr; one that cannot be read is said before remote work ([SPEC §10](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#10-keys-and-proxies)). Without a
 valid proxy, local files and public storage still resolve.
 
 ## When something goes wrong

@@ -46,7 +46,7 @@ with rowver.open("higgs_tautau.rvr") as f:  # f.close() at the end: what it read
     met = f["MET_pt"]                        # its header still reads, a column then raises Error
 ```
 
-[The examples](https://gitlab.cern.ch/dgrove/rowver/-/tree/v15.0.0/docs/examples/python) work with
+[The examples](https://gitlab.cern.ch/dgrove/rowver/-/tree/v15.0.1/docs/examples/python) work with
 the columns of a file, and plot them with matplotlib, hist and ROOT.
 
 A column is the same array each time it is asked for while anything holds it; the `File` keeps none

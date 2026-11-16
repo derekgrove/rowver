@@ -30,7 +30,7 @@ magic (8 bytes) | compressed arrays | JSON header | header length (4 bytes) | ma
 A reader reads the first 8 bytes and the last 12, then the header, and has every fact about the
 file; since the header comes last, new columns and tool keys are added to a file in place. The first
 and last bytes of `tiny.rvr`, the running example of
-[the format](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.0/docs/FORMAT.md):
+[the format](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/FORMAT.md):
 
 ```text
 00000000: 8952 5652 0d0a 1a0a 28b5 2ffd 2404 2100  .RVR....(./.$.!.
