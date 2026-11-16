@@ -137,13 +137,23 @@ pub struct Staged {
     pub keep: Cell<bool>,
 }
 
+/// Why `target` could not be staged in `folder`, and what to do: a full disk wants space, not rights.
+fn unstaged(target: &Path, folder: &Path, e: &std::io::Error) -> String {
+    use std::io::ErrorKind::{QuotaExceeded, StorageFull};
+    let (target, folder) = (target.display(), folder.display());
+    let fix = match e.kind() {
+        StorageFull | QuotaExceeded => "Free some space on its disk, then try again.".to_owned(),
+        _ => format!("Make its folder writable, or remove {folder} if it is there."),
+    };
+    let said = rowver::described(e);
+    format!("{target} could not be staged in {folder}: {said}. {fix}")
+}
+
 impl Staged {
     /// The folder `target` is staged in, made when missing and locked, or why another press has it.
     pub fn lock(target: &Path) -> Result<Staged, String> {
         let folder = folder(target);
-        let failed = |e: std::io::Error| {
-            format!("{} could not be staged in {}: {}. Make its folder writable, or remove {} if it is there.", target.display(), folder.display(), rowver::described(&e), folder.display())
-        };
+        let failed = |e: std::io::Error| unstaged(target, &folder, &e);
         // A lock held for a moment is rvr status asking, or a press ending (its folder going, so
         // the journal locked may no longer be the one there): asked again.
         for _ in 0..5 {
@@ -665,6 +675,29 @@ impl Journal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // SPEC 1.5
+    #[test]
+    fn a_full_disk_is_told_to_free_space_and_any_other_failure_to_stage_how_to_stage() {
+        use std::io::ErrorKind::{PermissionDenied, QuotaExceeded, StorageFull};
+        let (target, folder) = (Path::new("study.rvr"), Path::new("study.rvr.partial"));
+        let told = |kind| unstaged(target, folder, &std::io::Error::from(kind));
+        for kind in [StorageFull, QuotaExceeded] {
+            let said = told(kind);
+            assert!(
+                said.starts_with("study.rvr could not be staged in study.rvr.partial: ")
+                    && said.ends_with(". Free some space on its disk, then try again."),
+                "{said}"
+            );
+        }
+        let said = told(PermissionDenied);
+        assert!(
+            said.ends_with(
+                ". Make its folder writable, or remove study.rvr.partial if it is there."
+            ),
+            "{said}"
+        );
+    }
 
     // SPEC 7.5.7
     #[test]

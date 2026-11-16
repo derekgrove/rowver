@@ -21,7 +21,8 @@ f.path, f.header          # where it is; its JSON header, as a dict
 f.derived                 # the derived columns: kept as expressions, worked out when first asked for
 f["mean_jet_pt"]          # a derived column, read as any other, checked against what the file records
 f.slice("MET_pt", 100, 200)  # rows 100 to 199 alone: only the chunks of the file that hold them read
-f.slice("MET_pt", -100)      # the last 100; f.slice(name, slice(a, b, step)) reads as a list's slice
+f.slice("MET_pt", -100)      # the last 100; f.slice(name, slice(a, b, step)) reads as a list's slice,
+                             # a step past 1 reading only the chunks that hold a row asked for
 for block in f.blocks(["MET_pt", "Muon_pt"]):  # the file about a million rows at a time (rows=), for one too
     block["MET_pt"], block.rows                # large to hold (two blocks are held at most): the columns, and its rows
 f.labels                  # each sample's label, what a plot shows
@@ -49,7 +50,11 @@ with rowver.open("higgs_tautau.rvr") as f:  # f.close() at the end: what it read
 the columns of a file, and plot them with matplotlib, hist and ROOT.
 
 A column is the same array each time it is asked for while anything holds it; the `File` keeps none
-in memory itself, so memory is what your own variables hold. A `File` pickles as its path (for
+in memory itself, so memory is what your own variables hold. A slice of a column
+(`f["MET_pt"][:100]`) holds the whole column, as a NumPy slice does: `f.slice`, or
+`f.read(names, sample=NAME)`, reads those rows alone. Let go of, an array is freed at once; what
+the system shows for the process (macOS above all) may stay higher for a while, memory it takes
+back when anything needs it. A `File` pickles as its path (for
 multiprocessing, dask and the like), and a name it has no column of raises `KeyError` naming the
 nearest it has. Every column asked for at once (`f.read([...])`, `arrays`, `to_*`, a block of `f.blocks`) is read in parallel. Only
 NumPy is required; Awkward, pyarrow and pandas are used when installed

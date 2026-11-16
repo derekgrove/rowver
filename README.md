@@ -117,14 +117,15 @@ from the tutorial below, trimmed: `…` marks what was cut, and checksums are sh
 This uses two Higgs-to-tau-tau samples from CMS Open Data, which anyone can read without a grid
 proxy. Every output below is from a real run.
 
-**1. Install `rvr`.** `pip install rowver` installs the Python package and the `rvr` command with
-it (Python 3.11 or later). Or download the `rvr` binary alone from the
+**1. Install `rvr`.** `pip install "rowver[all]"` installs the Python package and the `rvr` command
+with it (Python 3.11 or later); `[all]` adds Awkward, pandas and pyarrow, which step 6 uses, and
+`pip install rowver` alone needs only NumPy. Or download the `rvr` binary alone from the
 [releases](https://gitlab.cern.ch/dgrove/rowver/-/releases) (Linux x86_64 with glibc 2.28 or later,
 so the LPC and lxplus, and macOS). Building from a checkout is for developers:
 [the setup page](docs/SETUP.md) says how.
 
 ```sh
-pip install rowver
+pip install "rowver[all]"
 rvr --version
 ```
 

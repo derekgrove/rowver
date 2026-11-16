@@ -54,6 +54,17 @@ def _read(kind, raw, offsets):
     return _typed(raw, kind), offsets
 
 
+def _owner(values):
+    """The array that holds a column's bytes: what any view of the column, a slice too, keeps alive."""
+    base = values.base
+    return base if isinstance(base, _np.ndarray) and base.nbytes == values.nbytes else values
+
+
+def _before(rows, row):
+    """How many of `rows`, a rising range, come before `row`."""
+    return min(len(rows), max(0, -((rows.start - row) // rows.step)))
+
+
 def _names(names, every):
     """Column names asked for: all of `every` when none, one name given alone, or a list."""
     if names is None:
@@ -159,7 +170,8 @@ class File:
         for sample in self.header["data"]["samples"]:
             self._slices[sample["name"]] = slice(start, start + sample["rows"])
             start += sample["rows"]
-        # Each column handed out, by name, for as long as its arrays live: weak references to them.
+        # Each column handed out, by name, for as long as its arrays live: weak references to its
+        # values, the array that holds their bytes (which a slice keeps alive), and its offsets.
         self._held = {}
         # List columns of the same lists share one offsets array in the file (docs/FORMAT.md §4),
         # and here: each such array by where it lies, while a column read still holds it.
@@ -360,12 +372,21 @@ class File:
             raise TypeError(f"f[...] takes one column's name, not {name!r}: f.read, f.arrays and f.to_pandas take a list of names, and f[name][a:b] or f.slice(name, a, b) gives rows a to b")
         return _listed(*self.read([name])[name])
 
-    def _kept(self, name):
+    def _kept(self, held, name):
         """The column of this name handed out before, while its arrays live: (values, offsets)."""
-        values, offsets = self._held.get(name, (None, None))
-        values, listed = values and values(), offsets is not None
+        if name not in held:
+            return None
+        values, owner, kind, offsets = held[name]
+        values, owner, listed = values(), owner(), offsets is not None
         offsets = offsets() if listed else None
-        return None if values is None or (listed and offsets is None) else (values, offsets)
+        if owner is None or (listed and offsets is None):
+            return None
+        if values is None:
+            # Only a slice of it is still held: the same bytes, seen whole again.
+            values = owner.view(kind)
+            values.flags.writeable = False
+            held[name] = (_weakref.ref(values), *held[name][1:])
+        return values, offsets
 
     def read(self, names=None, sample=None):
         """Columns by name (every one, stored and derived, when not given), the stored ones read at once on every core: name -> (values,
@@ -379,7 +400,7 @@ class File:
         # Another thread's close() or forget() meanwhile changes nothing here: the open file is
         # taken once, and what is handed out is noted in the dict there when this read began.
         held = self._held
-        got = {n: self._kept(n) for n in dict.fromkeys(names)}
+        got = {n: self._kept(held, n) for n in dict.fromkeys(names)}
         missing = [n for n, kept in got.items() if kept is None]
         if missing:
             file = self._open()
@@ -394,7 +415,8 @@ class File:
                     codes = got["sample"][0] if got.get("sample") else self.read(["sample"])["sample"][0]
                     got[name] = (self._per_row(name, codes), None)
                 values, offsets = got[name]
-                held[name] = (_weakref.ref(values), None if offsets is None else _weakref.ref(offsets))
+                held[name] = (_weakref.ref(values), _weakref.ref(_owner(values)), values.dtype,
+                              None if offsets is None else _weakref.ref(offsets))
         return {n: got[n] for n in names}
 
     def slice(self, name, start=None, stop=None):
@@ -403,7 +425,8 @@ class File:
         is left to `rowver.validate`); a derived column is checked against its record first, once
         for the open file, over every row. A row left out is the file's first or last, a negative
         one counts from its end, and a slice (`f.slice(name, slice(a, b, step))`) reads as one of
-        a list does."""
+        a list does: with a step past 1, only the chunks that hold a row asked for, and the rows
+        given hold no others in memory)."""
         if not isinstance(name, str):
             raise TypeError(f"{name!r} is not a column's name: name each column by its text")
         if name not in self:
@@ -414,9 +437,11 @@ class File:
             rows = range(*start.indices(self.rows))
             if len(rows) == 0:
                 return _listed(*self._part(name, 0, 0))
+            if abs(rows.step) > 1:
+                return self._stepped(name, rows)
             first = min(rows[0], rows[-1])
             part = _listed(*self._part(name, first, max(rows[0], rows[-1]) + 1))
-            return part if rows.step == 1 else part[rows[0] - first::rows.step]
+            return part[::rows.step]
         start, stop = (0 if start is None else start), (self.rows if stop is None else stop)
         try:
             asked = _operator.index(start), _operator.index(stop)
@@ -425,6 +450,38 @@ class File:
         if min(asked) < -self.rows:
             raise Error(f"rows {asked[0]} to {asked[1]} of {name} are asked for, and the file has {self.rows}: a negative row counts from its end, back to -{self.rows}")
         return _listed(*self._part(name, *(at + self.rows if at < 0 else at for at in asked)))
+
+    def _stepped(self, name, rows, most=1 << 20):
+        """These rows of a column, a range of a step past 1: read from the chunks that hold one, no
+        more than `most` rows of them at a time, and copied out, so that no other row stays held."""
+        up = rows if rows.step > 0 else rows[::-1]
+        # Each run of chunks read at once, as the rows of `up` it holds: up[first:last].
+        runs, start = [], None
+        for a, b in self._open().chunks():
+            first, last = _before(up, a), _before(up, b)
+            if first == last:
+                start = None
+            elif start is not None and b - start <= most:
+                runs[-1][1] = last
+            else:
+                runs.append([first, last])
+                start = a
+        given, lists = None, []
+        for first, last in runs:
+            asked = up[first:last]
+            values, offsets = self._part(name, asked[0], asked[-1] + 1)
+            if offsets is not None:
+                ak = _needs("awkward", "a list column")
+                lists.append(ak.to_packed(_listed(values, offsets)[::up.step]))
+                continue
+            if given is None:
+                given = _np.empty(len(up), values.dtype)
+            given[first:last] = values[::up.step]
+        if lists:
+            given = lists[0] if len(lists) == 1 else ak.concatenate(lists)
+        else:
+            given.flags.writeable = False
+        return given if rows.step > 0 else given[::-1]
 
     def blocks(self, names=None, rows=1 << 20, sample=None):
         """The file a block of rows at a time, for one too large to hold: each block a dict of the

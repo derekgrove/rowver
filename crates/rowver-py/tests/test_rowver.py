@@ -243,6 +243,13 @@ class Pressed(unittest.TestCase):
         gone = weakref.ref(weight)
         del weight
         self.assertIsNone(gone())
+        # A slice of it holds the whole column: asked for again, those bytes, not read anew.
+        part = f["weight"][1:3]
+        self.assertTrue(np.shares_memory(f["weight"], part))
+        weight = f["weight"]
+        self.assertIs(f["weight"], weight)
+        self.assertFalse(weight.flags.writeable)
+        del weight, part
         with self.assertRaisesRegex(KeyError, r"wieght: not a column of .*; did you mean weight\? f.keys\(\) lists every one"):
             f["wieght"]
         with self.assertRaisesRegex(KeyError, "QQQQ: not a column of .*; it has sample, entry, .*xsec"):
@@ -393,8 +400,9 @@ class Pressed(unittest.TestCase):
             f = rowver.open(copy)
             self.assertEqual((f.empty, self.file.empty, f.rows, f.columns), (True, False, self.file.rows, self.file.columns))
             self.assertIn(", empty>", repr(f))
-            with self.assertRaisesRegex(rowver.Error, "the file is empty: .*rvr refill"):
-                f["weight"]
+            for read in [lambda: f["weight"], lambda: f.slice("weight", 0, 2), lambda: f.slice("weight", slice(None, None, 2))]:
+                with self.assertRaisesRegex(rowver.Error, "the file is empty: .*rvr refill"):
+                    read()
             # Asking for no columns gives none, whatever the file.
             self.assertEqual(f.read([]), {})
             self.assertEqual(rvr(["refill", str(copy)]), 0)
@@ -696,6 +704,27 @@ class Blocks(unittest.TestCase):
             self.assertEqual(list(first), f.columns + f.derived)
             # List columns of the same lists hold one offsets array in a block too.
             self.assertTrue(np.shares_memory(first["Jet_pt"].layout.offsets.data, first["Jet_eta"].layout.offsets.data))
+
+    # SPEC 11.8
+    def test_a_stepped_slice_reads_the_chunks_that_hold_its_rows_and_holds_no_others(self):
+        f = self.file
+        names = ["entry", "MET", "ratio", "xsec", *(["Jet_pt"] if has("awkward") else [])]
+        whole = {name: f[name].tolist() for name in names}
+        last = f.rows - 1
+        for rows in [slice(None, None, 2), slice(None, None, -3), slice(5, None, 1000), slice(None, None, 1500),
+                     slice(last, 1023, -1024), slice(1023, 1026, 2), slice(100, 3000, 7), slice(last, None, 5), slice(2, 1, 3)]:
+            for name in names:
+                self.assertEqual(f.slice(name, rows).tolist(), whole[name][rows], (name, rows))
+        # Read a run of chunks at a time, however few rows that is.
+        for most in (1, 2048):
+            self.assertEqual(f._stepped("MET", range(1, f.rows, 2), most).tolist(), whole["MET"][1::2])
+        # What is given holds no row besides its own, and is not to be written.
+        part = f.slice("MET", slice(None, None, 1500))
+        self.assertTrue(part.base is None and not part.flags.writeable)
+        # Rows two chunks apart: a row of each chunk that holds one is read, and no other chunk.
+        with mock.patch.object(f, "_parts", wraps=f._parts) as read:
+            f.slice("MET", slice(None, None, 2048))
+        self.assertEqual([call.args for call in read.call_args_list], [(["MET"], row, row + 1) for row in range(0, f.rows, 2048)])
 
     # SPEC 11.10
     def test_blocks_refuse_what_they_cannot_read_when_asked(self):

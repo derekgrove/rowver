@@ -1320,7 +1320,10 @@ columns; anything but a name
 
 **11.5** A column read is the same array each time it is asked for, for as long as anything holds
 it: the `File` keeps none in memory itself, so one let go of is read (a derived one worked out) again
-when next asked for, as after `f.forget(name, …)` (or `f.forget()`, every one).
+when next asked for, as after `f.forget(name, …)` (or `f.forget()`, every one). A slice of a column
+holds the whole column, as a NumPy slice does: while one is held the column asked for again is
+those bytes, read no second time. An array let go of is freed at once; what the system reports for
+the process may stay higher until it takes that memory back (macOS counts it until then).
 `f.close()`, which leaving `with rowver.open(path) as f:` calls, lets go of the open file:
 arrays handed out stay as they are, and all §11.3 gives still reads; a column then asked
 for raises `rowver.Error`.
@@ -1339,7 +1342,9 @@ sample=NAME)` does.
 **11.8** `f.slice(name, start, stop)` reads rows `start` to `stop` (not included) of a column, as
 `f[name]` gives it (`sample` and `entry` too; one left out is the file's first row, or its last; a
 negative one counts from the file's end, no further back than its first row; and `f.slice(name, slice(a, b, step))` reads as that slice
-of a list does), decoding only the chunks of the file that hold them,
+of a list does), decoding only the chunks of the file that hold them (with a step past 1 or before
+-1, only the chunks that hold a row asked for, a run of them of no more than 1,048,576 rows at a
+time, and what is given holds no row besides those asked for),
 each frame checked by its content checksum (FORMAT.md §7, §12: the Python package leaves a chunk's
 SHA-256 to `rowver.validate`, here and in `f[name]`); a derived column is checked against its
 record first, as `f[name]` checks it, once for the open file (its record is of every row, so that
