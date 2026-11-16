@@ -18,8 +18,21 @@ type Broken = Option<(String, Option<String>)>;
 pub(crate) fn strict(text: &[u8]) -> Result<Value> {
     let (broken, keyed) = (Cell::new(None), Cell::new(None));
     let mut parsed = serde_json::Deserializer::from_slice(text);
-    let value = Strict { depth: 1, at: At::Top, broken: &broken, text, keyed: &keyed }.deserialize(&mut parsed).map_err(|e| match broken.take() {
-        Some((fact, under)) => Error::Breaks { fact, under, line: e.line(), column: e.column() },
+    let value = Strict {
+        depth: 1,
+        at: At::Top,
+        broken: &broken,
+        text,
+        keyed: &keyed,
+    }
+    .deserialize(&mut parsed)
+    .map_err(|e| match broken.take() {
+        Some((fact, under)) => Error::Breaks {
+            fact,
+            under,
+            line: e.line(),
+            column: e.column(),
+        },
         None => e.into(),
     })?;
     parsed.end()?;
@@ -32,7 +45,15 @@ pub(crate) fn strict_tool(text: &[u8], key: &str) -> Result<Value> {
     let (broken, keyed) = (Cell::new(None), Cell::new(None));
     let mut parsed = serde_json::Deserializer::from_slice(text);
     let top = At::Top;
-    let value = Strict { depth: 2, at: At::Key(&top, key), broken: &broken, text, keyed: &keyed }.deserialize(&mut parsed).and_then(|value| parsed.end().map(|()| value));
+    let value = Strict {
+        depth: 2,
+        at: At::Key(&top, key),
+        broken: &broken,
+        text,
+        keyed: &keyed,
+    }
+    .deserialize(&mut parsed)
+    .and_then(|value| parsed.end().map(|()| value));
     value.map_err(|e| match broken.take() {
         Some((fact, _)) => invalid(format!("the tool key {key} breaks docs/FORMAT.md §1: {fact} (line {}, column {}): write its data as a header's rules say", e.line(), e.column())),
         None => invalid(format!("the tool key {key} is not JSON as docs/FORMAT.md §1 reads it ({e}): write its data as one JSON object")),
@@ -59,14 +80,23 @@ impl<'a> At<'a> {
 
     /// Whether this object's keys are names, as `made.files` and a sample's `files` hold.
     fn names(&self) -> bool {
-        matches!(self, At::Key(At::Key(At::Top, "made"), "files") | At::Key(At::Key(At::Key(At::Key(At::Top, "made"), "files"), _), "files"))
+        matches!(
+            self,
+            At::Key(At::Key(At::Top, "made"), "files")
+                | At::Key(
+                    At::Key(At::Key(At::Key(At::Top, "made"), "files"), _),
+                    "files"
+                )
+        )
     }
 }
 
 impl std::fmt::Display for At<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // A name, or a key not of plain letters, digits and `_`, is quoted; a field is not.
-        let field = |key: &str| !key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+        let field = |key: &str| {
+            !key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        };
         match self {
             At::Top => f.write_str("the header"),
             At::Key(At::Top, key) if field(key) => f.write_str(key),
@@ -100,7 +130,10 @@ impl Strict<'_> {
 
     /// Whether the text writes the key `NUMBER`, looked for once.
     fn keyed(self) -> bool {
-        let keyed = self.keyed.get().unwrap_or_else(|| writes_number_key(self.text));
+        let keyed = self
+            .keyed
+            .get()
+            .unwrap_or_else(|| writes_number_key(self.text));
         self.keyed.set(Some(keyed));
         keyed
     }
@@ -108,7 +141,13 @@ impl Strict<'_> {
     /// The depth of what an array or object holds, refused when it is too deep itself.
     fn deeper<E: serde::de::Error>(self) -> std::result::Result<usize, E> {
         match self.depth > DEEPEST {
-            true => Err(self.breaks(self.at, &format!("is nested {} arrays and objects deep, more than {DEEPEST}", self.depth))),
+            true => Err(self.breaks(
+                self.at,
+                &format!(
+                    "is nested {} arrays and objects deep, more than {DEEPEST}",
+                    self.depth
+                ),
+            )),
             false => Ok(self.depth + 1),
         }
     }
@@ -116,7 +155,10 @@ impl Strict<'_> {
 
 impl<'de> DeserializeSeed<'de> for Strict<'_> {
     type Value = Value;
-    fn deserialize<D: serde::Deserializer<'de>>(self, value: D) -> std::result::Result<Value, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        self,
+        value: D,
+    ) -> std::result::Result<Value, D::Error> {
         value.deserialize_any(self)
     }
 }
@@ -154,7 +196,11 @@ impl<'de> Visitor<'de> for Strict<'_> {
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Value, A::Error> {
         let depth = self.deeper()?;
         let mut out = Vec::new();
-        while let Some(value) = seq.next_element_seed(Strict { depth, at: At::Index(&self.at, out.len()), ..self })? {
+        while let Some(value) = seq.next_element_seed(Strict {
+            depth,
+            at: At::Index(&self.at, out.len()),
+            ..self
+        })? {
             out.push(value);
         }
         Ok(Value::Array(out))
@@ -166,14 +212,22 @@ impl<'de> Visitor<'de> for Strict<'_> {
             // no i64 or u64 holds over as a map of one member, its digits as written; from 1.0.154
             // on, -0 too. The key written in the text, anywhere in an object, is refused (FORMAT 1).
             if key == NUMBER {
-                let handed = if out.is_empty() { map.next_value_seed(Digits).ok() } else { None };
-                let digits = match handed {
-                    Some(Handed::Owned(digits)) => digits,
-                    // serde_json hands its own digits over owned; were a later one to lend them,
-                    // the text tells its numbers from the key written.
-                    Some(Handed::Lent(digits)) if !self.keyed() => digits,
-                    _ => return Err(self.breaks(At::Key(&self.at, &key), "is a key no header holds, as the JSON reader takes it for a number")),
+                let handed = if out.is_empty() {
+                    map.next_value_seed(Digits).ok()
+                } else {
+                    None
                 };
+                let digits =
+                    match handed {
+                        Some(Handed::Owned(digits)) => digits,
+                        // serde_json hands its own digits over owned; were a later one to lend them,
+                        // the text tells its numbers from the key written.
+                        Some(Handed::Lent(digits)) if !self.keyed() => digits,
+                        _ => return Err(self.breaks(
+                            At::Key(&self.at, &key),
+                            "is a key no header holds, as the JSON reader takes it for a number",
+                        )),
+                    };
                 if digits == "-0" {
                     return Err(self.breaks(self.at, "is written -0"));
                 }
@@ -183,7 +237,11 @@ impl<'de> Visitor<'de> for Strict<'_> {
             if out.contains_key(&key) {
                 return Err(self.breaks(At::Key(&self.at, &key), "is written twice"));
             }
-            let value = map.next_value_seed(Strict { depth, at: At::Key(&self.at, &key), ..self })?;
+            let value = map.next_value_seed(Strict {
+                depth,
+                at: At::Key(&self.at, &key),
+                ..self
+            })?;
             out.insert(key, value);
         }
         if out.is_empty() {
@@ -208,7 +266,10 @@ struct Digits;
 
 impl<'de> DeserializeSeed<'de> for Digits {
     type Value = Handed;
-    fn deserialize<D: serde::Deserializer<'de>>(self, value: D) -> std::result::Result<Self::Value, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        self,
+        value: D,
+    ) -> std::result::Result<Self::Value, D::Error> {
         value.deserialize_any(self)
     }
 }
@@ -238,7 +299,10 @@ pub(crate) struct Member {
 /// escapes passed over), their values not parsed; `None` when it is not an object so written.
 pub(crate) fn members(text: &[u8]) -> Option<Vec<Member>> {
     let blank = |mut at: usize| {
-        while text.get(at).is_some_and(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r')) {
+        while text
+            .get(at)
+            .is_some_and(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+        {
             at += 1;
         }
         at
@@ -259,11 +323,19 @@ pub(crate) fn members(text: &[u8]) -> Option<Vec<Member>> {
         at = blank(value.end);
         match text.get(at)? {
             b',' => {
-                out.push(Member { name, value, comma: Some(at) });
+                out.push(Member {
+                    name,
+                    value,
+                    comma: Some(at),
+                });
                 at = blank(at + 1);
             }
             b'}' => {
-                out.push(Member { name, value, comma: None });
+                out.push(Member {
+                    name,
+                    value,
+                    comma: None,
+                });
                 return (blank(at + 1) == text.len()).then_some(out);
             }
             _ => return None,
@@ -273,7 +345,13 @@ pub(crate) fn members(text: &[u8]) -> Option<Vec<Member>> {
 
 /// A member's name, from its text with its quotes: as JSON reads it, or, when it does not, as it is written.
 pub(crate) fn name(text: &[u8]) -> String {
-    serde_json::from_slice(text).unwrap_or_else(|_| String::from_utf8_lossy(text.get(1..text.len().saturating_sub(1)).unwrap_or_default()).into_owned())
+    serde_json::from_slice(text).unwrap_or_else(|_| {
+        String::from_utf8_lossy(
+            text.get(1..text.len().saturating_sub(1))
+                .unwrap_or_default(),
+        )
+        .into_owned()
+    })
 }
 
 /// Whether `text` writes the key `NUMBER`, however it is escaped: serde_json's own numbers are
@@ -281,8 +359,13 @@ pub(crate) fn name(text: &[u8]) -> String {
 fn writes_number_key(text: &[u8]) -> bool {
     let mut at = 0;
     while let Some(open) = text[at..].iter().position(|&b| b == b'"').map(|i| at + i) {
-        let Some(end) = string_end(text, open) else { return false };
-        let colon = text[end..].iter().find(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r')) == Some(&b':');
+        let Some(end) = string_end(text, open) else {
+            return false;
+        };
+        let colon = text[end..]
+            .iter()
+            .find(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+            == Some(&b':');
         if colon && name(&text[open..end]) == NUMBER {
             return true;
         }
@@ -327,7 +410,11 @@ fn value_end(text: &[u8], at: usize) -> Option<usize> {
             }
         }
         _ => {
-            let end = at + text[at..].iter().position(|b| matches!(b, b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r')).unwrap_or(text.len() - at);
+            let end = at
+                + text[at..]
+                    .iter()
+                    .position(|b| matches!(b, b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r'))
+                    .unwrap_or(text.len() - at);
             (end > at).then_some(end)
         }
     }
@@ -453,7 +540,10 @@ mod tests {
     fn a_whole_number_written_minus_zero_is_refused_wherever_it_is() {
         let refused = |text: &str| strict(text.as_bytes()).unwrap_err().to_string();
         assert_eq!(refused("-0"), "the header breaks docs/FORMAT.md §1: the header is written -0 (line 1, column 2): the program that wrote it does not follow the format; press its study again with rvr");
-        assert!(refused(r#"{"data": {"files": [{"rows": 1}, {"rows": -0}]}}"#).contains(": data.files[1].rows is written -0 ("));
+        assert!(
+            refused(r#"{"data": {"files": [{"rows": 1}, {"rows": -0}]}}"#)
+                .contains(": data.files[1].rows is written -0 (")
+        );
         assert!(refused(r#"{"tool": {"x": [1, -0]}}"#).contains(": tool.x[1] is written -0 ("));
         // -0.0 and -0e0 are floats, and allowed; so is a negative whole number.
         for text in ["-0.0", "-0e0", "-1", "0", r#"{"a": [-0.0, -0e0]}"#] {
@@ -466,15 +556,41 @@ mod tests {
     fn the_key_serde_json_hands_a_number_over_under_is_refused_and_every_number_read() {
         let refused = |text: &str| strict(text.as_bytes()).unwrap_err().to_string();
         let marker = r#"["$serde_json::private::Number"] is a key no header holds, as the JSON reader takes it for a number ("#;
-        for text in [r#"{"t": {"$serde_json::private::Number": "12"}}"#, r#"{"t": {"\u0024serde_json::private::Number": "1\u0032"}}"#, r#"{"t": {"a": 1, "$serde_json::private::Number": "12"}}"#, r#"{"t": {"$serde_json::private::Number": 12}}"#, r#"{"t": {"$serde_json::private::Number": {"a": [1]}}}"#] {
-            assert!(refused(text).contains(&format!(": t{marker}")), "{text}: {}", refused(text));
+        for text in [
+            r#"{"t": {"$serde_json::private::Number": "12"}}"#,
+            r#"{"t": {"\u0024serde_json::private::Number": "1\u0032"}}"#,
+            r#"{"t": {"a": 1, "$serde_json::private::Number": "12"}}"#,
+            r#"{"t": {"$serde_json::private::Number": 12}}"#,
+            r#"{"t": {"$serde_json::private::Number": {"a": [1]}}}"#,
+        ] {
+            assert!(
+                refused(text).contains(&format!(": t{marker}")),
+                "{text}: {}",
+                refused(text)
+            );
         }
-        assert!(strict_tool(br#"{"note": {"$serde_json::private::Number": "12"}}"#, "app").unwrap_err().to_string().contains(&format!("app.note{marker}")));
+        assert!(strict_tool(
+            br#"{"note": {"$serde_json::private::Number": "12"}}"#,
+            "app"
+        )
+        .unwrap_err()
+        .to_string()
+        .contains(&format!("app.note{marker}")));
         // A number no u64 or i64 holds is read as written, wherever it is.
-        let read = strict(br#"{"t": [18446744073709551616, -9223372036854775809, 1e400, 0.1]}"#).unwrap();
-        assert_eq!(read["t"].to_string(), "[18446744073709551616,-9223372036854775809,1e+400,0.1]");
+        let read =
+            strict(br#"{"t": [18446744073709551616, -9223372036854775809, 1e400, 0.1]}"#).unwrap();
+        assert_eq!(
+            read["t"].to_string(),
+            "[18446744073709551616,-9223372036854775809,1e+400,0.1]"
+        );
         // Were serde_json to lend its own digits, the text alone would tell them from the key written.
-        for (text, keyed) in [(r#"{"$serde_json::private::Number": 1}"#, true), (r#"{"a": {"\u0024serde_json::private::Number" : 1}}"#, true), (r#"{"a": "$serde_json::private::Number"}"#, false), (r#"{"a": "\"$serde_json::private::Number\": 1"}"#, false), ("[1.5, 1e400]", false)] {
+        for (text, keyed) in [
+            (r#"{"$serde_json::private::Number": 1}"#, true),
+            (r#"{"a": {"\u0024serde_json::private::Number" : 1}}"#, true),
+            (r#"{"a": "$serde_json::private::Number"}"#, false),
+            (r#"{"a": "\"$serde_json::private::Number\": 1"}"#, false),
+            ("[1.5, 1e400]", false),
+        ] {
             assert_eq!(writes_number_key(text.as_bytes()), keyed, "{text}");
         }
     }
@@ -483,11 +599,32 @@ mod tests {
     #[test]
     fn a_refusal_names_a_sample_a_file_and_a_key_not_of_plain_letters_quoted() {
         let refused = |text: &str| strict(text.as_bytes()).unwrap_err().to_string();
-        let at = |text: &str| refused(text).split_once(": ").unwrap().1.split_once(" (line").unwrap().0.to_owned();
-        assert_eq!(at(r#"{"made": {"files": {"A": {"files": {"./f.root": {"stop": -0}}}}}}"#), r#"made.files["A"].files["./f.root"].stop is written -0"#);
-        assert_eq!(at(r#"{"made": {"files": {"A": {"metadata": {"big": -0}}}}}"#), r#"made.files["A"].metadata.big is written -0"#);
-        assert_eq!(at(r#"{"tool.x": {"a.b": [1, -0]}}"#), r#"["tool.x"]["a.b"][1] is written -0"#);
-        assert_eq!(at(r#"{"t": {"a\"b": 1, "a\"b": 2}}"#), r#"t["a\"b"] is written twice"#);
+        let at = |text: &str| {
+            refused(text)
+                .split_once(": ")
+                .unwrap()
+                .1
+                .split_once(" (line")
+                .unwrap()
+                .0
+                .to_owned()
+        };
+        assert_eq!(
+            at(r#"{"made": {"files": {"A": {"files": {"./f.root": {"stop": -0}}}}}}"#),
+            r#"made.files["A"].files["./f.root"].stop is written -0"#
+        );
+        assert_eq!(
+            at(r#"{"made": {"files": {"A": {"metadata": {"big": -0}}}}}"#),
+            r#"made.files["A"].metadata.big is written -0"#
+        );
+        assert_eq!(
+            at(r#"{"tool.x": {"a.b": [1, -0]}}"#),
+            r#"["tool.x"]["a.b"][1] is written -0"#
+        );
+        assert_eq!(
+            at(r#"{"t": {"a\"b": 1, "a\"b": 2}}"#),
+            r#"t["a\"b"] is written twice"#
+        );
     }
 
     // FORMAT 1
@@ -497,25 +634,71 @@ mod tests {
         let deep = format!("{}{}", "[".repeat(DEEPEST + 1), "]".repeat(DEEPEST + 1));
         for text in ["-0", r#"{"a": 1, "a": 2}"#, &deep] {
             let said = said(text);
-            assert!(said.starts_with("the header breaks docs/FORMAT.md §1: "), "{said}");
-            assert!(said.contains("): the program that wrote it does not follow the format; "), "{said}");
+            assert!(
+                said.starts_with("the header breaks docs/FORMAT.md §1: "),
+                "{said}"
+            );
+            assert!(
+                said.contains("): the program that wrote it does not follow the format; "),
+                "{said}"
+            );
         }
         // One under a tool key is mended by dropping that key; any other by pressing again.
-        assert!(said(r#"{"a": 1, "a": 2}"#).ends_with("; rvr tool on the file says whether dropping a tool key lets it open"), "{}", said(r#"{"a": 1, "a": 2}"#));
-        assert!(said("-0").ends_with("; press its study again with rvr"), "{}", said("-0"));
-        assert!(said(&deep).contains(" is nested 65 arrays and objects deep, more than 64 (line 1, column 66)"), "{}", said(&deep));
+        assert!(
+            said(r#"{"a": 1, "a": 2}"#)
+                .ends_with("; rvr tool on the file says whether dropping a tool key lets it open"),
+            "{}",
+            said(r#"{"a": 1, "a": 2}"#)
+        );
+        assert!(
+            said("-0").ends_with("; press its study again with rvr"),
+            "{}",
+            said("-0")
+        );
+        assert!(
+            said(&deep).contains(
+                " is nested 65 arrays and objects deep, more than 64 (line 1, column 66)"
+            ),
+            "{}",
+            said(&deep)
+        );
         // Only Strict's own refusals break §1; text that does not parse is not JSON.
-        for text in [r#"{"a": "#, "{\"a\": 1} x", "[1,]", "\u{feff}{}", r#"{"a": "\ud800"}"#] {
-            assert!(said(text).starts_with("the header is not JSON as docs/FORMAT.md §1 reads it ("), "{}", said(text));
+        for text in [
+            r#"{"a": "#,
+            "{\"a\": 1} x",
+            "[1,]",
+            "\u{feff}{}",
+            r#"{"a": "\ud800"}"#,
+        ] {
+            assert!(
+                said(text).starts_with("the header is not JSON as docs/FORMAT.md §1 reads it ("),
+                "{}",
+                said(text)
+            );
         }
     }
 
     // FORMAT 1
     #[test]
     fn each_refusal_of_a_header_names_its_file() {
-        let about = |text: &str| crate::about(std::path::Path::new("f.rvr"), strict(text.as_bytes()).unwrap_err()).to_string();
-        assert!(about("-0").starts_with("f.rvr: the header breaks docs/FORMAT.md §1: "), "{}", about("-0"));
-        assert!(about("[1,]").starts_with("f.rvr: the header is not JSON as docs/FORMAT.md §1 reads it ("), "{}", about("[1,]"));
+        let about = |text: &str| {
+            crate::about(
+                std::path::Path::new("f.rvr"),
+                strict(text.as_bytes()).unwrap_err(),
+            )
+            .to_string()
+        };
+        assert!(
+            about("-0").starts_with("f.rvr: the header breaks docs/FORMAT.md §1: "),
+            "{}",
+            about("-0")
+        );
+        assert!(
+            about("[1,]")
+                .starts_with("f.rvr: the header is not JSON as docs/FORMAT.md §1 reads it ("),
+            "{}",
+            about("[1,]")
+        );
     }
 
     // FORMAT 1
@@ -523,12 +706,26 @@ mod tests {
     fn a_header_rowver_was_about_to_write_that_breaks_section_1_says_what_put_it_there() {
         let deep = (0..DEEPEST).fold(serde_json::json!(1), |inner, _| serde_json::json!([inner]));
         // The header is checked before any array is read: any file stands in for the one being written.
-        let file = || std::sync::Arc::new(std::fs::File::open(std::env::current_exe().unwrap()).unwrap());
-        let said = |header: Value| crate::rvr::Reader::laid(std::path::Path::new("x.rvr"), file(), 0, header).err().unwrap().to_string();
+        let file =
+            || std::sync::Arc::new(std::fs::File::open(std::env::current_exe().unwrap()).unwrap());
+        let said = |header: Value| {
+            crate::rvr::Reader::laid(std::path::Path::new("x.rvr"), file(), 0, header)
+                .err()
+                .unwrap()
+                .to_string()
+        };
         let tool = said(serde_json::json!({"rowver": 15, "deep-tool": {"x": deep}}));
-        assert!(tool.starts_with("the header rowver was about to write breaks docs/FORMAT.md §1: [\"deep-tool\"].x"), "{tool}");
+        assert!(
+            tool.starts_with(
+                "the header rowver was about to write breaks docs/FORMAT.md §1: [\"deep-tool\"].x"
+            ),
+            "{tool}"
+        );
         assert!(tool.ends_with(" is nested 65 arrays and objects deep, more than 64, in the tool key deep-tool it was given: change that tool key's data to follow §1"), "{tool}");
         let made = said(serde_json::json!({"rowver": 15, "made": {"x": deep}}));
-        assert!(made.ends_with(", in what it was given to write: change that to follow §1"), "{made}");
+        assert!(
+            made.ends_with(", in what it was given to write: change that to follow §1"),
+            "{made}"
+        );
     }
 }

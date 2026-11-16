@@ -20,10 +20,21 @@ fn lists<'a>(array: &'a Array, what: &str) -> Result<(&'a Arc<Vec<usize>>, &'a V
 /// Apply a float function to every value, in the float kind of the input.
 pub(crate) fn float_map(array: &Array, function: fn(f64) -> f64) -> Result<Array> {
     array.map_values(
-        |constant| Ok(Array::Constant(Constant::Float(function(constant.alone(1)?.number(0))))),
+        |constant| {
+            Ok(Array::Constant(Constant::Float(function(
+                constant.alone(1)?.number(0),
+            ))))
+        },
         |values| {
             let kind = values.kind.floating();
-            Ok(Values::float(kind, values.numbers().into_iter().map(|value| kind.round(function(value))).collect()))
+            Ok(Values::float(
+                kind,
+                values
+                    .numbers()
+                    .into_iter()
+                    .map(|value| kind.round(function(value)))
+                    .collect(),
+            ))
         },
     )
 }
@@ -40,12 +51,19 @@ pub(crate) fn same_map(
         Constant::Float(value) => Ok(Array::Constant(Constant::Float(float(*value)))),
         Constant::Missing(key) => Err(lacking(key, &format!("a number in {what}"))),
         Constant::Truth(_) => Ok(array.clone()),
-        Constant::Text(text) => Err(problem(format!("{what} needs a number, not the text {text:?}"))),
+        Constant::Text(text) => Err(problem(format!(
+            "{what} needs a number, not the text {text:?}"
+        ))),
     };
     array.map_values(fixed, |values| {
         Ok(match &values.store {
-            Store::Whole(held) => Values::whole(values.kind, held.iter().map(|v| values.kind.wrap(whole(*v))).collect()),
-            Store::Float(held) => Values::float(values.kind, held.iter().map(|v| float(*v)).collect()),
+            Store::Whole(held) => Values::whole(
+                values.kind,
+                held.iter().map(|v| values.kind.wrap(whole(*v))).collect(),
+            ),
+            Store::Float(held) => {
+                Values::float(values.kind, held.iter().map(|v| float(*v)).collect())
+            }
         })
     })
 }
@@ -66,8 +84,21 @@ pub(crate) fn rounded(array: &Array) -> Result<Array> {
 /// Say for every value whether it is a finite number.
 pub(crate) fn finite(array: &Array) -> Result<Array> {
     array.map_values(
-        |constant| Ok(Array::Constant(Constant::Truth(constant.alone(1)?.number(0).is_finite()))),
-        |values| Ok(Values::whole(Kind::B1, values.numbers().into_iter().map(|v| v.is_finite() as i64).collect())),
+        |constant| {
+            Ok(Array::Constant(Constant::Truth(
+                constant.alone(1)?.number(0).is_finite(),
+            )))
+        },
+        |values| {
+            Ok(Values::whole(
+                Kind::B1,
+                values
+                    .numbers()
+                    .into_iter()
+                    .map(|v| v.is_finite() as i64)
+                    .collect(),
+            ))
+        },
     )
 }
 
@@ -77,7 +108,11 @@ pub(crate) fn finite(array: &Array) -> Result<Array> {
 pub(crate) fn pairwise(left: &Array, right: &Array, greatest: bool) -> Result<Array> {
     let float = move |x: f64, y: f64| {
         if x.is_nan() || y.is_nan() {
-            if x.is_nan() { x } else { y }
+            if x.is_nan() {
+                x
+            } else {
+                y
+            }
         } else if (greatest && x > y) || (!greatest && x < y) {
             x
         } else {
@@ -86,21 +121,43 @@ pub(crate) fn pairwise(left: &Array, right: &Array, greatest: bool) -> Result<Ar
     };
     let whole = move |kind: Kind, x: i64, y: i64| {
         let (a, b) = (kind.widen(x), kind.widen(y));
-        if (greatest && a > b) || (!greatest && a < b) { x } else { y }
+        if (greatest && a > b) || (!greatest && a < b) {
+            x
+        } else {
+            y
+        }
     };
     let apply = |a: &Values, b: &Values| -> Result<Values> {
         let (a, b) = together(a, b)?;
         Ok(match (&a.store, &b.store) {
-            (Store::Float(x), Store::Float(y)) => Values::float(a.kind, x.iter().zip(y.iter()).map(|(x, y)| float(*x, *y)).collect()),
-            (Store::Whole(x), Store::Whole(y)) => Values::whole(a.kind, x.iter().zip(y.iter()).map(|(x, y)| whole(a.kind, *x, *y)).collect()),
+            (Store::Float(x), Store::Float(y)) => Values::float(
+                a.kind,
+                x.iter().zip(y.iter()).map(|(x, y)| float(*x, *y)).collect(),
+            ),
+            (Store::Whole(x), Store::Whole(y)) => Values::whole(
+                a.kind,
+                x.iter()
+                    .zip(y.iter())
+                    .map(|(x, y)| whole(a.kind, *x, *y))
+                    .collect(),
+            ),
             _ => unreachable!("one kind"),
         })
     };
-    left.zip(right, &adopt, &|a, b| Ok(apply(&a.alone(1)?, &b.alone(1)?)?.constant()), &apply)
+    left.zip(
+        right,
+        &adopt,
+        &|a, b| Ok(apply(&a.alone(1)?, &b.alone(1)?)?.constant()),
+        &apply,
+    )
 }
 
 /// A float function of two arrays (hypot, atan2), value by value, in their common float kind.
-pub(crate) fn float_pair(left: &Array, right: &Array, function: fn(f64, f64) -> f64) -> Result<Array> {
+pub(crate) fn float_pair(
+    left: &Array,
+    right: &Array,
+    function: fn(f64, f64) -> f64,
+) -> Result<Array> {
     let apply = |a: &Values, b: &Values| -> Result<Values> {
         let (a, b) = together(a, b)?;
         let kind = a.kind.floating();
@@ -115,9 +172,10 @@ pub(crate) fn float_pair(left: &Array, right: &Array, function: fn(f64, f64) -> 
         right,
         &adopt,
         &|a, b| {
-            Ok(Constant::Float(
-                function(a.alone(1)?.number(0), b.alone(1)?.number(0)),
-            ))
+            Ok(Constant::Float(function(
+                a.alone(1)?.number(0),
+                b.alone(1)?.number(0),
+            )))
         },
         &apply,
     )
@@ -125,7 +183,8 @@ pub(crate) fn float_pair(left: &Array, right: &Array, function: fn(f64, f64) -> 
 
 /// The size of each value without its sign; a kind without a sign, `b1` too, is unchanged.
 pub(crate) fn magnitude(array: &Array) -> Result<Array> {
-    if matches!(array, Array::Event(values) | Array::Object { values, .. } if values.kind.unsigned()) {
+    if matches!(array, Array::Event(values) | Array::Object { values, .. } if values.kind.unsigned())
+    {
         return Ok(array.clone());
     }
     same_map(array, "abs", i64::wrapping_abs, f64::abs)
@@ -139,7 +198,8 @@ pub(crate) fn sign(array: &Array) -> Result<Array> {
         _ if value == 0.0 => 0.0,
         _ => value.signum(),
     };
-    if matches!(array, Array::Event(values) | Array::Object { values, .. } if values.kind.unsigned()) {
+    if matches!(array, Array::Event(values) | Array::Object { values, .. } if values.kind.unsigned())
+    {
         return same_map(array, "sign", |value| (value != 0) as i64, float);
     }
     same_map(array, "sign", i64::signum, float)
@@ -148,7 +208,8 @@ pub(crate) fn sign(array: &Array) -> Result<Array> {
 /// Each value negated: a float's sign turned over, a whole number subtracted from 0 in its kind
 /// (wrapping, as an unsigned kind does); a true-or-false value is refused.
 pub(crate) fn negated(array: &Array) -> Result<Array> {
-    let truth = || problem("- needs a number, not a true-or-false value: write if(x, -1, 0), or not x");
+    let truth =
+        || problem("- needs a number, not a true-or-false value: write if(x, -1, 0), or not x");
     let fixed = |constant: &Constant| match constant {
         Constant::Whole(value) => Ok(Array::Constant(Constant::Whole(value.wrapping_neg()))),
         Constant::Float(value) => Ok(Array::Constant(Constant::Float(-value))),
@@ -157,9 +218,17 @@ pub(crate) fn negated(array: &Array) -> Result<Array> {
         Constant::Text(text) => Err(problem(format!("- needs a number, not the text {text:?}"))),
     };
     array.map_values(fixed, |values| match &values.store {
-        Store::Float(held) => Ok(Values::float(values.kind, held.iter().map(|v| -v).collect())),
+        Store::Float(held) => Ok(Values::float(
+            values.kind,
+            held.iter().map(|v| -v).collect(),
+        )),
         Store::Whole(_) if values.kind == Kind::B1 => Err(truth()),
-        Store::Whole(held) => Ok(Values::whole(values.kind, held.iter().map(|v| values.kind.wrap(v.wrapping_neg())).collect())),
+        Store::Whole(held) => Ok(Values::whole(
+            values.kind,
+            held.iter()
+                .map(|v| values.kind.wrap(v.wrapping_neg()))
+                .collect(),
+        )),
     })
 }
 
@@ -168,10 +237,17 @@ pub(crate) fn denied(array: &Array) -> Result<Array> {
     let fixed = |constant: &Constant| match constant {
         Constant::Truth(truth) => Ok(Array::Constant(Constant::Truth(!truth))),
         Constant::Missing(key) => Err(lacking(key, "a true-or-false value")),
-        Constant::Text(text) => Err(problem(format!("not needs a true-or-false value, not the text {text:?}"))),
+        Constant::Text(text) => Err(problem(format!(
+            "not needs a true-or-false value, not the text {text:?}"
+        ))),
         _ => Err(not_truth("not", "a number")),
     };
-    array.map_values(fixed, |values| Ok(Values::whole(Kind::B1, values.truths("not")?.iter().map(|v| 1 - v).collect())))
+    array.map_values(fixed, |values| {
+        Ok(Values::whole(
+            Kind::B1,
+            values.truths("not")?.iter().map(|v| 1 - v).collect(),
+        ))
+    })
 }
 
 /// How many members each event's list has, or for true-or-false members how many are true.
@@ -316,7 +392,11 @@ fn floats_or(found: &[Option<f64>], kind: Kind, otherwise: &Array, what: &str) -
 
 /// The float kind a kernel's result takes: the kind the inputs combine in, as a float.
 fn float_kind(arrays: &[&Values]) -> Kind {
-    arrays.iter().map(|values| values.kind).reduce(Kind::with).map_or(Kind::F8, Kind::floating)
+    arrays
+        .iter()
+        .map(|values| values.kind)
+        .reduce(Kind::with)
+        .map_or(Kind::F8, Kind::floating)
 }
 
 /// The least or greatest member of each event's list, or `otherwise` where it is empty: the first
@@ -324,15 +404,24 @@ fn float_kind(arrays: &[&Values]) -> Kind {
 pub(crate) fn extreme(array: &Array, otherwise: &Array, greatest: bool) -> Result<Array> {
     let what = if greatest { "greatest" } else { "least" };
     let (offsets, values) = lists(array, what)?;
-    let places = in_own_numbers!(values, |held| hep_columns::lists::extreme_at(offsets, held, greatest));
-    let picks: Vec<Option<usize>> = places.iter().zip(offsets.iter()).map(|(at, start)| at.map(|at| start + at)).collect();
+    let places = in_own_numbers!(values, |held| hep_columns::lists::extreme_at(
+        offsets, held, greatest
+    ));
+    let picks: Vec<Option<usize>> = places
+        .iter()
+        .zip(offsets.iter())
+        .map(|(at, start)| at.map(|at| start + at))
+        .collect();
     Ok(Array::Event(filled(values, &picks, otherwise, what)?))
 }
 
 /// The member at a position of each event's list, counting from 0, or `otherwise`; `what` names it.
 pub(crate) fn nth(array: &Array, position: usize, otherwise: &Array, what: &str) -> Result<Array> {
     let (offsets, values) = lists(array, what)?;
-    let picks: Vec<Option<usize>> = offsets.windows(2).map(|pair| (pair[0] + position < pair[1]).then_some(pair[0] + position)).collect();
+    let picks: Vec<Option<usize>> = offsets
+        .windows(2)
+        .map(|pair| (pair[0] + position < pair[1]).then_some(pair[0] + position))
+        .collect();
     Ok(Array::Event(filled(values, &picks, otherwise, what)?))
 }
 
@@ -342,10 +431,22 @@ pub(crate) fn pick(array: &Array, mask: &Array) -> Result<Array> {
     let (others, marks) = lists(mask, "A pick's mask")?;
     let marks = marks.truths("A mask")?;
     if offsets != others {
-        return Err(unlike(others, offsets, "A mask has one true-or-false value per member of the list it picks from"));
+        return Err(unlike(
+            others,
+            offsets,
+            "A mask has one true-or-false value per member of the list it picks from",
+        ));
     }
     let positions: Vec<usize> = (0..values.len()).filter(|at| marks[*at] != 0).collect();
-    let counts: Vec<usize> = offsets.windows(2).map(|pair| marks[pair[0]..pair[1]].iter().filter(|mark| **mark != 0).count()).collect();
+    let counts: Vec<usize> = offsets
+        .windows(2)
+        .map(|pair| {
+            marks[pair[0]..pair[1]]
+                .iter()
+                .filter(|mark| **mark != 0)
+                .count()
+        })
+        .collect();
     Array::object(&counts, values.take(&positions))
 }
 
@@ -371,18 +472,30 @@ pub(crate) fn listed(array: &Array, positions: &Array) -> Result<Array> {
     let wanted = whole_positions(named, "listed")?;
     let mut marks = Vec::with_capacity(offsets[offsets.len() - 1]);
     for event in 0..offsets.len() - 1 {
-        let here: Vec<i128> = (others[event]..others[event + 1]).map(|at| named.kind.widen(wanted[at])).collect();
-        marks.extend((0..offsets[event + 1] - offsets[event]).map(|at| here.contains(&(at as i128)) as i64));
+        let here: Vec<i128> = (others[event]..others[event + 1])
+            .map(|at| named.kind.widen(wanted[at]))
+            .collect();
+        marks.extend(
+            (0..offsets[event + 1] - offsets[event]).map(|at| here.contains(&(at as i128)) as i64),
+        );
     }
-    Ok(Array::Object { offsets: offsets.clone(), values: Values::whole(Kind::B1, marks) })
+    Ok(Array::Object {
+        offsets: offsets.clone(),
+        values: Values::whole(Kind::B1, marks),
+    })
 }
 
 /// The whole numbers of a list of positions, or why it holds none: `what` names the function.
 fn whole_positions<'a>(positions: &'a Values, what: &str) -> Result<&'a [i64]> {
     match (&positions.store, positions.kind) {
-        (_, Kind::B1) => Err(problem(format!("{what} needs positions, not true-or-false values; use values[mask] to keep members"))),
+        (_, Kind::B1) => Err(problem(format!(
+            "{what} needs positions, not true-or-false values; use values[mask] to keep members"
+        ))),
         (Store::Whole(held), _) => Ok(held),
-        (Store::Float(_), kind) => Err(problem(format!("{what} needs whole-number positions, counting from 0, not {}", kind.name()))),
+        (Store::Float(_), kind) => Err(problem(format!(
+            "{what} needs whole-number positions, counting from 0, not {}",
+            kind.name()
+        ))),
     }
 }
 
@@ -396,13 +509,23 @@ fn two_lists<'a>(arguments: &'a [Array], what: &str) -> Result<[List<'a>; 4]> {
     let (others, other_eta) = lists(&arguments[2], what)?;
     let (other_phi_offsets, other_phi) = lists(&arguments[3], what)?;
     if offsets.len() != others.len() {
-        return Err(problem(format!("{what} needs eta and phi of two lists over the same events")));
+        return Err(problem(format!(
+            "{what} needs eta and phi of two lists over the same events"
+        )));
     }
     if offsets != phi_offsets {
-        return Err(unlike(offsets, phi_offsets, &format!("{what} needs the eta and phi of one list, member by member")));
+        return Err(unlike(
+            offsets,
+            phi_offsets,
+            &format!("{what} needs the eta and phi of one list, member by member"),
+        ));
     }
     if others != other_phi_offsets {
-        return Err(unlike(others, other_phi_offsets, &format!("{what} needs the eta and phi of the other list, member by member")));
+        return Err(unlike(
+            others,
+            other_phi_offsets,
+            &format!("{what} needs the eta and phi of the other list, member by member"),
+        ));
     }
     Ok([
         (offsets, eta),
@@ -466,7 +589,13 @@ fn particles<'a>(
     for argument in &arguments[1..] {
         let (own, values) = lists(argument, what)?;
         if own != offsets {
-            return Err(unlike(offsets, own, &format!("{what} needs pt, eta, phi, and any mass of the same list, member by member")));
+            return Err(unlike(
+                offsets,
+                own,
+                &format!(
+                    "{what} needs pt, eta, phi, and any mass of the same list, member by member"
+                ),
+            ));
         }
         held.push(values);
     }
@@ -480,8 +609,12 @@ pub(crate) fn summed(arguments: &[Array], name: &str, of: fn(Momentum) -> f64) -
     let kind = float_kind(&held);
     let numbers: Vec<Vec<f64>> = held.iter().map(|values| values.numbers()).collect();
     let mass = numbers.get(3).map(Vec::as_slice);
-    let sums = hep_columns::vectors::sum_per_event(offsets, &numbers[0], &numbers[1], &numbers[2], mass);
-    Ok(Array::Event(Values::float(kind, sums.map(|sum| kind.round(of(sum))).collect())))
+    let sums =
+        hep_columns::vectors::sum_per_event(offsets, &numbers[0], &numbers[1], &numbers[2], mass);
+    Ok(Array::Event(Values::float(
+        kind,
+        sums.map(|sum| kind.round(of(sum))).collect(),
+    )))
 }
 
 /// How many pairs one event's list may make: 65,536 (a list of 362 members makes 65,341).
@@ -493,7 +626,11 @@ pub(crate) const RUN_PAIRS: usize = 1 << 26;
 /// `RUN_PAIRS`; in a debug build, `RVR_RUN_PAIRS` when set, so the tests can make a run crowded.
 fn run_pairs() -> usize {
     #[cfg(debug_assertions)]
-    if let Some(n) = std::env::var("RVR_RUN_PAIRS").ok().and_then(|n| n.parse().ok()).filter(|n| *n > 0) {
+    if let Some(n) = std::env::var("RVR_RUN_PAIRS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .filter(|n| *n > 0)
+    {
         return n;
     }
     RUN_PAIRS
@@ -504,7 +641,9 @@ fn run_pairs() -> usize {
 /// too many to work on at once.
 fn pairs_of(offsets: &[usize], what: &str) -> Result<(hep_columns::Jagged<usize>, Vec<usize>)> {
     let made = |members: usize| members * members.saturating_sub(1) / 2;
-    if let Some(event) = (0..offsets.len() - 1).find(|&e| made(offsets[e + 1] - offsets[e]) > MOST_PAIRS) {
+    if let Some(event) =
+        (0..offsets.len() - 1).find(|&e| made(offsets[e + 1] - offsets[e]) > MOST_PAIRS)
+    {
         let members = offsets[event + 1] - offsets[event];
         return Err(data(event, format!("{what} would make {} pairs of this event's {members} members, more than the {MOST_PAIRS} one event may make: select fewer members first, as Jet_pt[Jet_pt > 30]", made(members))));
     }
@@ -533,13 +672,24 @@ pub(crate) fn pair_member(array: &Array, second: bool) -> Result<Array> {
 }
 
 /// What `of` measures of each pair of particles in each event's list added together.
-pub(crate) fn pair_summed(arguments: &[Array], name: &str, of: fn(Momentum) -> f64) -> Result<Array> {
+pub(crate) fn pair_summed(
+    arguments: &[Array],
+    name: &str,
+    of: fn(Momentum) -> f64,
+) -> Result<Array> {
     let (offsets, held) = particles(arguments, name)?;
     let (first, second) = pairs_of(offsets, name)?;
     let kind = float_kind(&held);
     let numbers: Vec<Vec<f64>> = held.iter().map(|values| values.numbers()).collect();
     let mass = numbers.get(3).map(Vec::as_slice);
-    let sums = hep_columns::vectors::pair_sum(&first.values, &second, &numbers[0], &numbers[1], &numbers[2], mass);
+    let sums = hep_columns::vectors::pair_sum(
+        &first.values,
+        &second,
+        &numbers[0],
+        &numbers[1],
+        &numbers[2],
+        mass,
+    );
     Ok(Array::Object {
         offsets: Arc::new(first.offsets),
         values: Values::float(kind, sums.map(|sum| kind.round(of(sum))).collect()),
@@ -551,7 +701,11 @@ pub(crate) fn pair_dr(eta: &Array, phi: &Array) -> Result<Array> {
     let (offsets, eta) = lists(eta, "pair_dr")?;
     let (phi_offsets, phi) = lists(phi, "pair_dr")?;
     if offsets != phi_offsets {
-        return Err(unlike(offsets, phi_offsets, "pair_dr needs the eta and phi of one list, member by member"));
+        return Err(unlike(
+            offsets,
+            phi_offsets,
+            "pair_dr needs the eta and phi of one list, member by member",
+        ));
     }
     let (first, second) = pairs_of(offsets, "pair_dr")?;
     let kind = float_kind(&[eta, phi]);
@@ -618,30 +772,56 @@ pub(crate) fn take(array: &Array, positions: &Array, otherwise: &Array) -> Resul
     let (offsets, values) = lists(array, "take")?;
     let (position_offsets, wanted) = lists(positions, "take's positions")?;
     if offsets.len() != position_offsets.len() {
-        return Err(problem("take needs a list and positions over the same events"));
+        return Err(problem(
+            "take needs a list and positions over the same events",
+        ));
     }
     // A u8 position past the largest i8 is held as a negative number: past the end either way.
     let held = whole_positions(wanted, "take")?;
     let taken = hep_columns::lists::take(offsets, position_offsets, held);
-    Ok(Array::Object { offsets: position_offsets.clone(), values: filled(values, &taken.values, otherwise, "take")? })
+    Ok(Array::Object {
+        offsets: position_offsets.clone(),
+        values: filled(values, &taken.values, otherwise, "take")?,
+    })
 }
 
 /// For each event, the members of several lists one after another, in the order given, in the
 /// kind they combine in.
 pub(crate) fn join(arguments: &[Array]) -> Result<Array> {
-    let lists = arguments.iter().map(|argument| lists(argument, "join")).collect::<Result<Vec<_>>>()?;
-    let kind = lists.iter().map(|(_, values)| values.kind).reduce(Kind::with).ok_or_else(|| problem("join needs two lists or more"))?;
+    let lists = arguments
+        .iter()
+        .map(|argument| lists(argument, "join"))
+        .collect::<Result<Vec<_>>>()?;
+    let kind = lists
+        .iter()
+        .map(|(_, values)| values.kind)
+        .reduce(Kind::with)
+        .ok_or_else(|| problem("join needs two lists or more"))?;
     // Each list in that kind (itself when it is already): floats or whole numbers, as it holds.
-    let cast: Vec<Values> = lists.iter().map(|(_, values)| values.convert(kind)).collect::<Result<_>>()?;
+    let cast: Vec<Values> = lists
+        .iter()
+        .map(|(_, values)| values.convert(kind))
+        .collect::<Result<_>>()?;
     let offsets = lists.iter().map(|(offsets, _)| offsets.as_slice());
     let joined = if kind.float() {
-        let parts: Option<Vec<(&[usize], &[f64])>> = offsets.zip(&cast).map(|(o, v)| v.floats().map(|held| (o, held))).collect();
-        parts.and_then(|parts| hep_columns::lists::join(&parts)).map(|j| (j.offsets, Values::float(kind, j.values)))
+        let parts: Option<Vec<(&[usize], &[f64])>> = offsets
+            .zip(&cast)
+            .map(|(o, v)| v.floats().map(|held| (o, held)))
+            .collect();
+        parts
+            .and_then(|parts| hep_columns::lists::join(&parts))
+            .map(|j| (j.offsets, Values::float(kind, j.values)))
     } else {
-        let parts: Option<Vec<(&[usize], &[i64])>> = offsets.zip(&cast).map(|(o, v)| v.wholes().map(|held| (o, held))).collect();
-        parts.and_then(|parts| hep_columns::lists::join(&parts)).map(|j| (j.offsets, Values::whole(kind, j.values)))
+        let parts: Option<Vec<(&[usize], &[i64])>> = offsets
+            .zip(&cast)
+            .map(|(o, v)| v.wholes().map(|held| (o, held)))
+            .collect();
+        parts
+            .and_then(|parts| hep_columns::lists::join(&parts))
+            .map(|j| (j.offsets, Values::whole(kind, j.values)))
     };
-    let (offsets, values) = joined.ok_or_else(|| problem("join needs lists over the same events"))?;
+    let (offsets, values) =
+        joined.ok_or_else(|| problem("join needs lists over the same events"))?;
     Ok(Array::Object {
         offsets: Arc::new(offsets),
         values,
@@ -714,8 +894,14 @@ pub(crate) fn bits(
 ) -> Result<Array> {
     let amount = match amount {
         Array::Constant(Constant::Whole(amount)) => amount,
-        Array::Constant(Constant::Missing(key)) => return Err(lacking(key, &format!("the second value of {what}"))),
-        _ => return Err(problem(format!("{what} needs a fixed whole number, the same for every event, as its second value"))),
+        Array::Constant(Constant::Missing(key)) => {
+            return Err(lacking(key, &format!("the second value of {what}")))
+        }
+        _ => {
+            return Err(problem(format!(
+                "{what} needs a fixed whole number, the same for every event, as its second value"
+            )))
+        }
     };
     let apply = |values: &Values| match &values.store {
         Store::Whole(_) if values.kind == Kind::B1 => Err(problem(format!(
@@ -741,7 +927,9 @@ pub(crate) fn bits(
         ))),
     };
     let fixed = |constant: &Constant| match constant {
-        Constant::Whole(value) => Ok(Array::Constant(Constant::Whole(function(*value, *amount, false)))),
+        Constant::Whole(value) => Ok(Array::Constant(Constant::Whole(function(
+            *value, *amount, false,
+        )))),
         Constant::Missing(key) => Err(lacking(key, &format!("a whole number in {what}"))),
         _ => Err(problem(format!("{what} needs whole numbers"))),
     };
@@ -771,9 +959,21 @@ fn laid(
         }
         (Array::Event(values), None) => values.convert(kind),
         (Array::Event(values), Some(offsets)) => Array::spread(values, offsets).convert(kind),
-        (Array::Object { offsets: own, values }, Some(offsets)) if own == offsets => values.convert(kind),
-        (Array::Object { offsets: own, .. }, Some(offsets)) => Err(unlike(offsets, own, &format!("The lists of {what} are taken member by member"))),
-        _ => Err(problem(format!("The parts of {what} do not cover the same events and members"))),
+        (
+            Array::Object {
+                offsets: own,
+                values,
+            },
+            Some(offsets),
+        ) if own == offsets => values.convert(kind),
+        (Array::Object { offsets: own, .. }, Some(offsets)) => Err(unlike(
+            offsets,
+            own,
+            &format!("The lists of {what} are taken member by member"),
+        )),
+        _ => Err(problem(format!(
+            "The parts of {what} do not cover the same events and members"
+        ))),
     }
 }
 
@@ -782,9 +982,15 @@ fn laid(
 pub(crate) fn choose(condition: &Array, yes: &Array, no: &Array) -> Result<Array> {
     match condition {
         Array::Constant(Constant::Missing(key)) => return Err(lacking(key, "the condition of if")),
-        Array::Constant(Constant::Text(text)) => return Err(problem(format!("if's condition needs a true-or-false value, not the text {text:?}"))),
+        Array::Constant(Constant::Text(text)) => {
+            return Err(problem(format!(
+                "if's condition needs a true-or-false value, not the text {text:?}"
+            )))
+        }
         Array::Constant(_) => return Err(not_truth("if's condition", "a fixed value")),
-        Array::Event(values) | Array::Object { values, .. } if values.kind != Kind::B1 => return Err(not_truth("if's condition", values.kind.name())),
+        Array::Event(values) | Array::Object { values, .. } if values.kind != Kind::B1 => {
+            return Err(not_truth("if's condition", values.kind.name()))
+        }
         _ => {}
     }
     let parts = [condition, yes, no];
@@ -799,21 +1005,41 @@ pub(crate) fn choose(condition: &Array, yes: &Array, no: &Array) -> Result<Array
     };
     let kind = match (kind_of(yes), kind_of(no), yes, no) {
         (Some(a), Some(b), ..) => a.with(b),
-        (Some(a), None, _, Array::Constant(c)) | (None, Some(a), Array::Constant(c), _) => c.beside(a)?.with(a),
-        (None, None, Array::Constant(a), Array::Constant(b)) => together(&a.alone(1)?, &b.alone(1)?)?.0.kind,
+        (Some(a), None, _, Array::Constant(c)) | (None, Some(a), Array::Constant(c), _) => {
+            c.beside(a)?.with(a)
+        }
+        (None, None, Array::Constant(a), Array::Constant(b)) => {
+            together(&a.alone(1)?, &b.alone(1)?)?.0.kind
+        }
         _ => unreachable!("an array without a kind is a constant"),
     };
     let marks = laid(condition, Kind::B1, events, offsets, "an if")?;
     let marks = marks.truths("if")?;
-    let (yes, no) = (laid(yes, kind, events, offsets, "an if")?, laid(no, kind, events, offsets, "an if")?);
+    let (yes, no) = (
+        laid(yes, kind, events, offsets, "an if")?,
+        laid(no, kind, events, offsets, "an if")?,
+    );
     let pick = |at: usize| marks[at] != 0;
     let values = match (&yes.store, &no.store) {
-        (Store::Float(a), Store::Float(b)) => Values::float(kind, (0..marks.len()).map(|at| if pick(at) { a[at] } else { b[at] }).collect()),
-        (Store::Whole(a), Store::Whole(b)) => Values::whole(kind, (0..marks.len()).map(|at| if pick(at) { a[at] } else { b[at] }).collect()),
+        (Store::Float(a), Store::Float(b)) => Values::float(
+            kind,
+            (0..marks.len())
+                .map(|at| if pick(at) { a[at] } else { b[at] })
+                .collect(),
+        ),
+        (Store::Whole(a), Store::Whole(b)) => Values::whole(
+            kind,
+            (0..marks.len())
+                .map(|at| if pick(at) { a[at] } else { b[at] })
+                .collect(),
+        ),
         _ => unreachable!("one kind"),
     };
     Ok(match offsets {
-        Some(offsets) => Array::Object { offsets: offsets.clone(), values },
+        Some(offsets) => Array::Object {
+            offsets: offsets.clone(),
+            values,
+        },
         None => Array::Event(values),
     })
 }

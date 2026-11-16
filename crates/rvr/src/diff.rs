@@ -42,7 +42,10 @@ fn find<'a>(list: &[(&str, &'a Value)], name: &str) -> Option<&'a Value> {
 }
 
 /// The records two lists both hold, by name, each named `what NAME`.
-fn pairs<'a>(lists: &[Vec<(&str, &'a Value)>; 2], what: &str) -> Vec<(String, &'a Value, &'a Value)> {
+fn pairs<'a>(
+    lists: &[Vec<(&str, &'a Value)>; 2],
+    what: &str,
+) -> Vec<(String, &'a Value, &'a Value)> {
     let first = lists[0].iter();
     first
         .filter_map(|(n, r)| Some((format!("{what} {n}"), *r, find(&lists[1], n)?)))
@@ -66,15 +69,27 @@ fn compare(a: &str, b: &str, headers: [&Value; 2]) -> Vec<String> {
         ));
     }
     let samples = [named(&first["samples"]), named(&second["samples"])];
-    let index = |i: usize, name: &str| samples[i].iter().position(|(n, _)| *n == name).unwrap_or(usize::MAX);
+    let index = |i: usize, name: &str| {
+        samples[i]
+            .iter()
+            .position(|(n, _)| *n == name)
+            .unwrap_or(usize::MAX)
+    };
     // Each sample both hold, with its record in each.
     let shared: Vec<(&str, &Value, &Value)> = samples[0]
         .iter()
         .filter_map(|(n, one)| Some((*n, *one, find(&samples[1], n)?)))
         .collect();
     let columns = [named(&first["cols"]), named(&second["cols"])];
-    let derived = [named(&headers[0]["derived"]["columns"]), named(&headers[1]["derived"]["columns"])];
-    for (what, lists) in [("sample", &samples), ("column", &columns), ("derived column", &derived)] {
+    let derived = [
+        named(&headers[0]["derived"]["columns"]),
+        named(&headers[1]["derived"]["columns"]),
+    ];
+    for (what, lists) in [
+        ("sample", &samples),
+        ("column", &columns),
+        ("derived column", &derived),
+    ] {
         for (i, file) in [(0, a), (1, b)] {
             for (name, _) in &lists[i] {
                 if find(&lists[1 - i], name).is_none() {
@@ -85,10 +100,16 @@ fn compare(a: &str, b: &str, headers: [&Value; 2]) -> Vec<String> {
     }
     for (name, one, other) in &shared {
         if one["rows"] != other["rows"] {
-            said.push(format!("sample {name}: {} rows in {a}, {} in {b}", one["rows"], other["rows"]));
+            said.push(format!(
+                "sample {name}: {} rows in {a}, {} in {b}",
+                one["rows"], other["rows"]
+            ));
         }
         if one["label"] != other["label"] {
-            said.push(format!("sample {name}: its label is {} in {a}, {} in {b}", one["label"], other["label"]));
+            said.push(format!(
+                "sample {name}: its label is {} in {a}, {} in {b}",
+                one["label"], other["label"]
+            ));
         }
     }
     let shared: Vec<&str> = shared.into_iter().map(|(name, _, _)| name).collect();
@@ -101,10 +122,17 @@ fn compare(a: &str, b: &str, headers: [&Value; 2]) -> Vec<String> {
         .collect();
     for (name, one, other) in &both {
         if kind(one) != kind(other) {
-            said.push(format!("{name}: {} in {a}, {} in {b}", kind(one), kind(other)));
+            said.push(format!(
+                "{name}: {} in {a}, {} in {b}",
+                kind(one),
+                kind(other)
+            ));
         }
         if one["expression"] != other["expression"] {
-            said.push(format!("{name}: its expression is {} in {a}, {} in {b}", one["expression"], other["expression"]));
+            said.push(format!(
+                "{name}: its expression is {} in {a}, {} in {b}",
+                one["expression"], other["expression"]
+            ));
         }
     }
     for sample in &shared {
@@ -182,10 +210,16 @@ pub fn main(a: &str, b: &str) -> u8 {
     let mut said = Vec::new();
     for (path, (_, checked)) in [(a, &first), (b, &second)] {
         if let Err(why) = checked {
-            said.push(format!("{path}: its header fails its checks, and is compared all the same: {}", rowver::words(std::path::Path::new(path), why)));
+            said.push(format!(
+                "{path}: its header fails its checks, and is compared all the same: {}",
+                rowver::words(std::path::Path::new(path), why)
+            ));
         }
     }
-    for (empty, full) in [((a, &first.0), (b, &second.0)), ((b, &second.0), (a, &first.0))] {
+    for (empty, full) in [
+        ((a, &first.0), (b, &second.0)),
+        ((b, &second.0), (a, &first.0)),
+    ] {
         if empty.1.empty() && !full.1.empty() {
             said.push(format!("{} is empty: its arrays are gone (rvr refill presses them again), and {} holds them", empty.0, full.0));
         }

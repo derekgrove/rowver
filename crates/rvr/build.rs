@@ -80,7 +80,9 @@ fn packaged(manifest: &str) -> Option<String> {
 /// Whether `text` is one line naming a commit: 40 lowercase hex digits.
 fn named(text: &str) -> Option<&str> {
     let commit = text.strip_suffix('\n').unwrap_or(text);
-    let hex = commit.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let hex = commit
+        .bytes()
+        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     (commit.len() == 40 && hex).then_some(commit)
 }
 
@@ -89,7 +91,11 @@ fn named(text: &str) -> Option<&str> {
 fn a_commit(text: &str) -> bool {
     let (sha, rest) = (text.get(..40).unwrap_or(""), text.get(40..).unwrap_or(""));
     let hash = |h: &str| h.len() == 12 && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-    text == "unknown" || (named(sha).is_some() && (rest.is_empty() || rest == "-dirty" || rest.strip_prefix("-dirty-").is_some_and(hash)))
+    text == "unknown"
+        || (named(sha).is_some()
+            && (rest.is_empty()
+                || rest == "-dirty"
+                || rest.strip_prefix("-dirty-").is_some_and(hash)))
 }
 
 /// The commit a build names, first that applies (docs/SPEC.md §12.2): the one cargo packaged, the
@@ -138,7 +144,9 @@ fn main() {
     let commit = chosen(packaged(manifest), sdist.as_deref(), checkout);
     // A debug build for tests/builds.rs only: the commit given, to press as an unknown or dirty build.
     println!("cargo:rerun-if-env-changed=RVR_BUILD_COMMIT");
-    let given = std::env::var("RVR_BUILD_COMMIT").ok().filter(|c| !c.is_empty());
+    let given = std::env::var("RVR_BUILD_COMMIT")
+        .ok()
+        .filter(|c| !c.is_empty());
     let commit = match given {
         Some(given) if std::env::var("PROFILE").as_deref() == Ok("debug") => {
             assert!(a_commit(&given), "RVR_BUILD_COMMIT is {given:?}, not a commit a build names (40 lowercase hex digits, then nothing, -dirty or -dirty- and 12 more; or unknown): give one such, or unset it");
@@ -166,8 +174,14 @@ mod tests {
     #[test]
     fn packaged_comes_first() {
         let packaged = Some(format!("{A}-dirty"));
-        assert_eq!(chosen(packaged.clone(), Some(A), None), format!("{A}-dirty"));
-        assert_eq!(chosen(packaged, None, Some("b".into())), format!("{A}-dirty"));
+        assert_eq!(
+            chosen(packaged.clone(), Some(A), None),
+            format!("{A}-dirty")
+        );
+        assert_eq!(
+            chosen(packaged, None, Some("b".into())),
+            format!("{A}-dirty")
+        );
     }
 
     // SPEC 12.2
@@ -181,7 +195,15 @@ mod tests {
     #[test]
     fn sdist_file_that_names_no_commit_is_unknown() {
         let upper = A.to_uppercase();
-        let bad = ["", "\n", &A[..39], &format!("{A}0"), &upper, &format!("{A}\n\n"), &format!(" {A}")];
+        let bad = [
+            "",
+            "\n",
+            &A[..39],
+            &format!("{A}0"),
+            &upper,
+            &format!("{A}\n\n"),
+            &format!(" {A}"),
+        ];
         for text in bad {
             assert_eq!(chosen(None, Some(text), None), "unknown", "{text:?}");
         }
@@ -202,7 +224,9 @@ mod tests {
     fn a_crate_from_crates_io_names_the_commit_cargo_recorded() {
         let dir = std::env::temp_dir().join(format!("rvr-vcs-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let info = |dirty: &str| format!("{{\"git\": {{\"sha1\": \"{A}\"{dirty}}}, \"path_in_vcs\": \"crates/rvr\"}}");
+        let info = |dirty: &str| {
+            format!("{{\"git\": {{\"sha1\": \"{A}\"{dirty}}}, \"path_in_vcs\": \"crates/rvr\"}}")
+        };
         std::fs::write(dir.join(".cargo_vcs_info.json"), info("")).unwrap();
         assert_eq!(packaged(dir.to_str().unwrap()), Some(A.to_owned()));
         std::fs::write(dir.join(".cargo_vcs_info.json"), info(", \"dirty\": true")).unwrap();
@@ -214,10 +238,24 @@ mod tests {
     // SPEC 12.2
     #[test]
     fn a_test_build_names_only_a_commit_a_build_can() {
-        for good in ["unknown", A, &format!("{A}-dirty"), &format!("{A}-dirty-0123456789ab")] {
+        for good in [
+            "unknown",
+            A,
+            &format!("{A}-dirty"),
+            &format!("{A}-dirty-0123456789ab"),
+        ] {
             assert!(a_commit(good), "{good}");
         }
-        for bad in ["", "abc", "é".repeat(30).as_str(), &A.to_uppercase(), &format!("{A}-dirty-0123"), &format!("{A}-clean"), &format!("{A}0"), &format!("{A}-dirty-0123456789AB")] {
+        for bad in [
+            "",
+            "abc",
+            "é".repeat(30).as_str(),
+            &A.to_uppercase(),
+            &format!("{A}-dirty-0123"),
+            &format!("{A}-clean"),
+            &format!("{A}0"),
+            &format!("{A}-dirty-0123456789AB"),
+        ] {
             assert!(!a_commit(bad), "{bad}");
         }
     }

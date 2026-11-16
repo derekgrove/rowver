@@ -25,8 +25,14 @@ const RECIPE: &str = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]
 /// second of waiting a millisecond.
 fn set(dir: &Path) -> Vec<(&'static str, String)> {
     vec![
-        ("X509_CERT_DIR", common::fixture("tls/authority").display().to_string()),
-        ("X509_USER_PROXY", dir.join("no-proxy").display().to_string()),
+        (
+            "X509_CERT_DIR",
+            common::fixture("tls/authority").display().to_string(),
+        ),
+        (
+            "X509_USER_PROXY",
+            dir.join("no-proxy").display().to_string(),
+        ),
         ("RVR_SECOND_MS", "1".into()),
     ]
 }
@@ -34,7 +40,10 @@ fn set(dir: &Path) -> Vec<(&'static str, String)> {
 /// rvr in `dir`: its exit status, and what it said.
 fn rvr(dir: &Path, args: &[&str]) -> (i32, String) {
     let set = set(dir);
-    let set: Vec<(&str, &str)> = set.iter().map(|(name, value)| (*name, value.as_str())).collect();
+    let set: Vec<(&str, &str)> = set
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
     rvr_with(dir, &set, args)
 }
 
@@ -50,12 +59,23 @@ fn holes(header: &Value) -> Vec<(String, String, String)> {
     let samples = header["made"]["files"].as_object().unwrap().values();
     let files = samples.flat_map(|sample| sample["files"].as_object().unwrap().iter());
     let text = |hole: &Value, key: &str| hole[key].as_str().unwrap().to_owned();
-    files.flat_map(|(at, file)| file["holes"].as_array().into_iter().flatten().map(move |hole| (at.clone(), text(hole, "kind"), text(hole, "why")))).collect()
+    files
+        .flat_map(|(at, file)| {
+            file["holes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(move |hole| (at.clone(), text(hole, "kind"), text(hole, "why")))
+        })
+        .collect()
 }
 
 /// Whether this runs as root, who reads a file whatever its rights.
 fn root() -> bool {
-    let uid = Command::new("id").arg("-u").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+    let uid = Command::new("id")
+        .arg("-u")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
     uid.ok().as_deref() == Some("0")
 }
 
@@ -67,7 +87,10 @@ fn mode(path: &Path, mode: u32) {
 /// in the folder `b` (`b/flat_a.root`, `b/flat_b.root`), resolved: a press reads the remote one first.
 fn halted(name: &str) -> (Study, Server) {
     let server = Server::start();
-    server.put("/store/flat.root", std::fs::read(common::fixture("uproot_flat.root")).unwrap());
+    server.put(
+        "/store/flat.root",
+        std::fs::read(common::fixture("uproot_flat.root")).unwrap(),
+    );
     let samples = format!(
         "format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n[[sample]]\nname = \"far\"\nfiles = {:?}\n\n[[sample]]\nname = \"near\"\nfiles = \"b/flat_*.root\"\n",
         server.url("/store/flat.root")
@@ -84,7 +107,12 @@ fn halted(name: &str) -> (Study, Server) {
 
 /// rvr in `dir` with `args`, the first GET it sends `server` held unanswered while `meanwhile`
 /// runs: its exit status, what it said, and what `meanwhile` gave.
-fn while_held<T>(dir: &Path, server: &Server, args: &[&str], meanwhile: impl FnOnce() -> T) -> (i32, String, T) {
+fn while_held<T>(
+    dir: &Path,
+    server: &Server,
+    args: &[&str],
+    meanwhile: impl FnOnce() -> T,
+) -> (i32, String, T) {
     let held = Arc::new((AtomicBool::new(false), AtomicBool::new(false)));
     let shared = held.clone();
     server.script(move |request| {
@@ -98,18 +126,30 @@ fn while_held<T>(dir: &Path, server: &Server, args: &[&str], meanwhile: impl FnO
         Answer::Serve
     });
     let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
-    command.args(args).current_dir(dir).env("RVR_CONFIG", dir.join(".rvr-config")).envs(set(dir));
-    let child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    command
+        .args(args)
+        .current_dir(dir)
+        .env("RVR_CONFIG", dir.join(".rvr-config"))
+        .envs(set(dir));
+    let child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
     let since = Instant::now();
     while !held.0.load(Ordering::SeqCst) {
-        assert!(since.elapsed() < Duration::from_secs(30), "rvr {args:?} never asked for its first file");
+        assert!(
+            since.elapsed() < Duration::from_secs(30),
+            "rvr {args:?} never asked for its first file"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
     let gave = meanwhile();
     held.1.store(true, Ordering::SeqCst);
     let out = child.wait_with_output().unwrap();
     server.script(|_| Answer::Serve);
-    let said = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    let said =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     (out.status.code().unwrap_or(-1), said, gave)
 }
 
@@ -144,48 +184,111 @@ fn flip(path: &Path) {
 fn a_file_deleted_cut_short_or_rewritten_while_the_press_reads_another_is_a_hole_of_its_kind() {
     type Fault = fn(&Path);
     let cases: [(&str, Fault, &str, &str); 3] = [
-        ("deleted", |path| std::fs::remove_file(path).unwrap(), "gone", "b/flat_b.root no longer exists: put it back and run rvr press --fill"),
-        ("cut short", |path| std::fs::File::options().write(true).open(path).unwrap().set_len(20_000).unwrap(), "changed", "b/flat_b.root: it was 39262 bytes, adler32 "),
-        ("rewritten", flip, "changed", "; it is now 39262 bytes, adler32 "),
+        (
+            "deleted",
+            |path| std::fs::remove_file(path).unwrap(),
+            "gone",
+            "b/flat_b.root no longer exists: put it back and run rvr press --fill",
+        ),
+        (
+            "cut short",
+            |path| {
+                std::fs::File::options()
+                    .write(true)
+                    .open(path)
+                    .unwrap()
+                    .set_len(20_000)
+                    .unwrap()
+            },
+            "changed",
+            "b/flat_b.root: it was 39262 bytes, adler32 ",
+        ),
+        (
+            "rewritten",
+            flip,
+            "changed",
+            "; it is now 39262 bytes, adler32 ",
+        ),
     ];
     for (what, fault, kind, why) in cases {
         let (dir, server) = halted("mid-press");
-        let (code, said, ()) = while_held(&dir, &server, &["press", "--workers", "1"], || fault(&dir.join("b/flat_b.root")));
+        let (code, said, ()) = while_held(&dir, &server, &["press", "--workers", "1"], || {
+            fault(&dir.join("b/flat_b.root"))
+        });
         assert_eq!(code, 3, "{what}: {said}");
         let header = header(&dir, &file(&dir));
         let holes = holes(&header);
         assert_eq!(holes.len(), 1, "{what}: {holes:?}");
         let (at, found, said_why) = &holes[0];
-        assert!(at == "b/flat_b.root" && found == kind && said_why.contains(why), "{what}: {holes:?}");
-        assert!(said.contains(&format!("    hole ({kind}): ")) && said.contains("with 1 hole:"), "{what}: {said}");
-        assert_eq!(header["data"]["rows"], 10, "{what}: the remote file and b/flat_a.root, 5 entries each");
+        assert!(
+            at == "b/flat_b.root" && found == kind && said_why.contains(why),
+            "{what}: {holes:?}"
+        );
+        assert!(
+            said.contains(&format!("    hole ({kind}): ")) && said.contains("with 1 hole:"),
+            "{what}: {said}"
+        );
+        assert_eq!(
+            header["data"]["rows"], 10,
+            "{what}: the remote file and b/flat_a.root, 5 entries each"
+        );
     }
 }
 
 // SPEC 2.6, 7.3.3, 7.5.1, 7.5.3, 7.5.4
 #[test]
-fn a_folder_moved_away_or_a_file_or_folder_made_unreadable_mid_press_stops_it_and_the_next_carries_on() {
+fn a_folder_moved_away_or_a_file_or_folder_made_unreadable_mid_press_stops_it_and_the_next_carries_on(
+) {
     if root() {
         return eprintln!("not checked here: root reads a file whatever its rights");
     }
     type Change = fn(&Path);
     let cases: [(&str, Change, Change, &str, usize); 3] = [
-        ("folder moved", |d| std::fs::rename(d.join("b"), d.join("away")).unwrap(), |d| std::fs::rename(d.join("away"), d.join("b")).unwrap(), "b/flat_a.root cannot be read: its folder is not there either (a disk not mounted?)", 1),
-        ("file unreadable", |d| mode(&d.join("b/flat_b.root"), 0o000), |d| mode(&d.join("b/flat_b.root"), 0o644), "b/flat_b.root is not yours to read or write", 2),
-        ("folder unreadable", |d| mode(&d.join("b"), 0o000), |d| mode(&d.join("b"), 0o755), "b/flat_a.root is not yours to read or write", 1),
+        (
+            "folder moved",
+            |d| std::fs::rename(d.join("b"), d.join("away")).unwrap(),
+            |d| std::fs::rename(d.join("away"), d.join("b")).unwrap(),
+            "b/flat_a.root cannot be read: its folder is not there either (a disk not mounted?)",
+            1,
+        ),
+        (
+            "file unreadable",
+            |d| mode(&d.join("b/flat_b.root"), 0o000),
+            |d| mode(&d.join("b/flat_b.root"), 0o644),
+            "b/flat_b.root is not yours to read or write",
+            2,
+        ),
+        (
+            "folder unreadable",
+            |d| mode(&d.join("b"), 0o000),
+            |d| mode(&d.join("b"), 0o755),
+            "b/flat_a.root is not yours to read or write",
+            1,
+        ),
     ];
     for (what, fault, mend, why, done) in cases {
         let (dir, server) = halted("stopped");
         let whole = full(&dir);
-        let (code, said, ()) = while_held(&dir, &server, &["press", "--workers", "1"], || fault(&dir));
+        let (code, said, ()) =
+            while_held(&dir, &server, &["press", "--workers", "1"], || fault(&dir));
         mend(&dir);
         assert_eq!(code, 1, "{what}: {said}");
-        assert!(said.contains(why) && !said.contains("hole ("), "{what}: {said}");
+        assert!(
+            said.contains(why) && !said.contains("hole ("),
+            "{what}: {said}"
+        );
         assert!(said.contains(&format!("It is not a file's fault, so no file was made a hole of it: fix it, then press again, which carries on from the {done} of 3 files done")), "{what}: {said}");
         assert!(!dir.join(file(&dir)).exists(), "{what}");
         let (code, said) = rvr(&dir, &["press", "--workers", "1"]);
-        assert!(code == 0 && said.contains(&format!("where it stopped: {done} of 3 files done")), "{what}: {said}");
-        assert_eq!(sha256(&dir, &file(&dir)), whole, "{what}: picked up, the file is the one a press at once writes");
+        assert!(
+            code == 0 && said.contains(&format!("where it stopped: {done} of 3 files done")),
+            "{what}: {said}"
+        );
+        assert_eq!(
+            sha256(&dir, &file(&dir)),
+            whole,
+            "{what}: picked up, the file is the one a press at once writes"
+        );
     }
 }
 
@@ -248,16 +351,26 @@ fn a_file_changed_since_the_lock_in_each_way_the_lock_pins_it_is_a_changed_hole(
         assert_eq!(code, 3, "{what}: {said}");
         let holes = holes(&header(&dir, &file(&dir)));
         // A branch list is its sample's: every file reads the branch as another kind than it gives.
-        let files: &[&str] = if what == "kind" { &["./flat_a.root", "./flat_b.root"] } else { &["./flat_b.root"] };
+        let files: &[&str] = if what == "kind" {
+            &["./flat_a.root", "./flat_b.root"]
+        } else {
+            &["./flat_b.root"]
+        };
         let found: Vec<&str> = holes.iter().map(|(at, _, _)| at.as_str()).collect();
         assert_eq!(found, files, "{what}: {holes:?}");
-        assert!(holes.iter().all(|(_, kind, said)| kind == "changed" && said.contains(why)), "{what}: {holes:?}");
+        assert!(
+            holes
+                .iter()
+                .all(|(_, kind, said)| kind == "changed" && said.contains(why)),
+            "{what}: {holes:?}"
+        );
     }
 }
 
 // SPEC 2.6, 7.5.1, 7.5.3, 7.5.4
 #[test]
-fn an_output_folder_that_may_not_be_written_stops_the_press_before_it_reads_or_as_it_puts_the_file_in() {
+fn an_output_folder_that_may_not_be_written_stops_the_press_before_it_reads_or_as_it_puts_the_file_in(
+) {
     if root() {
         return eprintln!("not checked here: root writes a folder whatever its rights");
     }
@@ -268,16 +381,37 @@ fn an_output_folder_that_may_not_be_written_stops_the_press_before_it_reads_or_a
     let (code, said) = rvr(&dir, &["press", "--out", "out/x.rvr"]);
     mode(&out, 0o755);
     assert_eq!(code, 1, "{said}");
-    assert!(said.contains("x.rvr could not be staged in ") && said.contains("x.rvr.partial: Permission denied. Make its folder writable"), "{said}");
-    assert!(!said.contains("Pressing") && !out.join("x.rvr.partial").exists(), "nothing is read, and nothing is left: {said}");
+    assert!(
+        said.contains("x.rvr could not be staged in ")
+            && said.contains("x.rvr.partial: Permission denied. Make its folder writable"),
+        "{said}"
+    );
+    assert!(
+        !said.contains("Pressing") && !out.join("x.rvr.partial").exists(),
+        "nothing is read, and nothing is left: {said}"
+    );
     // Shut as the press reads: what it read is kept, and the next press puts the file in.
-    let (code, said, ()) = while_held(&dir, &server, &["press", "--workers", "1", "--out", "out/x.rvr"], || mode(&out, 0o555));
+    let (code, said, ()) = while_held(
+        &dir,
+        &server,
+        &["press", "--workers", "1", "--out", "out/x.rvr"],
+        || mode(&out, 0o555),
+    );
     mode(&out, 0o755);
     assert_eq!(code, 1, "{said}");
-    assert!(said.contains("carries on from the 3 of 3 files done") && !said.contains("hole ("), "{said}");
-    assert!(!out.join("x.rvr").exists() && out.join("x.rvr.partial").exists(), "{said}");
+    assert!(
+        said.contains("carries on from the 3 of 3 files done") && !said.contains("hole ("),
+        "{said}"
+    );
+    assert!(
+        !out.join("x.rvr").exists() && out.join("x.rvr.partial").exists(),
+        "{said}"
+    );
     let (code, said) = rvr(&dir, &["press", "--out", "out/x.rvr"]);
-    assert!(code == 0 && said.contains("where it stopped: 3 of 3 files done"), "{said}");
+    assert!(
+        code == 0 && said.contains("where it stopped: 3 of 3 files done"),
+        "{said}"
+    );
     assert_eq!(rvr(&dir, &["validate", "out/x.rvr"]).0, 0);
     assert!(!out.join("x.rvr.partial").exists());
 }
@@ -289,25 +423,45 @@ const BUSY: &str = "is being changed by another program (it holds the file's loc
 fn of_two_presses_of_one_target_at_once_the_second_is_refused() {
     let (dir, server) = halted("two-at-once");
     // No file there yet: the second is refused the staging folder the first holds.
-    let (code, said, (second, refused)) = while_held(&dir, &server, &["press", "--workers", "1"], || rvr(&dir, &["press"]));
-    assert!(second == 1 && refused.contains("another rvr press of ") && refused.contains(" is under way (it holds "), "{refused}");
+    let (code, said, (second, refused)) =
+        while_held(&dir, &server, &["press", "--workers", "1"], || {
+            rvr(&dir, &["press"])
+        });
+    assert!(
+        second == 1
+            && refused.contains("another rvr press of ")
+            && refused.contains(" is under way (it holds "),
+        "{refused}"
+    );
     assert_eq!(code, 0, "{said}");
     // A file there: the second is refused the file's lock, which the first holds from its first read.
-    let (code, said, (second, refused)) = while_held(&dir, &server, &["press", "--full", "--workers", "1"], || rvr(&dir, &["press", "--full"]));
+    let (code, said, (second, refused)) = while_held(
+        &dir,
+        &server,
+        &["press", "--full", "--workers", "1"],
+        || rvr(&dir, &["press", "--full"]),
+    );
     assert!(second == 1 && refused.contains(BUSY), "{refused}");
     assert_eq!(code, 0, "{said}");
     assert_eq!(rvr(&dir, &["validate", &file(&dir)]).0, 0);
 }
 
 /// What a press says when a file was put at its target, where there was none, as it pressed.
-const PUT_THERE: &str = " was put there by another program while rvr pressed it, and is left as it is: move it away.";
+const PUT_THERE: &str =
+    " was put there by another program while rvr pressed it, and is left as it is: move it away.";
 
 // SPEC 7.5.3, 7.5.4, 8.12
 #[test]
 fn a_press_begun_with_no_file_at_its_target_leaves_one_another_program_put_there_meanwhile() {
     // A file, a link to nothing, a folder, or a file or folder made where a link there from the
     // start leads: each is something there.
-    for put in ["file", "link", "where a link leads", "folder", "a folder where a link leads"] {
+    for put in [
+        "file",
+        "link",
+        "where a link leads",
+        "folder",
+        "a folder where a link leads",
+    ] {
         let (dir, server) = halted(&format!("put-there-{}", put.replace(' ', "-")));
         let target = dir.join(file(&dir));
         if put.ends_with("where a link leads") {
@@ -317,22 +471,53 @@ fn a_press_begun_with_no_file_at_its_target_leaves_one_another_program_put_there
             "file" => std::fs::write(&target, b"another program's file").unwrap(),
             "link" => std::os::unix::fs::symlink("nowhere.rvr", &target).unwrap(),
             "folder" => std::fs::create_dir(&target).unwrap(),
-            "a folder where a link leads" => std::fs::create_dir(dir.join("elsewhere.rvr")).unwrap(),
+            "a folder where a link leads" => {
+                std::fs::create_dir(dir.join("elsewhere.rvr")).unwrap()
+            }
             _ => std::fs::write(dir.join("elsewhere.rvr"), b"another program's file").unwrap(),
         };
         let (code, said, ()) = while_held(&dir, &server, &["press", "--workers", "1"], putting);
         match put {
-            "file" => assert!(std::fs::read(&target).unwrap() == b"another program's file", "{said}"),
-            "link" => assert_eq!(std::fs::read_link(&target).unwrap(), Path::new("nowhere.rvr"), "{said}"),
-            "folder" => assert!(std::fs::read_dir(&target).unwrap().next().is_none(), "{said}"),
-            "a folder where a link leads" => assert!(std::fs::read_link(&target).is_ok() && dir.join("elsewhere.rvr").is_dir(), "{said}"),
-            _ => assert!(std::fs::read_link(&target).is_ok() && std::fs::read(&target).unwrap() == b"another program's file", "{said}"),
+            "file" => assert!(
+                std::fs::read(&target).unwrap() == b"another program's file",
+                "{said}"
+            ),
+            "link" => assert_eq!(
+                std::fs::read_link(&target).unwrap(),
+                Path::new("nowhere.rvr"),
+                "{said}"
+            ),
+            "folder" => assert!(
+                std::fs::read_dir(&target).unwrap().next().is_none(),
+                "{said}"
+            ),
+            "a folder where a link leads" => assert!(
+                std::fs::read_link(&target).is_ok() && dir.join("elsewhere.rvr").is_dir(),
+                "{said}"
+            ),
+            _ => assert!(
+                std::fs::read_link(&target).is_ok()
+                    && std::fs::read(&target).unwrap() == b"another program's file",
+                "{said}"
+            ),
         }
         assert_eq!(code, 1, "{said}");
-        assert!(said.contains(PUT_THERE) && said.contains("press again, which carries on from the 3 of 3 files done"), "{said}");
-        if put == "folder" { std::fs::remove_dir(&target) } else { std::fs::remove_file(&target) }.unwrap();
+        assert!(
+            said.contains(PUT_THERE)
+                && said.contains("press again, which carries on from the 3 of 3 files done"),
+            "{said}"
+        );
+        if put == "folder" {
+            std::fs::remove_dir(&target)
+        } else {
+            std::fs::remove_file(&target)
+        }
+        .unwrap();
         let (code, said) = rvr(&dir, &["press"]);
-        assert!(code == 0 && said.contains("where it stopped: 3 of 3 files done"), "{said}");
+        assert!(
+            code == 0 && said.contains("where it stopped: 3 of 3 files done"),
+            "{said}"
+        );
         assert_eq!(rvr(&dir, &["validate", &file(&dir)]).0, 0);
     }
 }
@@ -342,31 +527,59 @@ fn a_press_begun_with_no_file_at_its_target_leaves_one_another_program_put_there
 fn two_presses_started_together_write_one_file_and_any_other_is_refused_or_finds_it_current() {
     let names: Vec<String> = (0..12).map(|i| format!("\"r{i:02}.root\"")).collect();
     let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\n\n[eras]\n\n[[sample]]\nname = \"runs\"\nfiles = [{}]\ntree = \"Events\"\n", names.join(", "));
-    let recipe = RECIPE.replace("\"nJet\", \"Jet_pt\"", "\"Jet_pt\", \"Jet_eta\", \"MET\", \"event\"");
+    let recipe = RECIPE.replace(
+        "\"nJet\", \"Jet_pt\"",
+        "\"Jet_pt\", \"Jet_eta\", \"MET\", \"event\"",
+    );
     let dir = common::study("together", &samples, &recipe);
     for i in 0..12 {
-        std::fs::copy(common::fixture("runs.root"), dir.join(format!("r{i:02}.root"))).unwrap();
+        std::fs::copy(
+            common::fixture("runs.root"),
+            dir.join(format!("r{i:02}.root")),
+        )
+        .unwrap();
     }
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     let whole = full(&dir);
     for round in 0..8 {
         let start = || {
             let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
-            command.args(["press", "--workers", "2"]).current_dir(&*dir).env("RVR_CONFIG", dir.join(".rvr-config"));
-            command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()
+            command
+                .args(["press", "--workers", "2"])
+                .current_dir(&*dir)
+                .env("RVR_CONFIG", dir.join(".rvr-config"));
+            command
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
         };
         let both = [start(), start()].map(|child| {
             let out = child.wait_with_output().unwrap();
-            (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr))
+            (
+                out.status.code(),
+                String::from_utf8_lossy(&out.stdout).into_owned()
+                    + &String::from_utf8_lossy(&out.stderr),
+            )
         });
-        let wrote = both.iter().filter(|(code, said)| *code == Some(0) && said.contains("Wrote ")).count();
+        let wrote = both
+            .iter()
+            .filter(|(code, said)| *code == Some(0) && said.contains("Wrote "))
+            .count();
         let other = |(code, said): &(Option<i32>, String)| match code {
             Some(0) => said.contains("Wrote ") || said.contains("is current: nothing to press"),
             // Begun before the first put its file in place, and staged after: it keeps what it read.
-            Some(1) => said.contains(BUSY) || said.contains(" is under way (it holds ") || said.contains(PUT_THERE),
+            Some(1) => {
+                said.contains(BUSY)
+                    || said.contains(" is under way (it holds ")
+                    || said.contains(PUT_THERE)
+            }
             _ => false,
         };
-        assert!(wrote == 1 && both.iter().all(other), "round {round}: {both:?}");
+        assert!(
+            wrote == 1 && both.iter().all(other),
+            "round {round}: {both:?}"
+        );
         assert_eq!(rvr(&dir, &["validate", &file(&dir)]).0, 0);
         assert_eq!(sha256(&dir, &file(&dir)), whole, "round {round}");
         std::fs::remove_file(dir.join(file(&dir))).unwrap();
@@ -390,13 +603,31 @@ struct RamDisk {
 impl RamDisk {
     /// A disk of `mb` MB, its volume named for this process.
     fn new(mb: u64) -> RamDisk {
-        let out = Command::new("hdiutil").args(["attach", "-nomount", &format!("ram://{}", mb * 2048)]).output().unwrap();
+        let out = Command::new("hdiutil")
+            .args(["attach", "-nomount", &format!("ram://{}", mb * 2048)])
+            .output()
+            .unwrap();
         let device = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-        assert!(out.status.success() && device.starts_with("/dev/disk"), "hdiutil: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success() && device.starts_with("/dev/disk"),
+            "hdiutil: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         let name = format!("rvrfull{}", std::process::id());
-        let disk = RamDisk { device, volume: Path::new("/Volumes").join(&name) };
-        let out = Command::new("diskutil").args(["erasevolume", "HFS+", &name, &disk.device]).output().unwrap();
-        assert!(out.status.success() && disk.volume.is_dir(), "diskutil: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let disk = RamDisk {
+            device,
+            volume: Path::new("/Volumes").join(&name),
+        };
+        let out = Command::new("diskutil")
+            .args(["erasevolume", "HFS+", &name, &disk.device])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success() && disk.volume.is_dir(),
+            "diskutil: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
         disk
     }
 
@@ -416,7 +647,9 @@ impl RamDisk {
 #[cfg(target_os = "macos")]
 impl Drop for RamDisk {
     fn drop(&mut self) {
-        let _ = Command::new("hdiutil").args(["detach", "-force", &self.device]).output();
+        let _ = Command::new("hdiutil")
+            .args(["detach", "-force", &self.device])
+            .output();
     }
 }
 
@@ -427,10 +660,17 @@ impl Drop for RamDisk {
 fn a_full_disk_stops_the_press_keeping_what_it_read_and_the_next_carries_on() {
     let names: Vec<String> = (0..24).map(|i| format!("\"r{i:02}.root\"")).collect();
     let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\n\n[eras]\n\n[[sample]]\nname = \"runs\"\nfiles = [{}]\ntree = \"Events\"\n", names.join(", "));
-    let recipe = RECIPE.replace("\"nJet\", \"Jet_pt\"", "\"Jet_pt\", \"Jet_eta\", \"Jet_phi\", \"MET\", \"weight\", \"run\", \"event\"");
+    let recipe = RECIPE.replace(
+        "\"nJet\", \"Jet_pt\"",
+        "\"Jet_pt\", \"Jet_eta\", \"Jet_phi\", \"MET\", \"weight\", \"run\", \"event\"",
+    );
     let dir = common::study("full-disk", &samples, &recipe);
     for i in 0..24 {
-        std::fs::copy(common::fixture("runs.root"), dir.join(format!("r{i:02}.root"))).unwrap();
+        std::fs::copy(
+            common::fixture("runs.root"),
+            dir.join(format!("r{i:02}.root")),
+        )
+        .unwrap();
     }
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     let whole = full(&dir);
@@ -438,21 +678,40 @@ fn a_full_disk_stops_the_press_keeping_what_it_read_and_the_next_carries_on() {
     let out = disk.volume.join("out.rvr");
     let target = out.to_str().unwrap();
     let mut stopped = 0;
-    for left in [0, 64 << 10, 256 << 10, 512 << 10, 1 << 20, 2 << 20, 3 << 20, 4 << 20, 6 << 20] {
+    for left in [
+        0,
+        64 << 10,
+        256 << 10,
+        512 << 10,
+        1 << 20,
+        2 << 20,
+        3 << 20,
+        4 << 20,
+        6 << 20,
+    ] {
         disk.fill(left);
         let (code, said) = rvr(&dir, &["press", "--workers", "1", "--out", target]);
         if code != 0 {
             stopped += 1;
             assert_eq!(code, 1, "{left} bytes free: {said}");
-            assert!(said.contains("disk is full") && !said.contains("No space left on device"), "{left} bytes free: {said}");
-            assert!(!said.contains("hole (") && !out.exists(), "{left} bytes free: {said}");
+            assert!(
+                said.contains("disk is full") && !said.contains("No space left on device"),
+                "{left} bytes free: {said}"
+            );
+            assert!(
+                !said.contains("hole (") && !out.exists(),
+                "{left} bytes free: {said}"
+            );
         }
         std::fs::remove_file(disk.volume.join("filler")).unwrap();
         let (code, said) = rvr(&dir, &["press", "--workers", "1", "--out", target]);
         assert_eq!(code, 0, "{left} bytes free, then the disk emptied: {said}");
         assert_eq!(sha256(&dir, target), whole, "{left} bytes free: {said}");
         std::fs::remove_file(&out).unwrap();
-        assert!(!disk.volume.join("out.rvr.partial").exists(), "{left} bytes free");
+        assert!(
+            !disk.volume.join("out.rvr.partial").exists(),
+            "{left} bytes free"
+        );
     }
     assert!(stopped >= 3, "the disk filled only {stopped} times");
 }
@@ -461,7 +720,10 @@ fn a_full_disk_stops_the_press_keeping_what_it_read_and_the_next_carries_on() {
 #[test]
 fn a_file_its_storage_will_not_give_is_not_called_no_root_file() {
     let server = Server::start();
-    server.put("/st/f.root", std::fs::read(common::fixture("uproot_flat.root")).unwrap());
+    server.put(
+        "/st/f.root",
+        std::fs::read(common::fixture("uproot_flat.root")).unwrap(),
+    );
     server.script(|request| match request.method.as_str() {
         "GET" => Answer::Status(403),
         _ => Answer::Serve,
@@ -469,21 +731,33 @@ fn a_file_its_storage_will_not_give_is_not_called_no_root_file() {
     let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n[[sample]]\nname = \"far\"\nfiles = {:?}\n", server.url("/st/f.root"));
     let dir = common::study("refused-get", &samples, RECIPE);
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
-    assert!(code == 1 && said.contains("/st/f.root could not be read: ") && !said.contains("is not a ROOT file"), "{said}");
+    assert!(
+        code == 1
+            && said.contains("/st/f.root could not be read: ")
+            && !said.contains("is not a ROOT file"),
+        "{said}"
+    );
 }
 
 // SPEC 6.2.1, 6.3.1
 #[test]
 fn an_empty_storage_file_is_said_empty_and_a_lock_without_its_samples_toml_does_not_check_out() {
     let server = Server::start();
-    server.put("/st/a.root", std::fs::read(common::fixture("uproot_flat.root")).unwrap());
+    server.put(
+        "/st/a.root",
+        std::fs::read(common::fixture("uproot_flat.root")).unwrap(),
+    );
     server.put("/st/b.root", Vec::new());
     let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"analysis\"\n\n[eras]\n\n[[sample]]\nname = \"far\"\nfiles = {:?}\n", server.url("/st/*.root"));
     let dir = common::study("empty-remote", &samples, RECIPE);
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
     assert!(code == 1 && said.contains("/st/b.root is empty (0 bytes), so it is no ROOT file: remove it, or name the files so that this one is not among them"), "{said}");
     // A HEAD that says 0 bytes of a file its listing sizes is not taken for an empty file.
-    std::fs::write(dir.join("samples.toml"), samples.replace("*.root", "a*.root")).unwrap();
+    std::fs::write(
+        dir.join("samples.toml"),
+        samples.replace("*.root", "a*.root"),
+    )
+    .unwrap();
     server.script(|request| match request.method.as_str() {
         "HEAD" => Answer::Status(200),
         _ => Answer::Serve,
@@ -491,13 +765,23 @@ fn an_empty_storage_file_is_said_empty_and_a_lock_without_its_samples_toml_does_
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
     assert!(code == 1 && said.contains("/st/a.root: its storage answers that it holds 0 bytes, but lists it with 39262, so the lock cannot pin its size"), "{said}");
     server.script(|_| Answer::Serve);
-    std::fs::write(dir.join("samples.toml"), samples.replace("*.root", "a.root")).unwrap();
+    std::fs::write(
+        dir.join("samples.toml"),
+        samples.replace("*.root", "a.root"),
+    )
+    .unwrap();
     assert_eq!(rvr(&dir, &["samples", "resolve", "samples.toml"]).0, 0);
     std::fs::rename(dir.join("samples.toml"), dir.join("away.toml")).unwrap();
     let (code, said) = rvr(&dir, &["samples", "check", "samples.lock"]);
-    assert!(code == 1 && said.contains("There is no samples.toml beside the lock: a press needs both"), "{said}");
+    assert!(
+        code == 1 && said.contains("There is no samples.toml beside the lock: a press needs both"),
+        "{said}"
+    );
     let (code, said) = rvr(&dir, &["branches"]);
-    assert!(code == 0 && said.contains("There is no samples.toml beside samples.lock to read"), "{said}");
+    assert!(
+        code == 0 && said.contains("There is no samples.toml beside samples.lock to read"),
+        "{said}"
+    );
 }
 
 // SPEC 6.2.3
@@ -511,24 +795,64 @@ fn a_storage_name_percent_encoded_is_matched_as_listed_and_said_so() {
     let dir = common::study("encoded", &samples, RECIPE);
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
     assert!(code == 1 && said.contains("a b.root matched no file: a name is matched as its storage spells it, with or without %-escapes as in a URL, and it spells this one a%20b.root: write it so"), "{said}");
-    std::fs::write(dir.join("samples.toml"), samples.replace("a b.root", "a b*.root")).unwrap();
+    std::fs::write(
+        dir.join("samples.toml"),
+        samples.replace("a b.root", "a b*.root"),
+    )
+    .unwrap();
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
     assert!(code == 1 && said.contains("a b*.root matched no file: a name is matched as its storage spells it, with or without %-escapes as in a URL, and it spells one a%20b.root: write the pattern so"), "{said}");
     // Escapes where the storage spells none are told the other way.
-    std::fs::write(dir.join("samples.toml"), samples.replace("a b.root", "c%2Eroot")).unwrap();
+    std::fs::write(
+        dir.join("samples.toml"),
+        samples.replace("a b.root", "c%2Eroot"),
+    )
+    .unwrap();
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
-    assert!(code == 1 && said.contains("c%2Eroot matched no file: a name is matched as its storage spells it") && said.contains("it spells this one c.root: write it so"), "{said}");
+    assert!(
+        code == 1
+            && said
+                .contains("c%2Eroot matched no file: a name is matched as its storage spells it")
+            && said.contains("it spells this one c.root: write it so"),
+        "{said}"
+    );
     // A pattern written with escapes is told so too.
-    std::fs::write(dir.join("samples.toml"), samples.replace("a b.root", "c%2E*")).unwrap();
+    std::fs::write(
+        dir.join("samples.toml"),
+        samples.replace("a b.root", "c%2E*"),
+    )
+    .unwrap();
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
-    assert!(code == 1 && said.contains("c%2E* matched no file") && said.contains("it spells one c.root: write the pattern so"), "{said}");
+    assert!(
+        code == 1
+            && said.contains("c%2E* matched no file")
+            && said.contains("it spells one c.root: write the pattern so"),
+        "{said}"
+    );
     // A %2A is not made a wildcard to find a spelling.
-    std::fs::write(dir.join("samples.toml"), samples.replace("a b.root", "c%2A*")).unwrap();
+    std::fs::write(
+        dir.join("samples.toml"),
+        samples.replace("a b.root", "c%2A*"),
+    )
+    .unwrap();
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
-    assert!(code == 1 && said.contains("c%2A* matched no file (2 files in that folder)"), "{said}");
-    std::fs::write(dir.join("samples.toml"), samples.replace("a b.root", "a%20b.root")).unwrap();
+    assert!(
+        code == 1 && said.contains("c%2A* matched no file (2 files in that folder)"),
+        "{said}"
+    );
+    std::fs::write(
+        dir.join("samples.toml"),
+        samples.replace("a b.root", "a%20b.root"),
+    )
+    .unwrap();
     let (code, said) = rvr(&dir, &["samples", "resolve", "samples.toml"]);
-    assert!(code == 0 && said.contains("also hold 1 .root file no sample reads") && said.contains("/enc/c.root") && !said.contains("a%20b.root"), "{said}");
+    assert!(
+        code == 0
+            && said.contains("also hold 1 .root file no sample reads")
+            && said.contains("/enc/c.root")
+            && !said.contains("a%20b.root"),
+        "{said}"
+    );
     let lock = std::fs::read_to_string(dir.join("samples.lock")).unwrap();
     assert!(lock.contains("/enc/a%20b.root"), "{lock}");
     let (code, said) = rvr(&dir, &["press"]);

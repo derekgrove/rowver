@@ -46,15 +46,26 @@ fn read(options: &Options) -> Result<Pressing, String> {
     let choice = Choice::read(options)?;
     let workers = crate::options::workers(options)?;
     let dir = options.words.first().map(PathBuf::from);
-    let fill = options.has("--fill").then(|| crate::fill::kinds(options.value("--fill")));
+    let fill = options
+        .has("--fill")
+        .then(|| crate::fill::kinds(options.value("--fill")));
     let on = match (fill, options.has("--full")) {
-        (Some(_), true) => return Err("--fill reads only a file's holes, --full every entry: give one".into()),
+        (Some(_), true) => {
+            return Err("--fill reads only a file's holes, --full every entry: give one".into())
+        }
         (Some(kinds), false) => On::Holes(kinds),
         (None, true) => On::Full,
         (None, false) => On::Earlier,
     };
     let out = options.value("--out").map(PathBuf::from);
-    Ok(Pressing { dir, out, choice, workers, on, restart: options.has("--restart") })
+    Ok(Pressing {
+        dir,
+        out,
+        choice,
+        workers,
+        on,
+        restart: options.has("--restart"),
+    })
 }
 
 /// Press as asked: the exit status, 3 when the file at the target has holes.
@@ -67,14 +78,17 @@ fn run(pressing: Pressing) -> Result<u8, String> {
     // Options that do not fit the samples are refused before recipe.toml is offered tables.
     if crate::at_terminal() {
         if let Ok(lock) = rowver::study::lock::Lock::read(&texts.lock) {
-            let (_, _, said) = crate::agree::choices(lock, &Choose::Options(pressing.choice.clone()));
+            let (_, _, said) =
+                crate::agree::choices(lock, &Choose::Options(pressing.choice.clone()));
             if !said.is_empty() {
                 return Err(said.join("\n"));
             }
         }
     }
     // A fill takes the recipe the file was pressed from, as it was: it is not offered tables.
-    if !matches!(pressing.on, On::Holes(_)) && crate::tables::offer(&dir, &texts.recipe, "press", "continue pressing")? {
+    if !matches!(pressing.on, On::Holes(_))
+        && crate::tables::offer(&dir, &texts.recipe, "press", "continue pressing")?
+    {
         texts = crate::texts::read(&dir)?;
     }
     // Held from its first read of the file there until its new file is in place (SPEC §8.12), and
@@ -90,26 +104,54 @@ fn run(pressing: Pressing) -> Result<u8, String> {
     };
     crate::hold();
     // Refused before its staging folder is made beside the file.
-    let unwritable = || locked.as_ref().map_or_else(|| rowver::change::probe(&target).0, rowver::change::Locked::unwritable);
-    if let Some(why) = pressing.restart.then(|| crate::plan::read_only(&target, unwritable())).flatten() {
+    let unwritable = || {
+        locked.as_ref().map_or_else(
+            || rowver::change::probe(&target).0,
+            rowver::change::Locked::unwritable,
+        )
+    };
+    if let Some(why) = pressing
+        .restart
+        .then(|| crate::plan::read_only(&target, unwritable()))
+        .flatten()
+    {
         return Err(why);
     }
     crate::journal::tidy(&target, None);
     if pressing.restart {
         let stopped = crate::journal::Staged::lock(&target)?;
         if stopped.keep.get() {
-            println!("Starting over: removed the press that stopped in {}.", stopped.folder.display());
+            println!(
+                "Starting over: removed the press that stopped in {}.",
+                stopped.folder.display()
+            );
         }
         stopped.keep.set(false);
     }
-    let at = locked.as_ref().map_or_else(|| crate::plan::At::open(&target), crate::plan::At::held);
+    let at = locked
+        .as_ref()
+        .map_or_else(|| crate::plan::At::open(&target), crate::plan::At::held);
     // The entries the file there read, when it opens: a press that reads fewer asks first.
     let held = match &at {
-        crate::plan::At::Opened(file, Ok(())) => Some(crate::entries_read(&file.header()["made"]).0),
+        crate::plan::At::Opened(file, Ok(())) => {
+            Some(crate::entries_read(&file.header()["made"]).0)
+        }
         _ => None,
     };
-    let place = Place { base: dir, study, at, target: target.clone(), locked, found };
-    let asked = Asked { choose: Choose::Options(pressing.choice), on: pressing.on, workers: pressing.workers, sign: true };
+    let place = Place {
+        base: dir,
+        study,
+        at,
+        target: target.clone(),
+        locked,
+        found,
+    };
+    let asked = Asked {
+        choose: Choose::Options(pressing.choice),
+        on: pressing.on,
+        workers: pressing.workers,
+        sign: true,
+    };
     let plan = crate::plan::build(place, texts, asked)?;
     if let Some(why) = &plan.refused {
         return Err(why.clone());
@@ -123,11 +165,17 @@ fn run(pressing: Pressing) -> Result<u8, String> {
                 return Ok(2);
             }
             if !crate::yes("Press every column? [y/N] ")? {
-                return Err(format!("{} is as it was: nothing was pressed.", target.display()));
+                return Err(format!(
+                    "{} is as it was: nothing was pressed.",
+                    target.display()
+                ));
             }
         }
         (Some(why), false) => {
-            println!("Pressing every column: {} cannot be built on, as {why}.", target.display());
+            println!(
+                "Pressing every column: {} cannot be built on, as {why}.",
+                target.display()
+            );
             // A file of fewer events in place of a fuller one is asked first (SPEC §8.5).
             let read: u64 = plan.lock.samples.iter().map(|s| s.events_read).sum();
             if let Some(held) = held.filter(|held| *held > read) {
@@ -138,7 +186,10 @@ fn run(pressing: Pressing) -> Result<u8, String> {
                     return Ok(2);
                 }
                 if !crate::yes("Replace it? [y/N] ")? {
-                    return Err(format!("{} is as it was: nothing was pressed.", target.display()));
+                    return Err(format!(
+                        "{} is as it was: nothing was pressed.",
+                        target.display()
+                    ));
                 }
             }
         }
@@ -155,7 +206,11 @@ fn run(pressing: Pressing) -> Result<u8, String> {
             holes
         }
         _ => {
-            for note in crate::agree::notes(crate::agree::expressions(&plan.recipe).iter(), &plan.recipe, &plan.lock) {
+            for note in crate::agree::notes(
+                crate::agree::expressions(&plan.recipe).iter(),
+                &plan.recipe,
+                &plan.lock,
+            ) {
                 eprintln!("Note: recipe.toml: {note}");
             }
             crate::core::press(plan)?

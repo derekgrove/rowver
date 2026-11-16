@@ -2,9 +2,9 @@
 //! the WLCG registry (wlcg-doors) lists for its host. Folders are listed with one PROPFIND, and a
 //! file's adler32 is asked with one HEAD (`Want-Digest`); nothing is read from any file.
 
+use crate::holes::{Failed, Fault, Seen};
 use hep_root::ByteSource;
 use std::collections::{BTreeSet, HashMap};
-use crate::holes::{Failed, Fault, Seen};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -73,14 +73,23 @@ enum Unlisted {
 /// A PROPFIND answer's text, read whole: a folder of a million files lists in some hundreds of MiB.
 fn listing(reply: ureq::Response, folder: &str) -> Result<String, Unlisted> {
     const MOST: u64 = 1 << 30;
-    let over = || Unlisted::Said(format!("{folder} could not be listed: its listing is over 1 GiB, the most rvr reads of one folder; split its files among subfolders"));
-    let said = reply.header("Content-Length").and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+    let over = || {
+        Unlisted::Said(format!("{folder} could not be listed: its listing is over 1 GiB, the most rvr reads of one folder; split its files among subfolders"))
+    };
+    let said = reply
+        .header("Content-Length")
+        .and_then(|n| n.parse::<u64>().ok())
+        .unwrap_or(0);
     if said > MOST {
         return Err(over());
     }
     // Room for what it says, up to 16 MiB: a body shorter than said grows no more.
     let mut bytes = Vec::with_capacity(said.min(16 << 20) as usize);
-    std::io::Read::read_to_end(&mut std::io::Read::take(reply.into_reader(), MOST + 1), &mut bytes).map_err(Unlisted::Cut)?;
+    std::io::Read::read_to_end(
+        &mut std::io::Read::take(reply.into_reader(), MOST + 1),
+        &mut bytes,
+    )
+    .map_err(Unlisted::Cut)?;
     if bytes.len() as u64 > MOST {
         return Err(over());
     }
@@ -98,7 +107,11 @@ fn entries(xml: &str) -> Vec<Entry> {
             continue;
         }
         let href = unescaped(href);
-        let name = href.trim_end_matches('/').rsplit('/').next().unwrap_or(&href);
+        let name = href
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or(&href);
         let bytes = element(block, "getcontentlength")
             .or_else(|| element(block, "size"))
             .and_then(|s| s.trim().parse().ok())
@@ -127,13 +140,23 @@ fn unescaped(text: &str) -> String {
             "apos" => Some('\''),
             // Digits alone, of a character XML allows (never 0).
             _ => match name.strip_prefix("#x") {
-                Some(hex) => hex.bytes().all(|b| b.is_ascii_hexdigit()).then(|| u32::from_str_radix(hex, 16).ok()).flatten(),
-                None => name.strip_prefix('#').filter(|digits| digits.bytes().all(|b| b.is_ascii_digit())).and_then(|digits| digits.parse().ok()),
+                Some(hex) => hex
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit())
+                    .then(|| u32::from_str_radix(hex, 16).ok())
+                    .flatten(),
+                None => name
+                    .strip_prefix('#')
+                    .filter(|digits| digits.bytes().all(|b| b.is_ascii_digit()))
+                    .and_then(|digits| digits.parse().ok()),
             }
             .and_then(char::from_u32)
             .filter(|c| *c != '\0'),
         };
-        match rest.find(';').and_then(|end| Some((reference(&rest[1..end])?, end))) {
+        match rest
+            .find(';')
+            .and_then(|end| Some((reference(&rest[1..end])?, end)))
+        {
             Some((decoded, end)) => {
                 out.push(decoded);
                 rest = &rest[end + 1..];
@@ -157,7 +180,9 @@ pub(crate) fn decoded(name: &str) -> Option<String> {
             bytes.push(first);
             continue;
         }
-        let hex = std::str::from_utf8(rest.get(..2)?).ok().filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()))?;
+        let hex = std::str::from_utf8(rest.get(..2)?)
+            .ok()
+            .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()))?;
         bytes.push(u8::from_str_radix(hex, 16).ok()?);
         rest = &rest[2..];
     }
@@ -217,7 +242,10 @@ fn follow(
             Some(to) => {
                 url = absolute(&url, to);
                 upgraded = None;
-                if url.get(..7).is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://")) {
+                if url
+                    .get(..7)
+                    .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
+                {
                     upgraded = Some(origin(&url));
                     url = format!("https://{}", &url[7..]);
                 }
@@ -234,7 +262,9 @@ fn follow(
 fn origin(url: &str) -> String {
     let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
     let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     format!("{scheme}://{host}")
 }
 
@@ -255,22 +285,35 @@ impl std::error::Error for PlainHttp {}
 /// `answer` to an `upgraded` Location (asked as https): a handshake its server answered in plain
 /// HTTP made a `PlainHttp`, everything else as it is.
 #[allow(clippy::result_large_err)] // ureq's own error, as `follow` returns it
-fn plain(answer: Result<ureq::Response, ureq::Error>, upgraded: Option<&str>) -> Result<ureq::Response, ureq::Error> {
+fn plain(
+    answer: Result<ureq::Response, ureq::Error>,
+    upgraded: Option<&str>,
+) -> Result<ureq::Response, ureq::Error> {
     match (&answer, upgraded) {
-        (Err(ureq::Error::Transport(failure)), Some(location)) if spoke_plain(failure) => Err(std::io::Error::other(PlainHttp(location.to_owned())).into()),
+        (Err(ureq::Error::Transport(failure)), Some(location)) if spoke_plain(failure) => {
+            Err(std::io::Error::other(PlainHttp(location.to_owned())).into())
+        }
         _ => answer,
     }
 }
 
 /// Whether a failed request's server answered the TLS handshake in plain HTTP.
 fn spoke_plain(failure: &ureq::Transport) -> bool {
-    matches!(grid_trust::tls_error(failure), Some(rustls::Error::InvalidMessage(rustls::InvalidMessage::InvalidContentType)))
+    matches!(
+        grid_trust::tls_error(failure),
+        Some(rustls::Error::InvalidMessage(
+            rustls::InvalidMessage::InvalidContentType
+        ))
+    )
 }
 
 /// The `PlainHttp` a failed request is, if it is one.
 fn plain_http(failure: &ureq::Transport) -> Option<&PlainHttp> {
     let source = std::error::Error::source(failure)?;
-    source.downcast_ref::<std::io::Error>().and_then(|io| io.get_ref()).and_then(|inner| inner.downcast_ref::<PlainHttp>())
+    source
+        .downcast_ref::<std::io::Error>()
+        .and_then(|io| io.get_ref())
+        .and_then(|inner| inner.downcast_ref::<PlainHttp>())
 }
 
 // Storage under load refuses requests for minutes at a time (EOS answers 403), so a press asks
@@ -293,7 +336,10 @@ const REACH: u32 = 5;
 /// A second of waiting; in a debug build, `RVR_SECOND_MS` milliseconds when set, for the tests.
 pub fn second() -> Duration {
     #[cfg(debug_assertions)]
-    if let Some(ms) = std::env::var("RVR_SECOND_MS").ok().and_then(|ms| ms.parse().ok()) {
+    if let Some(ms) = std::env::var("RVR_SECOND_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+    {
         return Duration::from_millis(ms);
     }
     Duration::from_secs(1)
@@ -343,7 +389,10 @@ impl Watch {
             asking: AtomicBool::new(false),
             gone: Default::default(),
         };
-        Watch { stop: AtomicBool::new(false), heard: Some(heard) }
+        Watch {
+            stop: AtomicBool::new(false),
+            heard: Some(heard),
+        }
     }
 
     /// A request came back as `reply`, from the door `door` (`host:port`) itself when it is named.
@@ -367,7 +416,9 @@ impl Watch {
             return;
         };
         if answered {
-            heard.answer.fetch_max(heard.began.elapsed().as_millis() as u64, Ordering::Relaxed);
+            heard
+                .answer
+                .fetch_max(heard.began.elapsed().as_millis() as u64, Ordering::Relaxed);
             heard.answers.fetch_add(1, Ordering::Relaxed);
         }
         let Some(door) = door else {
@@ -390,7 +441,10 @@ impl Watch {
         // Looked up once it has answered (its name resolves then), outside the lock.
         if look_up {
             use std::net::ToSocketAddrs;
-            let found: Vec<_> = door.to_socket_addrs().map(Iterator::collect).unwrap_or_default();
+            let found: Vec<_> = door
+                .to_socket_addrs()
+                .map(Iterator::collect)
+                .unwrap_or_default();
             if let Some((_, addresses)) = lock().doors.get_mut(door) {
                 *addresses = Some(found);
             }
@@ -426,17 +480,25 @@ impl Watch {
     fn ask(&self, heard: &Heard) -> bool {
         let now = || heard.began.elapsed().as_millis() as u64;
         let answers = heard.answers.load(Ordering::Relaxed);
-        if now().saturating_sub(heard.answer.load(Ordering::Relaxed)) < heard.quiet.as_millis() as u64 {
+        if now().saturating_sub(heard.answer.load(Ordering::Relaxed))
+            < heard.quiet.as_millis() as u64
+        {
             return false;
         }
         let (names, addresses, one_site): (Vec<String>, Vec<std::net::SocketAddr>, bool) = {
             let last = heard.last.lock().unwrap_or_else(|e| e.into_inner());
             // A doubt stands only while nothing has answered since.
             let doubt = last.doubt.filter(|(_, then)| *then == answers);
-            if doubt.is_some_and(|(at, _)| now().saturating_sub(at) < heard.again.as_millis() as u64) {
+            if doubt
+                .is_some_and(|(at, _)| now().saturating_sub(at) < heard.again.as_millis() as u64)
+            {
                 return false;
             }
-            let known: Vec<_> = last.doors.iter().filter(|(_, (_, addresses))| addresses.is_some()).collect();
+            let known: Vec<_> = last
+                .doors
+                .iter()
+                .filter(|(_, (_, addresses))| addresses.is_some())
+                .collect();
             let up: Vec<_> = known.iter().copied().filter(|(_, (up, _))| *up).collect();
             // One site when every door that answered is of it (SPEC §7.4.5), though only those up may be asked.
             let sites: BTreeSet<String> = known.iter().map(|(door, _)| domain(door)).collect();
@@ -447,7 +509,10 @@ impl Watch {
                 (true, true) => return false,
             };
             let names: Vec<String> = asked.iter().map(|(door, _)| (*door).clone()).collect();
-            let addresses = asked.iter().flat_map(|(_, (_, addresses))| addresses.iter().flatten().copied()).collect();
+            let addresses = asked
+                .iter()
+                .flat_map(|(_, (_, addresses))| addresses.iter().flatten().copied())
+                .collect();
             (names, addresses, one_site)
         };
         let found = reachable(&names, &addresses, second() * REACH);
@@ -479,7 +544,9 @@ impl Watch {
 
     /// Why the network was taken to be gone, if it was.
     pub fn gone(&self) -> Option<String> {
-        self.heard.as_ref().and_then(|heard| heard.gone.get().cloned())
+        self.heard
+            .as_ref()
+            .and_then(|heard| heard.gone.get().cloned())
     }
 
     /// Whether a failed request may pass when asked again (see `passing`); in a press, a name that
@@ -492,7 +559,11 @@ impl Watch {
 
 /// The `host:port` of an `https://` URL as `door` gives it.
 pub fn host_port(url: &str) -> Option<String> {
-    let authority = url.strip_prefix("https://")?.split('/').next()?.to_ascii_lowercase();
+    let authority = url
+        .strip_prefix("https://")?
+        .split('/')
+        .next()?
+        .to_ascii_lowercase();
     match authority.contains(':') {
         true => Some(authority),
         false => Some(format!("{authority}:443")),
@@ -507,16 +578,34 @@ fn domain(door: &str) -> String {
     static SITES: std::sync::OnceLock<Sites> = std::sync::OnceLock::new();
     let (doors, sites) = SITES.get_or_init(|| {
         let listed = &wlcg_doors::snapshot().doors;
-        let doors = listed.iter().map(|d| ((d.host.to_ascii_lowercase(), d.port), d.site.clone())).collect();
-        (doors, listed.iter().map(|d| d.site.to_ascii_lowercase()).collect())
+        let doors = listed
+            .iter()
+            .map(|d| ((d.host.to_ascii_lowercase(), d.port), d.site.clone()))
+            .collect();
+        (
+            doors,
+            listed.iter().map(|d| d.site.to_ascii_lowercase()).collect(),
+        )
     });
-    let (host, port) = door.rsplit_once(':').map_or((door, None), |(host, port)| (host, port.parse::<u16>().ok()));
+    let (host, port) = door.rsplit_once(':').map_or((door, None), |(host, port)| {
+        (host, port.parse::<u16>().ok())
+    });
     let host = host.to_ascii_lowercase();
     if let Some(site) = port.and_then(|port| doors.get(&(host.clone(), port))) {
         return site.clone();
     }
-    let within = |site: &&String| host == **site || host.strip_suffix(site.as_str()).is_some_and(|rest| rest.ends_with('.'));
-    sites.iter().filter(within).max_by_key(|site| site.len()).cloned().unwrap_or(host)
+    let within = |site: &&String| {
+        host == **site
+            || host
+                .strip_suffix(site.as_str())
+                .is_some_and(|rest| rest.ends_with('.'))
+    };
+    sites
+        .iter()
+        .filter(within)
+        .max_by_key(|site| site.len())
+        .cloned()
+        .unwrap_or(host)
 }
 
 /// Whether any of `addresses`, or of the addresses `names` (`host:port`) have now, takes a TCP
@@ -708,7 +797,8 @@ impl Storage {
                         .set("Depth", "1")
                         .set("Content-Type", "application/xml")
                         .send_string(body);
-                    self.watch.note(door.as_deref().filter(|_| url == at), &reply);
+                    self.watch
+                        .note(door.as_deref().filter(|_| url == at), &reply);
                     reply
                 })
                 .1
@@ -767,7 +857,8 @@ impl Storage {
 }
 
 /// What storage that refuses a request without a grid proxy needs.
-const UNPROXIED: &str = "it needs a grid proxy, and there is none usable (rvr proxy says why, and what to run)";
+const UNPROXIED: &str =
+    "it needs a grid proxy, and there is none usable (rvr proxy says why, and what to run)";
 
 /// `why` a request failed, with what a 401 or 403 without a grid proxy needs.
 fn told(error: &ureq::Error, proxied: bool) -> String {
@@ -786,20 +877,27 @@ pub fn why(error: &ureq::Error) -> String {
     }
     match error {
         ureq::Error::Status(code @ 300..=399, answer) if answer.header("Location").is_some() => {
-            format!("its storage redirected more than four times ({code} {})", answer.status_text())
+            format!(
+                "its storage redirected more than four times ({code} {})",
+                answer.status_text()
+            )
         }
         ureq::Error::Status(code @ 300..=399, answer) => {
-            format!("its storage answered {code} {} without saying where to go", answer.status_text())
+            format!(
+                "its storage answered {code} {} without saying where to go",
+                answer.status_text()
+            )
         }
         ureq::Error::Status(code, answer) => {
             format!("its storage answered {code} {}", answer.status_text())
         }
-        ureq::Error::Transport(failure) => match grid_trust::tls_error(failure) {
-            Some(tls) => tls.to_string(),
-            None if grid_trust::timed_out(failure) => "it did not answer in time".into(),
-            None => {
-                use ureq::ErrorKind as K;
-                let plain = match failure.kind() {
+        ureq::Error::Transport(failure) => {
+            match grid_trust::tls_error(failure) {
+                Some(tls) => tls.to_string(),
+                None if grid_trust::timed_out(failure) => "it did not answer in time".into(),
+                None => {
+                    use ureq::ErrorKind as K;
+                    let plain = match failure.kind() {
                     K::Dns => "its storage's name could not be looked up".to_owned(),
                     K::ConnectionFailed => "its storage did not take the connection".to_owned(),
                     K::TooManyRedirects => "it was redirected too many times".to_owned(),
@@ -810,14 +908,22 @@ pub fn why(error: &ureq::Error) -> String {
                     K::ProxyUnauthorized => "the proxy between this computer and its storage asked for a login (407)".to_owned(),
                     other => format!("it could not be asked ({other})"),
                 };
-                // The system's own words follow in brackets: ureq's, then their cause's.
-                let words: Vec<String> = [failure.message().map(str::to_owned), std::error::Error::source(failure).map(innermost)].into_iter().flatten().filter(|w| !w.is_empty()).collect();
-                match words.is_empty() {
-                    true => plain,
-                    false => format!("{plain} ({})", words.join(": ")),
+                    // The system's own words follow in brackets: ureq's, then their cause's.
+                    let words: Vec<String> = [
+                        failure.message().map(str::to_owned),
+                        std::error::Error::source(failure).map(innermost),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .filter(|w| !w.is_empty())
+                    .collect();
+                    match words.is_empty() {
+                        true => plain,
+                        false => format!("{plain} ({})", words.join(": ")),
+                    }
                 }
             }
-        },
+        }
     }
 }
 
@@ -839,8 +945,14 @@ fn innermost(error: &(dyn std::error::Error + 'static)) -> String {
 /// A failure reading an answer as it came, in plain words, the system's own in brackets.
 fn broke(error: &std::io::Error) -> String {
     match error.kind() {
-        std::io::ErrorKind::UnexpectedEof => format!("its storage's answer ended before every byte asked came ({})", innermost(error)),
-        _ => format!("the connection to its storage broke as its answer came ({})", innermost(error)),
+        std::io::ErrorKind::UnexpectedEof => format!(
+            "its storage's answer ended before every byte asked came ({})",
+            innermost(error)
+        ),
+        _ => format!(
+            "the connection to its storage broke as its answer came ({})",
+            innermost(error)
+        ),
     }
 }
 
@@ -856,11 +968,20 @@ pub fn digest_seen(
     proxied: bool,
     watch: &Watch,
 ) -> Result<Digest, Failed> {
-    let reply = patiently(waits, watch, shown, |e| watch.passing(e, proxied), || head(agent, https, watch));
+    let reply = patiently(
+        waits,
+        watch,
+        shown,
+        |e| watch.passing(e, proxied),
+        || head(agent, https, watch),
+    );
     if reply.is_err() && watch.stop.load(Ordering::Acquire) {
         return Err(Failed::new(Fault::Stopped, format!("{shown}: {STOPPED}")));
     }
-    let seen = reply.as_ref().err().map_or(Fault::Unreachable, |e| fault(e, proxied));
+    let seen = reply
+        .as_ref()
+        .err()
+        .map_or(Fault::Unreachable, |e| fault(e, proxied));
     digested(shown, reply, proxied).map_err(|why| Failed::new(seen, why))
 }
 
@@ -1028,11 +1149,17 @@ impl HttpsFile {
 
     /// The answer to a request for the byte ranges `range` (traced as `asked`, `bytes` bytes):
     /// from the disk server that answered last, else the door; where it came from, and it.
-    fn ask(&self, range: &str, asked: &str, bytes: u64) -> (String, Result<ureq::Response, ureq::Error>) {
+    fn ask(
+        &self,
+        range: &str,
+        asked: &str,
+        bytes: u64,
+    ) -> (String, Result<ureq::Response, ureq::Error>) {
         let ask = |url: &str| {
             follow(url, |url| {
                 let reply = self.agent.get(url).set("Range", range).call();
-                self.watch.note(self.host.as_deref().filter(|_| url == self.door), &reply);
+                self.watch
+                    .note(self.host.as_deref().filter(|_| url == self.door), &reply);
                 trace(asked, bytes, &self.shown, &reply);
                 reply
             })
@@ -1099,9 +1226,15 @@ impl HttpsFile {
             return self.read_at(*at, &mut buf).map(|()| Some(vec![buf]));
         }
         let fail = |e: String| hep_root::Error::Remote(format!("{}: {e}", self.shown));
-        let asked: Vec<String> = ranges.iter().map(|(at, len)| format!("{at}-{}", at + *len as u64 - 1)).collect();
+        let asked: Vec<String> = ranges
+            .iter()
+            .map(|(at, len)| format!("{at}-{}", at + *len as u64 - 1))
+            .collect();
         let header = format!("bytes={}", asked.join(","));
-        let (count, total): (String, u64) = (format!("{} ranges", ranges.len()), ranges.iter().map(|(_, len)| *len as u64).sum());
+        let (count, total): (String, u64) = (
+            format!("{} ranges", ranges.len()),
+            ranges.iter().map(|(_, len)| *len as u64).sum(),
+        );
         let (to, reply) = self.ask(&header, &count, total);
         let reply = match reply {
             Ok(reply) => reply,
@@ -1122,8 +1255,14 @@ impl HttpsFile {
             // storage's; any other not laid out as the parts asked (one that ends early with no
             // failure cannot be told from it) is asked again one range a request.
             Some(boundary) => {
-                let mut body = super::multipart::Noted { inner: reply.into_reader(), failed: None };
-                match (super::multipart::parts(&mut body, &boundary, total), &body.failed) {
+                let mut body = super::multipart::Noted {
+                    inner: reply.into_reader(),
+                    failed: None,
+                };
+                match (
+                    super::multipart::parts(&mut body, &boundary, total),
+                    &body.failed,
+                ) {
                     (Ok(parts), _) => parts,
                     (Err(_), Some(e)) => {
                         self.seen.note(Fault::Unreachable);
@@ -1179,13 +1318,21 @@ fn trace(asked: &str, bytes: u64, shown: &str, reply: &Result<ureq::Response, ur
 }
 
 /// The line `trace` prints.
-fn traced(asked: &str, bytes: u64, shown: &str, reply: &Result<ureq::Response, ureq::Error>) -> String {
+fn traced(
+    asked: &str,
+    bytes: u64,
+    shown: &str,
+    reply: &Result<ureq::Response, ureq::Error>,
+) -> String {
     let answer = match reply {
         Ok(reply) => reply.status().to_string(),
         Err(ureq::Error::Status(status, _)) => status.to_string(),
         Err(e) => format!("failed: {}", why(e)),
     };
-    format!("  GET {asked} ({bytes} bytes) of {}: {answer}", shown.rsplit('/').next().unwrap_or(""))
+    format!(
+        "  GET {asked} ({bytes} bytes) of {}: {answer}",
+        shown.rsplit('/').next().unwrap_or("")
+    )
 }
 
 impl ByteSource for HttpsFile {
@@ -1203,13 +1350,10 @@ impl ByteSource for HttpsFile {
             Ok(reply) if reply.status() == 206 => {
                 *self.url.lock().unwrap() = to;
                 use std::io::Read;
-                reply
-                    .into_reader()
-                    .read_exact(buf)
-                    .map_err(|e| {
-                        self.seen.note(Fault::Unreachable);
-                        hep_root::Error::Remote(format!("{}: {}", self.shown, broke(&e)))
-                    })
+                reply.into_reader().read_exact(buf).map_err(|e| {
+                    self.seen.note(Fault::Unreachable);
+                    hep_root::Error::Remote(format!("{}: {}", self.shown, broke(&e)))
+                })
             }
             Ok(reply) => Err({
                 self.seen.note(Fault::Unreachable);
@@ -1276,7 +1420,14 @@ mod tests {
     fn served(bytes: usize) -> (server::Server, Storage) {
         let server = server::Server::start();
         server.put("/f.root", vec![7; bytes]);
-        let storage = Storage::new(None, Some(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tls/authority"))).unwrap();
+        let storage = Storage::new(
+            None,
+            Some(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/tls/authority"
+            )),
+        )
+        .unwrap();
         (server, storage)
     }
 
@@ -1290,7 +1441,10 @@ mod tests {
         std::thread::spawn(move || {
             for mut stream in plain.incoming().flatten() {
                 let _ = std::io::Read::read(&mut stream, &mut [0; 4096]);
-                let _ = std::io::Write::write_all(&mut stream, b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                let _ = std::io::Write::write_all(
+                    &mut stream,
+                    b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
             }
         });
         let location = format!("http://127.0.0.1:{port}/f.root");
@@ -1298,9 +1452,24 @@ mod tests {
         server.script(move |_| server::Answer::Redirect(sent.clone()));
         let started = std::time::Instant::now();
         let failed = storage.digest(&server.url("/f.root")).unwrap_err();
-        assert!(started.elapsed() < Duration::from_secs(3), "asked again: {:?}, {}", started.elapsed(), failed.why);
-        assert!(failed.why.contains(&format!("http://127.0.0.1:{port}, a plain HTTP server")) && failed.why.contains("only over https"), "{}", failed.why);
-        assert!(matches!(failed.fault, Fault::Unreachable), "a hole of its file, not a press stopped");
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "asked again: {:?}, {}",
+            started.elapsed(),
+            failed.why
+        );
+        assert!(
+            failed
+                .why
+                .contains(&format!("http://127.0.0.1:{port}, a plain HTTP server"))
+                && failed.why.contains("only over https"),
+            "{}",
+            failed.why
+        );
+        assert!(
+            matches!(failed.fault, Fault::Unreachable),
+            "a hole of its file, not a press stopped"
+        );
     }
 
     // SPEC 7.2.4
@@ -1318,8 +1487,18 @@ mod tests {
             })
         });
         let asked = asked.into_inner();
-        assert_eq!(asked, ["https://door.example:1094/eos/f.root", "https://fst.example:8443/eos/f.root?id=7", "https://fst2.example/f.root"]);
-        assert_eq!((url.as_str(), got.unwrap().status()), ("https://fst2.example/f.root", 200));
+        assert_eq!(
+            asked,
+            [
+                "https://door.example:1094/eos/f.root",
+                "https://fst.example:8443/eos/f.root?id=7",
+                "https://fst2.example/f.root"
+            ]
+        );
+        assert_eq!(
+            (url.as_str(), got.unwrap().status()),
+            ("https://fst2.example/f.root", 200)
+        );
     }
 
     // SPEC 7.2.5
@@ -1328,10 +1507,20 @@ mod tests {
         let (server, storage) = served(40 << 20);
         let file = HttpsFile::reading(&storage, "f.root", &server.url("/f.root"), 40 << 20);
         // Every answer held until six requests are in: a seventh at once would show.
-        server.script(|_| server::Answer::Together(6, Box::new(server::Answer::Late(Duration::from_millis(50), Box::new(server::Answer::Serve)))));
+        server.script(|_| {
+            server::Answer::Together(
+                6,
+                Box::new(server::Answer::Late(
+                    Duration::from_millis(50),
+                    Box::new(server::Answer::Serve),
+                )),
+            )
+        });
         let ranges: Vec<(u64, usize)> = (0..2000).map(|i| (i * 20_000, 100)).collect();
         let read = file.read_ranges(&ranges).unwrap();
-        assert!(read.iter().all(|r| r.len() == 100 && r.iter().all(|b| *b == 7)));
+        assert!(read
+            .iter()
+            .all(|r| r.len() == 100 && r.iter().all(|b| *b == 7)));
         let mut asked: Vec<usize> = server.taken().iter().map(server::Request::ranges).collect();
         asked.sort_unstable();
         assert_eq!(asked, [208, 256, 256, 256, 256, 256, 256, 256]);
@@ -1349,12 +1538,19 @@ mod tests {
         let asked = server.taken();
         let after: Vec<_> = asked.iter().filter(|r| r.ranges() == 1).collect();
         // Joined across gaps of up to 512 KiB, each at most 32 MiB: two, one gap of 19,900 bytes between.
-        let spans: Vec<u64> = after.iter().map(|r| {
-            let (a, b) = r.range.as_deref().unwrap().split_once('-').unwrap();
-            b.parse::<u64>().unwrap() - a.parse::<u64>().unwrap() + 1
-        }).collect();
+        let spans: Vec<u64> = after
+            .iter()
+            .map(|r| {
+                let (a, b) = r.range.as_deref().unwrap().split_once('-').unwrap();
+                b.parse::<u64>().unwrap() - a.parse::<u64>().unwrap() + 1
+            })
+            .collect();
         assert_eq!(spans.len(), 2, "{asked:?}");
-        assert!(spans.iter().all(|s| *s <= 32 << 20) && spans.iter().sum::<u64>() == 1999 * 20_000 + 100 - 19_900, "{spans:?}");
+        assert!(
+            spans.iter().all(|s| *s <= 32 << 20)
+                && spans.iter().sum::<u64>() == 1999 * 20_000 + 100 - 19_900,
+            "{spans:?}"
+        );
         // Later reads ask one range a request, without trying several again.
         let far = [(0, 10), (1 << 20, 10)];
         assert_eq!(file.read_ranges(&far).unwrap().len(), 2);
@@ -1394,7 +1590,10 @@ mod tests {
         let (server, storage) = served(40 << 20);
         server.script(|_| server::Answer::Short);
         let file = HttpsFile::reading(&storage, "f.root", &server.url("/f.root"), 40 << 20);
-        assert!(matches!(file.read_ranges(&[(0, 100), (30 << 20, 100)]), Err(hep_root::Error::Remote(_))));
+        assert!(matches!(
+            file.read_ranges(&[(0, 100), (30 << 20, 100)]),
+            Err(hep_root::Error::Remote(_))
+        ));
     }
 
     // SPEC 6.2.6, 7.4.1
@@ -1412,7 +1611,12 @@ mod tests {
         storage.waits = &[0];
         server.script(|_| server::Answer::Short);
         let failed = storage.list(&server.url("/")).unwrap_err();
-        assert!(failed.contains("could not be listed: its storage's answer ended before every byte asked came (") && !failed.contains("https://docs.rs"), "{failed}");
+        assert!(
+            failed.contains(
+                "could not be listed: its storage's answer ended before every byte asked came ("
+            ) && !failed.contains("https://docs.rs"),
+            "{failed}"
+        );
     }
 
     // SPEC 7.4.3
@@ -1421,12 +1625,28 @@ mod tests {
         let (server, storage) = served(100);
         server.script(|_| server::Answer::Status(403));
         let failed = storage.digest(&server.url("/f.root")).unwrap_err();
-        assert!(failed.why.ends_with(&format!("answered 403 Answer: {UNPROXIED}")) && matches!(failed.fault, Fault::Save), "{}", failed.why);
-        assert_eq!(storage.list(&server.url("/")).unwrap_err(), format!("{} refused the listing (403): {UNPROXIED}.", server.url("/")));
+        assert!(
+            failed
+                .why
+                .ends_with(&format!("answered 403 Answer: {UNPROXIED}"))
+                && matches!(failed.fault, Fault::Save),
+            "{}",
+            failed.why
+        );
+        assert_eq!(
+            storage.list(&server.url("/")).unwrap_err(),
+            format!(
+                "{} refused the listing (403): {UNPROXIED}.",
+                server.url("/")
+            )
+        );
         server.script(|_| server::Answer::Status(401));
         let file = HttpsFile::reading(&storage, "f.root", &server.url("/f.root"), 100);
         let said = file.read_ranges(&[(0, 10)]).unwrap_err().to_string();
-        assert!(said.ends_with(&format!("answered 401 Answer: {UNPROXIED}")), "{said}");
+        assert!(
+            said.ends_with(&format!("answered 401 Answer: {UNPROXIED}")),
+            "{said}"
+        );
     }
 
     // SPEC 6.2.3
@@ -1434,10 +1654,16 @@ mod tests {
     fn a_folder_whose_listing_is_over_ten_mib_is_listed_whole() {
         let (server, storage) = served(1);
         for i in 0..70_000 {
-            server.put(&format!("/big/file_with_a_long_name_{i:06}.root"), Vec::new());
+            server.put(
+                &format!("/big/file_with_a_long_name_{i:06}.root"),
+                Vec::new(),
+            );
         }
         let found = storage.list(&server.url("/big")).unwrap();
-        assert_eq!((found.len(), found[69_999].name.as_str()), (70_000, "file_with_a_long_name_069999.root"));
+        assert_eq!(
+            (found.len(), found[69_999].name.as_str()),
+            (70_000, "file_with_a_long_name_069999.root")
+        );
     }
 
     // SPEC 6.2.3
@@ -1452,10 +1678,28 @@ mod tests {
 </D:multistatus>"#;
         let found = entries(xml);
         let names: Vec<&str> = found.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, ["a%2Bb%20c.root", "collection_2024.root", "x&y&z&&amp.root&#0;&#+38;"]);
-        assert_eq!((decoded("%e2%82%ac.root").as_deref(), decoded("50%.root"), decoded("%ff.root"), decoded("x%+1.root")), (Some("€.root"), None, None, None));
+        assert_eq!(
+            names,
+            [
+                "a%2Bb%20c.root",
+                "collection_2024.root",
+                "x&y&z&&amp.root&#0;&#+38;"
+            ]
+        );
+        assert_eq!(
+            (
+                decoded("%e2%82%ac.root").as_deref(),
+                decoded("50%.root"),
+                decoded("%ff.root"),
+                decoded("x%+1.root")
+            ),
+            (Some("€.root"), None, None, None)
+        );
         assert_eq!(found[0].bytes, 7);
-        assert_eq!(adler32_of("md5=x, adler32=3DA0195").as_deref(), Some("03da0195"));
+        assert_eq!(
+            adler32_of("md5=x, adler32=3DA0195").as_deref(),
+            Some("03da0195")
+        );
         assert_eq!(adler32_of("adler32=not-hex"), None);
     }
 
@@ -1532,33 +1776,78 @@ mod tests {
     #[test]
     fn a_traced_request_says_what_answered_it() {
         let ok = ureq::Response::new(206, "Partial Content", "");
-        assert_eq!(traced("bytes=0-9", 10, "root://h//d/f.root", &ok), "  GET bytes=0-9 (10 bytes) of f.root: 206");
-        let refused = Err(ureq::Error::Status(403, ureq::Response::new(403, "Forbidden", "").unwrap()));
-        assert_eq!(traced("2 ranges", 20, "f.root", &refused), "  GET 2 ranges (20 bytes) of f.root: 403");
+        assert_eq!(
+            traced("bytes=0-9", 10, "root://h//d/f.root", &ok),
+            "  GET bytes=0-9 (10 bytes) of f.root: 206"
+        );
+        let refused = Err(ureq::Error::Status(
+            403,
+            ureq::Response::new(403, "Forbidden", "").unwrap(),
+        ));
+        assert_eq!(
+            traced("2 ranges", 20, "f.root", &refused),
+            "  GET 2 ranges (20 bytes) of f.root: 403"
+        );
         let failed = ureq::get("https://exa mple/").call();
-        assert!(traced("bytes=0-9", 10, "f.root", &failed).starts_with("  GET bytes=0-9 (10 bytes) of f.root: failed: "));
+        assert!(traced("bytes=0-9", 10, "f.root", &failed)
+            .starts_with("  GET bytes=0-9 (10 bytes) of f.root: failed: "));
     }
 
     // SPEC 7.4.1, 7.4.5
     #[test]
     fn the_network_is_gone_only_when_no_host_that_answered_can_be_reached() {
-        assert_eq!(host_port("https://eos.example:9000/store/f.root").as_deref(), Some("eos.example:9000"));
-        assert_eq!(host_port("https://Door.Example").as_deref(), Some("door.example:443"));
-        assert_eq!((domain("cmseos.fnal.gov:9000"), domain("eos.cms.rcac.purdue.edu:9000")), ("fnal.gov".into(), "purdue.edu".into()));
-        assert_eq!((domain("127.0.0.1:0"), domain("[::1]:0")), ("127.0.0.1".into(), "[::1]".into()));
+        assert_eq!(
+            host_port("https://eos.example:9000/store/f.root").as_deref(),
+            Some("eos.example:9000")
+        );
+        assert_eq!(
+            host_port("https://Door.Example").as_deref(),
+            Some("door.example:443")
+        );
+        assert_eq!(
+            (
+                domain("cmseos.fnal.gov:9000"),
+                domain("eos.cms.rcac.purdue.edu:9000")
+            ),
+            ("fnal.gov".into(), "purdue.edu".into())
+        );
+        assert_eq!(
+            (domain("127.0.0.1:0"), domain("[::1]:0")),
+            ("127.0.0.1".into(), "[::1]".into())
+        );
         // A door not on the list is at the longest site the list names that its host is or ends
         // in, as EOS's disk servers are at its door's; else a site of its own, by its host.
-        assert_eq!((domain("cmseos.fnal.gov:443"), domain("CMSEOS.fnal.gov:1")), ("fnal.gov".into(), "fnal.gov".into()));
-        assert_eq!((domain("cmseos-fst12.fnal.gov:1094"), domain("Other.FNAL.gov:9000")), ("fnal.gov".into(), "fnal.gov".into()));
-        assert_eq!((domain("nowhere.example.org:443"), domain("notfnal.gov:443")), ("nowhere.example.org".into(), "notfnal.gov".into()));
+        assert_eq!(
+            (domain("cmseos.fnal.gov:443"), domain("CMSEOS.fnal.gov:1")),
+            ("fnal.gov".into(), "fnal.gov".into())
+        );
+        assert_eq!(
+            (
+                domain("cmseos-fst12.fnal.gov:1094"),
+                domain("Other.FNAL.gov:9000")
+            ),
+            ("fnal.gov".into(), "fnal.gov".into())
+        );
+        assert_eq!(
+            (domain("nowhere.example.org:443"), domain("notfnal.gov:443")),
+            ("nowhere.example.org".into(), "notfnal.gov".into())
+        );
         // As the door list groups them: two doors under ac.uk are two sites, as it says.
-        assert_eq!((domain("antares.stfc.ac.uk:9000"), domain("ceph-dev-gw4.gridpp.rl.ac.uk:1094")), ("stfc.ac.uk".into(), "rl.ac.uk".into()));
+        assert_eq!(
+            (
+                domain("antares.stfc.ac.uk:9000"),
+                domain("ceph-dev-gw4.gridpp.rl.ac.uk:1094")
+            ),
+            ("stfc.ac.uk".into(), "rl.ac.uk".into())
+        );
         // A door that takes connections, and two that never do (port 0).
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let door = listener.local_addr().unwrap().to_string();
         let (closed, shut) = ("127.0.0.1:0", "[::1]:0");
         let unanswered = ureq::get("https://exa mple/").call();
-        let busy = || hep_root::Error::Remote("https://door.example/f.root: its storage answered 503".into());
+        let busy = || {
+            hep_root::Error::Remote("https://door.example/f.root: its storage answered 503".into())
+        };
         let shown = "https://door.example/f.root";
         let watch = |quiet| Watch::press(quiet, Duration::ZERO);
         // Something answered moments ago: the network is not asked about.
@@ -1615,7 +1904,11 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(10) && tries.get() == 1);
         assert!(gone.stop.load(Ordering::Acquire));
         let why = gone.gone().unwrap();
-        assert!(why.contains("none that answered earlier in this press takes a connection now (") && why.contains(closed), "{why}");
+        assert!(
+            why.contains("none that answered earlier in this press takes a connection now (")
+                && why.contains(closed),
+            "{why}"
+        );
         // In a press, a name that does not resolve waits as a refused connection does (where this
         // machine's resolver says so).
         let unresolved = ureq::get("https://nowhere.invalid/").call().unwrap_err();

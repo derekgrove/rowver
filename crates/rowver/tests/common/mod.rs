@@ -6,9 +6,11 @@
 pub mod corpus;
 pub mod gen;
 
-use rowver::study::lock::{Branch, Branches, File, Lock, Sample, Shape};
 use rowver::choice::Events;
-use rowver::write::{array, made_checksum, sample_cols, stream, text_checksum, write_laid, Rows, Source, Values};
+use rowver::study::lock::{Branch, Branches, File, Lock, Sample, Shape};
+use rowver::write::{
+    array, made_checksum, sample_cols, stream, text_checksum, write_laid, Rows, Source, Values,
+};
 use serde_json::{json, Value};
 
 /// One sample's rows before they are joined with the other samples'.
@@ -21,7 +23,10 @@ pub struct Piece {
 
 /// The bytes of one `.rvr` file (FORMAT §1): the magic, the arrays, the header's text, its length, the magic.
 pub fn to_bytes(header: &Value, arrays: &[Vec<u8>]) -> Vec<u8> {
-    framed(serde_json::to_string(header).unwrap().as_bytes(), &arrays.concat())
+    framed(
+        serde_json::to_string(header).unwrap().as_bytes(),
+        &arrays.concat(),
+    )
 }
 
 /// A file of these arrays' bytes and this header text, framed as FORMAT §1 says.
@@ -41,12 +46,22 @@ pub const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
 /// array's compressed bytes, in file order.
 pub fn pack(pieces: Vec<Piece>, files: Vec<Value>) -> rowver::Result<(Value, Vec<Vec<u8>>)> {
     let refused = |why: String| rowver::Error::Invalid(why);
-    let samples = pieces.iter().map(|p| rowver::write::Sample { name: p.name.clone(), label: p.label.clone(), rows: p.entry.len() }).collect();
+    let samples = pieces
+        .iter()
+        .map(|p| rowver::write::Sample {
+            name: p.name.clone(),
+            label: p.label.clone(),
+            rows: p.entry.len(),
+        })
+        .collect();
     let entry: Vec<i64> = pieces.iter().flat_map(|p| p.entry.clone()).collect();
     let mut columns: Vec<(String, Values)> = Vec::new();
     for (index, piece) in pieces.into_iter().enumerate() {
         if index > 0 && piece.columns.len() != columns.len() {
-            return Err(refused(format!("sample {} does not hold every column", piece.name)));
+            return Err(refused(format!(
+                "sample {} does not hold every column",
+                piece.name
+            )));
         }
         for (at, (name, values)) in piece.columns.into_iter().enumerate() {
             let rows = match &values {
@@ -54,19 +69,33 @@ pub fn pack(pieces: Vec<Piece>, files: Vec<Value>) -> rowver::Result<(Value, Vec
                 Values::Jagged { counts, .. } => counts.len(),
             };
             if rows != piece.entry.len() {
-                return Err(refused(format!("{name}: needs one value per row of sample {}", piece.name)));
+                return Err(refused(format!(
+                    "{name}: needs one value per row of sample {}",
+                    piece.name
+                )));
             }
             if index == 0 {
                 columns.push((name, values));
                 continue;
             }
             match (&mut columns[at], values) {
-                ((held, _), _) if *held != name => return Err(refused(format!("sample {} holds {name} where the first holds {held}", piece.name))),
+                ((held, _), _) if *held != name => {
+                    return Err(refused(format!(
+                        "sample {} holds {name} where the first holds {held}",
+                        piece.name
+                    )))
+                }
                 ((_, Values::Flat(all)), Values::Flat(more)) if all.kind == more.kind => {
                     all.count += more.count;
                     all.bytes.extend(more.bytes);
                 }
-                ((_, Values::Jagged { counts, content }), Values::Jagged { counts: more, content: values }) if content.kind == values.kind => {
+                (
+                    (_, Values::Jagged { counts, content }),
+                    Values::Jagged {
+                        counts: more,
+                        content: values,
+                    },
+                ) if content.kind == values.kind => {
                     counts.extend(more);
                     content.count += values.count;
                     content.bytes.extend(values.bytes);
@@ -77,9 +106,18 @@ pub fn pack(pieces: Vec<Piece>, files: Vec<Value>) -> rowver::Result<(Value, Vec
     }
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("rowver-test-{}-{n}-packed.rvr", std::process::id()));
-    let rows = Rows { samples, files, entry: Source::Values(Values::Flat(array(&entry))), chunk_rows: 65_536 };
-    let columns = columns.into_iter().map(|(name, values)| (name, Source::Values(values))).collect();
+    let path =
+        std::env::temp_dir().join(format!("rowver-test-{}-{n}-packed.rvr", std::process::id()));
+    let rows = Rows {
+        samples,
+        files,
+        entry: Source::Values(Values::Flat(array(&entry))),
+        chunk_rows: 65_536,
+    };
+    let columns = columns
+        .into_iter()
+        .map(|(name, values)| (name, Source::Values(values)))
+        .collect();
     let (data, laid) = stream(rows, columns, 2, &path)?;
     write_laid(&json!({}), laid)?;
     let bytes = std::fs::read(&path)?;
@@ -96,7 +134,11 @@ pub fn pack(pieces: Vec<Piece>, files: Vec<Value>) -> rowver::Result<(Value, Vec
     let at = |record: &Value, key: &str| record[key].as_u64().unwrap() as usize;
     // An offsets array list columns share (FORMAT §4) is recorded by each, and held once.
     let mut seen = std::collections::HashSet::new();
-    let arrays = records.into_iter().filter(|r| at(r, "size") == 0 || seen.insert(at(r, "at"))).map(|r| rest[at(r, "at")..at(r, "at") + at(r, "size")].to_vec()).collect();
+    let arrays = records
+        .into_iter()
+        .filter(|r| at(r, "size") == 0 || seen.insert(at(r, "at")))
+        .map(|r| rest[at(r, "at")..at(r, "at") + at(r, "size")].to_vec())
+        .collect();
     Ok((data, arrays))
 }
 
@@ -107,7 +149,11 @@ pub fn golden() -> Vec<u8> {
         let (header, arrays) = rebuilt(10.);
         return to_bytes(&header, &arrays);
     }
-    std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/conformance/rvr/valid/fixture.rvr")).unwrap()
+    std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/conformance/rvr/valid/fixture.rvr"
+    ))
+    .unwrap()
 }
 
 /// The columns over the rows `from..to`, with a chosen first muon.
@@ -172,7 +218,10 @@ const BRANCHES: [(&str, &str, Shape); 12] = [
 
 /// The fixture's recipe: every column copied from its branch.
 pub fn recipe() -> String {
-    let names: Vec<String> = BRANCHES.iter().map(|(name, _, _)| format!("{name:?}")).collect();
+    let names: Vec<String> = BRANCHES
+        .iter()
+        .map(|(name, _, _)| format!("{name:?}"))
+        .collect();
     format!("format = \"rvr-recipe\"\nversion = 1\ntitle = \"Synthetic reader test: π and μ\"\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [{}]\n\n[totals]\n\n[derived]\n", names.join(", "))
 }
 
@@ -225,7 +274,17 @@ pub fn lock() -> String {
 
 /// The fixture's lock with `edit` made to it, written as `rvr samples resolve` writes one.
 pub fn lock_with(edit: impl Fn(&mut Lock)) -> String {
-    let list = Branches::new(BRANCHES.iter().map(|(name, kind, shape)| Branch { name: (*name).into(), kind: (*kind).into(), shape: *shape, why: None }).collect());
+    let list = Branches::new(
+        BRANCHES
+            .iter()
+            .map(|(name, kind, shape)| Branch {
+                name: (*name).into(),
+                kind: (*kind).into(),
+                shape: *shape,
+                why: None,
+            })
+            .collect(),
+    );
     let samples = rowver::study::samples::read(SAMPLES).unwrap();
     let locked = |at: usize, files: Vec<File>| {
         let made = &samples[at];
@@ -244,7 +303,14 @@ pub fn lock_with(edit: impl Fn(&mut Lock)) -> String {
         }
         .planned(made.events)
     };
-    let a = locked(0, vec![file("./fixture-a.root", 1, 10), file("./fixture-empty.root", 2, 10), file("./fixture-a2.root", 3, 10)]);
+    let a = locked(
+        0,
+        vec![
+            file("./fixture-a.root", 1, 10),
+            file("./fixture-empty.root", 2, 10),
+            file("./fixture-a2.root", 3, 10),
+        ],
+    );
     let b = locked(1, vec![file("./fixture-b.root", 4, 20)]);
     assert_eq!(b.events, Events::Random { n: 4, seed: 7 });
     let mut lock = Lock {
@@ -279,22 +345,35 @@ pub fn variant(seed: u64) -> (Value, Vec<Vec<u8>>) {
     rebuilt_with(10., Some(&mut gen::Rng::new(seed)), false)
 }
 
-fn rebuilt_with(muon: f32, mut drawn: Option<&mut gen::Rng>, rowless: bool) -> (Value, Vec<Vec<u8>>) {
+fn rebuilt_with(
+    muon: f32,
+    mut drawn: Option<&mut gen::Rng>,
+    rowless: bool,
+) -> (Value, Vec<Vec<u8>>) {
     let mut redrawn = |columns: Vec<(String, Values)>| -> Vec<(String, Values)> {
-        let Some(rng) = drawn.as_deref_mut() else { return columns };
+        let Some(rng) = drawn.as_deref_mut() else {
+            return columns;
+        };
         columns
             .into_iter()
             .map(|(name, values)| {
                 let values = match values {
                     kept if name == "nlep" => kept,
                     Values::Flat(v) => Values::Flat(gen::values(rng, &v.kind, v.count)),
-                    Values::Jagged { counts, content } => Values::Jagged { content: gen::values(rng, &content.kind, content.count), counts },
+                    Values::Jagged { counts, content } => Values::Jagged {
+                        content: gen::values(rng, &content.kind, content.count),
+                        counts,
+                    },
                 };
                 (name, values)
             })
             .collect()
     };
-    let (a, b) = if rowless { ((0, 0), (0, 0)) } else { ((0, 3), (3, 5)) };
+    let (a, b) = if rowless {
+        ((0, 0), (0, 0))
+    } else {
+        ((0, 3), (3, 5))
+    };
     let pieces = vec![
         Piece {
             name: "A".into(),
@@ -323,7 +402,8 @@ fn rebuilt_with(muon: f32, mut drawn: Option<&mut gen::Rng>, rowless: bool) -> (
     for sample in &lock.samples {
         let mut records = serde_json::Map::new();
         for file in &sample.files {
-            let mut record = json!({"tree": sample.tree, "uuid": file.uuid, "entries": file.entries});
+            let mut record =
+                json!({"tree": sample.tree, "uuid": file.uuid, "entries": file.entries});
             if let Some(stop) = file.stop {
                 record["stop"] = stop.into();
             }
@@ -335,7 +415,10 @@ fn rebuilt_with(muon: f32, mut drawn: Option<&mut gen::Rng>, rowless: bool) -> (
         let mut metadata = sample.metadata.clone();
         metadata.insert("events_read".into(), sample.events_read.into());
         metadata.insert("events_total".into(), sample.events_total.into());
-        made_files.insert(sample.name.clone(), json!({"events": sample.events.record(), "files": records, "metadata": metadata}));
+        made_files.insert(
+            sample.name.clone(),
+            json!({"events": sample.events.record(), "files": records, "metadata": metadata}),
+        );
     }
     let names: Vec<String> = columns(0, 5, muon)
         .into_iter()
@@ -369,9 +452,19 @@ fn rebuilt_with(muon: f32, mut drawn: Option<&mut gen::Rng>, rowless: bool) -> (
 /// A header with its sample columns made again from its metadata, and `made` sealed with its new
 /// checksum, so that only the change made to it is wrong.
 pub fn sealed(mut header: Value) -> Value {
-    let names: Vec<String> = header["made"]["recipe"]["columns"].as_array().into_iter().flatten().filter_map(|n| n.as_str().map(str::to_owned)).collect();
+    let names: Vec<String> = header["made"]["recipe"]["columns"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|n| n.as_str().map(str::to_owned))
+        .collect();
     let taken: Vec<&str> = names.iter().map(String::as_str).collect();
-    let samples: Vec<String> = header["data"]["samples"].as_array().into_iter().flatten().filter_map(|s| s["name"].as_str().map(str::to_owned)).collect();
+    let samples: Vec<String> = header["data"]["samples"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s["name"].as_str().map(str::to_owned))
+        .collect();
     let samples: Vec<&str> = samples.iter().map(String::as_str).collect();
     if let Ok(cols) = sample_cols(&samples, &header["made"]["files"], &taken) {
         header["data"]["sample_cols"] = cols.into();
@@ -425,4 +518,3 @@ pub fn parts(bytes: &[u8]) -> (&[u8], &[u8]) {
     let start = n - 12 - length;
     (&bytes[start..n - 12], &bytes[8..start])
 }
-

@@ -3,7 +3,9 @@
 //! columns over its kept events, which go to the spool. A file that cannot be read is a hole; a
 //! value the recipe cannot take in a chosen or kept event stops the press (a data error).
 
-use crate::gather::{add_to, derived_tried, gather, held_lengths, kept, put_back, spooled, stored, summed, Gathered};
+use crate::gather::{
+    add_to, derived_tried, gather, held_lengths, kept, put_back, spooled, stored, summed, Gathered,
+};
 use crate::held::{spans, Held};
 use crate::holes::{fault_of, Failed, Fault};
 use crate::open::{entries as located, hint, mentioned, open, Branches, Reach};
@@ -26,7 +28,11 @@ pub(crate) const CHUNK: u64 = 50_000;
 /// `CHUNK`; in a debug build, `RVR_RUN` when set (and said, once), so the tests can press in runs of any size.
 fn chunk() -> u64 {
     #[cfg(debug_assertions)]
-    if let Some(n) = std::env::var("RVR_RUN").ok().and_then(|n| n.parse().ok()).filter(|n| *n > 0) {
+    if let Some(n) = std::env::var("RVR_RUN")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .filter(|n| *n > 0)
+    {
         static SAID: std::sync::Once = std::sync::Once::new();
         SAID.call_once(|| eprintln!("rvr (a debug build): RVR_RUN: runs of {n} entries"));
         return n;
@@ -107,20 +113,30 @@ fn runs(from: u64, to: u64, chosen: Option<&[u64]>, gap: u64, chunk: u64) -> Vec
 /// Whether reading `input` (to `entries`) reads its other trees for their totals: a read of the
 /// whole file, or of a file whose record has none yet; never building on an earlier file.
 pub(crate) fn whole(input: &Input, entries: u64) -> bool {
-    input.kept.is_none() && (input.unsummed || input.ranges.as_ref().is_none_or(|r| matches!(r[..], [(0, to, _)] if to >= entries)))
+    input.kept.is_none()
+        && (input.unsummed
+            || input
+                .ranges
+                .as_ref()
+                .is_none_or(|r| matches!(r[..], [(0, to, _)] if to >= entries)))
 }
 
 /// How many entries of `[first, last)` an input's choice chose: all, or a random choice's.
 pub(crate) fn chosen_in(input: &Input, first: u64, last: u64) -> u64 {
     match &input.chosen {
-        Some(chosen) => (chosen.partition_point(|e| *e < last) - chosen.partition_point(|e| *e < first)) as u64,
+        Some(chosen) => {
+            (chosen.partition_point(|e| *e < last) - chosen.partition_point(|e| *e < first)) as u64
+        }
         None => last.saturating_sub(first),
     }
 }
 
 /// How many entries an input's choice chose in `holes`, each `[first, last)`.
 pub(crate) fn missed(input: &Input, holes: &[(u64, u64)]) -> u64 {
-    holes.iter().map(|(first, last)| chosen_in(input, *first, *last)).sum()
+    holes
+        .iter()
+        .map(|(first, last)| chosen_in(input, *first, *last))
+        .sum()
 }
 
 /// The entries the choice reads of an input's file, by the lock: below `stop`, or all.
@@ -131,14 +147,18 @@ fn limit(input: &Input) -> u64 {
 /// How many entries an input reads: of what its choice reads, or for a fill of the holes asked.
 pub(crate) fn chosen_of(input: &Input) -> u64 {
     match &input.ranges {
-        Some(ranges) => ranges.iter().map(|(first, last, _)| chosen_in(input, *first, *last)).sum(),
+        Some(ranges) => ranges
+            .iter()
+            .map(|(first, last, _)| chosen_in(input, *first, *last))
+            .sum(),
         None => chosen_in(input, 0, limit(input)),
     }
 }
 
 /// An input's record as the lock gives it: its tree, UUID and entries, and what the choice reads of it.
 fn planned(input: &Input) -> Value {
-    let mut record = json!({"tree": input.tree, "uuid": input.file.uuid, "entries": input.file.entries});
+    let mut record =
+        json!({"tree": input.tree, "uuid": input.file.uuid, "entries": input.file.entries});
     if let Some(stop) = input.file.stop {
         record["stop"] = stop.into();
     }
@@ -166,7 +186,6 @@ fn hole((first, last, failed): &(u64, u64, Failed)) -> Value {
     json!({"entries": [first, last], "kind": failed.fault.kind(), "why": failed.why})
 }
 
-
 /// A hole's entries, as `[first, last)`.
 pub(crate) fn range(hole: &Value) -> (u64, u64) {
     let entry = |at: usize| hole["entries"][at].as_u64().unwrap_or(0);
@@ -175,7 +194,12 @@ pub(crate) fn range(hole: &Value) -> (u64, u64) {
 
 /// The holes a file's record holds, as `[first, last)`.
 pub(crate) fn ranges(record: &Value) -> Vec<(u64, u64)> {
-    record["holes"].as_array().into_iter().flatten().map(range).collect()
+    record["holes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(range)
+        .collect()
 }
 
 /// `text` ending as a sentence does.
@@ -188,15 +212,28 @@ pub(crate) fn sentence(text: &str) -> String {
 
 /// What a file gave when none of it was read: its record, and the entries chosen in its holes.
 fn nothing(recipe: &Recipe, record: Value, missing: u64) -> Taken {
-    Taken { rows: 0, record, entries: 0, missing, cutflow: vec![0; recipe.keep.len()] }
+    Taken {
+        rows: 0,
+        record,
+        entries: 0,
+        missing,
+        cutflow: vec![0; recipe.keep.len()],
+    }
 }
 
 /// A file that cannot be opened: one hole of every entry chosen of what it reads. One of no
 /// entries, which holds the totals once read, has none to make a hole of, and ends the press.
-fn unread(shared: &Shared, input: &Input, to_read: &[(u64, u64, usize)], failed: Failed) -> Result<Taken, Failed> {
+fn unread(
+    shared: &Shared,
+    input: &Input,
+    to_read: &[(u64, u64, usize)],
+    failed: Failed,
+) -> Result<Taken, Failed> {
     let (at, chosen) = (&input.file.at, chosen_of(input));
     let failed = hole_or_end(failed, input)?;
-    if !shared.recipe.totals.is_empty() && rowver::rvr::read_file(chosen, chosen, input.chosen.is_some()) {
+    if !shared.recipe.totals.is_empty()
+        && rowver::rvr::read_file(chosen, chosen, input.chosen.is_some())
+    {
         let why = match failed.fault {
             Fault::Gone => format!("{at} no longer exists: put it back (if it moved, run rvr samples resolve samples.toml again)"),
             _ if failed.why.contains(at.as_str()) => failed.why,
@@ -204,8 +241,12 @@ fn unread(shared: &Shared, input: &Input, to_read: &[(u64, u64, usize)], failed:
         };
         return Err(Failed::new(Fault::Needed, format!("{} The press reads it for the recipe's [totals] (each file it reads holds them, as a total over another of its trees holds that tree's sum), and as samples.lock gives it no entries, there is none to make a hole of: it cannot be left out.", sentence(&why))));
     }
-    let ranges = to_read.iter().filter(|(from, to, _)| chosen_in(input, *from, *to) > 0);
-    let holes: Vec<Value> = ranges.map(|&(from, to, _)| hole(&(from, to, failed.clone()))).collect();
+    let ranges = to_read
+        .iter()
+        .filter(|(from, to, _)| chosen_in(input, *from, *to) > 0);
+    let holes: Vec<Value> = ranges
+        .map(|&(from, to, _)| hole(&(from, to, failed.clone())))
+        .collect();
     let mut record = planned(input);
     if !holes.is_empty() {
         record["holes"] = holes.into();
@@ -217,8 +258,17 @@ fn unread(shared: &Shared, input: &Input, to_read: &[(u64, u64, usize)], failed:
 /// (its entries, and the branches the recipe reads as its sample's list gives them).
 fn opened(shared: &Shared, input: &Input) -> Result<(RootFile<Held>, Tree, u64), Failed> {
     let at = &input.file.at;
-    let then = if input.kept.is_some() { "press again" } else { "run rvr press --fill" };
-    let file = open(&shared.reach, &input.file, &input.read_at, (then, "rvr press"))?;
+    let then = if input.kept.is_some() {
+        "press again"
+    } else {
+        "run rvr press --fill"
+    };
+    let file = open(
+        &shared.reach,
+        &input.file,
+        &input.read_at,
+        (then, "rvr press"),
+    )?;
     let tree = file.tree_at(&input.tree).map_err(|e| match e {
         hep_root::Error::KeyNotFound(_) => Failed::new(Fault::Changed, format!("{at}: it has no tree {:?}, which samples.lock recorded. Run rvr samples resolve samples.toml and review the new lock.", input.tree)),
         e => Failed::new(fault_of(&e, file.source().inner().seen()), format!("{at}: its tree {:?}: {e}", input.tree)),
@@ -245,7 +295,12 @@ fn opened(shared: &Shared, input: &Input) -> Result<(RootFile<Held>, Tree, u64),
 /// Each total over another tree of the file, summed over every entry of that tree. A file without
 /// that tree, or without a branch it reads, or with one of a type rvr cannot read, stops the
 /// press (a data error); a failure reading its bytes is the file's, a hole.
-fn other_totals(shared: &Shared, input: &Input, file: &RootFile<Held>, sample: &BTreeMap<String, Constant>) -> Result<Vec<(String, f64)>, Failed> {
+fn other_totals(
+    shared: &Shared,
+    input: &Input,
+    file: &RootFile<Held>,
+    sample: &BTreeMap<String, Constant>,
+) -> Result<Vec<(String, f64)>, Failed> {
     let at = &input.file.at;
     let seen = || file.source().inner().seen();
     let mut sums = Vec::new();
@@ -260,7 +315,9 @@ fn other_totals(shared: &Shared, input: &Input, file: &RootFile<Held>, sample: &
         let (defines, branches) = (BTreeMap::new(), Branches::over(file, &other, 0, n as i64));
         let mut sum = 0.0;
         let mut work = |run: &dyn Columns, from: usize, to: usize| {
-            let array = Scope::new(run, sample, &defines).evaluate(&total.value).and_then(|v| rvr_recipe::per_event(v, to - from));
+            let array = Scope::new(run, sample, &defines)
+                .evaluate(&total.value)
+                .and_then(|v| rvr_recipe::per_event(v, to - from));
             add_to(&mut sum, &total.name, array)
         };
         if let Err((why, part)) = rvr_recipe::over_runs(&branches, n, &mut work) {
@@ -281,7 +338,12 @@ fn other_totals(shared: &Shared, input: &Input, file: &RootFile<Held>, sample: &
 }
 
 /// Each stored column read, worked out over the events of `scope` and gathered.
-fn columns(shared: &Shared, scope: &Scope, events: usize, gathered: &mut [Gathered]) -> rvr_recipe::Result<()> {
+fn columns(
+    shared: &Shared,
+    scope: &Scope,
+    events: usize,
+    gathered: &mut [Gathered],
+) -> rvr_recipe::Result<()> {
     for ((column, _), gathered) in shared.outputs.iter().zip(gathered) {
         let array = stored(shared.recipe, scope, column, events)?;
         gather(gathered, array).map_err(rvr_recipe::problem)?;
@@ -290,7 +352,9 @@ fn columns(shared: &Shared, scope: &Scope, events: usize, gathered: &mut [Gather
 }
 
 /// An error over picked rows as one over the run's rows: its event, and the rows of its part.
-pub(crate) fn unpicked(positions: &[usize]) -> impl Fn((rvr_recipe::Error, Range<usize>)) -> (rvr_recipe::Error, Range<usize>) + '_ {
+pub(crate) fn unpicked(
+    positions: &[usize],
+) -> impl Fn((rvr_recipe::Error, Range<usize>)) -> (rvr_recipe::Error, Range<usize>) + '_ {
     move |(error, part)| {
         let event = error.1.map(|row| positions[row]);
         let error = error.of_event(event);
@@ -304,7 +368,15 @@ pub(crate) fn unpicked(positions: &[usize]) -> impl Fn((rvr_recipe::Error, Range
 
 /// One run's chosen entries (`chosen`, its rows) through the totals and the cuts, and its kept
 /// events' stored columns into `gathered`: the rows it kept. A run is kept whole or not at all.
-fn evaluated(shared: &Shared, sample: &BTreeMap<String, Constant>, branches: &dyn Columns, rows: usize, chosen: &[usize], gathered: &mut [Gathered], read: &mut Read) -> Result<Vec<usize>, (rvr_recipe::Error, Range<usize>)> {
+fn evaluated(
+    shared: &Shared,
+    sample: &BTreeMap<String, Constant>,
+    branches: &dyn Columns,
+    rows: usize,
+    chosen: &[usize],
+    gathered: &mut [Gathered],
+    read: &mut Read,
+) -> Result<Vec<usize>, (rvr_recipe::Error, Range<usize>)> {
     let before = held_lengths(gathered);
     let done = worked_out(shared, sample, branches, rows, chosen, gathered, read);
     if done.is_err() {
@@ -314,7 +386,15 @@ fn evaluated(shared: &Shared, sample: &BTreeMap<String, Constant>, branches: &dy
 }
 
 /// `evaluated`, before what a run that failed gathered is put back.
-fn worked_out(shared: &Shared, sample: &BTreeMap<String, Constant>, branches: &dyn Columns, rows: usize, chosen: &[usize], gathered: &mut [Gathered], read: &mut Read) -> Result<Vec<usize>, (rvr_recipe::Error, Range<usize>)> {
+fn worked_out(
+    shared: &Shared,
+    sample: &BTreeMap<String, Constant>,
+    branches: &dyn Columns,
+    rows: usize,
+    chosen: &[usize],
+    gathered: &mut [Gathered],
+    read: &mut Read,
+) -> Result<Vec<usize>, (rvr_recipe::Error, Range<usize>)> {
     let recipe = shared.recipe;
     let (mut sums, mut counted) = (read.totals.clone(), vec![0_u64; recipe.keep.len()]);
     let picked = Picked::new(branches, chosen, rows);
@@ -323,7 +403,8 @@ fn worked_out(shared: &Shared, sample: &BTreeMap<String, Constant>, branches: &d
         let mut work = |run: &dyn Columns, from: usize, to: usize| {
             let scope = Scope::new(run, sample, &recipe.defines);
             let (part, mut more) = (held_lengths(gathered), sums.clone());
-            let done = summed(recipe, &scope, to - from, &mut more).and_then(|()| columns(shared, &scope, to - from, gathered));
+            let done = summed(recipe, &scope, to - from, &mut more)
+                .and_then(|()| columns(shared, &scope, to - from, gathered));
             match done {
                 Ok(()) => sums = more,
                 Err(_) => put_back(gathered, &part),
@@ -338,38 +419,70 @@ fn worked_out(shared: &Shared, sample: &BTreeMap<String, Constant>, branches: &d
         let mut work = |run: &dyn Columns, from: usize, to: usize| {
             let scope = Scope::new(run, sample, &recipe.defines);
             let (mut more, mut cut) = (sums.clone(), vec![0_u64; recipe.keep.len()]);
-            let keep = summed(recipe, &scope, to - from, &mut more).and_then(|()| kept(recipe, &scope, vec![true; to - from], &mut cut))?;
+            let keep = summed(recipe, &scope, to - from, &mut more)
+                .and_then(|()| kept(recipe, &scope, vec![true; to - from], &mut cut))?;
             sums = more;
-            counted.iter_mut().zip(cut).for_each(|(all, here)| *all += here);
+            counted
+                .iter_mut()
+                .zip(cut)
+                .for_each(|(all, here)| *all += here);
             if (from, to) == (0, chosen.len()) {
                 known = scope.worked_out();
             }
             Ok(keep)
         };
-        let keep = rvr_recipe::over_runs(&picked, chosen.len(), &mut work).map_err(unpicked(chosen))?.concat();
+        let keep = rvr_recipe::over_runs(&picked, chosen.len(), &mut work)
+            .map_err(unpicked(chosen))?
+            .concat();
         // The kept events, by place among the chosen ones: each branch, and each defined name the
         // cuts worked out, is picked down to them from what the cuts had, not worked out again.
-        let kept_at: Vec<usize> = keep.iter().enumerate().filter(|(_, keep)| **keep).map(|(at, _)| at).collect();
+        let kept_at: Vec<usize> = keep
+            .iter()
+            .enumerate()
+            .filter(|(_, keep)| **keep)
+            .map(|(at, _)| at)
+            .collect();
         let kept_rows: Vec<usize> = kept_at.iter().map(|at| chosen[*at]).collect();
-        let known: Vec<(String, rvr_recipe::Array)> = known.into_iter().map(|(name, array)| (name, array.picked(&kept_at))).collect();
+        let known: Vec<(String, rvr_recipe::Array)> = known
+            .into_iter()
+            .map(|(name, array)| (name, array.picked(&kept_at)))
+            .collect();
         let view = Picked::new(&picked, &kept_at, chosen.len());
         let mut work = |run: &dyn Columns, from: usize, to: usize| {
             let part = held_lengths(gathered);
             let whole = (from, to) == (0, kept_at.len());
-            let seeded = known.iter().map(|(name, array)| (name.clone(), if whole { array.clone() } else { array.rows(from, to) }));
-            let done = columns(shared, &Scope::new(run, sample, &recipe.defines).knowing(seeded), to - from, gathered);
+            let seeded = known.iter().map(|(name, array)| {
+                (
+                    name.clone(),
+                    if whole {
+                        array.clone()
+                    } else {
+                        array.rows(from, to)
+                    },
+                )
+            });
+            let done = columns(
+                shared,
+                &Scope::new(run, sample, &recipe.defines).knowing(seeded),
+                to - from,
+                gathered,
+            );
             if done.is_err() {
                 put_back(gathered, &part);
             }
             done
         };
         if !kept_rows.is_empty() {
-            rvr_recipe::over_runs(&view, kept_rows.len(), &mut work).map_err(unpicked(&kept_rows))?;
+            rvr_recipe::over_runs(&view, kept_rows.len(), &mut work)
+                .map_err(unpicked(&kept_rows))?;
         }
         kept_rows
     };
     read.totals = sums;
-    read.cutflow.iter_mut().zip(counted).for_each(|(all, here)| *all += here);
+    read.cutflow
+        .iter_mut()
+        .zip(counted)
+        .for_each(|(all, here)| *all += here);
     Ok(kept_rows)
 }
 
@@ -384,16 +497,46 @@ struct Read {
 /// Read a file's ranges a run at a time, keeping the events the cuts pass and sending their values
 /// to the spool, and counting each run's entries in `progressed` as the bars are told of it.
 #[allow(clippy::too_many_arguments)]
-fn read_runs(shared: &Shared, input: &Input, file: &RootFile<Held>, tree: &Tree, sample: &BTreeMap<String, Constant>, entries: u64, to_read: &[(u64, u64, usize)], progressed: &mut u64) -> Result<Read, Failed> {
+fn read_runs(
+    shared: &Shared,
+    input: &Input,
+    file: &RootFile<Held>,
+    tree: &Tree,
+    sample: &BTreeMap<String, Constant>,
+    entries: u64,
+    to_read: &[(u64, u64, usize)],
+    progressed: &mut u64,
+) -> Result<Read, Failed> {
     let (recipe, at) = (shared.recipe, &input.file.at);
-    let names: Vec<String> = tree.walk().into_iter().map(|(_, b)| b.name.clone()).collect();
+    let names: Vec<String> = tree
+        .walk()
+        .into_iter()
+        .map(|(_, b)| b.name.clone())
+        .collect();
     let remote = at.contains("://");
     let wanted: Vec<&hep_root::Branch> = match remote {
-        true => tree.walk().into_iter().map(|(_, b)| b).filter(|b| hep_root::columns::Kind::of(b).is_ok() && mentioned(shared.mentions, sample, &b.name)).collect(),
+        true => tree
+            .walk()
+            .into_iter()
+            .map(|(_, b)| b)
+            .filter(|b| {
+                hep_root::columns::Kind::of(b).is_ok()
+                    && mentioned(shared.mentions, sample, &b.name)
+            })
+            .collect(),
         false => Vec::new(),
     };
-    let mut gathered: Vec<Gathered> = shared.outputs.iter().map(|((name, _), kind)| Gathered::new(name, *kind)).collect();
-    let mut read = Read { rows: 0, holes: Vec::new(), cutflow: vec![0; recipe.keep.len()], totals: vec![0.0; recipe.totals.iter().filter(|t| t.tree.is_none()).count()] };
+    let mut gathered: Vec<Gathered> = shared
+        .outputs
+        .iter()
+        .map(|((name, _), kind)| Gathered::new(name, *kind))
+        .collect();
+    let mut read = Read {
+        rows: 0,
+        holes: Vec::new(),
+        cutflow: vec![0; recipe.keep.len()],
+        totals: vec![0.0; recipe.totals.iter().filter(|t| t.tree.is_none()).count()],
+    };
     let mut entry: Vec<i64> = Vec::new();
     let mut tried = recipe.derived.is_empty();
     let gap = if remote { chunk() } else { GAP };
@@ -401,14 +544,19 @@ fn read_runs(shared: &Shared, input: &Input, file: &RootFile<Held>, tree: &Tree,
     let picks = input.kept.as_deref().or(input.chosen.as_deref());
     'ranges: for (at_range, &(from, to, order)) in to_read.iter().enumerate() {
         let (to, mut piece, mut ended) = (to.min(entries), 0, false);
-        let here = picks.map(|c| &c[c.partition_point(|e| *e < from)..c.partition_point(|e| *e < to)]);
+        let here =
+            picks.map(|c| &c[c.partition_point(|e| *e < from)..c.partition_point(|e| *e < to)]);
         for (first, last) in runs(from, to, here, gap, chunk()) {
             if shared.reach.watch.stop.load(Ordering::Acquire) {
                 return Err(Failed::new(Fault::Stopped, STOPPED));
             }
             let count = (last - first) as usize;
             let chosen: Vec<usize> = match picks {
-                Some(picks) => picks[picks.partition_point(|e| *e < first)..picks.partition_point(|e| *e < last)].iter().map(|e| (e - first) as usize).collect(),
+                Some(picks) => picks
+                    [picks.partition_point(|e| *e < first)..picks.partition_point(|e| *e < last)]
+                    .iter()
+                    .map(|e| (e - first) as usize)
+                    .collect(),
                 None => (0..count).collect(),
             };
             let in_run = chosen_in(input, first, last);
@@ -420,14 +568,25 @@ fn read_runs(shared: &Shared, input: &Input, file: &RootFile<Held>, tree: &Tree,
             if remote {
                 // Fetching ahead only saves round trips; a branch that cannot be fetched is said
                 // when an expression asks for it. What failed before the run's reads says nothing.
-                let _ = file.source().inner().hold(spans(&wanted, first as i64, last as i64));
+                let _ = file
+                    .source()
+                    .inner()
+                    .hold(spans(&wanted, first as i64, last as i64));
                 if let Some(seen) = file.source().inner().seen() {
                     seen.clear();
                 }
             }
             let before = held_lengths(&gathered);
             let branches = Branches::over(file, tree, first as i64, last as i64);
-            let kept_rows = match evaluated(shared, sample, &branches, count, &chosen, &mut gathered, &mut read) {
+            let kept_rows = match evaluated(
+                shared,
+                sample,
+                &branches,
+                count,
+                &chosen,
+                &mut gathered,
+                &mut read,
+            ) {
                 Ok(kept_rows) => kept_rows,
                 Err((error, part)) => {
                     // A branch that could not be read is the file's; a value one cannot take is the data's.
@@ -436,11 +595,21 @@ fn read_runs(shared: &Shared, input: &Input, file: &RootFile<Held>, tree: &Tree,
                         None if error.1.is_some() => Fault::Data,
                         None => Fault::Bug,
                     };
-                    let mut failed = Failed::new(fault, format!("{at}, tree {}, {}: {}{}", input.tree, located(&error, first, &part), error.0, hint(&error, &names, recipe)));
+                    let mut failed = Failed::new(
+                        fault,
+                        format!(
+                            "{at}, tree {}, {}: {}{}",
+                            input.tree,
+                            located(&error, first, &part),
+                            error.0,
+                            hint(&error, &names, recipe)
+                        ),
+                    );
                     // A local file that cannot be opened now at all (a mount gone) is not the file's
                     // fault; one that can, but not read there, is damaged there.
                     if !remote && matches!(fault, Fault::Damaged | Fault::Save) {
-                        let opens = resolve::local(at, shared.reach.dir).is_ok_and(|path| std::fs::File::open(path).is_ok());
+                        let opens = resolve::local(at, shared.reach.dir)
+                            .is_ok_and(|path| std::fs::File::open(path).is_ok());
                         failed.fault = if opens { Fault::Damaged } else { Fault::Save };
                     }
                     let failed = hole_or_end(failed, input)?;
@@ -450,8 +619,12 @@ fn read_runs(shared: &Shared, input: &Input, file: &RootFile<Held>, tree: &Tree,
                         read.holes.push((first, last, failed));
                         continue;
                     }
-                    let rest = to_read[at_range + 1..].iter().map(|&(from, to, _)| (from, to.min(entries), failed.clone()));
-                    let rest: Vec<_> = rest.filter(|(from, to, _)| chosen_in(input, *from, *to) > 0).collect();
+                    let rest = to_read[at_range + 1..]
+                        .iter()
+                        .map(|&(from, to, _)| (from, to.min(entries), failed.clone()));
+                    let rest: Vec<_> = rest
+                        .filter(|(from, to, _)| chosen_in(input, *from, *to) > 0)
+                        .collect();
                     read.holes.push((first, to, failed));
                     read.holes.extend(rest);
                     ended = true;
@@ -462,9 +635,23 @@ fn read_runs(shared: &Shared, input: &Input, file: &RootFile<Held>, tree: &Tree,
             // that a value one cannot take stops the press now, not once every file is read.
             if !tried && !kept_rows.is_empty() {
                 tried = true;
-                if shared.tried.lock().unwrap_or_else(|e| e.into_inner()).insert(input.sample) {
-                    let kept_entries: Vec<u64> = kept_rows.iter().map(|row| first + *row as u64).collect();
-                    derived_tried(recipe, shared.derived, &gathered, &before, sample, &kept_entries).map_err(|mut failed| {
+                if shared
+                    .tried
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(input.sample)
+                {
+                    let kept_entries: Vec<u64> =
+                        kept_rows.iter().map(|row| first + *row as u64).collect();
+                    derived_tried(
+                        recipe,
+                        shared.derived,
+                        &gathered,
+                        &before,
+                        sample,
+                        &kept_entries,
+                    )
+                    .map_err(|mut failed| {
                         failed.why = format!("{at}, tree {}, {}", input.tree, failed.why);
                         failed
                     })?;
@@ -474,42 +661,88 @@ fn read_runs(shared: &Shared, input: &Input, file: &RootFile<Held>, tree: &Tree,
             entry.extend(kept_rows.iter().map(|row| (first + *row as u64) as i64));
             shared.counts.ran(input.sample, in_run, kept_now as u64);
             *progressed += in_run;
-            let held: usize = gathered.iter().map(|g| g.bytes.len() + g.counts.as_ref().map_or(0, |c| c.len() * 8)).sum();
+            let held: usize = gathered
+                .iter()
+                .map(|g| g.bytes.len() + g.counts.as_ref().map_or(0, |c| c.len() * 8))
+                .sum();
             if held + entry.len() * 8 >= SPOOLED {
-                spool(shared, input, &mut gathered, &mut entry, &mut read.rows, (order, piece))?;
+                spool(
+                    shared,
+                    input,
+                    &mut gathered,
+                    &mut entry,
+                    &mut read.rows,
+                    (order, piece),
+                )?;
                 piece += 1;
             }
         }
         if !entry.is_empty() {
-            spool(shared, input, &mut gathered, &mut entry, &mut read.rows, (order, piece))?;
+            spool(
+                shared,
+                input,
+                &mut gathered,
+                &mut entry,
+                &mut read.rows,
+                (order, piece),
+            )?;
         }
         if ended {
             break 'ranges;
         }
     }
-    if input.kept.as_ref().is_some_and(|kept| kept.len() != read.rows) {
-        return Err(Failed::new(Fault::Bug, format!("{at}: {} events were read again of the {} the earlier file kept", read.rows, input.kept.as_ref().map_or(0, Vec::len))));
+    if input
+        .kept
+        .as_ref()
+        .is_some_and(|kept| kept.len() != read.rows)
+    {
+        return Err(Failed::new(
+            Fault::Bug,
+            format!(
+                "{at}: {} events were read again of the {} the earlier file kept",
+                read.rows,
+                input.kept.as_ref().map_or(0, Vec::len)
+            ),
+        ));
     }
     Ok(read)
 }
 
 /// Send what a file has gathered to the spool, after checking, building on an earlier file, that its entries are the ones it kept.
-fn spool(shared: &Shared, input: &Input, gathered: &mut [Gathered], entry: &mut Vec<i64>, rows: &mut usize, order: write::Order) -> Result<(), Failed> {
+fn spool(
+    shared: &Shared,
+    input: &Input,
+    gathered: &mut [Gathered],
+    entry: &mut Vec<i64>,
+    rows: &mut usize,
+    order: write::Order,
+) -> Result<(), Failed> {
     let at = &input.file.at;
     if let Some(kept) = &input.kept {
-        let same = kept.get(*rows..*rows + entry.len()).is_some_and(|kept| kept.iter().zip(entry.iter()).all(|(k, e)| *k as i64 == *e));
+        let same = kept
+            .get(*rows..*rows + entry.len())
+            .is_some_and(|kept| kept.iter().zip(entry.iter()).all(|(k, e)| *k as i64 == *e));
         if !same {
-            return Err(Failed::new(Fault::Bug, format!("{at}: the events read again are not the ones the earlier file kept")));
+            return Err(Failed::new(
+                Fault::Bug,
+                format!("{at}: the events read again are not the ones the earlier file kept"),
+            ));
         }
     }
     *rows += entry.len();
-    spooled(shared.spool, gathered, entry, order).map_err(|e| Failed::new(Fault::Save, format!("{at}: {e}")))
+    spooled(shared.spool, gathered, entry, order)
+        .map_err(|e| Failed::new(Fault::Save, format!("{at}: {e}")))
 }
 
 /// Read one file a run of entries at a time, keeping the events the cuts pass. A file that cannot
 /// be opened, and a run of it that cannot be read, are holes; the error is what ends the press (a
 /// data error, a failure that is not the file's own, or another file's).
-pub(crate) fn take(shared: &Shared, sample: &BTreeMap<String, Constant>, input: &Input, progressed: &mut u64) -> Result<Taken, Failed> {
+pub(crate) fn take(
+    shared: &Shared,
+    sample: &BTreeMap<String, Constant>,
+    input: &Input,
+    progressed: &mut u64,
+) -> Result<Taken, Failed> {
     let recipe = shared.recipe;
     // A file a random choice takes nothing from is recorded from the lock, not opened.
     if input.chosen.as_ref().is_some_and(Vec::is_empty) {
@@ -521,10 +754,19 @@ pub(crate) fn take(shared: &Shared, sample: &BTreeMap<String, Constant>, input: 
     // A file the earlier one could not open, chose nothing of, or kept no event of, is not opened again.
     let none_kept = input.kept.as_ref().is_some_and(Vec::is_empty);
     let carried_missed = missed(input, &carried);
-    if let (Some(before), true) = (&input.before, none_kept || carried_missed == chosen_in(input, 0, limit)) {
-        return Ok(Taken { entries: chosen_in(input, 0, limit) - carried_missed, ..nothing(recipe, before.clone(), carried_missed) });
+    if let (Some(before), true) = (
+        &input.before,
+        none_kept || carried_missed == chosen_in(input, 0, limit),
+    ) {
+        return Ok(Taken {
+            entries: chosen_in(input, 0, limit) - carried_missed,
+            ..nothing(recipe, before.clone(), carried_missed)
+        });
     }
-    let to_read = input.ranges.clone().unwrap_or_else(|| vec![(0, limit, input.order)]);
+    let to_read = input
+        .ranges
+        .clone()
+        .unwrap_or_else(|| vec![(0, limit, input.order)]);
     let (file, tree, entries) = match opened(shared, input) {
         Ok(opened) => opened,
         Err(failed) => return unread(shared, input, &to_read, failed),
@@ -540,7 +782,9 @@ pub(crate) fn take(shared: &Shared, sample: &BTreeMap<String, Constant>, input: 
         },
         false => Vec::new(),
     };
-    let read = read_runs(shared, input, &file, &tree, &sample, entries, &to_read, progressed)?;
+    let read = read_runs(
+        shared, input, &file, &tree, &sample, entries, &to_read, progressed,
+    )?;
     let mut record = planned(input);
     let chosen = chosen_of(input);
     // Building on an earlier file, its holes are this file's: what it kept was read around them.
@@ -553,21 +797,34 @@ pub(crate) fn take(shared: &Shared, sample: &BTreeMap<String, Constant>, input: 
             if !read.holes.is_empty() {
                 record["holes"] = read.holes.iter().map(hole).collect();
             }
-            read.holes.iter().map(|(first, last, _)| chosen_in(input, *first, *last)).sum()
+            read.holes
+                .iter()
+                .map(|(first, last, _)| chosen_in(input, *first, *last))
+                .sum()
         }
     };
     // Its totals, when it was read: over its events read, and over every entry of another tree of
     // it; building on an earlier file, which reads only the events it kept, the earlier file's.
-    let earlier = input.before.as_ref().filter(|_| input.kept.is_some()).map(|before| before["totals"].clone());
+    let earlier = input
+        .before
+        .as_ref()
+        .filter(|_| input.kept.is_some())
+        .map(|before| before["totals"].clone());
     if let Some(totals) = earlier.filter(|totals| !totals.is_null()) {
         record["totals"] = totals;
-    } else if !recipe.totals.is_empty() && input.kept.is_none() && rowver::rvr::read_file(chosen, missing, input.chosen.is_some()) {
+    } else if !recipe.totals.is_empty()
+        && input.kept.is_none()
+        && rowver::rvr::read_file(chosen, missing, input.chosen.is_some())
+    {
         let mut sums = Map::new();
         let mut events = read.totals.iter();
         for total in &recipe.totals {
             let sum = match &total.tree {
                 None => events.next().copied(),
-                Some(_) => others.iter().find(|(name, _)| *name == total.name).map(|(_, sum)| *sum),
+                Some(_) => others
+                    .iter()
+                    .find(|(name, _)| *name == total.name)
+                    .map(|(_, sum)| *sum),
             };
             if let Some(sum) = sum {
                 sums.insert(total.name.clone(), sum.into());
@@ -575,7 +832,13 @@ pub(crate) fn take(shared: &Shared, sample: &BTreeMap<String, Constant>, input: 
         }
         record["totals"] = Value::Object(sums);
     }
-    Ok(Taken { rows: read.rows, record, entries: chosen - missing, missing, cutflow: read.cutflow })
+    Ok(Taken {
+        rows: read.rows,
+        record,
+        entries: chosen - missing,
+        missing,
+        cutflow: read.cutflow,
+    })
 }
 
 #[cfg(test)]
@@ -585,13 +848,28 @@ mod tests {
     // SPEC 4.2.1
     #[test]
     fn runs_are_every_chunk_or_the_chosen_entries_cut_at_gaps() {
-        assert_eq!(runs(0, 120_000, None, GAP, CHUNK), [(0, 50_000), (50_000, 100_000), (100_000, 120_000)]);
+        assert_eq!(
+            runs(0, 120_000, None, GAP, CHUNK),
+            [(0, 50_000), (50_000, 100_000), (100_000, 120_000)]
+        );
         assert_eq!(runs(0, 0, None, GAP, CHUNK), []);
-        assert_eq!(runs(70_000, 125_000, None, GAP, CHUNK), [(70_000, 120_000), (120_000, 125_000)]);
+        assert_eq!(
+            runs(70_000, 125_000, None, GAP, CHUNK),
+            [(70_000, 120_000), (120_000, 125_000)]
+        );
         let chosen = [3, 10, 5_000, 5_001, 60_000];
-        assert_eq!(runs(0, 70_000, Some(&chosen), GAP, CHUNK), [(3, 11), (5_000, 5_002), (60_000, 60_001)]);
-        assert_eq!(runs(0, 70_000, Some(&chosen), CHUNK, CHUNK), [(3, 5_002), (60_000, 60_001)]);
+        assert_eq!(
+            runs(0, 70_000, Some(&chosen), GAP, CHUNK),
+            [(3, 11), (5_000, 5_002), (60_000, 60_001)]
+        );
+        assert_eq!(
+            runs(0, 70_000, Some(&chosen), CHUNK, CHUNK),
+            [(3, 5_002), (60_000, 60_001)]
+        );
         let dense: Vec<u64> = (0..120_000).step_by(10).collect();
-        assert_eq!(runs(0, 120_000, Some(&dense), GAP, CHUNK), [(0, 49_991), (50_000, 99_991), (100_000, 119_991)]);
+        assert_eq!(
+            runs(0, 120_000, Some(&dense), GAP, CHUNK),
+            [(0, 49_991), (50_000, 99_991), (100_000, 119_991)]
+        );
     }
 }

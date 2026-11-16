@@ -30,7 +30,8 @@ pub const MAGIC: &[u8; 8] = b"\x89RVR\r\n\x1a\n";
 pub const HOLE_KINDS: [&str; 5] = ["unreachable", "damaged", "gone", "changed", "refused"];
 
 /// What every refusal of a file's own facts says to do.
-pub(crate) const MEND: &str = "press its study again with rvr press, which writes it as docs/FORMAT.md says";
+pub(crate) const MEND: &str =
+    "press its study again with rvr press, which writes it as docs/FORMAT.md says";
 
 /// What mends a file whose [derived] this rvr press would not take.
 pub(crate) const DERIVED_MEND: &str = "This rvr press refuses such a [derived]: mend [derived] in the recipe.toml of the study the file was pressed from, then press that study again";
@@ -63,16 +64,23 @@ pub fn holes(header: &Value) -> Vec<Hole> {
     let files = header["data"]["files"].as_array().into_iter().flatten();
     files
         .flat_map(|file| {
-            let (sample, at) = (file["sample"].as_str().unwrap_or(""), file["path"].as_str().unwrap_or(""));
+            let (sample, at) = (
+                file["sample"].as_str().unwrap_or(""),
+                file["path"].as_str().unwrap_or(""),
+            );
             let record = &header["made"]["files"][sample]["files"][at];
-            record["holes"].as_array().into_iter().flatten().map(move |hole| Hole {
-                sample: sample.into(),
-                file: at.into(),
-                first: whole_count(&hole["entries"][0]).unwrap_or(0),
-                last: whole_count(&hole["entries"][1]).unwrap_or(0),
-                kind: hole["kind"].as_str().unwrap_or("").into(),
-                why: hole["why"].as_str().unwrap_or("").into(),
-            })
+            record["holes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(move |hole| Hole {
+                    sample: sample.into(),
+                    file: at.into(),
+                    first: whole_count(&hole["entries"][0]).unwrap_or(0),
+                    last: whole_count(&hole["entries"][1]).unwrap_or(0),
+                    kind: hole["kind"].as_str().unwrap_or("").into(),
+                    why: hole["why"].as_str().unwrap_or("").into(),
+                })
         })
         .collect()
 }
@@ -97,7 +105,8 @@ pub fn validate_file(path: impl AsRef<Path>) -> Result<Validated> {
     let path = path.as_ref();
     let (file, size, text, seen) = head(path)?;
     let length = size - 20 - text.len();
-    let (header, end) = checked(&text).and_then(|(header, end)| arrays::fill(end, length).map(|()| (header, end)))?;
+    let (header, end) = checked(&text)
+        .and_then(|(header, end)| arrays::fill(end, length).map(|()| (header, end)))?;
     let empty = length == 0 && end > 0;
     let reads = identity::choices(&header)?;
     let worked = texts::validate(&header, &reads)?;
@@ -170,7 +179,12 @@ fn framed_text(file: &std::fs::File, size: usize) -> Result<Vec<u8>> {
 /// row agree, no journal beside it between them (docs/SPEC.md §8.12): a read torn by a change
 /// cannot agree with one made after it, and while it is made its journal is there. Read three
 /// times at most: the file changed while it was read when no two agree.
-fn agreed<T: PartialEq>(path: &Path, file: &std::fs::File, seen: &reader::Stamp, mut read: impl FnMut() -> Result<T>) -> Result<T> {
+fn agreed<T: PartialEq>(
+    path: &Path,
+    file: &std::fs::File,
+    seen: &reader::Stamp,
+    mut read: impl FnMut() -> Result<T>,
+) -> Result<T> {
     let mut was = read();
     for _ in 0..2 {
         settled(path, file, seen)?;
@@ -198,7 +212,10 @@ pub(crate) fn framed(path: &Path) -> Result<(crate::change::Handle, usize, usize
 
 /// What a reader of the file at `path` is told while a writer changes it.
 fn busy(path: &Path) -> crate::Error {
-    invalid(format!("{} is being changed by another program now: wait for it to finish, then open it again", path.display()))
+    invalid(format!(
+        "{} is being changed by another program now: wait for it to finish, then open it again",
+        path.display()
+    ))
 }
 
 /// Refuse the file at `path`, opened as `file` (`seen`), when what was just read of it may not be
@@ -248,7 +265,8 @@ pub(crate) const CUT_SHORT: &str = "it does not end in the .rvr magic (its last 
 const EMPTY: &str = "the file is empty: rvr empty let its columns go, and rvr refill presses them again from the study it carries";
 
 /// What a file that is not an `.rvr` file is told.
-const NOT_RVR: &str = "it is not an .rvr file (its first 8 bytes are not the .rvr magic): name an .rvr file";
+const NOT_RVR: &str =
+    "it is not an .rvr file (its first 8 bytes are not the .rvr magic): name an .rvr file";
 
 /// Refuse a header of another version, saying what to do.
 fn version(header: &Value) -> Result<()> {
@@ -281,38 +299,58 @@ pub fn grouped(n: u64) -> String {
 pub fn span(first: u64, last: u64) -> String {
     match last.saturating_sub(first) {
         1 => format!("entry {}", grouped(first)),
-        _ => format!("entries {} to {}", grouped(first), grouped(last.saturating_sub(1))),
+        _ => format!(
+            "entries {} to {}",
+            grouped(first),
+            grouped(last.saturating_sub(1))
+        ),
     }
 }
 
 /// Each tool key a header's text holds, by name, and where its object's bytes lie there, unparsed (docs/FORMAT.md §11).
 pub fn tool_texts(text: &[u8]) -> Result<Vec<(String, std::ops::Range<usize>)>> {
     let members = crate::json::members(text).ok_or_else(|| invalid("its header is not one JSON object (docs/FORMAT.md §1): the file is damaged; copy it again, or press its study again"))?;
-    let named = members.into_iter().map(|m| (crate::json::name(&text[m.name]), m.value));
-    Ok(named.filter(|(name, _)| !TOP.contains(&name.as_str())).collect())
+    let named = members
+        .into_iter()
+        .map(|m| (crate::json::name(&text[m.name]), m.value));
+    Ok(named
+        .filter(|(name, _)| !TOP.contains(&name.as_str()))
+        .collect())
 }
 
 /// The names of a header's tool keys (docs/FORMAT.md §11), in its order, nothing cloned.
 pub fn tool_names(header: &Value) -> impl Iterator<Item = &str> {
-    header.as_object().into_iter().flatten().map(|(key, _)| key.as_str()).filter(|key| !TOP.contains(key))
+    header
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(key, _)| key.as_str())
+        .filter(|key| !TOP.contains(key))
 }
 
 /// The tool keys of a header (docs/FORMAT.md §11): every top-level key that is not the format's.
 pub fn tool_keys(header: &Value) -> Map<String, Value> {
     let root = header.as_object().into_iter().flatten();
-    root.filter(|(key, _)| !TOP.contains(&key.as_str())).map(|(key, value)| (key.clone(), value.clone())).collect()
+    root.filter(|(key, _)| !TOP.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
 }
 
 /// The format's key that `key`, not one of them, is a slip of (docs/FORMAT.md §11): ignoring
 /// case, at most one edit from it, a swap of two neighbours counting as one.
 fn slip(key: &str) -> Option<&'static str> {
     let lower = key.to_lowercase();
-    TOP.iter().find(|top| **top != key && rvr_recipe::slips(&lower, top) <= 1).copied()
+    TOP.iter()
+        .find(|top| **top != key && rvr_recipe::slips(&lower, top) <= 1)
+        .copied()
 }
 
 /// Whether `name` is a tool key's name: one or more ASCII letters, digits, `_`, `-` and `.`.
 fn tool_name(name: &str) -> bool {
-    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
 }
 
 /// Where the arrays a header lays out end, checked to fill the `length` bytes from byte 8 to the
@@ -327,7 +365,15 @@ pub(crate) fn placed(header: &Value, length: usize) -> Result<u64> {
 /// order of its records.
 pub(crate) fn spans(header: &Value) -> Result<(u64, Vec<(u64, u64)>)> {
     let end = arrays::layout(&header["data"])?;
-    let spans = arrays::records(&header["data"]).iter().map(|(record, _, _)| (record["at"].as_u64().unwrap_or(0), record["size"].as_u64().unwrap_or(0))).collect();
+    let spans = arrays::records(&header["data"])
+        .iter()
+        .map(|(record, _, _)| {
+            (
+                record["at"].as_u64().unwrap_or(0),
+                record["size"].as_u64().unwrap_or(0),
+            )
+        })
+        .collect();
     Ok((end, spans))
 }
 
@@ -381,17 +427,25 @@ fn checked(text: &[u8]) -> Result<(Value, u64)> {
 
 /// How a header a tool key breaks is mended, of the file at `path` (FILE when unknown).
 pub(crate) fn dropping(path: Option<&std::path::Path>) -> String {
-    let on = path.map_or_else(|| "on the file".to_owned(), |path| crate::shell(&path.display().to_string()));
+    let on = path.map_or_else(
+        || "on the file".to_owned(),
+        |path| crate::shell(&path.display().to_string()),
+    );
     format!("the program that wrote it does not follow the format; rvr tool {on} says whether dropping a tool key lets it open")
 }
 
 /// Every check `checked_header` makes, of a header parsed as `json::strict` parses it; where
 /// the arrays its records lay out end.
 fn checks(header: &Value) -> Result<u64> {
-    let root = header.as_object().ok_or_else(|| invalid(format!("the header must be one JSON object: {MEND}")))?;
+    let root = header
+        .as_object()
+        .ok_or_else(|| invalid(format!("the header must be one JSON object: {MEND}")))?;
     version(header)?;
     for (key, value) in root {
-        let tool = |fact: String| Error::Tool { fact, key: key.clone() };
+        let tool = |fact: String| Error::Tool {
+            fact,
+            key: key.clone(),
+        };
         match slip(key) {
             // A slip standing for a key every header has, dropped, leaves a header without it.
             Some(near) if ["rowver", "data", "made"].contains(&near) && !root.contains_key(near) => return Err(invalid(format!("the top-level key {key:?} is a slip of {near}, one of the format's own keys, and the header has no {near} (docs/FORMAT.md §2, §11): {MEND}"))),
@@ -403,14 +457,31 @@ fn checks(header: &Value) -> Result<u64> {
         }
         if key != "rowver" && !value.is_object() {
             return Err(match TOP.contains(&key.as_str()) {
-                true => invalid(format!("{key} must be an object (docs/FORMAT.md §2, §11): {MEND}")),
+                true => invalid(format!(
+                    "{key} must be an object (docs/FORMAT.md §2, §11): {MEND}"
+                )),
                 false => tool(format!("{key} must be an object (docs/FORMAT.md §2, §11)")),
             });
         }
     }
     let data = object(header, "", "data")?;
     let made = object(header, "", "made")?;
-    exactly(data, "data", &["rows", "chunk_rows", "samples", "files", "sample", "entry", "cols", "sha256", "sample_cols"], &[])?;
+    exactly(
+        data,
+        "data",
+        &[
+            "rows",
+            "chunk_rows",
+            "samples",
+            "files",
+            "sample",
+            "entry",
+            "cols",
+            "sha256",
+            "sample_cols",
+        ],
+        &[],
+    )?;
     let (fewest, most) = rvr_recipe::CHUNK_BOUNDS;
     if !(fewest..=most).contains(&count(data, "data", "chunk_rows")?) {
         return Err(invalid(format!("data.chunk_rows is {}, and a chunk holds from 1,024 to 16,777,216 rows (docs/FORMAT.md §3): {MEND}", data["chunk_rows"])));
@@ -423,7 +494,9 @@ fn checks(header: &Value) -> Result<u64> {
     if let Some(derived) = header.get("derived") {
         derived::validate(derived, data)?;
     }
-    if data_checksum(data).map_err(|place| invalid(format!("{place} has no sha256: {MEND}")))? != checksum(data, "data")? {
+    if data_checksum(data).map_err(|place| invalid(format!("{place} has no sha256: {MEND}")))?
+        != checksum(data, "data")?
+    {
         return Err(invalid(format!("data.sha256 is not the SHA-256 of the arrays' sha256s joined in record order (docs/FORMAT.md §8): {MEND}")));
     }
     crate::sign::verify(header)?;
@@ -441,12 +514,21 @@ fn read_body(file: &Reader, reads: &identity::Reads, worked: &[bool]) -> Result<
     let per = Reader::rows_of(&rows);
     let more: Vec<usize> = per.iter().map(|n| n + 1).collect();
     let mut check = identity::Rows::new(header, reads)?;
-    let mut first: Vec<reader::Whole> = vec![(&data["sample"], "i4", "data.sample".into(), (&per[..]).into()), (&data["entry"], "i8", "data.entry".into(), (&per[..]).into())];
+    let mut first: Vec<reader::Whole> = vec![
+        (
+            &data["sample"],
+            "i4",
+            "data.sample".into(),
+            (&per[..]).into(),
+        ),
+        (&data["entry"], "i8", "data.entry".into(), (&per[..]).into()),
+    ];
     let mut columns = Vec::new();
     // Each flat column's facts made again, each list column's offsets put together (not kept):
     // one for each array after the first two, `of` its column and `owner` each column's. List
     // columns that share one offsets array (docs/FORMAT.md §7) check it once.
-    let mut made: Vec<std::result::Result<crate::write::facts::Facts, reader::Stitched>> = Vec::new();
+    let mut made: Vec<std::result::Result<crate::write::facts::Facts, reader::Stitched>> =
+        Vec::new();
     let (mut of, mut owner) = (Vec::new(), Vec::new());
     for record in list(data, "data", "cols")? {
         let name = text(record, "data.cols", "name")?;
@@ -454,13 +536,21 @@ fn read_body(file: &Reader, reads: &identity::Reads, worked: &[bool]) -> Result<
         let kind = text(record, &place, "kind")?;
         let offsets = &record["offsets"];
         let shared = kind == "jagged" && offsets["size"].as_u64() > Some(0);
-        match first.iter().position(|(held, ..)| shared && *held == offsets) {
+        match first
+            .iter()
+            .position(|(held, ..)| shared && *held == offsets)
+        {
             Some(a) => owner.push(a - 2),
             None => {
                 owner.push(made.len());
                 of.push(columns.len());
                 match kind == "jagged" {
-                    true => first.push((offsets, "i8", format!("{place}.offsets"), (&more[..]).into())),
+                    true => first.push((
+                        offsets,
+                        "i8",
+                        format!("{place}.offsets"),
+                        (&more[..]).into(),
+                    )),
                     false => first.push((record, kind, place.clone(), (&per[..]).into())),
                 }
                 made.push(match kind {
@@ -492,12 +582,19 @@ fn read_body(file: &Reader, reads: &identity::Reads, worked: &[bool]) -> Result<
             Some(Err(stitched)) => {
                 let content = &record["content"];
                 reader::ends(stitched.end, content, place)?;
-                contents.push((content, text(content, place, "kind")?, format!("{place}.content"), stitched.members.clone().into()));
+                contents.push((
+                    content,
+                    text(content, place, "kind")?,
+                    format!("{place}.content"),
+                    stitched.members.clone().into(),
+                ));
                 quieted.push(worked[c]);
             }
-            flat => if let Some(Ok(facts)) = flat.take() {
-                facts::agree(record, &facts.finish(), kind, place)?;
-            },
+            flat => {
+                if let Some(Ok(facts)) = flat.take() {
+                    facts::agree(record, &facts.finish(), kind, place)?;
+                }
+            }
         }
     }
     file.each_chunks(&contents, None, &mut |a, _, values, _| {
@@ -515,8 +612,18 @@ fn quiet(values: &[u8], kind: &str, place: &str) -> Result<()> {
         return Ok(());
     };
     let other = match w {
-        8 => values.as_chunks::<8>().0.iter().map(|v| u64::from_le_bytes(*v)).find(|&b| f64::from_bits(b).is_nan() && b != one),
-        _ => values.as_chunks::<4>().0.iter().map(|v| u64::from(u32::from_le_bytes(*v))).find(|&b| f32::from_bits(b as u32).is_nan() && b != one),
+        8 => values
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|v| u64::from_le_bytes(*v))
+            .find(|&b| f64::from_bits(b).is_nan() && b != one),
+        _ => values
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| u64::from(u32::from_le_bytes(*v)))
+            .find(|&b| f32::from_bits(b as u32).is_nan() && b != one),
     };
     match other {
         Some(bits) => Err(invalid(format!("{place}: a NaN it holds has the bits {bits:#0width$x}, and a NaN a column works out is {one:#0width$x}, the one quiet NaN (docs/FORMAT.md §4): {MEND}", width = 2 + 2 * w))),
@@ -527,14 +634,21 @@ fn quiet(values: &[u8], kind: &str, place: &str) -> Result<()> {
 /// Refuse a `b1` value that is not 0 or 1.
 fn truth(values: &[u8], kind: &str, place: &str) -> Result<()> {
     match crate::numeric::untrue(kind, values) {
-        Some(byte) => Err(invalid(format!("{place}: a b1 value is {byte}, and a b1 value is 0 or 1 (docs/FORMAT.md §4): {MEND}"))),
+        Some(byte) => Err(invalid(format!(
+            "{place}: a b1 value is {byte}, and a b1 value is 0 or 1 (docs/FORMAT.md §4): {MEND}"
+        ))),
         None => Ok(()),
     }
 }
 
 /// A record's member `key`, refused when missing; `place` is where the record is.
 fn field<'a>(value: &'a Value, place: &str, key: &str) -> Result<&'a Value> {
-    value.get(key).ok_or_else(|| invalid(format!("{} is missing (docs/FORMAT.md): {MEND}", at(place, key))))
+    value.get(key).ok_or_else(|| {
+        invalid(format!(
+            "{} is missing (docs/FORMAT.md): {MEND}",
+            at(place, key)
+        ))
+    })
 }
 
 /// `place.key`, or `key` at the top level.
@@ -550,7 +664,10 @@ fn object<'a>(value: &'a Value, place: &str, key: &str) -> Result<&'a Value> {
     let member = field(value, place, key)?;
     match member.is_object() {
         true => Ok(member),
-        false => Err(invalid(format!("{} must be an object: {MEND}", at(place, key)))),
+        false => Err(invalid(format!(
+            "{} must be an object: {MEND}",
+            at(place, key)
+        ))),
     }
 }
 
@@ -571,7 +688,10 @@ fn text<'a>(value: &'a Value, place: &str, key: &str) -> Result<&'a str> {
 /// A member that must be nonempty text.
 fn nonempty<'a>(value: &'a Value, place: &str, key: &str) -> Result<&'a str> {
     match text(value, place, key)? {
-        "" => Err(invalid(format!("{} must be nonempty text: {MEND}", at(place, key)))),
+        "" => Err(invalid(format!(
+            "{} must be nonempty text: {MEND}",
+            at(place, key)
+        ))),
         held => Ok(held),
     }
 }
@@ -593,7 +713,10 @@ fn checksum<'a>(value: &'a Value, place: &str) -> Result<&'a str> {
     let hash = text(value, place, "sha256")?;
     match crate::study::hex(hash, 64) {
         true => Ok(hash),
-        false => Err(invalid(format!("{} must be 64 lowercase hexadecimal characters (docs/FORMAT.md §8): {MEND}", at(place, "sha256")))),
+        false => Err(invalid(format!(
+            "{} must be 64 lowercase hexadecimal characters (docs/FORMAT.md §8): {MEND}",
+            at(place, "sha256")
+        ))),
     }
 }
 
@@ -607,8 +730,14 @@ fn exactly(value: &Value, place: &str, keys: &[&str], optional: &[&str]) -> Resu
             keys.join(", ")
         )));
     }
-    match keys.iter().find(|key| !held.contains_key(**key) && !optional.contains(key)) {
-        Some(key) => Err(invalid(format!("{} is missing (docs/FORMAT.md): {MEND}", at(place, key)))),
+    match keys
+        .iter()
+        .find(|key| !held.contains_key(**key) && !optional.contains(key))
+    {
+        Some(key) => Err(invalid(format!(
+            "{} is missing (docs/FORMAT.md): {MEND}",
+            at(place, key)
+        ))),
         None => Ok(()),
     }
 }
@@ -638,8 +767,17 @@ mod tests {
             let read = super::framed_text(&file, size);
             if let Some(version) = next.next() {
                 std::fs::write(path, version).unwrap();
-                std::fs::File::options().write(true).open(path).unwrap().set_modified(time).unwrap();
-                assert_eq!(super::reader::stamp(&file).unwrap(), seen, "the same length and time");
+                std::fs::File::options()
+                    .write(true)
+                    .open(path)
+                    .unwrap()
+                    .set_modified(time)
+                    .unwrap();
+                assert_eq!(
+                    super::reader::stamp(&file).unwrap(),
+                    seen,
+                    "the same length and time"
+                );
             }
             read
         })
@@ -647,27 +785,59 @@ mod tests {
 
     // SPEC 1.5, 8.12; FORMAT 12
     #[test]
-    fn a_change_of_the_header_alone_its_length_and_time_kept_made_between_two_reads_is_never_taken_for_the_file() {
-        let fixture = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/conformance/rvr/valid/fixture.rvr")).unwrap();
-        let path = std::env::temp_dir().join(format!("rowver-unit-{}-agreed.rvr", std::process::id()));
-        let start = fixture.len() - 12 - u32::from_le_bytes(fixture[fixture.len() - 12..fixture.len() - 8].try_into().unwrap()) as usize;
+    fn a_change_of_the_header_alone_its_length_and_time_kept_made_between_two_reads_is_never_taken_for_the_file(
+    ) {
+        let fixture = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/conformance/rvr/valid/fixture.rvr"
+        ))
+        .unwrap();
+        let path =
+            std::env::temp_dir().join(format!("rowver-unit-{}-agreed.rvr", std::process::id()));
+        let start = fixture.len()
+            - 12
+            - u32::from_le_bytes(
+                fixture[fixture.len() - 12..fixture.len() - 8]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
         let header = |bytes: &[u8]| bytes[start..bytes.len() - 12].to_vec();
         let (mut torn, mut cut) = (fixture.clone(), fixture.clone());
         torn[start] = b'x';
         let last = cut.len() - 1;
         cut[last] = b'x';
         // Read alone, each is what it is: the file, or damaged.
-        assert_eq!(read_as_changed(&path, &[&fixture]).unwrap(), header(&fixture));
+        assert_eq!(
+            read_as_changed(&path, &[&fixture]).unwrap(),
+            header(&fixture)
+        );
         assert_eq!(read_as_changed(&path, &[&torn]).unwrap(), header(&torn));
-        assert!(read_as_changed(&path, &[&cut]).unwrap_err().to_string().contains("it does not end in the .rvr magic"));
+        assert!(read_as_changed(&path, &[&cut])
+            .unwrap_err()
+            .to_string()
+            .contains("it does not end in the .rvr magic"));
         // A first read torn, or cut short, by a change made before the second is never the file's.
-        assert_eq!(read_as_changed(&path, &[&torn, &fixture]).unwrap(), header(&fixture));
-        assert_eq!(read_as_changed(&path, &[&cut, &fixture]).unwrap(), header(&fixture));
-        assert_eq!(read_as_changed(&path, &[&fixture, &torn]).unwrap(), header(&torn));
+        assert_eq!(
+            read_as_changed(&path, &[&torn, &fixture]).unwrap(),
+            header(&fixture)
+        );
+        assert_eq!(
+            read_as_changed(&path, &[&cut, &fixture]).unwrap(),
+            header(&fixture)
+        );
+        assert_eq!(
+            read_as_changed(&path, &[&fixture, &torn]).unwrap(),
+            header(&torn)
+        );
         // A file changed after every read: no two reads in a row agree.
         for versions in [[&fixture[..], &torn, &fixture], [&torn, &fixture, &cut]] {
             let said = crate::plain(&path, &read_as_changed(&path, &versions).unwrap_err());
-            assert!(said.contains("changed while it was read (emptied, or written again): open it again"), "{said}");
+            assert!(
+                said.contains(
+                    "changed while it was read (emptied, or written again): open it again"
+                ),
+                "{said}"
+            );
         }
         std::fs::remove_file(&path).unwrap();
     }
@@ -675,8 +845,13 @@ mod tests {
     // SPEC 8.12; FORMAT 12
     #[test]
     fn a_reader_that_loses_the_race_to_a_writer_is_told_so() {
-        let fixture = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/conformance/rvr/valid/fixture.rvr")).unwrap();
-        let path = std::env::temp_dir().join(format!("rowver-unit-{}-raced.rvr", std::process::id()));
+        let fixture = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/conformance/rvr/valid/fixture.rvr"
+        ))
+        .unwrap();
+        let path =
+            std::env::temp_dir().join(format!("rowver-unit-{}-raced.rvr", std::process::id()));
         let journal = crate::change::journal(&path);
         std::fs::write(&path, &fixture).unwrap();
         // A reader opens the file and finds no journal; a writer then locks it, journals it and cuts
@@ -686,13 +861,21 @@ mod tests {
         held.lock().unwrap();
         std::fs::write(&journal, b"a journal").unwrap();
         held.set_len(fixture.len() as u64 - 100).unwrap();
-        let said = super::headed(&path, &file, size, &seen).unwrap_err().to_string();
+        let said = super::headed(&path, &file, size, &seen)
+            .unwrap_err()
+            .to_string();
         assert!(said.contains("is being changed by another program now: wait for it to finish, then open it again"), "{said}");
         // The change finished before the reader looked again: the file changed since it was opened.
         std::fs::remove_file(&journal).unwrap();
         drop(held);
-        let said = crate::plain(&path, &super::headed(&path, &file, size, &seen).unwrap_err());
-        assert!(said.contains("changed while it was read (emptied, or written again): open it again"), "{said}");
+        let said = crate::plain(
+            &path,
+            &super::headed(&path, &file, size, &seen).unwrap_err(),
+        );
+        assert!(
+            said.contains("changed while it was read (emptied, or written again): open it again"),
+            "{said}"
+        );
         std::fs::remove_file(&path).unwrap();
     }
 }

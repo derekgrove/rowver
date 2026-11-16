@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// One request as the server read it.
@@ -76,7 +76,12 @@ pub struct Server {
 }
 
 fn fixture(name: &str) -> Vec<u8> {
-    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tls").join(name)).unwrap()
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/tls")
+            .join(name),
+    )
+    .unwrap()
 }
 
 /// The adler32 of `bytes`, as 8 lowercase hex digits.
@@ -100,7 +105,9 @@ impl Server {
     pub fn on(certificate: &str, port: u16) -> Self {
         use rustls::pki_types::pem::PemObject;
         use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-        let chain = CertificateDer::pem_slice_iter(&fixture(&format!("{certificate}.pem"))).collect::<Result<Vec<_>, _>>().unwrap();
+        let chain = CertificateDer::pem_slice_iter(&fixture(&format!("{certificate}.pem")))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         let key = PrivateKeyDer::from_pem_slice(&fixture(&format!("{certificate}.key"))).unwrap();
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let config = rustls::ServerConfig::builder_with_provider(provider)
@@ -124,7 +131,14 @@ impl Server {
             connections: Default::default(),
             accepting: None,
         };
-        let shared = (server.files.clone(), server.log.clone(), server.script.clone(), server.multipart.clone(), server.stop.clone(), server.busy.clone());
+        let shared = (
+            server.files.clone(),
+            server.log.clone(),
+            server.script.clone(),
+            server.multipart.clone(),
+            server.stop.clone(),
+            server.busy.clone(),
+        );
         let connections = server.connections.clone();
         server.accepting = Some(std::thread::spawn(move || {
             for stream in listener.incoming() {
@@ -133,10 +147,28 @@ impl Server {
                 }
                 let Ok(stream) = stream else { continue };
                 connections.fetch_add(1, Ordering::SeqCst);
-                let (config, files, log, script, multipart, stop, busy) = (config.clone(), shared.0.clone(), shared.1.clone(), shared.2.clone(), shared.3.clone(), shared.4.clone(), shared.5.clone());
+                let (config, files, log, script, multipart, stop, busy) = (
+                    config.clone(),
+                    shared.0.clone(),
+                    shared.1.clone(),
+                    shared.2.clone(),
+                    shared.3.clone(),
+                    shared.4.clone(),
+                    shared.5.clone(),
+                );
                 std::thread::spawn(move || {
-                    let Ok(tls) = rustls::ServerConnection::new(config) else { return };
-                    let vanished = serve(rustls::StreamOwned::new(tls, stream), &files, &log, &script, &multipart, &busy, &stop);
+                    let Ok(tls) = rustls::ServerConnection::new(config) else {
+                        return;
+                    };
+                    let vanished = serve(
+                        rustls::StreamOwned::new(tls, stream),
+                        &files,
+                        &log,
+                        &script,
+                        &multipart,
+                        &busy,
+                        &stop,
+                    );
                     if matches!(vanished, Ok(true)) {
                         stop.store(true, Ordering::Relaxed);
                         let _ = TcpStream::connect(("127.0.0.1", port));
@@ -154,7 +186,10 @@ impl Server {
 
     /// Serve `bytes` at `path`.
     pub fn put(&self, path: &str, bytes: Vec<u8>) {
-        self.files.lock().unwrap().insert(path.to_owned(), Arc::new(bytes));
+        self.files
+            .lock()
+            .unwrap()
+            .insert(path.to_owned(), Arc::new(bytes));
     }
 
     /// Answer each request as `script` says.
@@ -214,7 +249,10 @@ fn serve(
             return Ok(false);
         }
         let mut words = line.split_whitespace();
-        let (method, path) = (words.next().unwrap_or("").to_owned(), words.next().unwrap_or("").to_owned());
+        let (method, path) = (
+            words.next().unwrap_or("").to_owned(),
+            words.next().unwrap_or("").to_owned(),
+        );
         let (mut range, mut length) = (None, 0usize);
         loop {
             let mut header = String::new();
@@ -232,7 +270,12 @@ fn serve(
         }
         let mut body = vec![0; length];
         reader.read_exact(&mut body)?;
-        let request = Request { method, path, range, nth };
+        let request = Request {
+            method,
+            path,
+            range,
+            nth,
+        };
         log.lock().unwrap().push(request.clone());
         let answer = (script.lock().unwrap())(&request);
         let now = busy.0.fetch_add(1, Ordering::SeqCst) + 1;
@@ -247,7 +290,9 @@ fn serve(
                 }
                 Answer::Together(n, then) => {
                     let since = std::time::Instant::now();
-                    while busy.2.load(Ordering::SeqCst) < n && since.elapsed() < Duration::from_secs(30) {
+                    while busy.2.load(Ordering::SeqCst) < n
+                        && since.elapsed() < Duration::from_secs(30)
+                    {
                         std::thread::sleep(Duration::from_millis(5));
                     }
                     *then
@@ -272,9 +317,20 @@ fn serve(
             }
             Answer::Status(code) => reply(out, code, &[], b"")?,
             Answer::Redirect(to) => reply(out, 302, &[("Location", to)], b"")?,
-            Answer::Serve | Answer::Short | Answer::Whole | Answer::OnePart | Answer::Placeless | Answer::Garbled => {
+            Answer::Serve
+            | Answer::Short
+            | Answer::Whole
+            | Answer::OnePart
+            | Answer::Placeless
+            | Answer::Garbled => {
                 let short = matches!(answer, Answer::Short);
-                let (code, headers, bytes) = served(&request, files, file.as_deref().map(Vec::as_slice), &answer, several);
+                let (code, headers, bytes) = served(
+                    &request,
+                    files,
+                    file.as_deref().map(Vec::as_slice),
+                    &answer,
+                    several,
+                );
                 if short {
                     let head = head(code, &headers, bytes.len());
                     out.write_all(head.as_bytes())?;
@@ -302,24 +358,40 @@ fn served(
     if request.method == "PROPFIND" {
         let folder = request.path.trim_end_matches('/').to_owned() + "/";
         let files = files.lock().unwrap();
-        let inside: Vec<_> = files.iter().filter(|(p, _)| p.starts_with(&folder) && !p[folder.len()..].contains('/')).collect();
+        let inside: Vec<_> = files
+            .iter()
+            .filter(|(p, _)| p.starts_with(&folder) && !p[folder.len()..].contains('/'))
+            .collect();
         if inside.is_empty() {
             return (404, vec![], vec![]);
         }
-        let mut xml = format!(r#"<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>{folder}</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat></D:response>"#);
+        let mut xml = format!(
+            r#"<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>{folder}</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat></D:response>"#
+        );
         for (path, bytes) in inside {
             xml += &format!("<D:response><D:href>{path}</D:href><D:propstat><D:prop><D:resourcetype/><D:getcontentlength>{}</D:getcontentlength></D:prop></D:propstat></D:response>", bytes.len());
         }
         xml += "</D:multistatus>";
-        return (207, vec![("Content-Type", "application/xml".into())], xml.into_bytes());
+        return (
+            207,
+            vec![("Content-Type", "application/xml".into())],
+            xml.into_bytes(),
+        );
     }
-    let Some(file) = file else { return (404, vec![], vec![]) };
+    let Some(file) = file else {
+        return (404, vec![], vec![]);
+    };
     if request.method == "HEAD" {
-        let headers = vec![("Content-Length", file.len().to_string()), ("Digest", format!("adler32={}", adler32(file)))];
+        let headers = vec![
+            ("Content-Length", file.len().to_string()),
+            ("Digest", format!("adler32={}", adler32(file))),
+        ];
         return (200, headers, vec![]);
     }
     let whole = || (200, vec![], file.to_vec());
-    let Some(asked) = request.range.as_deref() else { return whole() };
+    let Some(asked) = request.range.as_deref() else {
+        return whole();
+    };
     if matches!(answer, Answer::Whole) {
         return whole();
     }
@@ -334,7 +406,10 @@ fn served(
     let len = file.len();
     let part = |(a, b): (usize, usize)| (format!("bytes {a}-{b}/{len}"), file[a..=b].to_vec());
     if ranges.len() == 1 || matches!(answer, Answer::OnePart) {
-        let span = (ranges.iter().map(|r| r.0).min().unwrap(), ranges.iter().map(|r| r.1).max().unwrap());
+        let span = (
+            ranges.iter().map(|r| r.0).min().unwrap(),
+            ranges.iter().map(|r| r.1).max().unwrap(),
+        );
         let (range, bytes) = part(span);
         return (206, vec![("Content-Range", range)], bytes);
     }
@@ -348,14 +423,24 @@ fn served(
             Answer::Placeless => String::new(),
             _ => format!("Content-Range: {range}\r\n"),
         };
-        body.extend(format!("\r\n--RVRTEST\r\nContent-Type: application/octet-stream\r\n{place}\r\n").bytes());
+        body.extend(
+            format!("\r\n--RVRTEST\r\nContent-Type: application/octet-stream\r\n{place}\r\n")
+                .bytes(),
+        );
         body.extend(bytes);
     }
     if matches!(answer, Answer::Garbled) {
         body = [&b"these are not parts\r\n"[..], &body].concat();
     }
     body.extend(b"\r\n--RVRTEST--\r\n");
-    (206, vec![("Content-Type", "multipart/byteranges; boundary=RVRTEST".into())], body)
+    (
+        206,
+        vec![(
+            "Content-Type",
+            "multipart/byteranges; boundary=RVRTEST".into(),
+        )],
+        body,
+    )
 }
 
 /// A status line and headers, with the body's length.

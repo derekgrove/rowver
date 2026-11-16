@@ -11,13 +11,17 @@ const LISTED: &str = r#"  { name = "a", kind = "none", shape = "flat", why = "a 
   { name = "nJet", kind = "i4", shape = "flat" },"#;
 
 fn sha(text: &str) -> String {
-    Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// A valid lock: one sample choosing 3 of its file's 5 entries at random, the list of branches given.
 fn lock(listed: &str, list: &str) -> String {
     let sha = sha(list);
-    format!(r#"format = "rvr-samples-lock"
+    format!(
+        r#"format = "rvr-samples-lock"
 version = 1
 resolved = "2026-11-04T16:06:01Z"
 samples_toml_sha256 = "{}"
@@ -48,7 +52,9 @@ sha256 = "{sha}"
 list = [
 {listed}
 ]
-"#, "0".repeat(64))
+"#,
+        "0".repeat(64)
+    )
 }
 
 fn refused(text: &str) -> String {
@@ -77,8 +83,14 @@ fn each_rule_of_the_lock_refuses_a_text_that_breaks_it_alone() {
 /// Each rule, a lock that breaks it alone, and what its refusal says.
 fn refusals() -> Vec<(&'static str, String, &'static str)> {
     let good = lock(LISTED, LIST);
-    let no_why = (LISTED.replace(", why = \"a TObject\"", ""), LIST.replace(r#","why":"a TObject""#, ""));
-    let why_too = (LISTED.replace("shape = \"flat\" },", "shape = \"flat\", why = \"x\" },"), LIST.replace(r#""shape":"flat"}]"#, r#""shape":"flat","why":"x"}]"#));
+    let no_why = (
+        LISTED.replace(", why = \"a TObject\"", ""),
+        LIST.replace(r#","why":"a TObject""#, ""),
+    );
+    let why_too = (
+        LISTED.replace("shape = \"flat\" },", "shape = \"flat\", why = \"x\" },"),
+        LIST.replace(r#""shape":"flat"}]"#, r#""shape":"flat","why":"x"}]"#),
+    );
     let cases: [(&'static str, String, &'static str); 7] = [
         ("why missing on a branch rvr cannot read", lock(&no_why.0, &no_why.1), "why"),
         ("why on a branch rvr reads", lock(&why_too.0, &why_too.1), "why"),
@@ -95,7 +107,9 @@ fn refusals() -> Vec<(&'static str, String, &'static str)> {
 #[test]
 fn the_conformance_corpus_holds_what_this_validator_says() {
     let good = lock(LISTED, LIST);
-    let mut cases = vec![json!({"rule": "a random choice of 3 of 5, a branch rvr cannot read", "text": good, "verdict": "valid"})];
+    let mut cases = vec![
+        json!({"rule": "a random choice of 3 of 5, a branch rvr cannot read", "text": good, "verdict": "valid"}),
+    ];
     for (rule, text, _) in refusals() {
         cases.push(json!({"rule": format!("FORMAT §6.3 {rule}"), "text": text, "verdict": "refused", "rust_says": refused(&text)}));
     }

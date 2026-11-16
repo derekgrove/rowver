@@ -6,9 +6,9 @@
 use super::remote::{HttpsFile, Storage, STOPPED};
 use hep_root::columns::{inventory, Kind, Shape};
 use rowver::study::lock::{self, Branch, Branches, File};
-use rvr_recipe::meant;
-pub use rowver::study::{join, matches, split};
 use rowver::study::samples::Sample;
+pub use rowver::study::{join, matches, split};
+use rvr_recipe::meant;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -70,7 +70,9 @@ pub fn in_home(text: &str) -> bool {
 
 /// Your home folder: HOME, when it is set to a full path.
 pub fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from).filter(|home| home.is_absolute())
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
 }
 
 /// Where a local path of samples.toml or the lock is: under `~/`, absolute, or relative to `base`.
@@ -147,22 +149,41 @@ pub fn branches_named(tree: &hep_root::Tree, wanted: impl Fn(&str) -> bool) -> V
                 _ => lock::Shape::Jagged,
             };
             match kind {
-                Ok(kind) => Branch { name: info.path, kind: kind_name(kind).into(), shape, why: None },
-                Err(why) => Branch { name: info.path, kind: "none".into(), shape: lock::Shape::Flat, why: Some(why) },
+                Ok(kind) => Branch {
+                    name: info.path,
+                    kind: kind_name(kind).into(),
+                    shape,
+                    why: None,
+                },
+                Err(why) => Branch {
+                    name: info.path,
+                    kind: "none".into(),
+                    shape: lock::Shape::Flat,
+                    why: Some(why),
+                },
             }
         })
         .collect()
 }
 
 /// How `have` falls short of `want` by name, kind and shape: the first few it lacks or has otherwise; empty if none.
-pub fn differ<'a>(want: impl Iterator<Item = &'a Branch>, have: impl Iterator<Item = &'a Branch>) -> String {
-    let index = |list: &mut dyn Iterator<Item = &'a Branch>| list.map(|b| (b.name.as_str(), (b.kind.as_str(), b.shape))).collect::<std::collections::BTreeMap<_, _>>();
+pub fn differ<'a>(
+    want: impl Iterator<Item = &'a Branch>,
+    have: impl Iterator<Item = &'a Branch>,
+) -> String {
+    let index = |list: &mut dyn Iterator<Item = &'a Branch>| {
+        list.map(|b| (b.name.as_str(), (b.kind.as_str(), b.shape)))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
     let (want, have) = (index(&mut { want }), index(&mut { have }));
     let mut said = Vec::new();
     for (name, b) in &want {
         match have.get(name) {
             None => said.push(format!("{name} missing")),
-            Some(h) if h != b => said.push(format!("{name} {} {} here, {} {} in the sample", h.0, h.1, b.0, b.1)),
+            Some(h) if h != b => said.push(format!(
+                "{name} {} {} here, {} {} in the sample",
+                h.0, h.1, b.0, b.1
+            )),
             Some(_) => {}
         }
     }
@@ -197,7 +218,9 @@ fn root_identity<S: hep_root::ByteSource>(
     })?;
     let uuid = file.header().uuid_string();
     let found = match listed {
-        true => file.tree_at(tree).map(|t| (t.entries, Some(branch_list(&t)))),
+        true => file
+            .tree_at(tree)
+            .map(|t| (t.entries, Some(branch_list(&t)))),
         false => file.tree_entries(tree).map(|entries| (entries, None)),
     };
     match found {
@@ -207,13 +230,24 @@ fn root_identity<S: hep_root::ByteSource>(
                 Ok(listing) => listing,
                 Err(e) => return Err(format!("{shown} has no tree {tree:?}, and its trees could not be listed ({e}): check that it is a whole ROOT file (a copy that did not finish leaves one cut short), then resolve again")),
             };
-            if listing.rntuples.iter().any(|path| path == tree.trim_matches('/')) {
+            if listing
+                .rntuples
+                .iter()
+                .any(|path| path == tree.trim_matches('/'))
+            {
                 return Err(format!("{shown} holds {tree:?} as an RNTuple, which rvr cannot read (it reads TTrees): write its events as a TTree"));
             }
             let trees: Vec<String> = listing.trees.into_iter().map(|t| t.path).collect();
-            let listed = if trees.is_empty() { "none".into() } else { trees.join(", ") };
+            let listed = if trees.is_empty() {
+                "none".into()
+            } else {
+                trees.join(", ")
+            };
             // The listing goes LISTING_DEPTH folders deep and opens at most LISTING_DIRECTORIES (SPEC §6.2.7): what it left is said.
-            let (depth, most) = (hep_root::file::LISTING_DEPTH, hep_root::file::LISTING_DIRECTORIES);
+            let (depth, most) = (
+                hep_root::file::LISTING_DEPTH,
+                hep_root::file::LISTING_DIRECTORIES,
+            );
             let left = match listing.unopened {
                 0 => String::new(),
                 n => {
@@ -221,7 +255,9 @@ fn root_identity<S: hep_root::ByteSource>(
                     format!(" ({}, past the {depth} folders deep or {most} folders the listing opens, {was} not looked in)", super::some(n, "folder", "folders"))
                 }
             };
-            Err(format!("{shown} has no tree {tree:?}. Its trees: {listed}{left}."))
+            Err(format!(
+                "{shown} has no tree {tree:?}. Its trees: {listed}{left}."
+            ))
         }
         Err(e) => Err(format!("{shown}: its tree {tree:?} could not be read: {e}")),
     }
@@ -242,13 +278,8 @@ pub struct Context {
     pub pins: bool,
 }
 
-
 impl Context {
-    pub fn new(
-        base: PathBuf,
-        proxy: Option<String>,
-        ca: Option<String>,
-    ) -> Self {
+    pub fn new(base: PathBuf, proxy: Option<String>, ca: Option<String>) -> Self {
         let storage = Storage::new(proxy.as_deref(), ca.as_deref());
         let offline = storage.as_ref().err().cloned().unwrap_or_default();
         Context {
@@ -265,7 +296,10 @@ impl Context {
     pub fn stop(&self) {
         self.stop.store(true, std::sync::atomic::Ordering::Release);
         if let Some(storage) = &self.storage {
-            storage.watch.stop.store(true, std::sync::atomic::Ordering::Release);
+            storage
+                .watch
+                .stop
+                .store(true, std::sync::atomic::Ordering::Release);
         }
     }
 
@@ -284,8 +318,13 @@ impl Context {
             // An entry that cannot be read is left out, as one that is not a file is.
             for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
                 // A link is followed to see whether it is a file; anything else is told by the folder.
-                let Ok(kind) = entry.file_type() else { continue };
-                if kind.is_file() || (kind.is_symlink() && std::fs::metadata(entry.path()).is_ok_and(|m| m.is_file())) {
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_file()
+                    || (kind.is_symlink()
+                        && std::fs::metadata(entry.path()).is_ok_and(|m| m.is_file()))
+                {
                     names.push(entry.file_name().to_string_lossy().into_owned());
                 }
             }
@@ -298,12 +337,18 @@ impl Context {
     pub fn which(&self, at: &str) -> PathBuf {
         match at.contains("://") {
             true => match super::remote::door(at) {
-                Ok((door, path)) => PathBuf::from(format!("{door}{}", rowver::study::lexical(Path::new(&path)).display())),
+                Ok((door, path)) => PathBuf::from(format!(
+                    "{door}{}",
+                    rowver::study::lexical(Path::new(&path)).display()
+                )),
                 Err(_) => PathBuf::from(at),
             },
             false => {
-                let Ok(path) = local(at, &self.base) else { return rowver::study::lexical(Path::new(at)) };
-                path.canonicalize().unwrap_or_else(|_| rowver::study::lexical(&path))
+                let Ok(path) = local(at, &self.base) else {
+                    return rowver::study::lexical(Path::new(at));
+                };
+                path.canonicalize()
+                    .unwrap_or_else(|_| rowver::study::lexical(&path))
             }
         }
     }
@@ -315,7 +360,13 @@ impl Context {
 
 /// Each file one path, URL or pattern of `files` matches, pinned and given to `each` in turn; the
 /// first with its branch list when `listed`. A run stopped ends before the next file.
-fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool, each: &mut dyn FnMut(File, Option<Branches>) -> Result<(), String>) -> Result<(), String> {
+fn files_of(
+    ctx: &Context,
+    asked: &str,
+    tree: &str,
+    listed: bool,
+    each: &mut dyn FnMut(File, Option<Branches>) -> Result<(), String>,
+) -> Result<(), String> {
     // Asked to stop (a listing for branches has its first file), no next folder is listed.
     ctx.going()?;
     let (folder, name) = split(asked);
@@ -323,10 +374,30 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool, each: &mut dyn
     if pattern(folder) {
         return Err(format!("{asked}: a pattern may only be in the file name, not in a folder. Write one pattern per folder."));
     }
-    let wanted = |found: &str| if pattern(name) { matches(name, found) } else { found == name };
-    let pinned = |at: String, bytes: u64, adler32: Option<String>, identity: (String, u64, Option<Branches>)| {
+    let wanted = |found: &str| {
+        if pattern(name) {
+            matches(name, found)
+        } else {
+            found == name
+        }
+    };
+    let pinned = |at: String,
+                  bytes: u64,
+                  adler32: Option<String>,
+                  identity: (String, u64, Option<Branches>)| {
         let (uuid, entries, list) = identity;
-        (File { at, bytes, adler32, uuid, entries, stop: None, take: None }, list)
+        (
+            File {
+                at,
+                bytes,
+                adler32,
+                uuid,
+                entries,
+                stop: None,
+                take: None,
+            },
+            list,
+        )
     };
     if asked.contains("://") {
         let storage = ctx.storage()?;
@@ -335,12 +406,16 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool, each: &mut dyn
         if found.is_empty() {
             // A storage may list a name percent-encoded, as in a URL, and a lock pins it as listed:
             // one that would match with its escapes decoded, either side, is told how to be written.
-            let plain = |n: &str| crate::samples::remote::decoded(n).unwrap_or_else(|| n.to_owned());
+            let plain =
+                |n: &str| crate::samples::remote::decoded(n).unwrap_or_else(|| n.to_owned());
             // A pattern is decoded too, unless that makes a wildcard of a %2A or %3F.
             let wild = |n: &str| n.matches(['*', '?']).count();
             let decoded = Some(plain(name)).filter(|n| wild(n) == wild(name));
             let alike = |listed: &str| match pattern(name) {
-                true => matches(name, &plain(listed)) || decoded.as_ref().is_some_and(|n| matches(n, &plain(listed))),
+                true => {
+                    matches(name, &plain(listed))
+                        || decoded.as_ref().is_some_and(|n| matches(n, &plain(listed)))
+                }
                 false => plain(name) == plain(listed),
             };
             if let Some(e) = entries.iter().find(|e| alike(&e.name)) {
@@ -350,52 +425,66 @@ fn files_of(ctx: &Context, asked: &str, tree: &str, listed: bool, each: &mut dyn
                 });
             }
             let near = meant(name, entries.iter().map(|e| e.name.as_str()));
-            return Err(format!("{asked} matched no file ({} files in that folder).{near}", entries.len()));
+            return Err(format!(
+                "{asked} matched no file ({} files in that folder).{near}",
+                entries.len()
+            ));
         }
         for (i, e) in found.iter().enumerate() {
-                ctx.going()?;
-                let at = join(&e.name);
-                // The listing's size is enough to open a file only found; one without needs the HEAD.
-                let (said, adler32) = match ctx.pins || e.bytes == 0 {
-                    true => storage.digest(&at).map_err(|failed| failed.why)?,
-                    false => (None, None),
-                };
-                // The HEAD's size when it was asked, which a press and rvr samples check compare, else
-                // the listing's: a lock pins every file's size.
-                let bytes = match (said, e.bytes) {
+            ctx.going()?;
+            let at = join(&e.name);
+            // The listing's size is enough to open a file only found; one without needs the HEAD.
+            let (said, adler32) = match ctx.pins || e.bytes == 0 {
+                true => storage.digest(&at).map_err(|failed| failed.why)?,
+                false => (None, None),
+            };
+            // The HEAD's size when it was asked, which a press and rvr samples check compare, else
+            // the listing's: a lock pins every file's size.
+            let bytes = match (said, e.bytes) {
                     (Some(0), 0) => return Err(format!("{at} is empty (0 bytes), so it is no ROOT file: remove it, or name the files so that this one is not among them")),
                     (Some(0), listed) => return Err(format!("{at}: its storage answers that it holds 0 bytes, but lists it with {listed}, so the lock cannot pin its size: try again later, or ask the storage's admins")),
                     (Some(size), _) | (None, size @ 1..) => size,
                     (None, 0) => return Err(format!("{at}: its storage gives no size for it, so the lock cannot pin it")),
                 };
-                let identity = root_identity(HttpsFile::new(storage, &at, bytes)?, &at, tree, listed && i == 0)?;
-                let (file, list) = pinned(at, bytes, adler32, identity);
-                each(file, list)?;
+            let identity = root_identity(
+                HttpsFile::new(storage, &at, bytes)?,
+                &at,
+                tree,
+                listed && i == 0,
+            )?;
+            let (file, list) = pinned(at, bytes, adler32, identity);
+            each(file, list)?;
         }
         Ok(())
     } else {
         let dir = local(folder, &ctx.base)?;
-        let names = ctx.listed(&dir).map_err(|e| format!("{asked}: the folder {folder} cannot be read: {e}"))?;
+        let names = ctx
+            .listed(&dir)
+            .map_err(|e| format!("{asked}: the folder {folder} cannot be read: {e}"))?;
         let found: Vec<&String> = names.iter().filter(|n| wanted(n)).collect();
         if found.is_empty() {
             let near = meant(name, names.iter().map(String::as_str));
-            let shown = if folder == "." { "the study folder" } else { folder };
+            let shown = if folder == "." {
+                "the study folder"
+            } else {
+                folder
+            };
             return Err(format!("{asked} matched no file in {shown}.{near}"));
         }
         for (i, n) in found.into_iter().enumerate() {
-                ctx.going()?;
-                let path = dir.join(n);
-                let meta = std::fs::metadata(&path).map_err(|e| format!("{n}: {e}"))?;
-                // The folder as samples.toml writes it, so the lock reads from any folder.
-                let at = join(n);
-                let opened = hep_root::LocalFile::open(&path).map_err(|e| format!("{at}: {e}"))?;
-                let identity = root_identity(opened, &at, tree, listed && i == 0)?;
-                let adler32 = match ctx.pins {
-                    true => Some(adler32_file(&path).map_err(|e| format!("{at}: {e}"))?),
-                    false => None,
-                };
-                let (file, list) = pinned(at, meta.len(), adler32, identity);
-                each(file, list)?;
+            ctx.going()?;
+            let path = dir.join(n);
+            let meta = std::fs::metadata(&path).map_err(|e| format!("{n}: {e}"))?;
+            // The folder as samples.toml writes it, so the lock reads from any folder.
+            let at = join(n);
+            let opened = hep_root::LocalFile::open(&path).map_err(|e| format!("{at}: {e}"))?;
+            let identity = root_identity(opened, &at, tree, listed && i == 0)?;
+            let adler32 = match ctx.pins {
+                true => Some(adler32_file(&path).map_err(|e| format!("{at}: {e}"))?),
+                false => None,
+            };
+            let (file, list) = pinned(at, meta.len(), adler32, identity);
+            each(file, list)?;
         }
         Ok(())
     }
@@ -426,22 +515,32 @@ fn locked(sample: &Sample, files: Vec<File>, list: &Branches) -> Result<lock::Sa
 /// the sample as its first file alone makes it (its choice not worked out), as soon as that file's
 /// branch list is read. A run stopped (`ctx.stop`)
 /// ends before the next file.
-pub fn resolve(ctx: &Context, sample: &Sample, first: &dyn Fn(lock::Sample, &Branches)) -> Result<(lock::Sample, Branches), String> {
+pub fn resolve(
+    ctx: &Context,
+    sample: &Sample,
+    first: &dyn Fn(lock::Sample, &Branches),
+) -> Result<(lock::Sample, Branches), String> {
     let mut files: Vec<File> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut list: Option<Branches> = None;
     for text in &sample.files {
-        files_of(ctx, text, &sample.tree, list.is_none(), &mut |file, found| {
-            if !seen.insert(ctx.which(&file.at)) {
-                return Err(format!("{} is reached twice, by two of files or by a pattern and a name: name each file once", file.at));
-            }
-            if let Some(found) = found.filter(|_| list.is_none()) {
-                first(locked(sample, vec![file.clone()], &found)?, &found);
-                list = Some(found);
-            }
-            files.push(file);
-            Ok(())
-        })?;
+        files_of(
+            ctx,
+            text,
+            &sample.tree,
+            list.is_none(),
+            &mut |file, found| {
+                if !seen.insert(ctx.which(&file.at)) {
+                    return Err(format!("{} is reached twice, by two of files or by a pattern and a name: name each file once", file.at));
+                }
+                if let Some(found) = found.filter(|_| list.is_none()) {
+                    first(locked(sample, vec![file.clone()], &found)?, &found);
+                    list = Some(found);
+                }
+                files.push(file);
+                Ok(())
+            },
+        )?;
     }
     let list = list.ok_or("it has no files")?;
     lock::entries_in_all(&files.iter().map(|f| f.entries).collect::<Vec<_>>(), "its")?;
@@ -458,13 +557,36 @@ mod tests {
     // SPEC 7.2.3
     #[test]
     fn two_branch_lists_differ_by_name_kind_and_shape() {
-        let branch = |name: &str, kind: &str, shape| Branch { name: name.into(), kind: kind.into(), shape, why: None };
-        let want = Branches::new(vec![branch("nJet", "i4", lock::Shape::Flat), branch("Jet_pt", "f4", lock::Shape::Jagged)]);
-        let have = Branches::new(vec![branch("nJet", "u4", lock::Shape::Flat), branch("Muon_pt", "f4", lock::Shape::Jagged)]);
-        assert_eq!(differ(want.list.iter(), have.list.iter()), "Jet_pt missing, nJet u4 flat here, i4 flat in the sample");
+        let branch = |name: &str, kind: &str, shape| Branch {
+            name: name.into(),
+            kind: kind.into(),
+            shape,
+            why: None,
+        };
+        let want = Branches::new(vec![
+            branch("nJet", "i4", lock::Shape::Flat),
+            branch("Jet_pt", "f4", lock::Shape::Jagged),
+        ]);
+        let have = Branches::new(vec![
+            branch("nJet", "u4", lock::Shape::Flat),
+            branch("Muon_pt", "f4", lock::Shape::Jagged),
+        ]);
+        assert_eq!(
+            differ(want.list.iter(), have.list.iter()),
+            "Jet_pt missing, nJet u4 flat here, i4 flat in the sample"
+        );
         assert_eq!(differ(want.list.iter(), want.list.iter()), "");
-        let unread = |why: &str| Branch { name: "obj".into(), kind: "none".into(), shape: lock::Shape::Flat, why: Some(why.into()) };
-        assert_eq!(differ([unread("old words")].iter(), [unread("new words")].iter()), "", "why is not compared");
+        let unread = |why: &str| Branch {
+            name: "obj".into(),
+            kind: "none".into(),
+            shape: lock::Shape::Flat,
+            why: Some(why.into()),
+        };
+        assert_eq!(
+            differ([unread("old words")].iter(), [unread("new words")].iter()),
+            "",
+            "why is not compared"
+        );
     }
 
     // SPEC 3.8.1
@@ -473,9 +595,21 @@ mod tests {
         let home = std::env::var("HOME").unwrap();
         let local = |text| local(text, Path::new("s")).unwrap();
         assert_eq!(local("~"), PathBuf::from(&home));
-        assert_eq!((local("~/d/x.root"), local("~//d/x.root")), (PathBuf::from(&home).join("d/x.root"), PathBuf::from(&home).join("d/x.root")));
-        assert_eq!((local("/d/x.root"), local("d/x.root")), (PathBuf::from("/d/x.root"), PathBuf::from("s/d/x.root")));
-        assert_eq!((split("/x.root"), split("x.root"), split("~/x.root")), (("/", "x.root"), (".", "x.root"), ("~", "x.root")));
+        assert_eq!(
+            (local("~/d/x.root"), local("~//d/x.root")),
+            (
+                PathBuf::from(&home).join("d/x.root"),
+                PathBuf::from(&home).join("d/x.root")
+            )
+        );
+        assert_eq!(
+            (local("/d/x.root"), local("d/x.root")),
+            (PathBuf::from("/d/x.root"), PathBuf::from("s/d/x.root"))
+        );
+        assert_eq!(
+            (split("/x.root"), split("x.root"), split("~/x.root")),
+            (("/", "x.root"), (".", "x.root"), ("~", "x.root"))
+        );
     }
 
     // SPEC 6.2.2, 6.2.3
@@ -502,8 +636,14 @@ mod tests {
             .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
             .collect();
         for data in [vec![0xff; 30_011], mixed] {
-            for len in [0, 1, 15, 16, 17, 4095, 4096, 4097, 5552, 5553, 11_111, 30_011] {
-                assert_eq!(adler32(1, &data[..len]), plain(1, &data[..len]), "{len} bytes");
+            for len in [
+                0, 1, 15, 16, 17, 4095, 4096, 4097, 5552, 5553, 11_111, 30_011,
+            ] {
+                assert_eq!(
+                    adler32(1, &data[..len]),
+                    plain(1, &data[..len]),
+                    "{len} bytes"
+                );
             }
             // Carried on across calls of uneven lengths, from sums as high as they go.
             let (head, tail) = data.split_at(7_777);

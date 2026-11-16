@@ -72,7 +72,11 @@ impl Part {
     /// The arrays of `file` from `start`, `length` bytes of them, read through its handle, the
     /// file `seen` as it was when it was opened.
     fn new(file: Handle, seen: Stamp, start: u64, length: u64) -> Self {
-        Self { from: Reading::Held(file, seen), start, length }
+        Self {
+            from: Reading::Held(file, seen),
+            start,
+            length,
+        }
     }
 
     /// Whether the file was changed in place since it was opened (emptied, cut short, written over).
@@ -95,7 +99,14 @@ pub(crate) fn stamp(file: &File) -> Result<Stamp> {
 
 /// What a read of the file at `path`, changed in place since it was opened, fails with.
 pub(crate) fn changed(path: &Path) -> crate::Error {
-    crate::tagged(path, std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "the file changed while it was read")).into()
+    crate::tagged(
+        path,
+        std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "the file changed while it was read",
+        ),
+    )
+    .into()
 }
 
 /// A debug build's note of an array about to be read, `size` bytes of the file at `path` from
@@ -104,8 +115,17 @@ pub(crate) fn changed(path: &Path) -> crate::Error {
 fn logged(path: &Path, at: u64, size: u64) {
     use std::io::Write;
     if let Some(log) = std::env::var_os("RVR_READ_LOG") {
-        let line = format!("{}\t{at}\t{size}\n", std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).display());
-        let _ = std::fs::OpenOptions::new().create(true).append(true).open(log).and_then(|mut f| f.write_all(line.as_bytes()));
+        let line = format!(
+            "{}\t{at}\t{size}\n",
+            std::fs::canonicalize(path)
+                .unwrap_or_else(|_| path.to_path_buf())
+                .display()
+        );
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .and_then(|mut f| f.write_all(line.as_bytes()));
     }
 }
 
@@ -120,15 +140,24 @@ pub(crate) struct Span {
 
 impl Read for Span {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let room = buffer.len().min(usize::try_from(self.end.saturating_sub(self.at)).unwrap_or(usize::MAX));
+        let room = buffer
+            .len()
+            .min(usize::try_from(self.end.saturating_sub(self.at)).unwrap_or(usize::MAX));
         #[cfg(unix)]
         let read = std::os::unix::fs::FileExt::read_at(&*self.file, &mut buffer[..room], self.at);
         #[cfg(windows)]
-        let read = std::os::windows::fs::FileExt::seek_read(&*self.file, &mut buffer[..room], self.at);
+        let read =
+            std::os::windows::fs::FileExt::seek_read(&*self.file, &mut buffer[..room], self.at);
         let read = read.map_err(|e| crate::tagged(&self.path, e))?;
         // Bytes its record lays out that are no longer there: the file was cut short since.
         if read == 0 && room > 0 {
-            return Err(crate::tagged(&self.path, std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "the file changed while it was read")));
+            return Err(crate::tagged(
+                &self.path,
+                std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "the file changed while it was read",
+                ),
+            ));
         }
         self.at += read as u64;
         Ok(read)
@@ -155,11 +184,26 @@ impl ArrayChunks<'_> {
         let read = || -> Result<_> {
             let (from, to) = self.table.span(k);
             let mut frames = vec![0; (to - from) as usize];
-            Span { at: self.span.at + from, end: self.span.at + to, ..self.span.clone() }.read_exact(&mut frames)?;
+            Span {
+                at: self.span.at + from,
+                end: self.span.at + to,
+                ..self.span.clone()
+            }
+            .read_exact(&mut frames)?;
             let values = crate::chunks::decode(&frames, &self.table, k, n, &self.label, true)?;
-            Ok((self.table.sum(k), crate::chunks::Frames::Together(frames, self.table.sizes(k).to_vec()), values))
+            Ok((
+                self.table.sum(k),
+                crate::chunks::Frames::Together(frames, self.table.sizes(k).to_vec()),
+                values,
+            ))
         };
-        read().map_err(|e| if self.part.changed() { changed(self.path) } else { e })
+        read().map_err(|e| {
+            if self.part.changed() {
+                changed(self.path)
+            } else {
+                e
+            }
+        })
     }
 }
 
@@ -180,14 +224,28 @@ impl Held {
     /// refused unless they lie in it.
     pub(super) fn part(&self, from: usize, to: usize) -> Result<(&[u8], Option<Vec<usize>>)> {
         let w = crate::numeric::width(&self.kind)?;
-        let rows = self.offsets.as_ref().map_or(self.bytes.len() / w, |o| o.len().saturating_sub(1));
-        let outside = || invalid(format!("rows {from} to {to} of a column of {rows} rows are asked for: ask for rows from 0 to {rows}, the first no later than the last"));
+        let rows = self
+            .offsets
+            .as_ref()
+            .map_or(self.bytes.len() / w, |o| o.len().saturating_sub(1));
+        let outside = || {
+            invalid(format!("rows {from} to {to} of a column of {rows} rows are asked for: ask for rows from 0 to {rows}, the first no later than the last"))
+        };
         if from > to || to > rows {
             return Err(outside());
         }
         let (a, b, offsets) = match &self.offsets {
             None => (from, to, None),
-            Some(o) => (o[from], o[to], Some(o[from..=to].iter().map(|at| at.saturating_sub(o[from])).collect())),
+            Some(o) => (
+                o[from],
+                o[to],
+                Some(
+                    o[from..=to]
+                        .iter()
+                        .map(|at| at.saturating_sub(o[from]))
+                        .collect(),
+                ),
+            ),
         };
         Ok((self.bytes.get(a * w..b * w).ok_or_else(outside)?, offsets))
     }
@@ -195,7 +253,11 @@ impl Held {
     /// Its rows `from..to`: their values, and a list column's offsets counted from 0.
     pub fn rows(&self, from: usize, to: usize) -> Result<Held> {
         let (bytes, offsets) = self.part(from, to)?;
-        Ok(Held { kind: self.kind.clone(), bytes: bytes.to_vec(), offsets: offsets.map(Arc::new) })
+        Ok(Held {
+            kind: self.kind.clone(),
+            bytes: bytes.to_vec(),
+            offsets: offsets.map(Arc::new),
+        })
     }
 }
 
@@ -210,14 +272,24 @@ pub(super) struct Stitched {
 impl Stitched {
     /// None yet, every offset kept when `keep`.
     pub fn new(keep: bool) -> Self {
-        Stitched { end: 0, members: Vec::new(), kept: keep.then(|| vec![0]) }
+        Stitched {
+            end: 0,
+            members: Vec::new(),
+            kept: keep.then(|| vec![0]),
+        }
     }
 
     /// One chunk's offsets, counted on from where those before it end.
     pub fn add(&mut self, values: &[u8], label: &str) -> Result<()> {
         let (chunk, members) = crate::chunks::offsets(values, label)?;
-        let past = || invalid(format!("{label} add up past what an offset holds (2^63 − 1) (docs/FORMAT.md §4): the file is damaged; copy it again, or press its study again"));
-        let end = self.end.checked_add(members).filter(|end| *end <= i64::MAX as usize).ok_or_else(past)?;
+        let past = || {
+            invalid(format!("{label} add up past what an offset holds (2^63 − 1) (docs/FORMAT.md §4): the file is damaged; copy it again, or press its study again"))
+        };
+        let end = self
+            .end
+            .checked_add(members)
+            .filter(|end| *end <= i64::MAX as usize)
+            .ok_or_else(past)?;
         if let Some(kept) = &mut self.kept {
             kept.extend(chunk[1..].iter().map(|at| self.end + at));
         }
@@ -252,18 +324,36 @@ impl Reader {
 
     /// The file at `path` read through `file`, the descriptor that holds its lock, its header
     /// `text` from `start`: as `inspect` reads it.
-    pub(crate) fn locked(path: &Path, file: Arc<File>, text: &[u8], start: u64) -> Result<(Self, Result<()>)> {
+    pub(crate) fn locked(
+        path: &Path,
+        file: Arc<File>,
+        text: &[u8],
+        start: u64,
+    ) -> Result<(Self, Result<()>)> {
         let seen = stamp(&file)?;
-        Self::looked(path, file.into(), seen, text, start.saturating_sub(8) as usize)
+        Self::looked(
+            path,
+            file.into(),
+            seen,
+            text,
+            start.saturating_sub(8) as usize,
+        )
     }
 
     /// The file at `path`, opened as `file` (`seen`), its header `text` after `length` bytes of
     /// arrays: the reader, and what checking the header found.
-    fn looked(path: &Path, file: Handle, seen: Stamp, text: &[u8], length: usize) -> Result<(Self, Result<()>)> {
+    fn looked(
+        path: &Path,
+        file: Handle,
+        seen: Stamp,
+        text: &[u8],
+        length: usize,
+    ) -> Result<(Self, Result<()>)> {
         // Parsed once: strictly, or, when that fails, as it is, to look inside all the same.
         let (header, checked) = match crate::json::strict(text) {
             Ok(header) => {
-                let checked = super::checks(&header).and_then(|end| super::arrays::fill(end, length));
+                let checked =
+                    super::checks(&header).and_then(|end| super::arrays::fill(end, length));
                 (header, checked)
             }
             Err(e) => (serde_json::from_slice(text)?, Err(e)),
@@ -273,25 +363,59 @@ impl Reader {
     }
 
     /// The file opened at `path` (`seen` as it was opened) whose `header`, already checked, is followed by `length` bytes of arrays from `start`.
-    pub(super) fn of(path: &Path, file: Handle, seen: Stamp, header: Value, start: u64, length: u64) -> Self {
-        Self::made(path.to_path_buf(), header, vec![Part::new(file, seen, start, length)])
+    pub(super) fn of(
+        path: &Path,
+        file: Handle,
+        seen: Stamp,
+        header: Value,
+        start: u64,
+        length: u64,
+    ) -> Self {
+        Self::made(
+            path.to_path_buf(),
+            header,
+            vec![Part::new(file, seen, start, length)],
+        )
     }
 
     /// Read the arrays of the file at `path` that is being written, through `file`, its `end` bytes
     /// from byte 8, under `header`, checked as `open` checks it, before the header is written.
     pub(crate) fn laid(path: &Path, file: Arc<File>, written: u64, header: Value) -> Result<Self> {
         let end = super::checked_to_write(&serde_json::to_vec(&header)?)?;
-        super::arrays::fill(end, usize::try_from(written).map_err(|_| invalid(crate::change::LONG))?)?;
-        let parts = vec![Part { from: Reading::Laid(file.into()), start: 8, length: written }];
+        super::arrays::fill(
+            end,
+            usize::try_from(written).map_err(|_| invalid(crate::change::LONG))?,
+        )?;
+        let parts = vec![Part {
+            from: Reading::Laid(file.into()),
+            start: 8,
+            length: written,
+        }];
         Ok(Self::made(path.to_path_buf(), header, parts))
     }
 
     /// A reader of `header`'s arrays in `parts`.
     fn made(path: PathBuf, header: Value, parts: Vec<Part>) -> Self {
-        let empty = parts.iter().all(|part| part.length == 0) && super::arrays::end(&header["data"]).is_none_or(|end| end > 0);
-        let mut reader = Self { path, header, parts, empty, chunks: Default::default(), places: HashMap::new(), tables: Default::default(), sums: true, checked: Default::default(), seen: None };
+        let empty = parts.iter().all(|part| part.length == 0)
+            && super::arrays::end(&header["data"]).is_none_or(|end| end > 0);
+        let mut reader = Self {
+            path,
+            header,
+            parts,
+            empty,
+            chunks: Default::default(),
+            places: HashMap::new(),
+            tables: Default::default(),
+            sums: true,
+            checked: Default::default(),
+            seen: None,
+        };
         // The records lie in the header's own allocations, which stay where they are as it moves.
-        reader.places = super::arrays::records(&reader.header["data"]).iter().enumerate().map(|(at, (record, _, _))| (*record as *const Value as usize, at)).collect();
+        reader.places = super::arrays::records(&reader.header["data"])
+            .iter()
+            .enumerate()
+            .map(|(at, (record, _, _))| (*record as *const Value as usize, at))
+            .collect();
         reader
     }
 
@@ -311,12 +435,19 @@ impl Reader {
     pub fn header_text(&self) -> Result<Vec<u8>> {
         let part = &self.parts[0];
         let Reading::Held(file, (size, _)) = &part.from else {
-            return Err(invalid("the file is being written: its header has no text yet"));
+            return Err(invalid(
+                "the file is being written: its header has no text yet",
+            ));
         };
         // The header lies after the arrays and before its length and the magic (docs/FORMAT.md §1).
         let start = part.start + part.length;
         let mut text = vec![0; size.saturating_sub(12).saturating_sub(start) as usize];
-        let mut span = Span { file: Arc::clone(file), path: self.path.clone(), at: start, end: start + text.len() as u64 };
+        let mut span = Span {
+            file: Arc::clone(file),
+            path: self.path.clone(),
+            at: start,
+            end: start + text.len() as u64,
+        };
         let read = span.read_exact(&mut text);
         // A change in place since it was opened leaves other bytes there, which read without error.
         match part.changed() {
@@ -356,16 +487,29 @@ impl Reader {
         if self.empty() {
             return Err(invalid(super::EMPTY));
         }
-        let (mut at, size) = (count(record, label, "at")? as u64, count(record, label, "size")? as u64);
+        let (mut at, size) = (
+            count(record, label, "at")? as u64,
+            count(record, label, "size")? as u64,
+        );
         for part in &self.parts {
             if at.checked_add(size).is_some_and(|end| end <= part.length) {
                 let at = part.start + at;
                 #[cfg(debug_assertions)]
                 logged(&self.path, at, size);
                 let (file, path) = match &part.from {
-                    Reading::Held(file, _) | Reading::Laid(file) => (Arc::clone(file), self.path.clone()),
+                    Reading::Held(file, _) | Reading::Laid(file) => {
+                        (Arc::clone(file), self.path.clone())
+                    }
                 };
-                return Ok((part, Span { file, path, at, end: at + size }));
+                return Ok((
+                    part,
+                    Span {
+                        file,
+                        path,
+                        at,
+                        end: at + size,
+                    },
+                ));
             }
             // An array lies whole in one part: one past this part's end is in a later one.
             match at.checked_sub(part.length) {
@@ -373,7 +517,9 @@ impl Reader {
                 None => break,
             }
         }
-        Err(invalid(format!("{label}: its array lies past the end of the file: the file is damaged; copy it again")))
+        Err(invalid(format!(
+            "{label}: its array lies past the end of the file: the file is damaged; copy it again"
+        )))
     }
 
     /// The file's chunks: each one's sample, first row and end row; refused for an empty file, and
@@ -430,11 +576,24 @@ impl Reader {
 
     /// One array's chunk table, read and checked against its record (its size, sha256 and
     /// by_sample), or as an earlier read of some of its chunks kept it; kept when `keep`.
-    fn table(&self, record: &Value, kind: &str, label: &str, span: &Span, keep: bool) -> Result<Arc<Table>> {
+    fn table(
+        &self,
+        record: &Value,
+        kind: &str,
+        label: &str,
+        span: &Span,
+        keep: bool,
+    ) -> Result<Arc<Table>> {
         // By the array's place among the arrays, as `at` is not one place: a laid file's arrays
         // each begin a part of their own, and a file of no rows has every array at 0.
         let place = self.places.get(&(record as *const Value as usize)).copied();
-        if let Some(held) = place.and_then(|place| self.tables.lock().unwrap_or_else(|e| e.into_inner()).get(&place).cloned()) {
+        if let Some(held) = place.and_then(|place| {
+            self.tables
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&place)
+                .cloned()
+        }) {
             return Ok(held);
         }
         let rows = self.chunks()?;
@@ -444,38 +603,79 @@ impl Reader {
         let table_bytes = (rows.len() as u64).saturating_mul(crate::chunks::entry(w) as u64);
         let start = size.checked_sub(table_bytes).ok_or_else(|| invalid(format!("{label}: its {size} bytes cannot hold its chunk table of {table_bytes} (docs/FORMAT.md §7): the file is damaged; copy it again, or press its study again")))?;
         let mut held = vec![0; table_bytes as usize];
-        Span { at: span.at + start, ..span.clone() }.read_exact(&mut held)?;
+        Span {
+            at: span.at + start,
+            ..span.clone()
+        }
+        .read_exact(&mut held)?;
         let table = crate::chunks::table(&held, size, w, rows.len(), label)?;
         crate::chunks::agree(record, &table, &rows, samples, label)?;
         let table = Arc::new(table);
         if let Some(place) = place.filter(|_| keep) {
-            self.tables.lock().unwrap_or_else(|e| e.into_inner()).insert(place, table.clone());
+            self.tables
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(place, table.clone());
         }
         Ok(table)
     }
 
     /// One array of `kind`, its chunk table read and checked against its record, to read a chunk
     /// at a time on any thread.
-    pub(crate) fn array_chunks(&self, record: &Value, kind: &str, label: &str) -> Result<ArrayChunks<'_>> {
+    pub(crate) fn array_chunks(
+        &self,
+        record: &Value,
+        kind: &str,
+        label: &str,
+    ) -> Result<ArrayChunks<'_>> {
         let (part, span) = self.part(record, label)?;
-        let table = self.table(record, kind, label, &span, false).map_err(|e| if part.changed() { changed(&self.path) } else { e })?;
-        Ok(ArrayChunks { path: &self.path, part, span, table, label: label.into() })
+        let table = self.table(record, kind, label, &span, false).map_err(|e| {
+            if part.changed() {
+                changed(&self.path)
+            } else {
+                e
+            }
+        })?;
+        Ok(ArrayChunks {
+            path: &self.path,
+            part,
+            span,
+            table,
+            label: label.into(),
+        })
     }
 
     /// Every chunk of every one of `arrays` (only those `wanted`, when given, each array's counts
     /// then from the first of them), decoded in one pool of threads a few ahead of `each`, which is
     /// handed them in order, each checked (its SHA-256 unless `trusting`); each array's table read
     /// with its first chunk, and kept for the next read when only some chunks are wanted.
-    pub(crate) fn each_chunks(&self, arrays: &[Whole], wanted: Option<std::ops::Range<usize>>, each: &mut Chunked) -> Result<()> {
+    pub(crate) fn each_chunks(
+        &self,
+        arrays: &[Whole],
+        wanted: Option<std::ops::Range<usize>>,
+        each: &mut Chunked,
+    ) -> Result<()> {
         let keep = wanted.is_some();
         let wanted = wanted.unwrap_or(0..self.chunks()?.len());
         let (first, chunks) = (wanted.start, wanted.len());
-        let placed = arrays.iter().map(|(record, _, label, _)| self.part(record, label)).collect::<Result<Vec<_>>>()?;
+        let placed = arrays
+            .iter()
+            .map(|(record, _, label, _)| self.part(record, label))
+            .collect::<Result<Vec<_>>>()?;
         // With no chunk to read a table with (a file of no rows, or no rows wanted), each is checked all the same.
-        for ((record, kind, label, _), (part, span)) in arrays.iter().zip(&placed).filter(|_| chunks == 0) {
-            self.table(record, kind, label, span, keep).map_err(|e| if part.changed() { changed(&self.path) } else { e })?;
+        for ((record, kind, label, _), (part, span)) in
+            arrays.iter().zip(&placed).filter(|_| chunks == 0)
+        {
+            self.table(record, kind, label, span, keep).map_err(|e| {
+                if part.changed() {
+                    changed(&self.path)
+                } else {
+                    e
+                }
+            })?;
         }
-        let tables: Vec<Mutex<Option<Arc<Table>>>> = arrays.iter().map(|_| Mutex::new(None)).collect();
+        let tables: Vec<Mutex<Option<Arc<Table>>>> =
+            arrays.iter().map(|_| Mutex::new(None)).collect();
         let work = |at: usize| {
             let (a, k) = (at / chunks, first + at % chunks);
             let ((record, kind, label, n), (part, span)) = (&arrays[a], &placed[a]);
@@ -484,25 +684,54 @@ impl Reader {
                     let mut held = tables[a].lock().unwrap_or_else(|e| e.into_inner());
                     match held.as_ref() {
                         Some(table) => table.clone(),
-                        None => held.insert(self.table(record, kind, label, span, keep)?).clone(),
+                        None => held
+                            .insert(self.table(record, kind, label, span, keep)?)
+                            .clone(),
                     }
                 };
                 let (from, to) = table.span(k);
                 let mut frames = vec![0; (to - from) as usize];
-                Span { at: span.at + from, end: span.at + to, ..span.clone() }.read_exact(&mut frames)?;
-                let count = |k: usize| k.checked_sub(first).and_then(|at| n.get(at)).copied().unwrap_or(0);
-                let decoded = crate::chunks::decode(&frames, &table, k, count(k), label, self.sums)?;
-                Ok((a, k, decoded, (k == first).then(|| crate::chunks::decoded(&table, wanted.clone(), &count))))
+                Span {
+                    at: span.at + from,
+                    end: span.at + to,
+                    ..span.clone()
+                }
+                .read_exact(&mut frames)?;
+                let count = |k: usize| {
+                    k.checked_sub(first)
+                        .and_then(|at| n.get(at))
+                        .copied()
+                        .unwrap_or(0)
+                };
+                let decoded =
+                    crate::chunks::decode(&frames, &table, k, count(k), label, self.sums)?;
+                Ok((
+                    a,
+                    k,
+                    decoded,
+                    (k == first).then(|| crate::chunks::decoded(&table, wanted.clone(), &count)),
+                ))
             };
-            read().map_err(|e| if part.changed() { changed(&self.path) } else { e })
+            read().map_err(|e| {
+                if part.changed() {
+                    changed(&self.path)
+                } else {
+                    e
+                }
+            })
         };
-        crate::parallel::ordered(arrays.len() * chunks, crate::parallel::cores(), work, |(a, k, values, bytes)| {
-            // Every chunk wanted of the array is read: none needs its table again.
-            if k + 1 == wanted.end {
-                *tables[a].lock().unwrap_or_else(|e| e.into_inner()) = None;
-            }
-            each(a, k, values, bytes)
-        })
+        crate::parallel::ordered(
+            arrays.len() * chunks,
+            crate::parallel::cores(),
+            work,
+            |(a, k, values, bytes)| {
+                // Every chunk wanted of the array is read: none needs its table again.
+                if k + 1 == wanted.end {
+                    *tables[a].lock().unwrap_or_else(|e| e.into_inner()) = None;
+                }
+                each(a, k, values, bytes)
+            },
+        )
     }
 
     /// Stored columns by name (`sample` and `entry` too), every chunk of every one decoded in one pool of threads; `None` for a name it stores no column of.
@@ -526,7 +755,11 @@ impl Reader {
         if held.iter().all(Option::is_some) {
             return Ok(held);
         }
-        let derived: Vec<String> = super::derived::listed(&self.header).into_iter().map(|(name, _)| name).filter(|name| names.contains(name) && self.record(name).is_none()).collect();
+        let derived: Vec<String> = super::derived::listed(&self.header)
+            .into_iter()
+            .map(|(name, _)| name)
+            .filter(|name| names.contains(name) && self.record(name).is_none())
+            .collect();
         if derived.is_empty() {
             return Ok(held);
         }
@@ -535,20 +768,55 @@ impl Reader {
             None => super::derived::columns(self, &derived)?,
         };
         let mut worked: HashMap<_, _> = derived.iter().zip(worked).collect();
-        for (at, (name, held)) in names.iter().zip(&mut held).enumerate().filter(|(_, (_, held))| held.is_none()) {
+        for (at, (name, held)) in names
+            .iter()
+            .zip(&mut held)
+            .enumerate()
+            .filter(|(_, (_, held))| held.is_none())
+        {
             // A name asked for twice is copied for all but its last.
-            *held = if names[at + 1..].contains(name) { worked.get(name).cloned() } else { worked.remove(name) };
+            *held = if names[at + 1..].contains(name) {
+                worked.get(name).cloned()
+            } else {
+                worked.remove(name)
+            };
         }
         Ok(held)
     }
 
     /// Stored columns by name (`sample` and `entry` too), whole or their `rows` alone, the chunks
     /// holding them decoded in one pool of threads; `None` for a name it stores no column of.
-    pub(super) fn together(&self, names: &[String], rows: Option<(usize, usize)>) -> Result<Vec<Option<Held>>> {
+    pub(super) fn together(
+        &self,
+        names: &[String],
+        rows: Option<(usize, usize)>,
+    ) -> Result<Vec<Option<Held>>> {
         // `sample` and `entry` are arrays of every file, of a kind the format gives (docs/FORMAT.md §3).
-        let row = |name: &str| [("sample", "i4"), ("entry", "i8")].into_iter().find(|(which, _)| *which == name);
-        let places: Vec<String> = names.iter().map(|name| if row(name).is_some() { format!("data.{name}") } else { format!("data.cols[{name:?}]") }).collect();
-        let records: Vec<Option<&Value>> = names.iter().map(|name| if row(name).is_some() { Some(&self.data()[name.as_str()]) } else { self.record(name) }).collect();
+        let row = |name: &str| {
+            [("sample", "i4"), ("entry", "i8")]
+                .into_iter()
+                .find(|(which, _)| *which == name)
+        };
+        let places: Vec<String> = names
+            .iter()
+            .map(|name| {
+                if row(name).is_some() {
+                    format!("data.{name}")
+                } else {
+                    format!("data.cols[{name:?}]")
+                }
+            })
+            .collect();
+        let records: Vec<Option<&Value>> = names
+            .iter()
+            .map(|name| {
+                if row(name).is_some() {
+                    Some(&self.data()[name.as_str()])
+                } else {
+                    self.record(name)
+                }
+            })
+            .collect();
         if records.iter().all(Option::is_none) {
             return Ok(vec![None; names.len()]);
         }
@@ -564,27 +832,56 @@ impl Reader {
         let read = &chunks[wanted.clone()];
         let end = read.last().map_or(first, |chunk| chunk.2);
         let wanted = rows.map(|_| wanted);
-        let (per, more) = (Self::rows_of(read), read.iter().map(|c| c.2 - c.1 + 1).collect::<Vec<_>>());
+        let (per, more) = (
+            Self::rows_of(read),
+            read.iter().map(|c| c.2 - c.1 + 1).collect::<Vec<_>>(),
+        );
         // The flat columns' arrays and the list columns' offsets, then the list columns' content.
         // Each column asked for, and its array among `arrays`: list columns that share one offsets
         // array (docs/FORMAT.md §7) read it once.
         let (mut arrays, mut owner): (Vec<Whole>, Vec<(usize, usize)>) = (Vec::new(), Vec::new());
-        for (index, (record, place)) in records.iter().zip(&places).enumerate().filter_map(|(i, (r, p))| Some((i, (r.as_ref()?, p)))) {
+        for (index, (record, place)) in records
+            .iter()
+            .zip(&places)
+            .enumerate()
+            .filter_map(|(i, (r, p))| Some((i, (r.as_ref()?, p))))
+        {
             let jagged = record["kind"] == "jagged";
             let offsets = &record["offsets"];
             let shared = jagged && offsets["size"].as_u64() > Some(0);
-            if let Some(a) = arrays.iter().position(|(held, ..)| shared && *held == offsets) {
+            if let Some(a) = arrays
+                .iter()
+                .position(|(held, ..)| shared && *held == offsets)
+            {
                 owner.push((index, a));
                 continue;
             }
             owner.push((index, arrays.len()));
             arrays.push(match jagged {
-                true => (offsets, "i8", format!("{place}.offsets"), (&more[..]).into()),
-                false => (*record, match row(&names[index]) { Some((_, kind)) => kind, None => text(record, place, "kind")? }, place.clone(), (&per[..]).into()),
+                true => (
+                    offsets,
+                    "i8",
+                    format!("{place}.offsets"),
+                    (&more[..]).into(),
+                ),
+                false => (
+                    *record,
+                    match row(&names[index]) {
+                        Some((_, kind)) => kind,
+                        None => text(record, place, "kind")?,
+                    },
+                    place.clone(),
+                    (&per[..]).into(),
+                ),
             });
         }
         let mut held: Vec<Option<Held>> = vec![None; names.len()];
-        let mut stitched: Vec<Option<Stitched>> = arrays.iter().map(|(_, kind, label, _)| (label.ends_with(".offsets") && *kind == "i8").then(|| Stitched::new(true))).collect();
+        let mut stitched: Vec<Option<Stitched>> = arrays
+            .iter()
+            .map(|(_, kind, label, _)| {
+                (label.ends_with(".offsets") && *kind == "i8").then(|| Stitched::new(true))
+            })
+            .collect();
         let mut bytes: Vec<Vec<u8>> = arrays.iter().map(|_| Vec::new()).collect();
         self.each_chunks(&arrays, wanted.clone(), &mut |a, _, values, whole| {
             match &mut stitched[a] {
@@ -598,11 +895,18 @@ impl Reader {
         })?;
         let mut contents: Vec<Whole> = Vec::new();
         let mut content_at = Vec::new();
-        let kept: Vec<_> = stitched.iter_mut().map(|s| s.as_mut().and_then(|s| s.kept.take()).map(Arc::new)).collect();
+        let kept: Vec<_> = stitched
+            .iter_mut()
+            .map(|s| s.as_mut().and_then(|s| s.kept.take()).map(Arc::new))
+            .collect();
         for (index, a) in &owner {
             let (record, place) = (records[*index].unwrap_or(&Value::Null), &places[*index]);
             let Some(offsets) = &stitched[*a] else {
-                held[*index] = Some(Held { kind: arrays[*a].1.to_owned(), bytes: std::mem::take(&mut bytes[*a]), offsets: None });
+                held[*index] = Some(Held {
+                    kind: arrays[*a].1.to_owned(),
+                    bytes: std::mem::take(&mut bytes[*a]),
+                    offsets: None,
+                });
                 continue;
             };
             let content = &record["content"];
@@ -610,8 +914,17 @@ impl Reader {
                 ends(offsets.end, content, place)?;
             }
             let kind = text(content, place, "kind")?;
-            contents.push((content, kind, format!("{place}.content"), offsets.members.clone().into()));
-            held[*index] = Some(Held { kind: kind.to_owned(), bytes: Vec::new(), offsets: kept[*a].clone() });
+            contents.push((
+                content,
+                kind,
+                format!("{place}.content"),
+                offsets.members.clone().into(),
+            ));
+            held[*index] = Some(Held {
+                kind: kind.to_owned(),
+                bytes: Vec::new(),
+                offsets: kept[*a].clone(),
+            });
             content_at.push(*index);
         }
         self.each_chunks(&contents, wanted, &mut |a, _, values, whole| {
@@ -641,13 +954,23 @@ impl Reader {
     }
 
     /// One array of `kind`, whole: its chunks' values, in order.
-    pub(super) fn array(&self, record: &Value, kind: &str, label: &str, n: &[usize]) -> Result<Vec<u8>> {
+    pub(super) fn array(
+        &self,
+        record: &Value,
+        kind: &str,
+        label: &str,
+        n: &[usize],
+    ) -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
-        self.each_chunks(&[(record, kind, label.to_owned(), n.into())], None, &mut |_, _, values, whole| {
-            bytes.reserve(whole.unwrap_or(0));
-            bytes.extend_from_slice(&values);
-            Ok(())
-        })?;
+        self.each_chunks(
+            &[(record, kind, label.to_owned(), n.into())],
+            None,
+            &mut |_, _, values, whole| {
+                bytes.reserve(whole.unwrap_or(0));
+                bytes.extend_from_slice(&values);
+                Ok(())
+            },
+        )?;
         Ok(bytes)
     }
 
@@ -662,36 +985,83 @@ impl Reader {
         if from >= to {
             return (start..start, from);
         }
-        (start..rows.partition_point(|c| c.1 < to), rows.get(start).map_or(from, |c| c.1))
+        (
+            start..rows.partition_point(|c| c.1 < to),
+            rows.get(start).map_or(from, |c| c.1),
+        )
     }
 
     /// Each chunk's first and end row, in order (docs/FORMAT.md §7).
     pub fn chunk_spans(&self) -> Result<Vec<(usize, usize)>> {
-        Ok(self.chunks()?.iter().map(|(_, first, end)| (*first, *end)).collect())
+        Ok(self
+            .chunks()?
+            .iter()
+            .map(|(_, first, end)| (*first, *end))
+            .collect())
     }
 
     /// Rows `from..to`'s indices into `data.samples`.
     pub fn sample_slice(&self, from: usize, to: usize) -> Result<Vec<i32>> {
-        let bytes = self.together(&["sample".into()], Some((from, to)))?.pop().flatten().map(|held| held.bytes).unwrap_or_default();
-        Ok(bytes.as_chunks::<4>().0.iter().map(|v| i32::from_le_bytes(*v)).collect())
+        let bytes = self
+            .together(&["sample".into()], Some((from, to)))?
+            .pop()
+            .flatten()
+            .map(|held| held.bytes)
+            .unwrap_or_default();
+        Ok(bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| i32::from_le_bytes(*v))
+            .collect())
     }
 
     /// Rows `from..to`'s entry numbers in their source trees.
     pub fn entry_slice(&self, from: usize, to: usize) -> Result<Vec<i64>> {
-        let bytes = self.together(&["entry".into()], Some((from, to)))?.pop().flatten().map(|held| held.bytes).unwrap_or_default();
-        Ok(bytes.as_chunks::<8>().0.iter().map(|v| i64::from_le_bytes(*v)).collect())
+        let bytes = self
+            .together(&["entry".into()], Some((from, to)))?
+            .pop()
+            .flatten()
+            .map(|held| held.bytes)
+            .unwrap_or_default();
+        Ok(bytes
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|v| i64::from_le_bytes(*v))
+            .collect())
     }
 
     /// Each row's index into `data.samples`.
     pub fn sample(&self) -> Result<Vec<i32>> {
-        let bytes = self.array(&self.data()["sample"], "i4", "data.sample", &Self::rows_of(&self.chunks()?))?;
-        Ok(bytes.as_chunks::<4>().0.iter().map(|v| i32::from_le_bytes(*v)).collect())
+        let bytes = self.array(
+            &self.data()["sample"],
+            "i4",
+            "data.sample",
+            &Self::rows_of(&self.chunks()?),
+        )?;
+        Ok(bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| i32::from_le_bytes(*v))
+            .collect())
     }
 
     /// Each row's entry number in its source tree.
     pub fn entry(&self) -> Result<Vec<i64>> {
-        let bytes = self.array(&self.data()["entry"], "i8", "data.entry", &Self::rows_of(&self.chunks()?))?;
-        Ok(bytes.as_chunks::<8>().0.iter().map(|v| i64::from_le_bytes(*v)).collect())
+        let bytes = self.array(
+            &self.data()["entry"],
+            "i8",
+            "data.entry",
+            &Self::rows_of(&self.chunks()?),
+        )?;
+        Ok(bytes
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|v| i64::from_le_bytes(*v))
+            .collect())
     }
 
     /// Read one row column, stored or derived (worked out and checked), or `sample` or `entry`; `None` when there is none.
@@ -706,6 +1076,11 @@ impl Reader {
 }
 
 /// The refusal of rows `from..to` of `what` that do not lie in a file of `rows` rows.
-fn outside(what: &str, from: impl std::fmt::Display, to: impl std::fmt::Display, rows: usize) -> crate::Error {
+fn outside(
+    what: &str,
+    from: impl std::fmt::Display,
+    to: impl std::fmt::Display,
+    rows: usize,
+) -> crate::Error {
     invalid(format!("rows {from} to {to} of {what} are asked for, and the file has {rows}: ask for rows from 0 to {rows}, the first no later than the last"))
 }

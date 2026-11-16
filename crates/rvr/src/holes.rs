@@ -66,10 +66,12 @@ pub struct Failed {
 impl Failed {
     /// A failure of this kind, and why.
     pub fn new(fault: Fault, why: impl Into<String>) -> Self {
-        Failed { fault, why: why.into() }
+        Failed {
+            fault,
+            why: why.into(),
+        }
     }
 }
-
 
 /// What the last request to a remote file that failed means for the file.
 #[derive(Default)]
@@ -102,13 +104,22 @@ pub fn fault_of(error: &hep_root::Error, seen: Option<&Seen>) -> Fault {
     match error {
         E::Remote(why) if why.contains(crate::samples::remote::STOPPED) => Fault::Stopped,
         // A remote file answers 404 as a changed source; its request said it is gone.
-        E::Remote(_) | E::Io(_) | E::SourceChanged(_) if remote.is_some() => remote.unwrap_or(Fault::Unreachable),
+        E::Remote(_) | E::Io(_) | E::SourceChanged(_) if remote.is_some() => {
+            remote.unwrap_or(Fault::Unreachable)
+        }
         E::Remote(_) => Fault::Unreachable,
         E::SourceChanged(_) => Fault::Changed,
         // A local file not there is gone, one cut short is damaged; one that cannot be read (no
         // rights, a mount gone, too many open files) is not the file's fault.
         E::Io(e) if e.kind() == std::io::ErrorKind::NotFound => Fault::Gone,
-        E::Io(e) if matches!(e.kind(), std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::InvalidData) => Fault::Damaged,
+        E::Io(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::InvalidData
+            ) =>
+        {
+            Fault::Damaged
+        }
         E::Io(_) => Fault::Save,
         E::Format { .. } | E::Compression { .. } | E::NoBasket { .. } => Fault::Damaged,
         E::Unsupported(_) | E::KeyNotFound(_) => Fault::Damaged,
@@ -123,7 +134,10 @@ mod tests {
     // SPEC 7.3.1, 7.4.2
     #[test]
     fn a_read_failure_is_named_by_what_it_is() {
-        let compression = hep_root::Error::Compression { algorithm: "zlib".into(), message: "bad".into() };
+        let compression = hep_root::Error::Compression {
+            algorithm: "zlib".into(),
+            message: "bad".into(),
+        };
         assert_eq!(fault_of(&compression, None), Fault::Damaged);
         let busy = hep_root::Error::Remote("f.root: its storage answered 503".into());
         assert_eq!(fault_of(&busy, None), Fault::Unreachable);
@@ -132,8 +146,14 @@ mod tests {
         assert_eq!(fault_of(&busy, Some(&seen)), Fault::Refused);
         let stopped = hep_root::Error::Remote(crate::samples::remote::STOPPED.into());
         assert_eq!(fault_of(&stopped, Some(&seen)), Fault::Stopped);
-        assert_eq!(fault_of(&hep_root::Error::Unsupported("TObjArray".into()), None), Fault::Damaged);
-        assert_eq!(fault_of(&hep_root::Error::BranchNotFound("x".into()), None), Fault::Bug);
+        assert_eq!(
+            fault_of(&hep_root::Error::Unsupported("TObjArray".into()), None),
+            Fault::Damaged
+        );
+        assert_eq!(
+            fault_of(&hep_root::Error::BranchNotFound("x".into()), None),
+            Fault::Bug
+        );
         seen.note(Fault::Gone);
         let deleted = hep_root::Error::SourceChanged("f.root no longer exists".into());
         assert_eq!(fault_of(&deleted, Some(&seen)), Fault::Gone);
@@ -144,10 +164,21 @@ mod tests {
     #[test]
     fn every_kind_of_hole_is_one_the_reader_knows() {
         use Fault::*;
-        let kinds: Vec<&str> = [Unreachable, Damaged, Gone, Changed, Refused, Save, Data, Stopped, Bug, Needed]
-            .iter()
-            .filter_map(|fault| fault.kind())
-            .collect();
+        let kinds: Vec<&str> = [
+            Unreachable,
+            Damaged,
+            Gone,
+            Changed,
+            Refused,
+            Save,
+            Data,
+            Stopped,
+            Bug,
+            Needed,
+        ]
+        .iter()
+        .filter_map(|fault| fault.kind())
+        .collect();
         assert_eq!(kinds, rowver::rvr::HOLE_KINDS);
         // Only what is about the file's bytes or place lasts.
         let lasting: Vec<&str> = kinds.into_iter().filter(|kind| !passing(kind)).collect();

@@ -56,7 +56,9 @@ pub fn read(text: &str) -> Result<Vec<Sample>, Problems> {
     match doc.get("format") {
         None => p.missing.push(FORMAT),
         Some(toml::Value::String(f)) if f == "rvr-samples" => {}
-        Some(_) => p.say("samples.toml's format is \"rvr-samples\": write format = \"rvr-samples\""),
+        Some(_) => {
+            p.say("samples.toml's format is \"rvr-samples\": write format = \"rvr-samples\"")
+        }
     }
     match doc.get("version") {
         None => p.missing.push(VERSION),
@@ -74,7 +76,11 @@ pub fn read(text: &str) -> Result<Vec<Sample>, Problems> {
             toml::Table::new()
         }
     };
-    let (places, defaults, eras) = (table("places", TABLES[0]), table("defaults", TABLES[1]), table("eras", TABLES[2]));
+    let (places, defaults, eras) = (
+        table("places", TABLES[0]),
+        table("defaults", TABLES[1]),
+        table("eras", TABLES[2]),
+    );
     let mut vars = Map::new();
     for (name, value) in &places {
         if name.is_empty() || !name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
@@ -84,12 +90,20 @@ pub fn read(text: &str) -> Result<Vec<Sample>, Problems> {
         }
         match value {
             toml::Value::String(place) => {
-                vars.insert(name.clone(), Value::String(place.strip_suffix('/').unwrap_or(place).to_owned()));
+                vars.insert(
+                    name.clone(),
+                    Value::String(place.strip_suffix('/').unwrap_or(place).to_owned()),
+                );
             }
-            _ => p.say(format!("[places] {name} must be text: a folder, a path or a URL")),
+            _ => p.say(format!(
+                "[places] {name} must be text: a folder, a path or a URL"
+            )),
         }
     }
-    for key in defaults.keys().filter(|key| !DEFAULTS.contains(&key.as_str())) {
+    for key in defaults
+        .keys()
+        .filter(|key| !DEFAULTS.contains(&key.as_str()))
+    {
         match key.as_str() {
             "name" | "label" | "files" | "trees" => p.say(format!("[defaults] cannot hold {key}, which belongs to one sample: give it in each [[sample]]")),
             _ => p.say(unknown("[defaults]", key, &DEFAULTS) + &metadata_hint(key)),
@@ -141,19 +155,40 @@ pub fn read(text: &str) -> Result<Vec<Sample>, Problems> {
     let mut samples = Vec::new();
     for (index, body) in entries.iter().enumerate() {
         match body {
-            toml::Value::Table(body) => expand(body, index + 1, (&usable, &wrong), &era_values, &vars, &mut samples, &mut p),
+            toml::Value::Table(body) => expand(
+                body,
+                index + 1,
+                (&usable, &wrong),
+                &era_values,
+                &vars,
+                &mut samples,
+                &mut p,
+            ),
             _ => p.say(format!("sample {} must be a table", index + 1)),
         }
     }
     // A default seed is used by a random sample that gives none of its own.
-    let own_seed = |s: &Sample| entries[s.entry - 1].as_table().is_some_and(|body| body.contains_key("seed"));
-    if p.said.is_empty() && defaults.contains_key("seed") && !samples.is_empty() && !samples.iter().any(|s| matches!(s.events, Events::Random { .. }) && !own_seed(s)) {
+    let own_seed = |s: &Sample| {
+        entries[s.entry - 1]
+            .as_table()
+            .is_some_and(|body| body.contains_key("seed"))
+    };
+    if p.said.is_empty()
+        && defaults.contains_key("seed")
+        && !samples.is_empty()
+        && !samples
+            .iter()
+            .any(|s| matches!(s.events, Events::Random { .. }) && !own_seed(s))
+    {
         p.say("[defaults] gives seed, but no sample uses it (none chooses at random without its own seed): take it out");
     }
     let (mut names, mut labels) = (BTreeSet::new(), BTreeSet::new());
     for sample in &samples {
         if !names.insert(sample.name.as_str()) {
-            p.say(format!("two samples are named {:?}: give one of them another name, or other eras or trees", sample.name));
+            p.say(format!(
+                "two samples are named {:?}: give one of them another name, or other eras or trees",
+                sample.name
+            ));
         }
         if !labels.insert(sample.label.as_str()) {
             p.say(format!("two samples are labelled {:?}, so plots could not tell them apart: give one of them another label", sample.label));
@@ -177,7 +212,9 @@ fn expand(
     let base = match body.get("name") {
         Some(toml::Value::String(name)) => name.clone(),
         Some(_) => {
-            p.say(format!("sample {entry}: name must be text, like name = \"ST_s-channel\""));
+            p.say(format!(
+                "sample {entry}: name must be text, like name = \"ST_s-channel\""
+            ));
             return;
         }
         None => {
@@ -203,11 +240,20 @@ fn expand(
     let setting = |key: &str| body.get(key).or_else(|| defaults.get(key));
     let files: Vec<String> = match body.get("files") {
         Some(toml::Value::String(f)) if !f.is_empty() => vec![f.clone()],
-        Some(toml::Value::Array(list)) if !list.is_empty() && list.iter().all(|f| f.as_str().is_some_and(|f| !f.is_empty())) => {
-            list.iter().filter_map(|f| f.as_str().map(str::to_owned)).collect()
+        Some(toml::Value::Array(list))
+            if !list.is_empty()
+                && list
+                    .iter()
+                    .all(|f| f.as_str().is_some_and(|f| !f.is_empty())) =>
+        {
+            list.iter()
+                .filter_map(|f| f.as_str().map(str::to_owned))
+                .collect()
         }
         Some(_) => {
-            p.say(format!("{place}: files is a path or URL, or a nonempty list of them"));
+            p.say(format!(
+                "{place}: files is a path or URL, or a nonempty list of them"
+            ));
             Vec::new()
         }
         None => {
@@ -248,8 +294,14 @@ fn expand(
         },
     };
     for (point, _) in &trees {
-        if point.as_deref().is_some_and(|point| as_name(point).is_empty()) {
-            p.say(format!("{place}: the trees label {:?} makes no name: give it letters or digits", point.as_deref().unwrap_or("")));
+        if point
+            .as_deref()
+            .is_some_and(|point| as_name(point).is_empty())
+        {
+            p.say(format!(
+                "{place}: the trees label {:?} makes no name: give it letters or digits",
+                point.as_deref().unwrap_or("")
+            ));
         }
     }
     let era_list: Vec<Option<String>> = match setting("eras") {
@@ -260,21 +312,39 @@ fn expand(
                 Some(era) if eras.contains_key(era) => Some(Some(era.to_owned())),
                 Some(era) => {
                     let known: Vec<&str> = eras.keys().map(String::as_str).collect();
-                    p.say(format!("{place}: the era {era:?} is not in [eras], which has {}", if known.is_empty() { "none".into() } else { known.join(", ") }));
+                    p.say(format!(
+                        "{place}: the era {era:?} is not in [eras], which has {}",
+                        if known.is_empty() {
+                            "none".into()
+                        } else {
+                            known.join(", ")
+                        }
+                    ));
                     None
                 }
                 None => {
-                    p.say(format!("{place}: eras is a list of era names, like eras = [\"UL17\", \"UL18\"]"));
+                    p.say(format!(
+                        "{place}: eras is a list of era names, like eras = [\"UL17\", \"UL18\"]"
+                    ));
                     None
                 }
             })
             .collect(),
         Some(_) => {
-            p.say(format!("{place}: eras is a nonempty list of era names, like eras = [\"UL17\", \"UL18\"]"));
+            p.say(format!(
+                "{place}: eras is a nonempty list of era names, like eras = [\"UL17\", \"UL18\"]"
+            ));
             Vec::new()
         }
     };
-    let events = events(setting("events"), setting("choose"), setting("seed"), body.contains_key("seed"), &place, p);
+    let events = events(
+        setting("events"),
+        setting("choose"),
+        setting("seed"),
+        body.contains_key("seed"),
+        &place,
+        p,
+    );
     metadata_of(body, &place, p);
     if p.said.len() > said {
         return;
@@ -294,7 +364,10 @@ fn expand(
             metadata.extend(values);
             vars.insert("era".into(), Value::String(era.clone()));
         }
-        let files: Vec<String> = files.iter().filter_map(|f| fill(f, &vars, false, &place, p)).collect();
+        let files: Vec<String> = files
+            .iter()
+            .filter_map(|f| fill(f, &vars, false, &place, p))
+            .collect();
         for file in &files {
             reachable(file, &place, p);
         }
@@ -316,29 +389,51 @@ fn expand(
                 name = format!("{name}_{era}");
                 shown = format!("{shown} ({era})");
             }
-            out.push(Sample { name, label: shown, entry, files: files.clone(), tree: tree.clone(), events, metadata: metadata.clone() });
+            out.push(Sample {
+                name,
+                label: shown,
+                entry,
+                files: files.clone(),
+                tree: tree.clone(),
+                events,
+                metadata: metadata.clone(),
+            });
         }
     }
 }
 
 /// Check that each value of `[defaults]` has its form, even when every sample gives its own: the
 /// keys that do not.
-fn defaults_forms(defaults: &toml::Table, eras: &toml::Table, p: &mut Problems) -> Vec<&'static str> {
+fn defaults_forms(
+    defaults: &toml::Table,
+    eras: &toml::Table,
+    p: &mut Problems,
+) -> Vec<&'static str> {
     use toml::Value::{Array, Integer, String as Text};
     let wrong = |key: &str| match defaults.get(key) {
         None => false,
         Some(value) => !match key {
             "tree" => matches!(value, Text(t) if !t.is_empty()),
-            "eras" => matches!(value, Array(list) if !list.is_empty() && list.iter().all(|e| e.as_str().is_some_and(|e| eras.contains_key(e)))),
-            "events" => matches!(value, Text(t) if t == "all") || matches!(value, Integer(n) if *n >= 1),
+            "eras" => {
+                matches!(value, Array(list) if !list.is_empty() && list.iter().all(|e| e.as_str().is_some_and(|e| eras.contains_key(e))))
+            }
+            "events" => {
+                matches!(value, Text(t) if t == "all") || matches!(value, Integer(n) if *n >= 1)
+            }
             "choose" => matches!(value, Text(t) if t == "first" || t == "random"),
             _ => matches!(value, Integer(n) if *n >= 0),
         },
     };
     let forms = [
         ("tree", "the name of a tree, like tree = \"Events\""),
-        ("eras", "a nonempty list of names in [eras], like eras = [\"UL17\", \"UL18\"]"),
-        ("events", "a number of entries to read, from 1, like events = 50_000, or \"all\""),
+        (
+            "eras",
+            "a nonempty list of names in [eras], like eras = [\"UL17\", \"UL18\"]",
+        ),
+        (
+            "events",
+            "a number of entries to read, from 1, like events = 50_000, or \"all\"",
+        ),
         ("choose", "\"first\" or \"random\""),
         ("seed", "a whole number from 0, like seed = 7"),
     ];
@@ -355,7 +450,14 @@ fn metadata_hint(key: &str) -> String {
 }
 
 /// A sample's event choice, from its `events`, `choose` and `seed` (or `[defaults]`'s).
-fn events(events: Option<&toml::Value>, choose: Option<&toml::Value>, seed: Option<&toml::Value>, seeded: bool, place: &str, p: &mut Problems) -> Events {
+fn events(
+    events: Option<&toml::Value>,
+    choose: Option<&toml::Value>,
+    seed: Option<&toml::Value>,
+    seeded: bool,
+    place: &str,
+    p: &mut Problems,
+) -> Events {
     let n = match events {
         None => None,
         Some(toml::Value::String(all)) if all == "all" => None,
@@ -378,7 +480,9 @@ fn events(events: Option<&toml::Value>, choose: Option<&toml::Value>, seed: Opti
         None => 1,
         Some(toml::Value::Integer(s)) if *s >= 0 => *s as u64,
         Some(_) => {
-            p.say(format!("{place}: seed is a whole number from 0, like seed = 7"));
+            p.say(format!(
+                "{place}: seed is a whole number from 0, like seed = 7"
+            ));
             1
         }
     };
@@ -399,15 +503,24 @@ fn events(events: Option<&toml::Value>, choose: Option<&toml::Value>, seed: Opti
 
 /// Say so when a `files` entry is neither a local path nor a URL of a form rvr reads.
 fn reachable(file: &str, place: &str, p: &mut Problems) {
-    if file.contains("://") && !["root://", "davs://", "https://"].iter().any(|s| file.starts_with(s)) {
+    if file.contains("://")
+        && !["root://", "davs://", "https://"]
+            .iter()
+            .any(|s| file.starts_with(s))
+    {
         p.say(format!("{place}: {file:?} is not a form rvr reads: a local path, or a URL starting root://, davs:// or https://"));
     }
-    let query = (file.starts_with("https://") || file.starts_with("davs://")) && file.find('?').is_some_and(|at| file[at..].contains('='));
+    let query = (file.starts_with("https://") || file.starts_with("davs://"))
+        && file.find('?').is_some_and(|at| file[at..].contains('='));
     if query {
         p.say(format!("{place}: {file} has a query: rvr names a storage file by its path: drop the query; storage access goes by your grid proxy"));
         return;
     }
-    if let Some(rest) = file.strip_prefix("root://").filter(|rest| !rest.find('/').is_some_and(|at| rest[at..].starts_with("//"))) {
+    if let Some(rest) = file.strip_prefix("root://").filter(|rest| {
+        !rest
+            .find('/')
+            .is_some_and(|at| rest[at..].starts_with("//"))
+    }) {
         let written = match rest.split_once('/') {
             Some((host, path)) => format!("root://{host}//{path}"),
             None => format!("root://{rest}//path/file.root"),
@@ -432,7 +545,9 @@ fn metadata_of(table: &toml::Table, place: &str, p: &mut Problems) {
     match table.get("metadata") {
         None => {}
         Some(toml::Value::Table(values)) => metadata(values, &format!("{place} metadata"), p),
-        Some(_) => p.say(format!("{place}: metadata is a table, like metadata = {{ kind = \"signal\", xsec = 2.5 }}")),
+        Some(_) => p.say(format!(
+            "{place}: metadata is a table, like metadata = {{ kind = \"signal\", xsec = 2.5 }}"
+        )),
     }
 }
 
@@ -443,7 +558,9 @@ pub(super) fn metadata(values: &toml::Table, place: &str, p: &mut Problems) {
         if !rvr_recipe::plain(key) || key == "sample" {
             p.say(format!("{place}: {key:?} is not a name a recipe can read as sample.{key}: use a letter or _, then letters, digits and _"));
         } else if given(key) {
-            p.say(format!("{place}: {key} is given by rvr to every sample: name yours otherwise"));
+            p.say(format!(
+                "{place}: {key} is given by rvr to every sample: name yours otherwise"
+            ));
         }
         let place = format!("{place} {key}");
         if value_ok(value, &place, p) > NESTING {
@@ -459,14 +576,28 @@ const NESTING: usize = crate::json::DEEPEST - 5;
 /// Say what in `value` is not metadata; how many lists and tables it nests, itself among them.
 fn value_ok(value: &toml::Value, place: &str, p: &mut Problems) -> usize {
     match value {
-        toml::Value::Datetime(_) => p.say(format!("{place}: a date or time is not metadata: write it as text, in quotes")),
-        toml::Value::Float(f) if !f.is_finite() => p.say(format!("{place}: {f} is not a finite number")),
-        toml::Value::Array(list) => return 1 + list.iter().map(|v| value_ok(v, place, p)).max().unwrap_or(0),
+        toml::Value::Datetime(_) => p.say(format!(
+            "{place}: a date or time is not metadata: write it as text, in quotes"
+        )),
+        toml::Value::Float(f) if !f.is_finite() => {
+            p.say(format!("{place}: {f} is not a finite number"))
+        }
+        toml::Value::Array(list) => {
+            return 1 + list
+                .iter()
+                .map(|v| value_ok(v, place, p))
+                .max()
+                .unwrap_or(0)
+        }
         toml::Value::Table(table) => {
             if table.contains_key(crate::json::NUMBER) {
                 p.say(format!("{place}: {:?} is a key no .rvr header holds, as the JSON reader takes it for a number: name it otherwise", crate::json::NUMBER));
             }
-            return 1 + table.values().map(|v| value_ok(v, place, p)).max().unwrap_or(0);
+            return 1 + table
+                .values()
+                .map(|v| value_ok(v, place, p))
+                .max()
+                .unwrap_or(0);
         }
         _ => {}
     }
@@ -475,7 +606,10 @@ fn value_ok(value: &toml::Value, place: &str, p: &mut Problems) -> usize {
 
 /// Whether text can be a sample's or era's name: ASCII letters, digits, `_` and `-`, at least one.
 pub(crate) fn is_name(text: &str) -> bool {
-    !text.is_empty() && text.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+    !text.is_empty()
+        && text
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
 }
 
 /// Text made into a name, as CMS dataset names write numbers: `.` becomes `p`, every other run of
@@ -497,7 +631,13 @@ pub(crate) fn as_name(text: &str) -> String {
 
 /// `text` with its `{NAME}` placeholders filled from `vars` (and `{file}` kept, in metadata, for
 /// resolve to fill), or `None` with the problem said.
-fn fill(text: &str, vars: &Map<String, Value>, metadata: bool, place: &str, p: &mut Problems) -> Option<String> {
+fn fill(
+    text: &str,
+    vars: &Map<String, Value>,
+    metadata: bool,
+    place: &str,
+    p: &mut Problems,
+) -> Option<String> {
     let mut out = String::new();
     let mut rest = text;
     loop {
@@ -515,7 +655,9 @@ fn fill(text: &str, vars: &Map<String, Value>, metadata: bool, place: &str, p: &
                 let key = &rest[open + 1..close];
                 match vars.get(key) {
                     Some(Value::String(s)) => out.push_str(s),
-                    Some(Value::Number(n)) if n.is_i64() || n.is_u64() => out.push_str(&n.to_string()),
+                    Some(Value::Number(n)) if n.is_i64() || n.is_u64() => {
+                        out.push_str(&n.to_string())
+                    }
                     Some(_) => {
                         p.say(format!("{place}: {{{key}}} is not text or a whole number, so it cannot be put into {text:?}"));
                         return None;
@@ -523,14 +665,23 @@ fn fill(text: &str, vars: &Map<String, Value>, metadata: bool, place: &str, p: &
                     None if metadata && key == "file" => out.push_str("{file}"),
                     None => {
                         let known: Vec<String> = vars.keys().map(|k| format!("{{{k}}}")).collect();
-                        p.say(format!("{place}: {{{key}}} is not defined here; defined: {}", if known.is_empty() { "nothing".into() } else { known.join(", ") }));
+                        p.say(format!(
+                            "{place}: {{{key}}} is not defined here; defined: {}",
+                            if known.is_empty() {
+                                "nothing".into()
+                            } else {
+                                known.join(", ")
+                            }
+                        ));
                         return None;
                     }
                 }
                 rest = &rest[close + 1..];
             }
             _ => {
-                p.say(format!("{place}: a '}}' with no '{{' before it in {text:?}"));
+                p.say(format!(
+                    "{place}: a '}}' with no '{{' before it in {text:?}"
+                ));
                 return None;
             }
         }
@@ -540,11 +691,24 @@ fn fill(text: &str, vars: &Map<String, Value>, metadata: bool, place: &str, p: &
 }
 
 /// A metadata value with every text in it filled, as `fill` fills one, or `None` with the problem said.
-fn filled(value: &toml::Value, vars: &Map<String, Value>, place: &str, p: &mut Problems) -> Option<Value> {
+fn filled(
+    value: &toml::Value,
+    vars: &Map<String, Value>,
+    place: &str,
+    p: &mut Problems,
+) -> Option<Value> {
     match value {
         toml::Value::String(text) => fill(text, vars, true, place, p).map(Value::String),
-        toml::Value::Array(list) => list.iter().map(|v| filled(v, vars, place, p)).collect::<Option<_>>().map(Value::Array),
-        toml::Value::Table(table) => table.iter().map(|(k, v)| Some((k.clone(), filled(v, vars, place, p)?))).collect::<Option<_>>().map(Value::Object),
+        toml::Value::Array(list) => list
+            .iter()
+            .map(|v| filled(v, vars, place, p))
+            .collect::<Option<_>>()
+            .map(Value::Array),
+        toml::Value::Table(table) => table
+            .iter()
+            .map(|(k, v)| Some((k.clone(), filled(v, vars, place, p)?)))
+            .collect::<Option<_>>()
+            .map(Value::Object),
         other => Some(json(other)),
     }
 }
@@ -601,85 +765,203 @@ mod tests {
         );
         let samples = read(&text).unwrap();
         let names: Vec<&str> = samples.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["Signal_300_292p5_UL17", "Signal_400_300_UL17", "Signal_300_292p5_UL18", "Signal_400_300_UL18"]);
+        assert_eq!(
+            names,
+            [
+                "Signal_300_292p5_UL17",
+                "Signal_400_300_UL17",
+                "Signal_300_292p5_UL18",
+                "Signal_400_300_UL18"
+            ]
+        );
         assert_eq!(samples[0].label, "Signal 300/292.5 (UL17)");
-        assert_eq!(samples[0].files, ["root://cmseos.fnal.gov//store/x/UL17/s_UL17.root"]);
+        assert_eq!(
+            samples[0].files,
+            ["root://cmseos.fnal.gov//store/x/UL17/s_UL17.root"]
+        );
         assert_eq!(samples[3].metadata["era"], 3);
         assert_eq!(samples[3].metadata["tag"], "UL18-{file}");
         let nested = read(&format!("{HEAD}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = {{ tags = [\"{{nowhere}}\"] }}")).unwrap_err();
-        assert!(nested.to_string().contains("{nowhere} is not defined"), "{nested}");
+        assert!(
+            nested.to_string().contains("{nowhere} is not defined"),
+            "{nested}"
+        );
         let one = json!({"note": {"f": ["{file}", 2]}, "k": "{file}!"});
         let filled = file_filled(one.as_object().unwrap(), &["root://h//d/x.root"]).unwrap();
-        assert_eq!(Value::Object(filled), json!({"note": {"f": ["x.root", 2]}, "k": "x.root!"}));
+        assert_eq!(
+            Value::Object(filled),
+            json!({"note": {"f": ["x.root", 2]}, "k": "x.root!"})
+        );
         assert!(file_filled(one.as_object().unwrap(), &["a.root", "b.root"]).is_none());
         assert_eq!(samples[0].events, Events::All);
-        let placed = HEAD.replace("[places]\n", "[places]\np = \"/data\"\n").replace("[eras]\n", "[eras.E1]\nfolder = \"{p}/d\"\n");
+        let placed = HEAD
+            .replace("[places]\n", "[places]\np = \"/data\"\n")
+            .replace("[eras]\n", "[eras.E1]\nfolder = \"{p}/d\"\n");
         let made = read(&format!("{placed}[[sample]]\nname = \"a\"\nfiles = \"{{folder}}/x.root\"\ntree = \"T\"\neras = [\"E1\"]")).unwrap();
-        assert_eq!((made[0].files[0].as_str(), &made[0].metadata["folder"]), ("/data/d/x.root", &json!("/data/d")));
+        assert_eq!(
+            (made[0].files[0].as_str(), &made[0].metadata["folder"]),
+            ("/data/d/x.root", &json!("/data/d"))
+        );
         let by_era = read(&format!("{}[[sample]]\nname = \"a\"\nfiles = \"{{folder}}/x.root\"\ntree = \"T\"\neras = [\"E1\"]", placed.replace("{p}/d", "{p}/S{era}"))).unwrap();
         assert_eq!(by_era[0].files[0], "/data/SE1/x.root");
         let clash = problems(&format!("{}[[sample]]\nname = \"a\"\nfiles = \"{{folder}}/x.root\"\ntree = \"T\"\neras = [\"E1\"]", placed.replace("folder = ", "p = \"x\"\nfolder = ")));
-        assert!(clash.contains("[eras.E1] p: a place has this name too"), "{clash}");
+        assert!(
+            clash.contains("[eras.E1] p: a place has this name too"),
+            "{clash}"
+        );
         let undefined = problems(&format!("{}[[sample]]\nname = \"a\"\nfiles = \"{{folder}}/x.root\"\ntree = \"T\"\neras = [\"E1\"]", placed.replace("{p}/d", "{q}/d")));
         assert_eq!(undefined.lines().count(), 1, "{undefined}");
         // A default text a sample replaces is not filled for it; one it takes is (SPEC 3.3.2).
-        let noted = HEAD.replace("[defaults]\n", "[defaults]\nmetadata = { note = \"{campaign}\", n = 1 }\n");
+        let noted = HEAD.replace(
+            "[defaults]\n",
+            "[defaults]\nmetadata = { note = \"{campaign}\", n = 1 }\n",
+        );
         let own = read(&format!("{noted}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = {{ note = \"no era\" }}")).unwrap();
-        assert_eq!(Value::Object(own[0].metadata.clone()), json!({"note": "no era", "n": 1}));
-        assert!(problems(&format!("{noted}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"")).contains("{campaign} is not defined"));
+        assert_eq!(
+            Value::Object(own[0].metadata.clone()),
+            json!({"note": "no era", "n": 1})
+        );
+        assert!(problems(&format!(
+            "{noted}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\""
+        ))
+        .contains("{campaign} is not defined"));
         // Metadata nests as deep as the header holds, and no deeper (SPEC 3.5.10).
-        let nested = |n: usize| format!("{HEAD}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = {{ deep = {}1{} }}", "[".repeat(n), "]".repeat(n));
+        let nested = |n: usize| {
+            format!("{HEAD}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = {{ deep = {}1{} }}", "[".repeat(n), "]".repeat(n))
+        };
         assert!(read(&nested(59)).is_ok());
         assert!(problems(&nested(60)).contains("metadata deep: its lists and tables nest more than 59 deep, more than a .rvr header holds: nest them less"), "{}", problems(&nested(60)));
         // Said once for the key, however many of its lists go too deep.
         let deep = format!("{}1{}", "[".repeat(60), "]".repeat(60));
         let siblings = problems(&format!("{HEAD}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = {{ deep = [{deep}, {deep}, {deep}] }}"));
-        assert_eq!(siblings.matches("nest more than 59 deep").count(), 1, "{siblings}");
+        assert_eq!(
+            siblings.matches("nest more than 59 deep").count(),
+            1,
+            "{siblings}"
+        );
     }
 
     // SPEC 1.4, 1.5, 3.1.3, 3.1.4, 3.2.1, 3.3.1, 3.3.2, 3.5.1, 3.5.2, 3.5.4, 3.5.5, 3.5.7, 3.5.8, 3.5.9, 3.5.10, 3.6.4, 3.7.2, 3.7.4, 3.8.1, 3.8.2, 3.8.5
     #[test]
     fn every_problem_is_said_and_what_is_left_out_is_offered() {
         let said = read("[[sample]]\nname = \"a\"\nfiles = \"x.root\"\ntree = \"T\"\nkind = \"mc\"\nchoice = \"random\"\n").unwrap_err();
-        assert_eq!(said.missing, [FORMAT, VERSION, TABLES[0], TABLES[1], TABLES[2]]);
+        assert_eq!(
+            said.missing,
+            [FORMAT, VERSION, TABLES[0], TABLES[1], TABLES[2]]
+        );
         assert_eq!(said.said.len(), 2, "{said}");
-        assert!(said.to_string().contains("has no key \"choice\"") && said.to_string().contains("Did you mean: choose?"), "{said}");
+        assert!(
+            said.to_string().contains("has no key \"choice\"")
+                && said.to_string().contains("Did you mean: choose?"),
+            "{said}"
+        );
         let p = |body: &str| problems(&format!("{HEAD}[[sample]]\n{body}"));
         assert!(p("name = \"a b\"\nfiles = \"x\"\ntree = \"T\"").contains("use name = \"a_b\""));
         assert!(p("name = \"a\"\ntree = \"T\"").contains("has no files"));
         assert!(p("name = \"a\"\nfiles = \"x\"").contains("has no tree"));
-        assert!(p("name = \"a\"\nfiles = \"x\"\ntree = \"T\"\ntrees = { a = \"T\" }").contains("not both"));
-        assert!(p("name = \"a\"\nfiles = \"x\"\ntree = \"T\"\nseed = 3").contains("not chosen at random"));
-        let seeded = HEAD.replace("[defaults]\n", "[defaults]\nevents = 10\nchoose = \"random\"\nseed = 7\n");
+        assert!(
+            p("name = \"a\"\nfiles = \"x\"\ntree = \"T\"\ntrees = { a = \"T\" }")
+                .contains("not both")
+        );
+        assert!(p("name = \"a\"\nfiles = \"x\"\ntree = \"T\"\nseed = 3")
+            .contains("not chosen at random"));
+        let seeded = HEAD.replace(
+            "[defaults]\n",
+            "[defaults]\nevents = 10\nchoose = \"random\"\nseed = 7\n",
+        );
         let first = read(&format!("{seeded}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nchoose = \"first\"\n[[sample]]\nname = \"b\"\nfiles = \"y\"\ntree = \"T\"")).unwrap();
-        assert_eq!(first.iter().map(|s| s.events).collect::<Vec<_>>(), [Events::First(10), Events::Random { n: 10, seed: 7 }]);
-        assert!(problems(&format!("{seeded}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nchoose = \"first\"")).contains("no sample uses it"));
-        assert!(problems(&format!("{seeded}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nseed = 3")).contains("no sample uses it"));
-        assert!(!problems(&format!("{seeded}[[sample]]\nname = \"a\"\nfiles = \"x\"")).contains("no sample uses it"));
-        let typo = p("name = \"a\"\nfiles = \"x\"\ntree = \"T\"\nevents = 10\nchoose = \"randm\"\nseed = 3");
-        assert!(typo.contains("choose is") && !typo.contains("seed is given"), "{typo}");
+        assert_eq!(
+            first.iter().map(|s| s.events).collect::<Vec<_>>(),
+            [Events::First(10), Events::Random { n: 10, seed: 7 }]
+        );
+        assert!(problems(&format!(
+            "{seeded}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nchoose = \"first\""
+        ))
+        .contains("no sample uses it"));
+        assert!(problems(&format!(
+            "{seeded}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nseed = 3"
+        ))
+        .contains("no sample uses it"));
+        assert!(
+            !problems(&format!("{seeded}[[sample]]\nname = \"a\"\nfiles = \"x\""))
+                .contains("no sample uses it")
+        );
+        let typo = p(
+            "name = \"a\"\nfiles = \"x\"\ntree = \"T\"\nevents = 10\nchoose = \"randm\"\nseed = 3",
+        );
+        assert!(
+            typo.contains("choose is") && !typo.contains("seed is given"),
+            "{typo}"
+        );
         assert!(p("name = \"a\"\nfiles = \"x\"\ntree = \"T\"\nevents = 0").contains("from 1"));
-        assert!(p("name = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = { when = 2026-11-02 }").contains("date or time"));
-        assert!(p("name = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = { events_read = 1 }").contains("given by rvr"));
-        assert!(p("name = \"a\"\nfiles = \"{nowhere}/x\"\ntree = \"T\"").contains("{nowhere} is not defined"));
+        assert!(
+            p("name = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = { when = 2026-11-02 }")
+                .contains("date or time")
+        );
+        assert!(
+            p("name = \"a\"\nfiles = \"x\"\ntree = \"T\"\nmetadata = { events_read = 1 }")
+                .contains("given by rvr")
+        );
+        assert!(p("name = \"a\"\nfiles = \"{nowhere}/x\"\ntree = \"T\"")
+            .contains("{nowhere} is not defined"));
         assert!(p("name = \"a\"\nfiles = \"x}\"\ntree = \"T\"").contains("no '{' before it"));
         let url = p("name = \"a\"\nfiles = \"xroot://h//x.root\"\ntree = \"T\"");
-        assert!(url.contains("not a form rvr reads") && !url.contains("nonempty list"), "{url}");
+        assert!(
+            url.contains("not a form rvr reads") && !url.contains("nonempty list"),
+            "{url}"
+        );
         assert!(p("name = \"a\"\nfiles = \"d*/x.root\"\ntree = \"T\"").contains("d*/x.root: its folder, d*, holds * or ?, which rvr reads only in a file's name (a pattern), never in a folder: rename the folder"));
         let query = p("name = \"a\"\nfiles = \"https://h.org/d/x.root?authz=a/b\"\ntree = \"T\"");
-        assert!(query.contains("has a query: rvr names a storage file by its path: drop the query") && !query.contains("its folder"), "{query}");
-        assert!(read(&format!("{HEAD}[[sample]]\nname = \"a\"\nfiles = \"https://h.org/d/x?.root\"\ntree = \"T\"")).is_ok(), "a ? in the file name is a pattern");
-        let placed = problems(&format!("{}[[sample]]\nname = \"a\"\nfiles = \"{{x}}/f.root\"\ntree = \"T\"", HEAD.replace("[places]\n", "[places]\nx = \"xroot://h//d\"\n")));
-        assert!(placed.contains("\"xroot://h//d/f.root\" is not a form rvr reads"), "{placed}");
-        assert!(problems(&HEAD.replace("[places]\n", "[places]\nfile = \"x\"\n")).contains("{file} is rvr's"));
-        assert!(problems(&HEAD.replace("[places]\n", "[places]\n\"\" = \"x\"\n")).contains("one or more ASCII"));
-        assert!(p("name = \"a\"\nfiles = \"x\"\ntrees = { \"///\" = \"T\" }").contains("makes no name"));
+        assert!(
+            query.contains("has a query: rvr names a storage file by its path: drop the query")
+                && !query.contains("its folder"),
+            "{query}"
+        );
+        assert!(
+            read(&format!(
+                "{HEAD}[[sample]]\nname = \"a\"\nfiles = \"https://h.org/d/x?.root\"\ntree = \"T\""
+            ))
+            .is_ok(),
+            "a ? in the file name is a pattern"
+        );
+        let placed = problems(&format!(
+            "{}[[sample]]\nname = \"a\"\nfiles = \"{{x}}/f.root\"\ntree = \"T\"",
+            HEAD.replace("[places]\n", "[places]\nx = \"xroot://h//d\"\n")
+        ));
+        assert!(
+            placed.contains("\"xroot://h//d/f.root\" is not a form rvr reads"),
+            "{placed}"
+        );
+        assert!(
+            problems(&HEAD.replace("[places]\n", "[places]\nfile = \"x\"\n"))
+                .contains("{file} is rvr's")
+        );
+        assert!(
+            problems(&HEAD.replace("[places]\n", "[places]\n\"\" = \"x\"\n"))
+                .contains("one or more ASCII")
+        );
+        assert!(
+            p("name = \"a\"\nfiles = \"x\"\ntrees = { \"///\" = \"T\" }").contains("makes no name")
+        );
         assert!(problems(&format!("{}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\n[[sample]]\nname = \"a\"\nfiles = \"y\"\ntree = \"T\"", HEAD)).contains("two samples are named"));
-        assert!(problems(&HEAD.replace("[defaults]\n", "[defaults]\nlabel = \"x\"\n")).contains("belongs to one sample"));
-        let bad = HEAD.replace("[defaults]\n", "[defaults]\ntree = 5\nevents = -3\nchoose = \"x\"\n");
+        assert!(
+            problems(&HEAD.replace("[defaults]\n", "[defaults]\nlabel = \"x\"\n"))
+                .contains("belongs to one sample")
+        );
+        let bad = HEAD.replace(
+            "[defaults]\n",
+            "[defaults]\ntree = 5\nevents = -3\nchoose = \"x\"\n",
+        );
         let said = problems(&format!("{bad}[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\nevents = 2\nchoose = \"first\""));
-        assert!(said.contains("[defaults]: tree is") && said.contains("[defaults]: events is") && said.contains("[defaults]: choose is"), "{said}");
-        let inherited = problems(&format!("{bad}[[sample]]\nname = \"a\"\nfiles = \"x\"\n[[sample]]\nname = \"b\"\nfiles = \"y\""));
+        assert!(
+            said.contains("[defaults]: tree is")
+                && said.contains("[defaults]: events is")
+                && said.contains("[defaults]: choose is"),
+            "{said}"
+        );
+        let inherited = problems(&format!(
+            "{bad}[[sample]]\nname = \"a\"\nfiles = \"x\"\n[[sample]]\nname = \"b\"\nfiles = \"y\""
+        ));
         assert_eq!(inherited.lines().count(), 3, "{inherited}");
     }
 }

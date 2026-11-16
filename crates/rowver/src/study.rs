@@ -17,7 +17,10 @@ pub struct Problems {
 impl Problems {
     /// One problem.
     pub(crate) fn one(said: impl Into<String>) -> Self {
-        Problems { said: vec![said.into()], missing: Vec::new() }
+        Problems {
+            said: vec![said.into()],
+            missing: Vec::new(),
+        }
     }
 
     /// One more problem, unless it was said already (as by each era of one sample).
@@ -41,12 +44,20 @@ impl std::fmt::Display for Problems {
     /// One problem a line, what is missing first.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let missing = (!self.missing.is_empty()).then(|| {
-            format!("it leaves out {}: write {} in", self.missing.join(", "), match self.missing.len() {
-                1 => "it",
-                _ => "them",
-            })
+            format!(
+                "it leaves out {}: write {} in",
+                self.missing.join(", "),
+                match self.missing.len() {
+                    1 => "it",
+                    _ => "them",
+                }
+            )
         });
-        let lines: Vec<&str> = missing.iter().map(String::as_str).chain(self.said.iter().map(String::as_str)).collect();
+        let lines: Vec<&str> = missing
+            .iter()
+            .map(String::as_str)
+            .chain(self.said.iter().map(String::as_str))
+            .collect();
         f.write_str(&lines.join("\n"))
     }
 }
@@ -62,13 +73,18 @@ pub fn lexical(path: &std::path::Path) -> std::path::PathBuf {
     for (at, part) in path.components().enumerate() {
         match part {
             Component::CurDir => {}
-            Component::ParentDir if matches!(out.components().next_back(), Some(Component::Normal(_))) && !(home && out == Path::new("~")) => {
+            Component::ParentDir
+                if matches!(out.components().next_back(), Some(Component::Normal(_)))
+                    && !(home && out == Path::new("~")) =>
+            {
                 out.pop();
                 if out == Path::new(".") {
                     out.clear();
                 }
             }
-            Component::Normal(name) if at > 0 && name == "~" && out.as_os_str().is_empty() => out.push("./~"),
+            Component::Normal(name) if at > 0 && name == "~" && out.as_os_str().is_empty() => {
+                out.push("./~")
+            }
             part => out.push(part),
         }
     }
@@ -79,10 +95,20 @@ pub fn lexical(path: &std::path::Path) -> std::path::PathBuf {
 pub(crate) fn utc(text: &str) -> bool {
     let b = text.as_bytes();
     let digits = |r: std::ops::Range<usize>| text[r].bytes().all(|c| c.is_ascii_digit());
-    if b.len() != 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' || b[19] != b'Z' {
+    if b.len() != 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+        || b[19] != b'Z'
+    {
         return false;
     }
-    if ![0..4, 5..7, 8..10, 11..13, 14..16, 17..19].into_iter().all(digits) {
+    if ![0..4, 5..7, 8..10, 11..13, 14..16, 17..19]
+        .into_iter()
+        .all(digits)
+    {
         return false;
     }
     let n = |r: std::ops::Range<usize>| text[r].parse::<u32>().unwrap_or(99);
@@ -136,7 +162,10 @@ pub fn matches(pattern: &str, name: &str) -> bool {
 
 /// Whether `text` is `count` lowercase hexadecimal digits.
 pub(crate) fn hex(text: &str, count: usize) -> bool {
-    text.len() == count && text.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    text.len() == count
+        && text
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
 #[cfg(test)]
@@ -147,7 +176,11 @@ mod tests {
     #[test]
     fn times_and_hex() {
         assert!(utc("2026-02-28T23:59:59Z") && utc("2024-02-29T00:00:00Z"));
-        assert!(!utc("2026-02-29T00:00:00Z") && !utc("2026-13-01T00:00:00Z") && !utc("2026-01-01 00:00:00"));
+        assert!(
+            !utc("2026-02-29T00:00:00Z")
+                && !utc("2026-13-01T00:00:00Z")
+                && !utc("2026-01-01 00:00:00")
+        );
         assert!(hex("0a1b2c3d", 8) && !hex("0A1B2C3D", 8) && !hex("0a1b2c3", 8));
         let p = |text: &str| lexical(std::path::Path::new(text));
         assert_eq!(p("./d/x.root"), p("d/x.root"));
@@ -164,13 +197,34 @@ mod tests {
     // SPEC 3.8.2; FORMAT 6.3
     #[test]
     fn patterns_and_paths_parted_and_joined_back_as_written() {
-        assert!(matches("Run2012*_TauPlusX.root", "Run2012B_TauPlusX.root") && matches("*.root", "a.root"));
-        assert!(!matches("Run2012?_Tau*.root", "Run2012BC_DoubleMuParked_Muons.root"));
-        assert!(matches("SMS-Signal*_Summer22_130X.root", "SMS-Signal-2L_TuneCP5_13p6TeV_madgraphMLM-pythia8_Summer22_130X.root"));
+        assert!(
+            matches("Run2012*_TauPlusX.root", "Run2012B_TauPlusX.root")
+                && matches("*.root", "a.root")
+        );
+        assert!(!matches(
+            "Run2012?_Tau*.root",
+            "Run2012BC_DoubleMuParked_Muons.root"
+        ));
+        assert!(matches(
+            "SMS-Signal*_Summer22_130X.root",
+            "SMS-Signal-2L_TuneCP5_13p6TeV_madgraphMLM-pythia8_Summer22_130X.root"
+        ));
         assert!(matches("a?c*", "abc") && !matches("a?c", "ac") && matches("*", ""));
         // A * in a name is matched by a * of the pattern as any other character is.
-        assert!(matches("x*.root", "x*1.root") && matches("a*b", "a*xb") && matches("x*", "x*y*") && !matches("x*.root", "y*.root"));
-        for asked in ["root://eospublic.cern.ch//x.root", "root://h//eos/a/x.root", "/x.root", "./x.root", "~/d/x.root", "d//x.root"] {
+        assert!(
+            matches("x*.root", "x*1.root")
+                && matches("a*b", "a*xb")
+                && matches("x*", "x*y*")
+                && !matches("x*.root", "y*.root")
+        );
+        for asked in [
+            "root://eospublic.cern.ch//x.root",
+            "root://h//eos/a/x.root",
+            "/x.root",
+            "./x.root",
+            "~/d/x.root",
+            "d//x.root",
+        ] {
             let (folder, name) = split(asked);
             assert_eq!(join(folder, name), asked);
         }

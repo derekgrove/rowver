@@ -60,17 +60,28 @@ pub enum Error {
 
 /// A header that breaks docs/FORMAT.md §1 by `fact` at `(line, column)`, under the top-level key
 /// `under`, and what mends it, of the file at `path`.
-fn breaks(fact: &str, under: Option<&str>, (line, column): (usize, usize), path: Option<&Path>) -> String {
+fn breaks(
+    fact: &str,
+    under: Option<&str>,
+    (line, column): (usize, usize),
+    path: Option<&Path>,
+) -> String {
     let mend = match under {
         Some(key) if !rvr::TOP.contains(&key) => rvr::dropping(path),
-        _ => "the program that wrote it does not follow the format; press its study again with rvr".into(),
+        _ => "the program that wrote it does not follow the format; press its study again with rvr"
+            .into(),
     };
     format!("the header breaks docs/FORMAT.md §1: {fact} (line {line}, column {column}): {mend}")
 }
 
 /// `word` as a shell reads it back: as it is when it holds nothing a shell takes apart, else in single quotes.
 pub fn shell(word: &str) -> String {
-    match !word.is_empty() && !word.starts_with('=') && word.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.,/:=@+%".contains(&b)) {
+    match !word.is_empty()
+        && !word.starts_with('=')
+        && word
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-.,/:=@+%".contains(&b))
+    {
         true => word.to_owned(),
         false => format!("'{}'", word.replace('\'', r"'\''")),
     }
@@ -78,7 +89,10 @@ pub fn shell(word: &str) -> String {
 
 /// A header that is not JSON (`error`), and what mends it, of the file at `path`.
 fn unread(error: &serde_json::Error, path: Option<&Path>) -> String {
-    let on = path.map_or_else(|| "on the file".to_owned(), |path| shell(&path.display().to_string()));
+    let on = path.map_or_else(
+        || "on the file".to_owned(),
+        |path| shell(&path.display().to_string()),
+    );
     format!("the header is not JSON as docs/FORMAT.md §1 reads it ({error}): the file is damaged, or the program that wrote it does not follow the format; copy it again, or press its study again with rvr (where a tool key holds what breaks it, rvr tool {on} says whether dropping one lets it open)")
 }
 
@@ -97,7 +111,12 @@ pub fn plain(path: impl AsRef<Path>, error: &Error) -> String {
 /// `error` in words, its advice naming `path` where it runs a command on the file.
 pub fn words(path: &Path, error: &Error) -> String {
     match error {
-        Error::Breaks { fact, under, line, column } => breaks(fact, under.as_deref(), (*line, *column), Some(path)),
+        Error::Breaks {
+            fact,
+            under,
+            line,
+            column,
+        } => breaks(fact, under.as_deref(), (*line, *column), Some(path)),
         Error::Tool { fact, .. } => format!("{fact}: {}", rvr::dropping(Some(path))),
         Error::Json(e) => unread(e, Some(path)),
         e => e.to_string(),
@@ -130,7 +149,9 @@ pub(crate) fn about(path: &Path, error: Error) -> Error {
             None => Error::File(path.to_path_buf(), e),
         },
         Error::Invalid(why) => Error::Invalid(named(path, &why)),
-        e @ (Error::Json(_) | Error::Breaks { .. } | Error::Tool { .. }) => Error::Invalid(named(path, &words(path, &e))),
+        e @ (Error::Json(_) | Error::Breaks { .. } | Error::Tool { .. }) => {
+            Error::Invalid(named(path, &words(path, &e)))
+        }
         e => e,
     }
 }
@@ -154,7 +175,13 @@ impl std::error::Error for Tagged {}
 pub(crate) fn tagged(path: &Path, error: std::io::Error) -> std::io::Error {
     match tagged_with(&error) {
         Some(_) => error,
-        None => std::io::Error::new(error.kind(), Tagged { path: path.to_path_buf(), error }),
+        None => std::io::Error::new(
+            error.kind(),
+            Tagged {
+                path: path.to_path_buf(),
+                error,
+            },
+        ),
     }
 }
 
@@ -196,14 +223,41 @@ fn told(path: &Path, error: &std::io::Error) -> (String, &'static str) {
     let shown = path.display();
     match error.kind() {
         NotFound => (format!("{shown} is not there"), ""),
-        IsADirectory => (format!("{shown} is a folder, not a file"), "name a file in it"),
-        NotADirectory => (format!("{shown}: part of its path is a file, not a folder"), ""),
-        UnexpectedEof => (format!("{shown} changed while it was read (emptied, or written again)"), "open it again"),
-        PermissionDenied => (format!("{shown} is not yours to read or write"), "ls -l says whose it is"),
-        AlreadyExists => (format!("{shown} is there already"), "move it away, or name another"),
-        StorageFull | QuotaExceeded => (format!("{shown} could not be written: its disk is full"), "free some space"),
-        ReadOnlyFilesystem => (format!("{shown} could not be written: its disk is read-only"), ""),
-        _ => (format!("{shown} could not be read or written ({})", described(error)), "check its disk, and try again"),
+        IsADirectory => (
+            format!("{shown} is a folder, not a file"),
+            "name a file in it",
+        ),
+        NotADirectory => (
+            format!("{shown}: part of its path is a file, not a folder"),
+            "",
+        ),
+        UnexpectedEof => (
+            format!("{shown} changed while it was read (emptied, or written again)"),
+            "open it again",
+        ),
+        PermissionDenied => (
+            format!("{shown} is not yours to read or write"),
+            "ls -l says whose it is",
+        ),
+        AlreadyExists => (
+            format!("{shown} is there already"),
+            "move it away, or name another",
+        ),
+        StorageFull | QuotaExceeded => (
+            format!("{shown} could not be written: its disk is full"),
+            "free some space",
+        ),
+        ReadOnlyFilesystem => (
+            format!("{shown} could not be written: its disk is read-only"),
+            "",
+        ),
+        _ => (
+            format!(
+                "{shown} could not be read or written ({})",
+                described(error)
+            ),
+            "check its disk, and try again",
+        ),
     }
 }
 

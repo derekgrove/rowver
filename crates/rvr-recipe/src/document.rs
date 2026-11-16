@@ -99,7 +99,11 @@ pub fn taken(name: &str) -> bool {
 /// The names a column may not have, `RESERVED` and `ADDED`, in words: "sample, entry, … or events_missing".
 pub fn given() -> String {
     let names: Vec<&str> = RESERVED.iter().chain(&ADDED).copied().collect();
-    format!("{} or {}", names[..names.len() - 1].join(", "), names[names.len() - 1])
+    format!(
+        "{} or {}",
+        names[..names.len() - 1].join(", "),
+        names[names.len() - 1]
+    )
 }
 
 /// Whether text is one plain name, as an expression would read it.
@@ -123,15 +127,23 @@ pub fn reads(expression: &Expression, found: &mut BTreeSet<String>) {
 }
 
 /// Add what a `branch(…)` not given text may name: its sample fields to `fields`, its text and names to `texts`.
-pub fn branch_names(expression: &Expression, fields: &mut BTreeSet<String>, texts: &mut BTreeSet<String>) {
+pub fn branch_names(
+    expression: &Expression,
+    fields: &mut BTreeSet<String>,
+    texts: &mut BTreeSet<String>,
+) {
     match expression {
-        Expression::Call(function, arguments) if function == "branch" && named(arguments).is_none() => {
+        Expression::Call(function, arguments)
+            if function == "branch" && named(arguments).is_none() =>
+        {
             for argument in arguments {
                 fields_of(argument, fields);
                 gather(argument, texts, true, false);
             }
         }
-        _ => expression.children().for_each(|child| branch_names(child, fields, texts)),
+        _ => expression
+            .children()
+            .for_each(|child| branch_names(child, fields, texts)),
     }
 }
 
@@ -149,12 +161,16 @@ fn gather(expression: &Expression, found: &mut BTreeSet<String>, text: bool, bra
     let held = match expression {
         Expression::Constant(crate::Constant::Text(held)) if text => Some(held),
         Expression::Name(name) => Some(name),
-        Expression::Call(function, arguments) if branches && function == "branch" => named(arguments),
+        Expression::Call(function, arguments) if branches && function == "branch" => {
+            named(arguments)
+        }
         _ => None,
     };
     match held {
         Some(held) => drop(found.insert(held.clone())),
-        None => expression.children().for_each(|child| gather(child, found, text, branches)),
+        None => expression
+            .children()
+            .for_each(|child| gather(child, found, text, branches)),
     }
 }
 
@@ -162,7 +178,9 @@ fn gather(expression: &Expression, found: &mut BTreeSet<String>, text: bool, bra
 pub fn fields_of(expression: &Expression, found: &mut BTreeSet<String>) {
     match expression {
         Expression::Sample(field) => drop(found.insert(field.clone())),
-        _ => expression.children().for_each(|child| fields_of(child, found)),
+        _ => expression
+            .children()
+            .for_each(|child| fields_of(child, found)),
     }
 }
 
@@ -172,22 +190,35 @@ pub fn compared(expression: &Expression, found: &mut Vec<(String, bool, Vec<crat
     use crate::Operator;
     use Expression::{Binary, Constant, In, Sample};
     match expression {
-        Binary(operator @ (Operator::Equal | Operator::NotEqual), left, right) => match (&**left, &**right) {
-            (Sample(field), Constant(value)) | (Constant(value), Sample(field)) => found.push((field.clone(), *operator == Operator::NotEqual, vec![value.clone()])),
-            _ => {}
-        },
+        Binary(operator @ (Operator::Equal | Operator::NotEqual), left, right) => {
+            match (&**left, &**right) {
+                (Sample(field), Constant(value)) | (Constant(value), Sample(field)) => {
+                    found.push((
+                        field.clone(),
+                        *operator == Operator::NotEqual,
+                        vec![value.clone()],
+                    ))
+                }
+                _ => {}
+            }
+        }
         In(left, list) => {
-            let fixed: Option<Vec<_>> = list.iter().map(|member| match member {
-                Constant(value) => Some(value.clone()),
-                _ => None,
-            }).collect();
+            let fixed: Option<Vec<_>> = list
+                .iter()
+                .map(|member| match member {
+                    Constant(value) => Some(value.clone()),
+                    _ => None,
+                })
+                .collect();
             if let (Sample(field), Some(values)) = (&**left, fixed) {
                 found.push((field.clone(), false, values));
             }
         }
         _ => {}
     }
-    expression.children().for_each(|child| compared(child, found));
+    expression
+        .children()
+        .for_each(|child| compared(child, found));
 }
 
 /// Whether an expression names a branch by anything but text, as `branch(sample.KEY)`.
@@ -215,7 +246,17 @@ fn unparsed(text: &str, error: &toml::de::Error) -> String {
 }
 
 /// The keys a recipe has at its top: these and no others.
-const TOP: [&str; 9] = ["format", "version", "title", "chunk_rows", "define", "keep", "columns", "totals", "derived"];
+const TOP: [&str; 9] = [
+    "format",
+    "version",
+    "title",
+    "chunk_rows",
+    "define",
+    "keep",
+    "columns",
+    "totals",
+    "derived",
+];
 
 /// The tables every recipe writes, even empty, in their order.
 pub const TABLES: [&str; 5] = ["define", "keep", "columns", "totals", "derived"];
@@ -259,18 +300,23 @@ impl Reading {
     /// none, said, when it is not one. `place` names where it sits.
     fn expression(&mut self, value: &Value, place: &str) -> Option<(Expression, Sort, usize)> {
         let Some(text) = value.as_str() else {
-            self.said.push(format!("{place} must be an expression in quotes"));
+            self.said
+                .push(format!("{place} must be an expression in quotes"));
             return None;
         };
         let depths = &self.depths;
-        let (expression, depth) = match parsed(text, &|name| depths.get(name).copied().unwrap_or(1)) {
+        let (expression, depth) = match parsed(text, &|name| depths.get(name).copied().unwrap_or(1))
+        {
             Ok(parsed) => parsed,
             Err(error) => {
                 self.say(place, error.0);
                 return None;
             }
         };
-        let mut checks = Checks { sorts: &self.sorts, said: Vec::new() };
+        let mut checks = Checks {
+            sorts: &self.sorts,
+            said: Vec::new(),
+        };
         let sort = checks.sort(&expression);
         for said in checks.said {
             self.say(place, said);
@@ -320,12 +366,23 @@ impl Recipe {
 
     /// Read a recipe from its TOML text, refusing it with every problem it has, one a line.
     pub fn read(text: &str) -> Result<Self> {
-        let root: Table = text.parse().map_err(|error: toml::de::Error| problem(unparsed(text, &error)))?;
-        let mut reading = Reading { said: Vec::new(), lacking: Vec::new(), sorts: BTreeMap::new(), depths: BTreeMap::new() };
+        let root: Table = text
+            .parse()
+            .map_err(|error: toml::de::Error| problem(unparsed(text, &error)))?;
+        let mut reading = Reading {
+            said: Vec::new(),
+            lacking: Vec::new(),
+            sorts: BTreeMap::new(),
+            depths: BTreeMap::new(),
+        };
         let recipe = reading.recipe(&root);
         match reading.said.is_empty() {
             true => Ok(recipe),
-            false => Err(crate::Error(reading.said.join("\n"), None, crate::Cause::Lacking(reading.lacking))),
+            false => Err(crate::Error(
+                reading.said.join("\n"),
+                None,
+                crate::Cause::Lacking(reading.lacking),
+            )),
         }
     }
 
@@ -334,12 +391,23 @@ impl Recipe {
         // What each defined name gives, in the order written: each uses only those above it.
         let mut sorts = BTreeMap::new();
         for (name, _) in &self.depths {
-            let sort = Checks { sorts: &sorts, said: Vec::new() }.sort(&self.defines[name]);
+            let sort = Checks {
+                sorts: &sorts,
+                said: Vec::new(),
+            }
+            .sort(&self.defines[name]);
             sorts.insert(name.clone(), sort);
         }
-        let depths: BTreeMap<&str, usize> = self.depths.iter().map(|(name, depth)| (name.as_str(), *depth)).collect();
+        let depths: BTreeMap<&str, usize> = self
+            .depths
+            .iter()
+            .map(|(name, depth)| (name.as_str(), *depth))
+            .collect();
         let (expression, _) = parsed(text, &|name| depths.get(name).copied().unwrap_or(1))?;
-        let mut checks = Checks { sorts: &sorts, said: Vec::new() };
+        let mut checks = Checks {
+            sorts: &sorts,
+            said: Vec::new(),
+        };
         checks.sort(&expression);
         match checks.said.is_empty() {
             true => Ok(expression),
@@ -352,10 +420,16 @@ impl Reading {
     /// The recipe `root` holds, with every problem it has said.
     fn recipe(&mut self, root: &Table) -> Recipe {
         self.only(root, &TOP, "A recipe");
-        if root.get("format").and_then(Value::as_str) != Some("rvr-recipe") || root.get("version").and_then(Value::as_integer) != Some(1) {
-            self.said.push("A recipe starts with format = \"rvr-recipe\" and version = 1".into());
+        if root.get("format").and_then(Value::as_str) != Some("rvr-recipe")
+            || root.get("version").and_then(Value::as_integer) != Some(1)
+        {
+            self.said
+                .push("A recipe starts with format = \"rvr-recipe\" and version = 1".into());
         }
-        self.lacking = TABLES.into_iter().filter(|table| !root.contains_key(*table)).collect();
+        self.lacking = TABLES
+            .into_iter()
+            .filter(|table| !root.contains_key(*table))
+            .collect();
         if !self.lacking.is_empty() {
             self.said.push(lacks(&self.lacking));
         }
@@ -363,7 +437,9 @@ impl Reading {
         match root.get("title") {
             None => {}
             Some(Value::String(title)) => recipe.title = Some(title.clone()),
-            Some(_) => self.said.push("title must be text, as title = \"my study\"".into()),
+            Some(_) => self
+                .said
+                .push("title must be text, as title = \"my study\"".into()),
         }
         let (fewest, most) = (CHUNK_BOUNDS.0 as i64, CHUNK_BOUNDS.1 as i64);
         match root.get("chunk_rows") {
@@ -383,12 +459,30 @@ impl Reading {
         let total = |expression: &Expression| {
             let mut fields = BTreeSet::new();
             fields_of(expression, &mut fields);
-            fields.into_iter().find(|field| recipe.totals.iter().any(|t| &t.name == field))
+            fields
+                .into_iter()
+                .find(|field| recipe.totals.iter().any(|t| &t.name == field))
         };
-        let places: Vec<(String, &Expression)> = recipe.defines.iter().map(|(name, e)| (format!("[define] {name}"), e))
-            .chain(recipe.keep.iter().flat_map(|cut| cut.expressions().map(move |e| (format!("[keep] {}", cut.name), e))))
-            .chain(recipe.columns.iter().map(|(name, e)| (format!("[columns] {name}"), e)))
-            .chain(recipe.totals.iter().map(|t| (format!("[totals] {}", t.name), &t.value)))
+        let places: Vec<(String, &Expression)> = recipe
+            .defines
+            .iter()
+            .map(|(name, e)| (format!("[define] {name}"), e))
+            .chain(recipe.keep.iter().flat_map(|cut| {
+                cut.expressions()
+                    .map(move |e| (format!("[keep] {}", cut.name), e))
+            }))
+            .chain(
+                recipe
+                    .columns
+                    .iter()
+                    .map(|(name, e)| (format!("[columns] {name}"), e)),
+            )
+            .chain(
+                recipe
+                    .totals
+                    .iter()
+                    .map(|t| (format!("[totals] {}", t.name), &t.value)),
+            )
             .collect();
         for (place, expression) in places {
             if let Some(field) = total(expression) {
@@ -401,19 +495,31 @@ impl Reading {
 
     /// `[define]`: names for expressions, each using only the names above it.
     fn defines(&mut self, root: &Table, recipe: &mut Recipe) {
-        let Some(defines) = self.table(root, "define") else { return };
+        let Some(defines) = self.table(root, "define") else {
+            return;
+        };
         let every: BTreeSet<&String> = defines.keys().collect();
         let mut above: BTreeSet<&String> = BTreeSet::new();
         for (name, value) in defines {
             let place = format!("[define] {name}");
             if !plain(name) || name == "sample" {
-                self.say(&place, "a defined name is one plain name an expression can use, such as good_muon");
+                self.say(
+                    &place,
+                    "a defined name is one plain name an expression can use, such as good_muon",
+                );
             }
             if let Some((value, sort, depth)) = self.expression(value, &place) {
                 let mut used = BTreeSet::new();
                 uses(&value, &mut used);
-                for later in used.iter().filter(|used| every.contains(used) && !above.contains(used)) {
-                    let itself = if later == name { ", itself" } else { ", which is defined below it" };
+                for later in used
+                    .iter()
+                    .filter(|used| every.contains(used) && !above.contains(used))
+                {
+                    let itself = if later == name {
+                        ", itself"
+                    } else {
+                        ", which is defined below it"
+                    };
                     self.said.push(format!("{place} uses {later}{itself}: a defined name may use only the names defined above it"));
                 }
                 self.sorts.insert(name.clone(), sort);
@@ -427,16 +533,23 @@ impl Reading {
 
     /// `[keep]`: the cuts, in order, each a condition or `{ if, apply }`.
     fn keep(&mut self, root: &Table, recipe: &mut Recipe) {
-        let Some(keep) = self.table(root, "keep") else { return };
+        let Some(keep) = self.table(root, "keep") else {
+            return;
+        };
         for (name, value) in keep {
             let place = format!("[keep] {name}");
             if !plain(name) {
-                self.say(&place, "a cut is named with one plain name, such as two_muons");
+                self.say(
+                    &place,
+                    "a cut is named with one plain name, such as two_muons",
+                );
             }
             let (when, pass) = match value {
                 Value::Table(cut) => {
                     self.only(cut, &["if", "apply"], &place);
-                    let when = cut.get("if").map(|when| self.condition(when, &format!("{place} if")));
+                    let when = cut
+                        .get("if")
+                        .map(|when| self.condition(when, &format!("{place} if")));
                     let pass = match cut.get("apply") {
                         Some(pass) => self.condition(pass, &place),
                         None => {
@@ -451,12 +564,18 @@ impl Reading {
                 }
                 Value::String(_) => (None, self.condition(value, &place)),
                 _ => {
-                    self.said.push(format!("{place} must be a condition in quotes, or {{ if = \"…\", apply = \"…\" }}"));
+                    self.said.push(format!(
+                        "{place} must be a condition in quotes, or {{ if = \"…\", apply = \"…\" }}"
+                    ));
                     (None, None)
                 }
             };
             if let Some(pass) = pass {
-                recipe.keep.push(Cut { name: name.clone(), when, pass });
+                recipe.keep.push(Cut {
+                    name: name.clone(),
+                    when,
+                    pass,
+                });
             }
         }
     }
@@ -472,7 +591,9 @@ impl Reading {
 
     /// `[columns]`: the branches stored as they are, and the columns computed.
     fn columns(&mut self, root: &Table, recipe: &mut Recipe) {
-        let Some(columns) = self.table(root, "columns") else { return };
+        let Some(columns) = self.table(root, "columns") else {
+            return;
+        };
         let mut named: Vec<String> = Vec::new();
         for (name, value) in columns {
             if name == "branches" {
@@ -492,14 +613,22 @@ impl Reading {
                         self.said.push(format!("[columns] branches lists {branch}, a name [define] gives an expression: list branches only, and store the expression as a column of its own, such as {branch}_stored = \"{branch}\""));
                     }
                     named.push(branch.to_owned());
-                    recipe.columns.push((branch.to_owned(), Expression::Name(branch.to_owned())));
+                    recipe
+                        .columns
+                        .push((branch.to_owned(), Expression::Name(branch.to_owned())));
                 }
                 continue;
             }
             let place = format!("[columns] {name}");
             named.push(name.clone());
             if !plain(name) || taken(name) {
-                self.say(&place, format!("a column is named with one plain name, such as ht, and not {}", given()));
+                self.say(
+                    &place,
+                    format!(
+                        "a column is named with one plain name, such as ht, and not {}",
+                        given()
+                    ),
+                );
             }
             let value = match value {
                 Value::Table(column) => {
@@ -508,13 +637,17 @@ impl Reading {
                         match kind.as_str().map(crate::Kind::named) {
                             Some(Ok(kind)) => drop(recipe.stored.insert(name.clone(), kind)),
                             Some(Err(e)) => self.say(&format!("{place} stored"), e.0),
-                            None => self.said.push(format!("{place} stored must be a number kind in quotes, such as \"i4\"")),
+                            None => self.said.push(format!(
+                                "{place} stored must be a number kind in quotes, such as \"i4\""
+                            )),
                         }
                     }
                     match column.get("value") {
                         Some(value) => value,
                         None => {
-                            self.said.push(format!("{place} needs value = \"…\": the expression it stores"));
+                            self.said.push(format!(
+                                "{place} needs value = \"…\": the expression it stores"
+                            ));
                             continue;
                         }
                     }
@@ -523,7 +656,10 @@ impl Reading {
             };
             if let Some((expression, sort, _)) = self.expression(value, &place) {
                 if sort == Sort::Text {
-                    self.say(&place, "a column holds numbers or true-or-false values, not text");
+                    self.say(
+                        &place,
+                        "a column holds numbers or true-or-false values, not text",
+                    );
                 }
                 recipe.columns.push((name.clone(), expression));
             }
@@ -531,18 +667,31 @@ impl Reading {
         let mut sorted = named.clone();
         sorted.sort();
         sorted.dedup();
-        for name in sorted.iter().filter(|name| named.iter().filter(|n| n == name).count() > 1) {
-            self.said.push(format!("Two columns are named {name}: give one another name"));
+        for name in sorted
+            .iter()
+            .filter(|name| named.iter().filter(|n| n == name).count() > 1)
+        {
+            self.said.push(format!(
+                "Two columns are named {name}: give one another name"
+            ));
         }
     }
 
     /// `[totals]`: sums over every event read, or over another tree of each file.
     fn totals(&mut self, root: &Table, recipe: &mut Recipe) {
-        let Some(totals) = self.table(root, "totals") else { return };
+        let Some(totals) = self.table(root, "totals") else {
+            return;
+        };
         for (name, value) in totals {
             let place = format!("[totals] {name}");
             if !plain(name) || taken(name) {
-                self.say(&place, format!("a total is named with one plain name, such as sumw, and not {}", given()));
+                self.say(
+                    &place,
+                    format!(
+                        "a total is named with one plain name, such as sumw, and not {}",
+                        given()
+                    ),
+                );
             }
             if recipe.columns.iter().any(|(n, _)| n == name) || recipe.defines.contains_key(name) {
                 self.say(&place, format!("{name} is already the name of a column or a line of [define]; give the total another"));
@@ -550,52 +699,75 @@ impl Reading {
             let (value, tree) = match value {
                 Value::Table(line) => {
                     self.only(line, &["value", "tree"], &place);
-                    let tree = line.get("tree").and_then(|tree| match tree.as_str().filter(|tree| !tree.is_empty()) {
-                        Some(tree) => Some(tree.to_owned()),
-                        None => {
-                            self.said.push(format!("{place} tree must name a tree of each file, such as \"Runs\""));
-                            None
+                    let tree = line.get("tree").and_then(|tree| {
+                        match tree.as_str().filter(|tree| !tree.is_empty()) {
+                            Some(tree) => Some(tree.to_owned()),
+                            None => {
+                                self.said.push(format!(
+                                    "{place} tree must name a tree of each file, such as \"Runs\""
+                                ));
+                                None
+                            }
                         }
                     });
                     match line.get("value") {
                         Some(value) => (value, tree),
                         None => {
-                            self.said.push(format!("{place} needs a value: what is summed"));
+                            self.said
+                                .push(format!("{place} needs a value: what is summed"));
                             continue;
                         }
                     }
                 }
                 value => (value, None),
             };
-            let Some((value, sort, _)) = self.expression(value, &place) else { continue };
+            let Some((value, sort, _)) = self.expression(value, &place) else {
+                continue;
+            };
             if sort == Sort::Text {
                 self.say(&place, "a total sums numbers, not text");
             }
             let mut used = BTreeSet::new();
             uses(&value, &mut used);
-            if let (Some(tree), Some(defined)) = (&tree, used.iter().find(|used| recipe.defines.contains_key(*used))) {
+            if let (Some(tree), Some(defined)) = (
+                &tree,
+                used.iter().find(|used| recipe.defines.contains_key(*used)),
+            ) {
                 self.said.push(format!("{place} reads the tree {tree}, and {defined} is a line of [define], over the events read: name that tree's branches"));
             }
-            recipe.totals.push(Total { name: name.clone(), value, tree });
+            recipe.totals.push(Total {
+                name: name.clone(),
+                value,
+                tree,
+            });
         }
     }
 
     /// `[derived]`: columns kept as expressions over what the file holds, each using only the
     /// stored columns and the derived columns above it.
     fn derived(&mut self, root: &Table, recipe: &mut Recipe) {
-        let Some(derived) = self.table(root, "derived") else { return };
+        let Some(derived) = self.table(root, "derived") else {
+            return;
+        };
         // Defined names are not what a derived column reads: each name is one level, a derived
         // column above as deep as its expression.
         self.sorts.clear();
         self.depths.clear();
-        let mut held: BTreeSet<String> = recipe.columns.iter().map(|(name, _)| name.clone()).collect();
+        let mut held: BTreeSet<String> = recipe
+            .columns
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
         let every: BTreeSet<&String> = derived.keys().collect();
         for (name, value) in derived {
             let place = format!("[derived] {name}");
             if !plain(name) || taken(name) {
                 self.say(&place, format!("a derived column is named with one plain name, such as ht_over_met, and not {}", given()));
             }
-            if held.contains(name) || recipe.defines.contains_key(name) || recipe.totals.iter().any(|t| &t.name == name) {
+            if held.contains(name)
+                || recipe.defines.contains_key(name)
+                || recipe.totals.iter().any(|t| &t.name == name)
+            {
                 self.say(&place, format!("{name} is already the name of a column, a total or a line of [define]; give the derived column another"));
             }
             let Some((parsed, _, depth)) = self.expression(value, &place) else {
@@ -621,7 +793,9 @@ impl Reading {
                 self.said.push(format!("{place} uses {missing}, but {why}: a derived column uses only the columns the file stores, under [columns], and the derived columns above it"));
             }
             held.insert(name.clone());
-            recipe.derived.push((name.clone(), value.as_str().unwrap_or_default().to_owned()));
+            recipe
+                .derived
+                .push((name.clone(), value.as_str().unwrap_or_default().to_owned()));
         }
     }
 }

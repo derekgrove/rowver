@@ -15,7 +15,11 @@ pub const USAGE: &str = "usage:
 /// The folder rvr keeps its key and trusted keys in; a variable set but empty counts as not set,
 /// as does an XDG_CONFIG_HOME that is not a full path.
 fn folder() -> Result<PathBuf, String> {
-    let set = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty()).map(PathBuf::from);
+    let set = |name: &str| {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
     if let Some(dir) = set("RVR_CONFIG") {
         return Ok(dir);
     }
@@ -71,10 +75,18 @@ enum Owner {
 
 /// Whose `key` is, as your key and the keys you trust say.
 fn owner(key: &str) -> Owner {
-    if secret().ok().flatten().is_some_and(|own| rowver::sign::public_key(&own) == key) {
+    if secret()
+        .ok()
+        .flatten()
+        .is_some_and(|own| rowver::sign::public_key(&own) == key)
+    {
         return Owner::You;
     }
-    match trusted().unwrap_or_default().into_iter().find(|(k, _)| k == key) {
+    match trusted()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(k, _)| k == key)
+    {
         Some((_, name)) => Owner::Trusted(name),
         None => Owner::Unknown,
     }
@@ -85,7 +97,10 @@ pub fn signer(key: &str) -> String {
     match owner(key) {
         Owner::You => "signed by you".into(),
         Owner::Trusted(name) => format!("signed by {name} (trusted)"),
-        Owner::Unknown => format!("signed by key {}, which you do not trust yet (rvr key trust {key} NAME)", short(key)),
+        Owner::Unknown => format!(
+            "signed by key {}, which you do not trust yet (rvr key trust {key} NAME)",
+            short(key)
+        ),
     }
 }
 
@@ -123,7 +138,9 @@ fn random() -> Result<[u8; 32], String> {
 fn new(name: Option<&str>) -> Result<(), String> {
     let dir = folder()?;
     let path = dir.join("key");
-    let have = || format!("You already have a key ({}); every press signs with it. To start again, move it away first.", path.display());
+    let have = || {
+        format!("You already have a key ({}); every press signs with it. To start again, move it away first.", path.display())
+    };
     if path.exists() {
         return Err(have());
     }
@@ -137,17 +154,21 @@ fn new(name: Option<&str>) -> Result<(), String> {
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
         use std::io::Write;
-        options.open(at).and_then(|mut f| f.write_all(text.as_bytes()).and_then(|()| f.sync_all()))
+        options
+            .open(at)
+            .and_then(|mut f| f.write_all(text.as_bytes()).and_then(|()| f.sync_all()))
     };
     let beside = dir.join(format!(".key.{}", &rowver::rvr::hex(&random()?)[..12]));
-    let written = fresh(&beside).map_err(|e| rowver::plain_io(&beside, &e)).and_then(|()| match std::fs::hard_link(&beside, &path) {
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(have()),
-        Err(_) => match fresh(&path) {
+    let written = fresh(&beside)
+        .map_err(|e| rowver::plain_io(&beside, &e))
+        .and_then(|()| match std::fs::hard_link(&beside, &path) {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(have()),
-            made => made.map_err(|e| rowver::plain_io(&path, &e)),
-        },
-        Ok(()) => Ok(()),
-    });
+            Err(_) => match fresh(&path) {
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(have()),
+                made => made.map_err(|e| rowver::plain_io(&path, &e)),
+            },
+            Ok(()) => Ok(()),
+        });
     let _ = std::fs::remove_file(&beside);
     written?;
     let public = rowver::sign::public_key(&secret);
@@ -178,7 +199,10 @@ fn trust(key: &str, name: &str) -> Result<(), String> {
     let path = folder()?.join("trusted");
     match trusted()?.into_iter().find(|(k, _)| k == key) {
         Some((_, whose)) if whose == name => {
-            println!("{} is trusted already, as {whose}'s: nothing to change.", short(key));
+            println!(
+                "{} is trusted already, as {whose}'s: nothing to change.",
+                short(key)
+            );
             return Ok(());
         }
         Some((_, whose)) => {

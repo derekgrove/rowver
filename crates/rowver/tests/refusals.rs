@@ -59,14 +59,22 @@ enum Change {
 use Change::*;
 
 fn sha(bytes: &[u8]) -> String {
-    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// The rows of each of the fixture's chunks (FORMAT §7): its samples' rows cut every chunk_rows.
 fn chunk_rows(header: &Value) -> Vec<(usize, usize, usize)> {
     let r = header["data"]["chunk_rows"].as_u64().unwrap() as usize;
     let (mut out, mut at) = (Vec::new(), 0);
-    for (sample, record) in header["data"]["samples"].as_array().unwrap().iter().enumerate() {
+    for (sample, record) in header["data"]["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
         let end = at + record["rows"].as_u64().unwrap() as usize;
         while at < end {
             let to = (at + r).min(end);
@@ -82,7 +90,19 @@ type Stored = (Vec<Vec<u8>>, Vec<u8>);
 
 /// A chunk's values `w` wide stored as FORMAT §7 says: each byte lane one zstd frame.
 fn chunk(values: &[u8], w: usize) -> Stored {
-    let lanes = (0..w).map(|j| ruzstd::encoding::compress_to_vec(&values.iter().skip(j).step_by(w).copied().collect::<Vec<u8>>()[..], ruzstd::encoding::CompressionLevel::Fastest)).collect();
+    let lanes = (0..w)
+        .map(|j| {
+            ruzstd::encoding::compress_to_vec(
+                &values
+                    .iter()
+                    .skip(j)
+                    .step_by(w)
+                    .copied()
+                    .collect::<Vec<u8>>()[..],
+                ruzstd::encoding::CompressionLevel::Fastest,
+            )
+        })
+        .collect();
     (lanes, Sha256::digest(values).to_vec())
 }
 
@@ -109,7 +129,8 @@ fn unlaid(array: &[u8], chunks: usize, w: usize) -> Vec<Stored> {
         .map(|entry| {
             let lanes = (0..w)
                 .map(|j| {
-                    let size = u64::from_le_bytes(entry[8 * j..8 * j + 8].try_into().unwrap()) as usize;
+                    let size =
+                        u64::from_le_bytes(entry[8 * j..8 * j + 8].try_into().unwrap()) as usize;
                     at += size;
                     array[at - size..at].to_vec()
                 })
@@ -120,7 +141,13 @@ fn unlaid(array: &[u8], chunks: usize, w: usize) -> Vec<Stored> {
 }
 
 /// Change array `index`'s stored chunks (values `w` wide) as `f` says, and lay it again.
-fn edit(header: &Value, arrays: &mut [Vec<u8>], index: usize, w: usize, f: impl FnOnce(&mut Vec<Stored>)) {
+fn edit(
+    header: &Value,
+    arrays: &mut [Vec<u8>],
+    index: usize,
+    w: usize,
+    f: impl FnOnce(&mut Vec<Stored>),
+) {
     let mut chunks = unlaid(&arrays[index], chunk_rows(header).len(), w);
     f(&mut chunks);
     arrays[index] = laid(&chunks);
@@ -128,7 +155,11 @@ fn edit(header: &Value, arrays: &mut [Vec<u8>], index: usize, w: usize, f: impl 
 
 /// The SHA-256 of these SHA-256s' hex texts joined (FORMAT §8).
 fn joined(digests: &[&[u8]]) -> String {
-    sha(digests.iter().map(|d| d.iter().map(|b| format!("{b:02x}")).collect::<String>()).collect::<String>().as_bytes())
+    sha(digests
+        .iter()
+        .map(|d| d.iter().map(|b| format!("{b:02x}")).collect::<String>())
+        .collect::<String>()
+        .as_bytes())
 }
 
 /// The record of the fixture's array `index`, in file order.
@@ -152,8 +183,17 @@ fn put(header: &mut Value, arrays: &mut [Vec<u8>], index: usize, raw: &[u8], w: 
         .iter()
         .map(|&(_, a, b)| match index {
             4 => {
-                let steps: Vec<i64> = raw[at(a)..at(b + 1)].chunks(8).map(|v| i64::from_le_bytes(v.try_into().unwrap())).collect();
-                chunk(&steps.iter().flat_map(|v| (v - steps[0]).to_le_bytes()).collect::<Vec<u8>>(), w)
+                let steps: Vec<i64> = raw[at(a)..at(b + 1)]
+                    .chunks(8)
+                    .map(|v| i64::from_le_bytes(v.try_into().unwrap()))
+                    .collect();
+                chunk(
+                    &steps
+                        .iter()
+                        .flat_map(|v| (v - steps[0]).to_le_bytes())
+                        .collect::<Vec<u8>>(),
+                    w,
+                )
             }
             _ => chunk(&raw[at(a)..at(b)], w),
         })
@@ -164,7 +204,18 @@ fn put(header: &mut Value, arrays: &mut [Vec<u8>], index: usize, raw: &[u8], w: 
     held["sha256"] = joined(&digests).into();
     if held.get("by_sample").is_some() {
         let samples = header["data"]["samples"].as_array().unwrap().len();
-        let by: Vec<String> = (0..samples).map(|s| joined(&rows.iter().zip(&digests).filter(|(r, _)| r.0 == s).map(|(_, d)| *d).collect::<Vec<_>>())).collect();
+        let by: Vec<String> = (0..samples)
+            .map(|s| {
+                joined(
+                    &rows
+                        .iter()
+                        .zip(&digests)
+                        .filter(|(r, _)| r.0 == s)
+                        .map(|(_, d)| *d)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
         record(header, index)["by_sample"] = json!(by);
     }
 }
@@ -203,7 +254,10 @@ fn derived_of((mut header, arrays): (Value, Vec<Vec<u8>>)) -> (Value, Vec<Vec<u8
     let header = sealed(header);
     let path = written(&to_bytes(&header, &arrays), "derived");
     let reader = Reader::open(&path).unwrap();
-    let wanted = [("twice".to_owned(), "MET * 2".to_owned()), ("muons".to_owned(), "Muon_pt * 2".to_owned())];
+    let wanted = [
+        ("twice".to_owned(), "MET * 2".to_owned()),
+        ("muons".to_owned(), "Muon_pt * 2".to_owned()),
+    ];
     let records = rowver::rvr::derived::records(&reader, &wanted, &[]).unwrap();
     let mut header = header;
     header["derived"] = json!({ "columns": records });
@@ -218,10 +272,18 @@ fn two_files(header: &mut Value, arrays: &mut [Vec<u8>], same: bool, swapped: bo
     let entries = [11, 9];
     let seed = match same {
         true => 7,
-        false => (8..).find(|&s| { let c = rowver::choice::per_file(&entries, 4, s); c[0].len() != c[1].len() }).unwrap(),
+        false => (8..)
+            .find(|&s| {
+                let c = rowver::choice::per_file(&entries, 4, s);
+                c[0].len() != c[1].len()
+            })
+            .unwrap(),
     };
     let samples = common::SAMPLES
-        .replace("files = \"./fixture-b.root\"", "files = [\"./fixture-b.root\", \"./fixture-b2.root\"]")
+        .replace(
+            "files = \"./fixture-b.root\"",
+            "files = [\"./fixture-b.root\", \"./fixture-b2.root\"]",
+        )
         .replace("seed = 7", &format!("seed = {seed}"));
     let lock = common::lock_with(|lock| {
         lock.samples_toml_sha256 = rowver::write::text_checksum(&samples);
@@ -229,8 +291,19 @@ fn two_files(header: &mut Value, arrays: &mut [Vec<u8>], same: bool, swapped: bo
         b.asked = vec!["./fixture-b.root".into(), "./fixture-b2.root".into()];
         b.files[0].entries = entries[0];
         let mut second = b.files[0].clone();
-        (second.at, second.bytes, second.adler32, second.uuid, second.entries) =
-            ("./fixture-b2.root".into(), 5005, Some("0a1b2c05".into()), "31e851e4-b994-11f1-ba5c-000000000005".into(), entries[1]);
+        (
+            second.at,
+            second.bytes,
+            second.adler32,
+            second.uuid,
+            second.entries,
+        ) = (
+            "./fixture-b2.root".into(),
+            5005,
+            Some("0a1b2c05".into()),
+            "31e851e4-b994-11f1-ba5c-000000000005".into(),
+            entries[1],
+        );
         b.files.push(second);
         b.events = rowver::choice::Events::Random { n: 4, seed };
         *b = b.planned(b.events);
@@ -241,7 +314,10 @@ fn two_files(header: &mut Value, arrays: &mut [Vec<u8>], same: bool, swapped: bo
     });
     set_text(header, "samples", &samples);
     set_text(header, "lock", &lock);
-    let taken: Vec<usize> = rowver::choice::per_file(&entries, 4, 7).iter().map(Vec::len).collect();
+    let taken: Vec<usize> = rowver::choice::per_file(&entries, 4, 7)
+        .iter()
+        .map(Vec::len)
+        .collect();
     let files = &mut header["made"]["files"]["B"]["files"];
     files["./fixture-b.root"]["entries"] = entries[0].into();
     files["./fixture-b.root"]["take"] = taken[0].into();
@@ -249,7 +325,12 @@ fn two_files(header: &mut Value, arrays: &mut [Vec<u8>], same: bool, swapped: bo
     let listed = header["data"]["files"].as_array_mut().unwrap();
     listed[3]["rows"] = 1.into();
     listed.push(json!({"sample": "B", "path": "./fixture-b2.root", "rows": 1}));
-    let entry = |values: &[i64]| values.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+    let entry = |values: &[i64]| {
+        values
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect::<Vec<u8>>()
+    };
     put(header, arrays, 1, &entry(&[0, 2, 4, 1, 6]), 8);
     relaid(header, arrays);
 }
@@ -271,7 +352,9 @@ fn bytes_of(base: (Value, Vec<Vec<u8>>), change: Change) -> Vec<u8> {
         Raw(f) => f(&mut header),
         Made(f) => {
             f(&mut header);
-            header["made"]["sha256"] = rowver::write::made_checksum(&header["made"]).unwrap().into();
+            header["made"]["sha256"] = rowver::write::made_checksum(&header["made"])
+                .unwrap()
+                .into();
         }
         Arrays(f) => {
             f(&mut header, &mut arrays);
@@ -286,7 +369,10 @@ fn bytes_of(base: (Value, Vec<Vec<u8>>), change: Change) -> Vec<u8> {
         Placed(f) => {
             relaid(&mut header, &arrays);
             let region = f(&mut header, &arrays);
-            return common::framed(serde_json::to_string(&sealed(header)).unwrap().as_bytes(), &region);
+            return common::framed(
+                serde_json::to_string(&sealed(header)).unwrap().as_bytes(),
+                &region,
+            );
         }
         Journaled => {}
         Bytes(f) => {
@@ -343,7 +429,11 @@ fn bytes_of(base: (Value, Vec<Vec<u8>>), change: Change) -> Vec<u8> {
         Derived(f) | EmptyDerived(f) => {
             let (mut with, arrays) = derived();
             f(&mut with);
-            let arrays = if matches!(change, EmptyDerived(_)) { Vec::new() } else { arrays };
+            let arrays = if matches!(change, EmptyDerived(_)) {
+                Vec::new()
+            } else {
+                arrays
+            };
             return to_bytes(&sealed(with), &arrays);
         }
     }
@@ -364,7 +454,10 @@ fn checked_with(bytes: &[u8], journal: bool) -> (Result<(), String>, Result<(), 
     }
     let _gone = common::Written(beside);
     // A refusal that names the file names it as FILE.rvr, the same wherever the test runs.
-    let said = |e: rowver::Error| e.to_string().replace(&*path.0.to_string_lossy(), "FILE.rvr");
+    let said = |e: rowver::Error| {
+        e.to_string()
+            .replace(&*path.0.to_string_lossy(), "FILE.rvr")
+    };
     let opened = Reader::open(&path).map(drop).map_err(said);
     let validated = validate_file(&path).map(drop).map_err(said);
     (opened, validated)
@@ -389,7 +482,8 @@ fn refused_of(base: impl Fn() -> (Value, Vec<Vec<u8>>), rows: Vec<Row>, opening:
             false => said.split('|').next().unwrap_or(said).to_owned(),
         };
         let said = said.as_str();
-        let (opened, validated) = checked_with(&bytes_of(base(), change), matches!(change, Journaled));
+        let (opened, validated) =
+            checked_with(&bytes_of(base(), change), matches!(change, Journaled));
         let problem = match (&opened, &validated) {
             (_, Ok(())) => Some("accepted".to_owned()),
             (Ok(()), _) if opening => Some("opened".to_owned()),
@@ -436,12 +530,21 @@ fn hole(first: u64, last: u64) -> Value {
 fn holed_with_total(h: &mut Value, a: Value, b: Value) {
     let text = common::recipe().replace("[totals]\n", "[totals]\nsumw = \"MET\"\n");
     set_text(h, "recipe", &text);
-    for (sample, path, last) in [("A", "./fixture-a.root", 10), ("A", "./fixture-empty.root", 10), ("A", "./fixture-a2.root", 5), ("B", "./fixture-b.root", 20)] {
+    for (sample, path, last) in [
+        ("A", "./fixture-a.root", 10),
+        ("A", "./fixture-empty.root", 10),
+        ("A", "./fixture-a2.root", 5),
+        ("B", "./fixture-b.root", 20),
+    ] {
         h["made"]["files"][sample]["files"][path]["holes"] = json!([hole(0, last)]);
     }
     for (sample, missing, total) in [("A", 25, a), ("B", 4, b)] {
         let metadata = &mut h["made"]["files"][sample]["metadata"];
-        (metadata["events_read"], metadata["events_missing"], metadata["sumw"]) = (0.into(), missing.into(), total);
+        (
+            metadata["events_read"],
+            metadata["events_missing"],
+            metadata["sumw"],
+        ) = (0.into(), missing.into(), total);
     }
 }
 
@@ -457,7 +560,9 @@ fn sized(frame: &[u8], declared: u8) -> Vec<u8> {
 /// The branch list of the lock with MET's kind changed, every sample naming it.
 fn met_as(lock: &mut Lock, kind: &str) {
     let mut list = lock.branches[0].list.clone();
-    list.iter_mut().filter(|b| b.name == "MET").for_each(|b| b.kind = kind.into());
+    list.iter_mut()
+        .filter(|b| b.name == "MET")
+        .for_each(|b| b.kind = kind.into());
     let list = Branches::new(list);
     for sample in &mut lock.samples {
         sample.branches = list.sha256.clone();
@@ -480,10 +585,13 @@ fn the_fixture_itself_is_valid() {
 // FORMAT 1, 4, 7, 8, 9, 11
 #[test]
 fn what_the_format_allows_is_valid() {
-    let wrong: Vec<String> = allowed().into_iter().filter_map(|(rule, change)| match checked(&bytes(change)) {
-        (Ok(()), Ok(())) => None,
-        said => Some(format!("{rule}: {said:?}")),
-    }).collect();
+    let wrong: Vec<String> = allowed()
+        .into_iter()
+        .filter_map(|(rule, change)| match checked(&bytes(change)) {
+            (Ok(()), Ok(())) => None,
+            said => Some(format!("{rule}: {said:?}")),
+        })
+        .collect();
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
@@ -1012,9 +1120,22 @@ fn every_rule_refuses_alone_in_generated_files() {
                 }
                 let base = || common::variant(seed);
                 let (opened, validated) = checked(&to_bytes(&base().0, &base().1));
-                assert!(opened.is_ok() && validated.is_ok(), "seed {seed}: the variant is not valid: {opened:?} {validated:?}");
-                refused_of(base, opening().into_iter().filter(of_any_file).collect(), true, &format!("seed {seed}: "));
-                refused_of(base, in_full().into_iter().filter(of_any_file).collect(), false, &format!("seed {seed}: "));
+                assert!(
+                    opened.is_ok() && validated.is_ok(),
+                    "seed {seed}: the variant is not valid: {opened:?} {validated:?}"
+                );
+                refused_of(
+                    base,
+                    opening().into_iter().filter(of_any_file).collect(),
+                    true,
+                    &format!("seed {seed}: "),
+                );
+                refused_of(
+                    base,
+                    in_full().into_iter().filter(of_any_file).collect(),
+                    false,
+                    &format!("seed {seed}: "),
+                );
             });
         }
     });
@@ -1034,10 +1155,20 @@ fn a_file_of_no_entries_is_listed_and_read_and_one_never_reached_is_not() {
     set_text(&mut header, "recipe", &recipe);
     let files = &mut header["made"]["files"]["A"];
     files["files"]["./fixture-empty.root"]["entries"] = 0.into();
-    drop(files["files"]["./fixture-a2.root"].as_object_mut().unwrap().shift_remove("stop"));
+    drop(
+        files["files"]["./fixture-a2.root"]
+            .as_object_mut()
+            .unwrap()
+            .shift_remove("stop"),
+    );
     files["metadata"]["events_read"] = 20.into();
     files["metadata"]["events_total"] = 20.into();
-    for (sample, path) in [("A", "./fixture-a.root"), ("A", "./fixture-empty.root"), ("A", "./fixture-a2.root"), ("B", "./fixture-b.root")] {
+    for (sample, path) in [
+        ("A", "./fixture-a.root"),
+        ("A", "./fixture-empty.root"),
+        ("A", "./fixture-a2.root"),
+        ("B", "./fixture-b.root"),
+    ] {
         header["made"]["files"][sample]["files"][path]["totals"] = json!({"sumw": 1.0});
     }
     header["made"]["files"]["A"]["metadata"]["sumw"] = json!(3.0);
@@ -1046,17 +1177,35 @@ fn a_file_of_no_entries_is_listed_and_read_and_one_never_reached_is_not() {
     assert_eq!(checked(&to_bytes(&read, &arrays)), (Ok(()), Ok(())));
     // A file of no entries that the press opened holds the totals.
     let mut without = header.clone();
-    drop(without["made"]["files"]["A"]["files"]["./fixture-empty.root"].as_object_mut().unwrap().shift_remove("totals"));
+    drop(
+        without["made"]["files"]["A"]["files"]["./fixture-empty.root"]
+            .as_object_mut()
+            .unwrap()
+            .shift_remove("totals"),
+    );
     without["made"]["files"]["A"]["metadata"]["sumw"] = json!(2.0);
     let said = checked(&to_bytes(&sealed(without), &arrays)).1.unwrap_err();
-    assert!(said.contains("./fixture-empty.root\"].totals holds [], and a file the press read holds each total"), "{said}");
+    assert!(
+        said.contains(
+            "./fixture-empty.root\"].totals holds [], and a file the press read holds each total"
+        ),
+        "{said}"
+    );
     // Left out of the file, it is refused: only a file with entries the first N never reached is.
     let mut left = header;
     left["data"]["files"].as_array_mut().unwrap().remove(1);
-    drop(left["made"]["files"]["A"]["files"].as_object_mut().unwrap().shift_remove("./fixture-empty.root"));
+    drop(
+        left["made"]["files"]["A"]["files"]
+            .as_object_mut()
+            .unwrap()
+            .shift_remove("./fixture-empty.root"),
+    );
     left["made"]["files"]["A"]["metadata"]["sumw"] = json!(2.0);
     let said = checked(&to_bytes(&sealed(left), &arrays)).1.unwrap_err();
-    assert!(said.contains("data.files lists of sample A [\"./fixture-a.root\", \"./fixture-a2.root\"]"), "{said}");
+    assert!(
+        said.contains("data.files lists of sample A [\"./fixture-a.root\", \"./fixture-a2.root\"]"),
+        "{said}"
+    );
 }
 
 // FORMAT 1, 3, 10, 12
@@ -1064,18 +1213,34 @@ fn a_file_of_no_entries_is_listed_and_read_and_one_never_reached_is_not() {
 fn a_file_is_judged_alike_whole_and_emptied() {
     // B keeps none of its rows, and has no xsec, which a derived column reads.
     let (mut header, _) = rebuilt(10.);
-    let piece = |name: &str, from, to, entry: Vec<i64>| common::Piece { name: name.into(), label: header["data"]["samples"][usize::from(name == "B")]["label"].as_str().unwrap().into(), columns: common::columns(from, to, 10.), entry };
-    let pieces = vec![piece("A", 0, 3, vec![0, 2, 4]), piece("B", 3, 3, Vec::new())];
+    let piece = |name: &str, from, to, entry: Vec<i64>| common::Piece {
+        name: name.into(),
+        label: header["data"]["samples"][usize::from(name == "B")]["label"]
+            .as_str()
+            .unwrap()
+            .into(),
+        columns: common::columns(from, to, 10.),
+        entry,
+    };
+    let pieces = vec![
+        piece("A", 0, 3, vec![0, 2, 4]),
+        piece("B", 3, 3, Vec::new()),
+    ];
     let mut files = header["data"]["files"].as_array().unwrap().clone();
     files[3]["rows"] = 0.into();
     let (mut data, arrays) = common::pack(pieces, files).unwrap();
     data["sample_cols"] = header["data"]["sample_cols"].clone();
     header["data"] = data;
-    set_text(&mut header, "recipe", &(common::recipe() + "w = \"MET * sample.xsec\"\n"));
+    set_text(
+        &mut header,
+        "recipe",
+        &(common::recipe() + "w = \"MET * sample.xsec\"\n"),
+    );
     let header = sealed(header);
     let path = written(&to_bytes(&header, &arrays), "plain");
     let wanted = [("w".to_owned(), "MET * sample.xsec".to_owned())];
-    let records = rowver::rvr::derived::records(&Reader::open(&path).unwrap(), &wanted, &[]).unwrap();
+    let records =
+        rowver::rvr::derived::records(&Reader::open(&path).unwrap(), &wanted, &[]).unwrap();
     let mut header = header;
     header["derived"] = json!({ "columns": records });
     // Its records hold over the rows, but a press of its study is refused, so full validation
@@ -1083,7 +1248,10 @@ fn a_file_is_judged_alike_whole_and_emptied() {
     let said = "[derived] w: sample.xsec is used as a number, but this sample has no xsec";
     for arrays in [&arrays[..], &[]] {
         let (opened, validated) = checked(&to_bytes(&header, arrays));
-        assert!(opened.is_ok() && validated.as_ref().is_err_and(|e| e.contains(said)), "{validated:?}");
+        assert!(
+            opened.is_ok() && validated.as_ref().is_err_and(|e| e.contains(said)),
+            "{validated:?}"
+        );
     }
 }
 
@@ -1093,10 +1261,23 @@ fn reading_a_column_of_an_empty_file_says_it_is_empty() {
     let path = written(&to_bytes(&rebuilt(10.).0, &[]), "empty");
     let derived = written(&to_bytes(&sealed(derived().0), &[]), "empty-derived");
     let reader = Reader::open(&derived).unwrap();
-    let asked = [reader.column("twice").map(drop), reader.slice("muons", 0, 2).map(drop), rowver::rvr::derived::checked(&reader).map(drop)];
-    for refused in [Reader::open(&path).unwrap().column("MET").map(drop), Reader::open(&path).unwrap().entry().map(drop)].into_iter().chain(asked) {
+    let asked = [
+        reader.column("twice").map(drop),
+        reader.slice("muons", 0, 2).map(drop),
+        rowver::rvr::derived::checked(&reader).map(drop),
+    ];
+    for refused in [
+        Reader::open(&path).unwrap().column("MET").map(drop),
+        Reader::open(&path).unwrap().entry().map(drop),
+    ]
+    .into_iter()
+    .chain(asked)
+    {
         let said = refused.unwrap_err().to_string();
-        assert!(said.contains("the file is empty") && said.contains("rvr refill"), "{said}");
+        assert!(
+            said.contains("the file is empty") && said.contains("rvr refill"),
+            "{said}"
+        );
     }
     // Asking for no columns gives none.
     assert_eq!(reader.stored_columns(&[]).unwrap(), vec![]);
@@ -1111,11 +1292,27 @@ fn a_slice_of_a_derived_column_is_checked_against_its_record() {
     header["derived"]["columns"][0]["sha256"] = sha(b"x").into();
     let path = written(&to_bytes(&sealed(header), &arrays), "derived-lying");
     let reader = Reader::open(&path).unwrap();
-    for refused in [reader.slice("twice", 1, 3).map(drop), reader.column("twice").map(drop)] {
+    for refused in [
+        reader.slice("twice", 1, 3).map(drop),
+        reader.column("twice").map(drop),
+    ] {
         let said = refused.unwrap_err().to_string();
-        assert!(said.contains("derived.columns[\"twice\"], worked out here, is not what the file records of it"), "{said}");
+        assert!(
+            said.contains(
+                "derived.columns[\"twice\"], worked out here, is not what the file records of it"
+            ),
+            "{said}"
+        );
     }
-    assert_eq!(reader.slice("muons", 1, 3).unwrap().unwrap().offsets.map(|o| o.len()), Some(3));
+    assert_eq!(
+        reader
+            .slice("muons", 1, 3)
+            .unwrap()
+            .unwrap()
+            .offsets
+            .map(|o| o.len()),
+        Some(3)
+    );
 }
 
 // SPEC 11.8; FORMAT 10
@@ -1123,39 +1320,73 @@ fn a_slice_of_a_derived_column_is_checked_against_its_record() {
 fn a_derived_column_reads_only_the_columns_it_uses() {
     // Muon_pt's content damaged: muons, which reads it, is refused; twice, which reads MET alone, reads.
     let (mut header, mut arrays) = derived();
-    edit(&header, &mut arrays, 5, 4, |c| c[0].0[0] = [c[0].0[0].clone(), c[0].0[0].clone()].concat());
+    edit(&header, &mut arrays, 5, 4, |c| {
+        c[0].0[0] = [c[0].0[0].clone(), c[0].0[0].clone()].concat()
+    });
     relaid(&mut header, &arrays);
     let path = written(&to_bytes(&sealed(header), &arrays), "derived-damaged");
     let reader = Reader::open(&path).unwrap();
-    assert!(reader.column("muons").unwrap_err().to_string().contains("it is exactly one frame"));
-    assert!(reader.column("twice").unwrap().is_some() && reader.slice("twice", 1, 3).unwrap().is_some());
+    assert!(reader
+        .column("muons")
+        .unwrap_err()
+        .to_string()
+        .contains("it is exactly one frame"));
+    assert!(
+        reader.column("twice").unwrap().is_some() && reader.slice("twice", 1, 3).unwrap().is_some()
+    );
     // Asked together, the refusal is Muon_pt's; twice alone reads whole.
-    let both = rowver::rvr::derived::columns(&reader, &["twice".into(), "muons".into()]).unwrap_err().to_string();
+    let both = rowver::rvr::derived::columns(&reader, &["twice".into(), "muons".into()])
+        .unwrap_err()
+        .to_string();
     assert!(both.contains("it is exactly one frame"), "{both}");
-    assert_eq!(rowver::rvr::derived::columns(&reader, &["twice".into()]).unwrap().len(), 1);
+    assert_eq!(
+        rowver::rvr::derived::columns(&reader, &["twice".into()])
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 // FORMAT 7, 8, 12
 #[test]
 fn reading_a_column_checks_its_frame_length_and_sha256() {
     let (mut header, mut arrays) = rebuilt(10.);
-    let raw: Vec<u8> = [20_f32, 0., 40., 30., 10.].iter().flat_map(|v| v.to_le_bytes()).collect();
-    edit(&header, &mut arrays, 3, 4, |c| c[1].0[2] = [c[1].0[2].clone(), c[1].0[2].clone()].concat());
+    let raw: Vec<u8> = [20_f32, 0., 40., 30., 10.]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    edit(&header, &mut arrays, 3, 4, |c| {
+        c[1].0[2] = [c[1].0[2].clone(), c[1].0[2].clone()].concat()
+    });
     relaid(&mut header, &arrays);
     let path = written(&to_bytes(&header, &arrays), "column");
     let reader = Reader::open(&path).unwrap();
-    assert!(reader.column("MET").unwrap_err().to_string().contains("before its chunk's lane does: it is exactly one frame"));
+    assert!(reader
+        .column("MET")
+        .unwrap_err()
+        .to_string()
+        .contains("before its chunk's lane does: it is exactly one frame"));
     assert!(reader.column("nlep").is_ok());
     let (mut header, mut arrays) = rebuilt(10.);
     put(&mut header, &mut arrays, 3, &raw[..16], 4);
     relaid(&mut header, &arrays);
     let path = written(&to_bytes(&header, &arrays), "column");
-    assert!(Reader::open(&path).unwrap().column("MET").unwrap_err().to_string().contains("decodes to 1 bytes, and its chunk's lane holds 2"));
+    assert!(Reader::open(&path)
+        .unwrap()
+        .column("MET")
+        .unwrap_err()
+        .to_string()
+        .contains("decodes to 1 bytes, and its chunk's lane holds 2"));
     let (mut header, arrays) = rebuilt(10.);
     header["data"]["cols"][1]["sha256"] = ZEROS.into();
     relaid(&mut header, &arrays);
     let path = written(&to_bytes(&header, &arrays), "column");
-    assert!(Reader::open(&path).unwrap().column("MET").unwrap_err().to_string().contains("its chunk table does not give the array's sha256"));
+    assert!(Reader::open(&path)
+        .unwrap()
+        .column("MET")
+        .unwrap_err()
+        .to_string()
+        .contains("its chunk table does not give the array's sha256"));
 }
 
 // FORMAT 6, 6.1, 6.3
@@ -1169,7 +1400,6 @@ fn a_two_file_random_sample_whose_takes_are_the_choices_shares_is_valid() {
     }
 }
 
-
 /// A valid file's contents as the corpus states them: rows, each row's sample and entry, and every
 /// column and derived column (floats as the hex of their bits, at their own width).
 fn contents(bytes: &[u8]) -> Value {
@@ -1177,22 +1407,38 @@ fn contents(bytes: &[u8]) -> Value {
     let reader = Reader::open(&path).unwrap();
     let mut columns = serde_json::Map::new();
     if !reader.empty() {
-        let names: Vec<String> = reader.header()["made"]["recipe"]["columns"].as_array().unwrap().iter().chain(reader.header()["derived"]["columns"].as_array().into_iter().flatten().map(|d| &d["name"])).map(|n| n.as_str().unwrap().to_owned()).collect();
+        let names: Vec<String> = reader.header()["made"]["recipe"]["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(
+                reader.header()["derived"]["columns"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|d| &d["name"]),
+            )
+            .map(|n| n.as_str().unwrap().to_owned())
+            .collect();
         for name in names {
             let held = reader.column(&name).unwrap().unwrap();
             let width = rowver::rvr::width(&held.kind).unwrap();
-            let values: Vec<Value> = held.bytes.chunks(width).map(|b| {
-                let mut wide = [0u8; 8];
-                wide[..width].copy_from_slice(b);
-                let raw = u64::from_le_bytes(wide);
-                let shift = 64 - 8 * width as u32;
-                match held.kind.as_str() {
-                    "f8" | "f4" => json!(format!("{raw:0w$x}", w = 2 * width)),
-                    "b1" => json!(raw != 0),
-                    k if k.starts_with('i') => json!(((raw << shift) as i64) >> shift),
-                    _ => json!(raw),
-                }
-            }).collect();
+            let values: Vec<Value> = held
+                .bytes
+                .chunks(width)
+                .map(|b| {
+                    let mut wide = [0u8; 8];
+                    wide[..width].copy_from_slice(b);
+                    let raw = u64::from_le_bytes(wide);
+                    let shift = 64 - 8 * width as u32;
+                    match held.kind.as_str() {
+                        "f8" | "f4" => json!(format!("{raw:0w$x}", w = 2 * width)),
+                        "b1" => json!(raw != 0),
+                        k if k.starts_with('i') => json!(((raw << shift) as i64) >> shift),
+                        _ => json!(raw),
+                    }
+                })
+                .collect();
             let mut column = json!({"kind": held.kind, "values": values});
             if let Some(offsets) = held.offsets {
                 column["offsets"] = json!(&*offsets);
@@ -1201,7 +1447,13 @@ fn contents(bytes: &[u8]) -> Value {
         }
     }
     let empty = reader.empty();
-    let (sample, entry) = match empty { true => (json!(null), json!(null)), false => (json!(reader.sample().unwrap()), json!(reader.entry().unwrap())) };
+    let (sample, entry) = match empty {
+        true => (json!(null), json!(null)),
+        false => (
+            json!(reader.sample().unwrap()),
+            json!(reader.entry().unwrap()),
+        ),
+    };
     json!({"rows": reader.rows().unwrap(), "empty": empty, "sample": sample, "entry": entry, "columns": columns})
 }
 
@@ -1218,11 +1470,26 @@ fn shared_parts() -> (Value, Vec<Vec<u8>>) {
     let mut rng = common::gen::Rng::new(7);
     let table = common::gen::table(&mut rng, 8);
     let mut values = common::gen::filled(&mut rng, &table);
-    let lists: Vec<usize> = table.columns.iter().enumerate().filter(|(_, c)| c.jagged).map(|(at, _)| at).collect();
+    let lists: Vec<usize> = table
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.jagged)
+        .map(|(at, _)| at)
+        .collect();
     for sample in &mut values {
-        let Values::Jagged { counts, .. } = &sample[lists[0]] else { panic!("a list column") };
+        let Values::Jagged { counts, .. } = &sample[lists[0]] else {
+            panic!("a list column")
+        };
         let counts = counts.clone();
-        sample[lists[1]] = Values::Jagged { content: common::gen::values(&mut rng, &table.columns[lists[1]].kind, counts.iter().sum()), counts };
+        sample[lists[1]] = Values::Jagged {
+            content: common::gen::values(
+                &mut rng,
+                &table.columns[lists[1]].kind,
+                counts.iter().sum(),
+            ),
+            counts,
+        };
     }
     common::gen::file(&table, values)
 }
@@ -1231,36 +1498,86 @@ fn shared_parts() -> (Value, Vec<Vec<u8>>) {
 #[test]
 fn a_trusting_reader_leaves_a_chunks_sha256_to_full_validation_and_no_frames_checksum() {
     // Lanes in another order: every frame is whole, and the values are not the chunk's SHA-256's.
-    let path = written(&bytes_of(rebuilt(10.), Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0.swap(2, 3)))), "trusting");
-    let said = |read: rowver::Result<Option<rowver::rvr::Held>>| read.map(drop).map_err(|e| e.to_string());
-    assert!(said(Reader::open(&path).unwrap().column("MET")).unwrap_err().contains("are not the SHA-256"));
-    assert_eq!(said(Reader::open(&path).unwrap().trusting().column("MET")), Ok(()));
-    assert_eq!(said(Reader::open(&path).unwrap().trusting().stored_columns(&["MET".into()]).map(|mut c| c.pop().flatten())), Ok(()));
-    assert!(validate_file(&path).unwrap_err().to_string().contains("are not the SHA-256"));
+    let path = written(
+        &bytes_of(
+            rebuilt(10.),
+            Arrays(|h, a| edit(h, a, 3, 4, |c| c[0].0.swap(2, 3))),
+        ),
+        "trusting",
+    );
+    let said =
+        |read: rowver::Result<Option<rowver::rvr::Held>>| read.map(drop).map_err(|e| e.to_string());
+    assert!(said(Reader::open(&path).unwrap().column("MET"))
+        .unwrap_err()
+        .contains("are not the SHA-256"));
+    assert_eq!(
+        said(Reader::open(&path).unwrap().trusting().column("MET")),
+        Ok(())
+    );
+    assert_eq!(
+        said(
+            Reader::open(&path)
+                .unwrap()
+                .trusting()
+                .stored_columns(&["MET".into()])
+                .map(|mut c| c.pop().flatten())
+        ),
+        Ok(())
+    );
+    assert!(validate_file(&path)
+        .unwrap_err()
+        .to_string()
+        .contains("are not the SHA-256"));
     // A frame whose bytes changed is refused by its own checksum.
-    let path = written(&bytes_of(rebuilt(10.), Arrays(|h, a| edit(h, a, 3, 4, |c| *c[0].0[0].last_mut().unwrap() ^= 1))), "trusting-frame");
-    assert!(said(Reader::open(&path).unwrap().trusting().column("MET")).unwrap_err().contains("content checksum"));
+    let path = written(
+        &bytes_of(
+            rebuilt(10.),
+            Arrays(|h, a| edit(h, a, 3, 4, |c| *c[0].0[0].last_mut().unwrap() ^= 1)),
+        ),
+        "trusting-frame",
+    );
+    assert!(said(Reader::open(&path).unwrap().trusting().column("MET"))
+        .unwrap_err()
+        .contains("content checksum"));
 }
 
 // FORMAT 4, 7
 #[test]
 fn list_columns_of_the_same_lists_record_one_offsets_array_and_no_other_two_records_one_place() {
     let (header, arrays) = shared_parts();
-    let lists: Vec<&Value> = header["data"]["cols"].as_array().unwrap().iter().filter(|c| c["kind"] == "jagged").collect();
+    let lists: Vec<&Value> = header["data"]["cols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "jagged")
+        .collect();
     assert!(lists[0]["offsets"]["size"].as_u64() > Some(0));
     assert_eq!(lists[0]["offsets"], lists[1]["offsets"]);
     assert_ne!(lists[0]["offsets"]["at"], lists[2]["offsets"]["at"]);
-    assert_eq!(checked_with(&to_bytes(&header, &arrays), false), (Ok(()), Ok(())));
+    assert_eq!(
+        checked_with(&to_bytes(&header, &arrays), false),
+        (Ok(()), Ok(()))
+    );
     // The two columns' lists read alike, each with its own content.
     let path = common::written(&to_bytes(&header, &arrays), "shared");
     let reader = rowver::rvr::Reader::open(&path).unwrap();
-    let names: Vec<String> = lists.iter().map(|c| c["name"].as_str().unwrap().to_owned()).collect();
+    let names: Vec<String> = lists
+        .iter()
+        .map(|c| c["name"].as_str().unwrap().to_owned())
+        .collect();
     let together = reader.stored_columns(&names).unwrap();
     for (name, held) in names.iter().zip(&together) {
-        assert_eq!(held.as_ref(), reader.column(name).unwrap().as_ref(), "{name}");
+        assert_eq!(
+            held.as_ref(),
+            reader.column(name).unwrap().as_ref(),
+            "{name}"
+        );
     }
     let offsets = |a: usize| together[a].as_ref().unwrap().offsets.clone().unwrap();
-    assert!(std::sync::Arc::ptr_eq(&offsets(0), &offsets(1)), "offsets read once are handed over once");
+    assert!(
+        std::sync::Arc::ptr_eq(&offsets(0), &offsets(1)),
+        "offsets read once are handed over once"
+    );
     for (rule, bytes, says) in shared_broken() {
         let (opened, _) = checked_with(&bytes, false);
         assert!(opened.unwrap_err().contains(says), "{rule}");
@@ -1270,7 +1587,14 @@ fn list_columns_of_the_same_lists_record_one_offsets_array_and_no_other_two_reco
 /// Each rule of shared offsets broken alone: its section and name, the file, and what a reader says on opening.
 fn shared_broken() -> Vec<(&'static str, Vec<u8>, &'static str)> {
     let (header, arrays) = shared_parts();
-    let lists: Vec<usize> = header["data"]["cols"].as_array().unwrap().iter().enumerate().filter(|(_, c)| c["kind"] == "jagged").map(|(at, _)| at).collect();
+    let lists: Vec<usize> = header["data"]["cols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c["kind"] == "jagged")
+        .map(|(at, _)| at)
+        .collect();
     let (first, at) = (lists[0], lists[1]);
     // Records of one place that differ are two arrays, which overlap.
     let mut differ = header.clone();
@@ -1281,18 +1605,41 @@ fn shared_broken() -> Vec<(&'static str, Vec<u8>, &'static str)> {
     let table = common::gen::table(&mut rng, 8);
     let filled = common::gen::filled(&mut rng, &table);
     let (mut twice, kept) = common::gen::file(&table, filled);
-    let named = |header: &Value, like: usize| header["data"]["cols"].as_array().unwrap().iter().position(|c| c["name"] == header["data"]["cols"][like]["name"] && c["kind"] == "jagged").unwrap();
+    let named = |header: &Value, like: usize| {
+        header["data"]["cols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|c| {
+                c["name"] == header["data"]["cols"][like]["name"] && c["kind"] == "jagged"
+            })
+            .unwrap()
+    };
     let (one, other) = (named(&twice, first), named(&twice, at));
-    twice["data"]["cols"][other]["offsets"]["sha256"] = twice["data"]["cols"][one]["offsets"]["sha256"].clone();
+    twice["data"]["cols"][other]["offsets"]["sha256"] =
+        twice["data"]["cols"][one]["offsets"]["sha256"].clone();
     // Only offsets are shared: a content array recorded where another lies overlaps it.
     let mut content = header.clone();
     for key in ["at", "size"] {
-        content["data"]["cols"][at]["content"][key] = content["data"]["cols"][first]["content"][key].clone();
+        content["data"]["cols"][at]["content"][key] =
+            content["data"]["cols"][first]["content"][key].clone();
     }
     vec![
-        ("§7 offsets records of one place that differ are two arrays", to_bytes(&sealed(differ), &arrays), "no gap and no overlap"),
-        ("§4 equal offsets are one array, not two", to_bytes(&sealed(twice), &kept), "share one offsets array"),
-        ("§7 only offsets are shared", to_bytes(&sealed(content), &arrays), "no gap and no overlap"),
+        (
+            "§7 offsets records of one place that differ are two arrays",
+            to_bytes(&sealed(differ), &arrays),
+            "no gap and no overlap",
+        ),
+        (
+            "§4 equal offsets are one array, not two",
+            to_bytes(&sealed(twice), &kept),
+            "share one offsets array",
+        ),
+        (
+            "§7 only offsets are shared",
+            to_bytes(&sealed(content), &arrays),
+            "no gap and no overlap",
+        ),
     ]
 }
 
@@ -1312,10 +1659,22 @@ fn the_conformance_corpus_holds_what_this_reader_says() {
         ("fixture".into(), to_bytes(&header, &arrays)),
         ("fixture-empty".into(), to_bytes(&header, &[])),
         ("fixture-signed".into(), to_bytes(&signed, &arrays)),
-        ("fixture-derived".into(), to_bytes(&sealed(with_derived.clone()), &derived_arrays)),
-        ("fixture-empty-derived".into(), to_bytes(&sealed(with_derived), &[])),
-        ("fixture-rowless".into(), to_bytes(&sealed(none), &none_arrays)),
-        ("fixture-rowless-derived".into(), to_bytes(&sealed(none_derived), &none_arrays)),
+        (
+            "fixture-derived".into(),
+            to_bytes(&sealed(with_derived.clone()), &derived_arrays),
+        ),
+        (
+            "fixture-empty-derived".into(),
+            to_bytes(&sealed(with_derived), &[]),
+        ),
+        (
+            "fixture-rowless".into(),
+            to_bytes(&sealed(none), &none_arrays),
+        ),
+        (
+            "fixture-rowless-derived".into(),
+            to_bytes(&sealed(none_derived), &none_arrays),
+        ),
     ];
     for seed in 0..12 {
         let mut rng = common::gen::Rng::new(seed);
@@ -1340,7 +1699,10 @@ fn the_conformance_corpus_holds_what_this_reader_says() {
             (Err(_), _) => "opening",
             _ => "full",
         };
-        let sha: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+        let sha: String = Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         let mut entry = json!({"rule": rule, "verdict": verdict, "refused": when, "at": packed.len(), "size": bytes.len(), "sha256": sha, "rust_says": said});
         if journal {
             entry["journal"] = true.into();
@@ -1353,7 +1715,12 @@ fn the_conformance_corpus_holds_what_this_reader_says() {
     }
     for (rows, when) in [(opening(), "opening"), (in_full(), "full")] {
         for (section, rule, change, _) in rows {
-            case(format!("FORMAT {section} {rule}"), when, bytes(change), matches!(change, Journaled));
+            case(
+                format!("FORMAT {section} {rule}"),
+                when,
+                bytes(change),
+                matches!(change, Journaled),
+            );
         }
     }
     for (rule, bytes, _) in shared_broken() {
@@ -1362,9 +1729,15 @@ fn the_conformance_corpus_holds_what_this_reader_says() {
     for entry in &cases {
         let verdict = entry["verdict"].as_str().unwrap();
         let refused = entry["refused"].as_str().unwrap();
-        assert!((verdict == "valid" && refused.is_empty()) || verdict == refused, "{entry}");
+        assert!(
+            (verdict == "valid" && refused.is_empty()) || verdict == refused,
+            "{entry}"
+        );
     }
-    files.push(("cases.zst".into(), ruzstd::encoding::compress_to_vec(&packed[..], ruzstd::encoding::CompressionLevel::Fastest)));
+    files.push((
+        "cases.zst".into(),
+        ruzstd::encoding::compress_to_vec(&packed[..], ruzstd::encoding::CompressionLevel::Fastest),
+    ));
     let manifest = json!({
         "about": "rvr files: each valid one with its contents, and every case of cases.zst (one zstd frame of the cases end to end, each at its at and size) with its verdict; see README.md",
         "valid": valid,

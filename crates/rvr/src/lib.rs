@@ -34,7 +34,10 @@ mod tool;
 mod trying;
 mod written;
 
-use options::{Command, Options, Takes::{Kinds, No, Value}};
+use options::{
+    Command, Options,
+    Takes::{Kinds, No, Value},
+};
 use std::path::Path;
 
 /// The recipe a press runs, read from its text, or what is wrong with it.
@@ -86,7 +89,8 @@ const USAGE: &str = "usage:
   rvr, rvr help, rvr --help                this usage";
 
 /// The usage of the commands that keep none of their own.
-const NEW: &str = "usage:\n  rvr new DIR    start a study in DIR: samples.toml, recipe.toml and .gitignore";
+const NEW: &str =
+    "usage:\n  rvr new DIR    start a study in DIR: samples.toml, recipe.toml and .gitignore";
 const VALIDATE: &str = "usage:\n  rvr validate FILE... [--complete]    check files in full; --complete fails a file with holes, or an empty one";
 const DUMP: &str = "usage:\n  rvr dump FILE [--files] [--recipe] [--samples] [--lock] [--columns] [--all]\n      the header in full, the study's texts and every column, or only the parts named, in the order\n      given; --all prints every value of every column, one row a line (with --columns, or alone)";
 const HEADER: &str = "usage:\n  rvr header FILE    the header's bytes, as the file holds them";
@@ -94,30 +98,225 @@ const DIFF: &str = "usage:\n  rvr diff A B                                     w
 
 /// Every command: its name after `rvr`, its flags, its words.
 const COMMANDS: &[Command] = &[
-    Command { name: "new", flags: &[], words: (1, 1, "one folder, DIR"), dashes: false, usage: NEW },
-    Command { name: "samples expand", flags: &[("--json", No, None)], words: (1, 1, "one samples.toml"), dashes: false, usage: samples::USAGE },
-    Command { name: "samples resolve", flags: &[], words: (1, 1, "one samples.toml"), dashes: false, usage: samples::USAGE },
-    Command { name: "samples check", flags: &[], words: (1, 1, "one samples.lock"), dashes: false, usage: samples::USAGE },
-    Command { name: "samples plan", flags: &[("--events", Value, None), ("--random", No, None), ("--seed", Value, None)], words: (1, 1, "one samples.lock"), dashes: false, usage: samples::USAGE },
-    Command { name: "branches", flags: &[("--sample", Value, None), ("--find", Value, None)], words: (0, 1, "at most one study folder"), dashes: false, usage: branches::USAGE },
-    Command { name: "try", flags: &[("--events", Value, None), ("--sample", Value, None), ("--kept", No, None)], words: (1, 2, "one expression and at most one study folder"), dashes: true, usage: trying::USAGE },
-    Command { name: "press", flags: &[("--events", Value, None), ("--random", No, None), ("--seed", Value, None), ("--out", Value, None), ("--workers", Value, None), ("--full", No, None), ("--fill", Kinds, None), ("--restart", No, None)], words: (0, 1, "at most one study folder"), dashes: false, usage: press::USAGE },
-    Command { name: "status", flags: &[("--out", Value, None), ("--events", Value, None), ("--random", No, None), ("--seed", Value, None), ("--holes", No, None)], words: (0, 1, "at most one study folder"), dashes: false, usage: status::USAGE },
-    Command { name: "derive", flags: &[("--drop", No, None), ("--rename", No, None)], words: (2, usize::MAX, "a file and what to change of it"), dashes: false, usage: derive::USAGE },
-    Command { name: "validate", flags: &[("--complete", No, None)], words: (1, usize::MAX, "the files to check"), dashes: false, usage: VALIDATE },
-    Command { name: "dump", flags: &[("--files", No, None), ("--recipe", No, None), ("--samples", No, None), ("--lock", No, None), ("--columns", No, None), ("--all", No, None)], words: (1, 1, "one file"), dashes: false, usage: DUMP },
-    Command { name: "header", flags: &[], words: (1, 1, "one file"), dashes: false, usage: HEADER },
-    Command { name: "diff", flags: &[("--rows", No, None), ("--key", Value, None), ("--sample", Value, None)], words: (2, 2, "two files, A and B"), dashes: false, usage: DIFF },
-    Command { name: "reproduce", flags: &[("--study", Value, None), ("--workers", Value, None), ("--texts", No, None)], words: (1, 2, "a file and at most one folder"), dashes: false, usage: reproduce::USAGE },
-    Command { name: "empty", flags: &[("--study", Value, None), ("--anyway", No, None), ("--force", No, Some("-f"))], words: (1, usize::MAX, "the files to empty"), dashes: false, usage: empty::USAGE },
-    Command { name: "refill", flags: &[("--study", Value, None), ("--workers", Value, None)], words: (1, 1, "one file"), dashes: false, usage: empty::USAGE },
-    Command { name: "tool", flags: &[("--set", Value, None), ("--get", No, None), ("--drop", No, None), ("--force", No, Some("-f"))], words: (1, usize::MAX, "a file, then a tool key (or keys to drop) and what to do with it"), dashes: true, usage: tool::USAGE },
-    Command { name: "key new", flags: &[], words: (0, 1, "at most one name"), dashes: false, usage: key::USAGE },
-    Command { name: "key show", flags: &[], words: (0, 0, "no words"), dashes: false, usage: key::USAGE },
-    Command { name: "key trust", flags: &[], words: (2, usize::MAX, "a key and its owner's name"), dashes: false, usage: key::USAGE },
-    Command { name: "proxy", flags: &[], words: (0, 0, "no words but init"), dashes: false, usage: proxy::USAGE },
-    Command { name: "proxy init", flags: &[("--hours", Value, None)], words: (0, 0, "no words"), dashes: false, usage: proxy::USAGE },
-    Command { name: "help", flags: &[], words: (0, 0, "no words"), dashes: false, usage: USAGE },
+    Command {
+        name: "new",
+        flags: &[],
+        words: (1, 1, "one folder, DIR"),
+        dashes: false,
+        usage: NEW,
+    },
+    Command {
+        name: "samples expand",
+        flags: &[("--json", No, None)],
+        words: (1, 1, "one samples.toml"),
+        dashes: false,
+        usage: samples::USAGE,
+    },
+    Command {
+        name: "samples resolve",
+        flags: &[],
+        words: (1, 1, "one samples.toml"),
+        dashes: false,
+        usage: samples::USAGE,
+    },
+    Command {
+        name: "samples check",
+        flags: &[],
+        words: (1, 1, "one samples.lock"),
+        dashes: false,
+        usage: samples::USAGE,
+    },
+    Command {
+        name: "samples plan",
+        flags: &[
+            ("--events", Value, None),
+            ("--random", No, None),
+            ("--seed", Value, None),
+        ],
+        words: (1, 1, "one samples.lock"),
+        dashes: false,
+        usage: samples::USAGE,
+    },
+    Command {
+        name: "branches",
+        flags: &[("--sample", Value, None), ("--find", Value, None)],
+        words: (0, 1, "at most one study folder"),
+        dashes: false,
+        usage: branches::USAGE,
+    },
+    Command {
+        name: "try",
+        flags: &[
+            ("--events", Value, None),
+            ("--sample", Value, None),
+            ("--kept", No, None),
+        ],
+        words: (1, 2, "one expression and at most one study folder"),
+        dashes: true,
+        usage: trying::USAGE,
+    },
+    Command {
+        name: "press",
+        flags: &[
+            ("--events", Value, None),
+            ("--random", No, None),
+            ("--seed", Value, None),
+            ("--out", Value, None),
+            ("--workers", Value, None),
+            ("--full", No, None),
+            ("--fill", Kinds, None),
+            ("--restart", No, None),
+        ],
+        words: (0, 1, "at most one study folder"),
+        dashes: false,
+        usage: press::USAGE,
+    },
+    Command {
+        name: "status",
+        flags: &[
+            ("--out", Value, None),
+            ("--events", Value, None),
+            ("--random", No, None),
+            ("--seed", Value, None),
+            ("--holes", No, None),
+        ],
+        words: (0, 1, "at most one study folder"),
+        dashes: false,
+        usage: status::USAGE,
+    },
+    Command {
+        name: "derive",
+        flags: &[("--drop", No, None), ("--rename", No, None)],
+        words: (2, usize::MAX, "a file and what to change of it"),
+        dashes: false,
+        usage: derive::USAGE,
+    },
+    Command {
+        name: "validate",
+        flags: &[("--complete", No, None)],
+        words: (1, usize::MAX, "the files to check"),
+        dashes: false,
+        usage: VALIDATE,
+    },
+    Command {
+        name: "dump",
+        flags: &[
+            ("--files", No, None),
+            ("--recipe", No, None),
+            ("--samples", No, None),
+            ("--lock", No, None),
+            ("--columns", No, None),
+            ("--all", No, None),
+        ],
+        words: (1, 1, "one file"),
+        dashes: false,
+        usage: DUMP,
+    },
+    Command {
+        name: "header",
+        flags: &[],
+        words: (1, 1, "one file"),
+        dashes: false,
+        usage: HEADER,
+    },
+    Command {
+        name: "diff",
+        flags: &[
+            ("--rows", No, None),
+            ("--key", Value, None),
+            ("--sample", Value, None),
+        ],
+        words: (2, 2, "two files, A and B"),
+        dashes: false,
+        usage: DIFF,
+    },
+    Command {
+        name: "reproduce",
+        flags: &[
+            ("--study", Value, None),
+            ("--workers", Value, None),
+            ("--texts", No, None),
+        ],
+        words: (1, 2, "a file and at most one folder"),
+        dashes: false,
+        usage: reproduce::USAGE,
+    },
+    Command {
+        name: "empty",
+        flags: &[
+            ("--study", Value, None),
+            ("--anyway", No, None),
+            ("--force", No, Some("-f")),
+        ],
+        words: (1, usize::MAX, "the files to empty"),
+        dashes: false,
+        usage: empty::USAGE,
+    },
+    Command {
+        name: "refill",
+        flags: &[("--study", Value, None), ("--workers", Value, None)],
+        words: (1, 1, "one file"),
+        dashes: false,
+        usage: empty::USAGE,
+    },
+    Command {
+        name: "tool",
+        flags: &[
+            ("--set", Value, None),
+            ("--get", No, None),
+            ("--drop", No, None),
+            ("--force", No, Some("-f")),
+        ],
+        words: (
+            1,
+            usize::MAX,
+            "a file, then a tool key (or keys to drop) and what to do with it",
+        ),
+        dashes: true,
+        usage: tool::USAGE,
+    },
+    Command {
+        name: "key new",
+        flags: &[],
+        words: (0, 1, "at most one name"),
+        dashes: false,
+        usage: key::USAGE,
+    },
+    Command {
+        name: "key show",
+        flags: &[],
+        words: (0, 0, "no words"),
+        dashes: false,
+        usage: key::USAGE,
+    },
+    Command {
+        name: "key trust",
+        flags: &[],
+        words: (2, usize::MAX, "a key and its owner's name"),
+        dashes: false,
+        usage: key::USAGE,
+    },
+    Command {
+        name: "proxy",
+        flags: &[],
+        words: (0, 0, "no words but init"),
+        dashes: false,
+        usage: proxy::USAGE,
+    },
+    Command {
+        name: "proxy init",
+        flags: &[("--hours", Value, None)],
+        words: (0, 0, "no words"),
+        dashes: false,
+        usage: proxy::USAGE,
+    },
+    Command {
+        name: "help",
+        flags: &[],
+        words: (0, 0, "no words"),
+        dashes: false,
+        usage: USAGE,
+    },
 ];
 
 /// Each command's name and the words it takes, for the tests.
@@ -127,13 +326,21 @@ pub fn commands() -> impl Iterator<Item = (&'static str, &'static str)> {
 }
 
 /// The commands whose next word names what they do, and those words.
-const SUBCOMMANDS: [(&str, &[&str]); 3] = [("samples", &["expand", "resolve", "check", "plan"]), ("key", &["new", "show", "trust"]), ("proxy", &["init"])];
+const SUBCOMMANDS: [(&str, &[&str]); 3] = [
+    ("samples", &["expand", "resolve", "check", "plan"]),
+    ("key", &["new", "show", "trust"]),
+    ("proxy", &["init"]),
+];
 
 /// Make a closed output pipe end the process with 141, as SIGPIPE does (`rvr dump … | head`).
 pub fn quiet_on_closed_pipe() {
     let usual = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let said = info.payload().downcast_ref::<String>().map(String::as_str).unwrap_or("");
+        let said = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .unwrap_or("");
         if said.starts_with("failed printing to stdout") && said.contains("Broken pipe") {
             std::process::exit(CLOSED);
         }
@@ -157,7 +364,10 @@ pub(crate) fn out(command: &str, bytes: &[u8]) -> Result<(), String> {
 
 /// Wrong use of `command`: what is wrong, its usage, and the exit status 2.
 pub(crate) fn wrong(command: &str, why: &str) -> u8 {
-    let usage = COMMANDS.iter().find(|c| c.name == command).map_or(USAGE, |c| c.usage);
+    let usage = COMMANDS
+        .iter()
+        .find(|c| c.name == command)
+        .map_or(USAGE, |c| c.usage);
     eprintln!("rvr {command}: {why}\n{usage}");
     2
 }
@@ -183,7 +393,10 @@ pub fn run(args: &[std::ffi::OsString]) -> u8 {
 /// The command these words name, with its options read; or, when they name none rightly, the exit
 /// status of saying so (or of `rvr` alone).
 fn read_words(args: &[&str]) -> Result<(&'static Command, Options), u8> {
-    let mut tops: Vec<&str> = COMMANDS.iter().map(|c| c.name.split(' ').next().unwrap_or(c.name)).collect();
+    let mut tops: Vec<&str> = COMMANDS
+        .iter()
+        .map(|c| c.name.split(' ').next().unwrap_or(c.name))
+        .collect();
     tops.dedup();
     // The command is the first word that is not a flag (flags before it, with their values, are
     // passed over); for samples, key and proxy, the next such word names what it does.
@@ -191,18 +404,35 @@ fn read_words(args: &[&str]) -> Result<(&'static Command, Options), u8> {
         return Err(bare(args));
     };
     if !tops.contains(&args[at]) {
-        eprintln!("rvr: {} is not a command.{}\n{USAGE}", args[at], rvr_recipe::meant(args[at], tops.iter().copied()));
+        eprintln!(
+            "rvr: {} is not a command.{}\n{USAGE}",
+            args[at],
+            rvr_recipe::meant(args[at], tops.iter().copied())
+        );
         return Err(2);
     }
-    let mut rest: Vec<&str> = args.iter().enumerate().filter(|(i, _)| *i != at).map(|(_, a)| *a).collect();
+    let mut rest: Vec<&str> = args
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != at)
+        .map(|(_, a)| *a)
+        .collect();
     let mut name = args[at].to_owned();
     if let Some((top, subs)) = SUBCOMMANDS.iter().find(|(top, _)| *top == args[at]) {
-        let usage = COMMANDS.iter().find(|c| c.name.starts_with(top)).map_or(USAGE, |c| c.usage);
+        let usage = COMMANDS
+            .iter()
+            .find(|c| c.name.starts_with(top))
+            .map_or(USAGE, |c| c.usage);
         match first_word(&rest) {
             Some(sub) if subs.contains(&rest[sub]) => name = format!("{top} {}", rest.remove(sub)),
             _ if *top == "proxy" => {}
             Some(sub) => {
-                eprintln!("rvr {top}: {} is not one of its commands, {}.{}\n{usage}", rest[sub], subs.join(", "), rvr_recipe::meant(rest[sub], subs.iter().copied()));
+                eprintln!(
+                    "rvr {top}: {} is not one of its commands, {}.{}\n{usage}",
+                    rest[sub],
+                    subs.join(", "),
+                    rvr_recipe::meant(rest[sub], subs.iter().copied())
+                );
                 return Err(2);
             }
             None => {
@@ -214,7 +444,9 @@ fn read_words(args: &[&str]) -> Result<(&'static Command, Options), u8> {
     let Some(command) = COMMANDS.iter().find(|c| c.name == name) else {
         return Err(wrong(&name, "it is not a command"));
     };
-    options::read(command, &rest).map(|options| (command, options)).map_err(|why| wrong(command.name, &why))
+    options::read(command, &rest)
+        .map(|options| (command, options))
+        .map_err(|why| wrong(command.name, &why))
 }
 
 /// What the fuzz harness (fuzz/) calls, built only by cargo fuzz (`--cfg fuzzing`).
@@ -242,7 +474,12 @@ fn first_word(args: &[&str]) -> Option<usize> {
         if !word.starts_with('-') {
             return Some(at);
         }
-        let takes = COMMANDS.iter().flat_map(|c| c.flags).filter(|(flag, _, short)| flag == word || *short == Some(*word)).map(|(_, takes, _)| *takes).next();
+        let takes = COMMANDS
+            .iter()
+            .flat_map(|c| c.flags)
+            .filter(|(flag, _, short)| flag == word || *short == Some(*word))
+            .map(|(_, takes, _)| *takes)
+            .next();
         at += match takes {
             Some(Value) => 2,
             Some(Kinds) if args.get(at + 1).is_some_and(|next| options::kinds(next)) => 2,
@@ -260,7 +497,12 @@ fn bare(args: &[&str]) -> u8 {
             0
         }
         ["--version"] => {
-            println!("rvr {} (reads and writes rowver {}; commit {})", env!("CARGO_PKG_VERSION"), rowver::VERSION, env!("RVR_COMMIT"));
+            println!(
+                "rvr {} (reads and writes rowver {}; commit {})",
+                env!("CARGO_PKG_VERSION"),
+                rowver::VERSION,
+                env!("RVR_COMMIT")
+            );
             0
         }
         _ => {
@@ -282,7 +524,9 @@ fn bare(args: &[&str]) -> u8 {
 fn opened<'a>(name: &str, words: &[&'a str]) -> Vec<&'a str> {
     match name {
         "diff" => words.iter().take(2).copied().collect(),
-        "derive" | "dump" | "header" | "reproduce" | "refill" | "tool" => words.iter().take(1).copied().collect(),
+        "derive" | "dump" | "header" | "reproduce" | "refill" | "tool" => {
+            words.iter().take(1).copied().collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -290,7 +534,9 @@ fn opened<'a>(name: &str, words: &[&'a str]) -> Vec<&'a str> {
 /// Put back the file at `file` as it was when a change to it was cut short, saying so on standard
 /// error; what failed, when it could not be.
 pub(crate) fn restored(file: &Path) -> Result<(), String> {
-    rowver::change::restore(file).map(|restored| told(file, restored)).map_err(|e| rowver::plain(file, &e))
+    rowver::change::restore(file)
+        .map(|restored| told(file, restored))
+        .map_err(|e| rowver::plain(file, &e))
 }
 
 /// The file at `file` locked for this one writer (SPEC §8.12), put back first when a change to it
@@ -331,7 +577,10 @@ pub(crate) fn told_anew(file: &Path, why: &str, would: bool) {
         true => "rvr press would write it anew and move it over",
         false => "wrote it anew and moved it over",
     };
-    println!("{} cannot be changed in place ({why}): {done}.", file.display());
+    println!(
+        "{} cannot be changed in place ({why}): {done}.",
+        file.display()
+    );
 }
 
 /// In a debug build, wait while the file `RVR_HOLD` names is there, saying so first: so that a
@@ -359,7 +608,9 @@ fn command_run(name: &str, options: &Options) -> u8 {
     }
     match name {
         "new" => report("new", new::main(words[0]).map(|()| 0)),
-        "samples expand" | "samples resolve" | "samples check" | "samples plan" => samples::main(name, options),
+        "samples expand" | "samples resolve" | "samples check" | "samples plan" => {
+            samples::main(name, options)
+        }
         "branches" => branches::main(options),
         "try" => trying::main(options),
         "press" => press::main(options),
@@ -367,15 +618,35 @@ fn command_run(name: &str, options: &Options) -> u8 {
         "derive" => derive::main(options),
         "validate" => validate(&words, options.has("--complete")),
         "dump" => {
-            let flags: Vec<&str> = options.flags.iter().map(|(flag, _)| *flag).filter(|flag| *flag != "--all").collect();
-            if let Some(part) = flags.iter().find(|flag| **flag != "--columns").filter(|_| options.has("--all")) {
+            let flags: Vec<&str> = options
+                .flags
+                .iter()
+                .map(|(flag, _)| *flag)
+                .filter(|flag| *flag != "--all")
+                .collect();
+            if let Some(part) = flags
+                .iter()
+                .find(|flag| **flag != "--columns")
+                .filter(|_| options.has("--all"))
+            {
                 return wrong("dump", &format!("--all prints every value of the columns, and {part} prints no column: give --all alone or with --columns"));
             }
-            report("dump", dump::main(words[0], &flags, options.has("--all")).map(|()| 0))
+            report(
+                "dump",
+                dump::main(words[0], &flags, options.has("--all")).map(|()| 0),
+            )
         }
         "header" => header(words[0]),
-        "diff" if options.has("--rows") => rowdiff::main(words[0], words[1], options.value("--key"), options.value("--sample")),
-        "diff" if options.has("--key") || options.has("--sample") => wrong("diff", "--key and --sample compare events, which only rvr diff A B --rows does: add --rows"),
+        "diff" if options.has("--rows") => rowdiff::main(
+            words[0],
+            words[1],
+            options.value("--key"),
+            options.value("--sample"),
+        ),
+        "diff" if options.has("--key") || options.has("--sample") => wrong(
+            "diff",
+            "--key and --sample compare events, which only rvr diff A B --rows does: add --rows",
+        ),
         "diff" => diff::main(words[0], words[1]),
         "reproduce" => reproduce::main(options),
         "empty" => empty::empty_main(options),
@@ -400,8 +671,12 @@ pub(crate) fn at_terminal() -> bool {
 pub(crate) fn yes(question: &str) -> Result<bool, String> {
     eprint!("{question}");
     let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).map_err(|e| format!("the answer could not be read ({})", rowver::described(&e)))?;
-    Ok(["y", "yes"].iter().any(|yes| answer.trim().eq_ignore_ascii_case(yes)))
+    std::io::stdin()
+        .read_line(&mut answer)
+        .map_err(|e| format!("the answer could not be read ({})", rowver::described(&e)))?;
+    Ok(["y", "yes"]
+        .iter()
+        .any(|yes| answer.trim().eq_ignore_ascii_case(yes)))
 }
 
 /// The exit status `result` holds, or 1 with what failed printed as `rvr COMMAND: …`.
@@ -425,7 +700,13 @@ fn header(file: &str) -> u8 {
     }
     match rowver::rvr::Reader::inspect(file).map(|(_, checked)| checked) {
         Ok(Ok(())) => 0,
-        Ok(Err(why)) => report("header", Err(format!("{file}: its header is printed as the file holds it, but it fails its checks: {}", rowver::words(Path::new(file), &why)))),
+        Ok(Err(why)) => report(
+            "header",
+            Err(format!(
+                "{file}: its header is printed as the file holds it, but it fails its checks: {}",
+                rowver::words(Path::new(file), &why)
+            )),
+        ),
         Err(e) => report("header", Err(rowver::plain(file, &e))),
     }
 }
@@ -436,11 +717,14 @@ fn header(file: &str) -> u8 {
 fn validate(words: &[&str], complete: bool) -> u8 {
     let mut ok = true;
     for file in words {
-        let restored = rowver::change::restore(file).map(|restored| told(Path::new(file), restored));
-        let checked = restored.and_then(|()| rowver::rvr::validate_file(file)).map_err(|e| match e {
-            rowver::Error::Io(e) => rowver::plain_it(&e),
-            e => rowver::words(Path::new(file), &e),
-        });
+        let restored =
+            rowver::change::restore(file).map(|restored| told(Path::new(file), restored));
+        let checked = restored
+            .and_then(|()| rowver::rvr::validate_file(file))
+            .map_err(|e| match e {
+                rowver::Error::Io(e) => rowver::plain_it(&e),
+                e => rowver::words(Path::new(file), &e),
+            });
         let compared = checked.map(|summary| {
             let derived = match (summary.derived, summary.empty) {
                 (0, _) => String::new(),
@@ -453,8 +737,14 @@ fn validate(words: &[&str], complete: bool) -> u8 {
             };
             let read = match entries_read(&summary.header["made"]) {
                 (1, 1) => "read its 1 entry, ".to_owned(),
-                (read, total) if read == total => format!("read all {} entries, ", rowver::rvr::grouped(total)),
-                (read, total) => format!("read {} of {}, ", rowver::rvr::grouped(read), samples::some(total as usize, "entry", "entries")),
+                (read, total) if read == total => {
+                    format!("read all {} entries, ", rowver::rvr::grouped(total))
+                }
+                (read, total) => format!(
+                    "read {} of {}, ",
+                    rowver::rvr::grouped(read),
+                    samples::some(total as usize, "entry", "entries")
+                ),
             };
             let holes = rowver::rvr::holes(&summary.header);
             let empty = match summary.empty {
@@ -462,7 +752,13 @@ fn validate(words: &[&str], complete: bool) -> u8 {
                 false => "",
             };
             let said = derived + &read + &holed(&holes) + empty + &signed;
-            (summary.rows, summary.columns, said, holes.is_empty(), summary.empty)
+            (
+                summary.rows,
+                summary.columns,
+                said,
+                holes.is_empty(),
+                summary.empty,
+            )
         });
         // With --complete, a file with holes, or an empty one, fails, on its one line.
         let compared = compared.and_then(|(rows, columns, said, whole, empty)| match complete && (!whole || empty) {
@@ -478,9 +774,16 @@ fn validate(words: &[&str], complete: bool) -> u8 {
 /// The entries a press read and the entries its samples hold: the sums of their `events_read` and
 /// `events_total`, which `validate_file` checked.
 pub(crate) fn entries_read(made: &serde_json::Value) -> (u64, u64) {
-    let samples = made["files"].as_object().into_iter().flatten().map(|(_, sample)| &sample["metadata"]);
+    let samples = made["files"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(_, sample)| &sample["metadata"]);
     samples.fold((0, 0), |(read, total), metadata| {
-        (read + metadata["events_read"].as_u64().unwrap_or(0), total + metadata["events_total"].as_u64().unwrap_or(0))
+        (
+            read + metadata["events_read"].as_u64().unwrap_or(0),
+            total + metadata["events_total"].as_u64().unwrap_or(0),
+        )
     })
 }
 
@@ -497,7 +800,10 @@ fn holed(holes: &[rowver::rvr::Hole]) -> String {
         [] => String::new(),
         [(kind, _)] => format!("{} ({kind}), ", samples::some(holes.len(), "hole", "holes")),
         _ => {
-            let each: Vec<String> = kinds.iter().map(|(kind, n)| format!("{n} {kind}")).collect();
+            let each: Vec<String> = kinds
+                .iter()
+                .map(|(kind, n)| format!("{n} {kind}"))
+                .collect();
             format!("{} holes ({}), ", holes.len(), each.join(", "))
         }
     }
@@ -506,7 +812,11 @@ fn holed(holes: &[rowver::rvr::Hole]) -> String {
 /// Print a file's line of `rvr validate`; whether it is valid.
 fn said(file: &str, verdict: &Result<(usize, usize, String), String>) -> bool {
     match verdict {
-        Ok((rows, columns, summary)) => println!("{file}: valid, {}, {}, {summary}", samples::some(*rows, "row", "rows"), samples::some(*columns, "column", "columns")),
+        Ok((rows, columns, summary)) => println!(
+            "{file}: valid, {}, {}, {summary}",
+            samples::some(*rows, "row", "rows"),
+            samples::some(*columns, "column", "columns")
+        ),
         Err(why) => println!("{file}: INVALID: {why}"),
     }
     verdict.is_ok()
@@ -521,9 +831,15 @@ mod tests {
         let help = format!("{}\n\n{}", super::USAGE, super::samples::USAGE);
         for command in super::COMMANDS {
             let named = format!("rvr {}", command.name);
-            assert!(command.usage.contains(&named) && help.contains(&named), "{named}");
+            assert!(
+                command.usage.contains(&named) && help.contains(&named),
+                "{named}"
+            );
             for (flag, _, _) in command.flags {
-                assert!(command.usage.contains(flag) && help.contains(flag), "{named} {flag}");
+                assert!(
+                    command.usage.contains(flag) && help.contains(flag),
+                    "{named} {flag}"
+                );
             }
         }
     }
@@ -536,7 +852,11 @@ mod tests {
             for (name, _, short) in command.flags {
                 if let Some(short) = short {
                     let beside = format!("[{name} | {short}]");
-                    assert!(command.usage.contains(&beside) && super::USAGE.contains(&beside), "{}: {beside}", command.name);
+                    assert!(
+                        command.usage.contains(&beside) && super::USAGE.contains(&beside),
+                        "{}: {beside}",
+                        command.name
+                    );
                 }
             }
         }

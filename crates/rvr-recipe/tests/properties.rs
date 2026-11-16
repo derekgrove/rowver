@@ -28,11 +28,26 @@ fn array(record: &Value) -> Array {
                 Value::Bool(truth) => *truth as i64,
                 number => number.to_string().parse::<i128>().unwrap() as i64,
             };
-            Values::whole(kind, record["values"].as_array().unwrap().iter().map(whole).collect())
+            Values::whole(
+                kind,
+                record["values"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(whole)
+                    .collect(),
+            )
         }
     };
     match record["counts"].as_array() {
-        Some(counts) => Array::object(&counts.iter().map(|c| c.as_u64().unwrap() as usize).collect::<Vec<_>>(), held).unwrap(),
+        Some(counts) => Array::object(
+            &counts
+                .iter()
+                .map(|c| c.as_u64().unwrap() as usize)
+                .collect::<Vec<_>>(),
+            held,
+        )
+        .unwrap(),
         None => Array::Event(held),
     }
 }
@@ -42,13 +57,24 @@ fn same(ours: &Array, theirs: &Array) -> bool {
     let values = |a: &Values, b: &Values| {
         a.kind == b.kind
             && match (&a.store, &b.store) {
-                (Store::Float(x), Store::Float(y)) => x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| p.to_bits() == q.to_bits() || (p.is_nan() && q.is_nan())),
+                (Store::Float(x), Store::Float(y)) => {
+                    x.len() == y.len()
+                        && x.iter()
+                            .zip(y.iter())
+                            .all(|(p, q)| p.to_bits() == q.to_bits() || (p.is_nan() && q.is_nan()))
+                }
                 (x, y) => x == y,
             }
     };
     match (ours, theirs) {
         (Array::Event(a), Array::Event(b)) => values(a, b),
-        (Array::Object { offsets, values: a }, Array::Object { offsets: others, values: b }) => offsets == others && values(a, b),
+        (
+            Array::Object { offsets, values: a },
+            Array::Object {
+                offsets: others,
+                values: b,
+            },
+        ) => offsets == others && values(a, b),
         _ => false,
     }
 }
@@ -56,9 +82,21 @@ fn same(ours: &Array, theirs: &Array) -> bool {
 // RECIPE operators, choosing-members-of-a-list, reducing-a-jagged-list-to-a-flat-value, math-value-by-value, bits, text-branches-and-stored-types, kinds-exactly, two-kinds-together, fixed-values-beside-a-column, numbers, conversions, signed-zeros, what-differs-from-numpy, functions-exactly, values-the-recipe-cannot-take
 #[test]
 fn random_expressions_give_what_the_readme_rules_give() {
-    let path = std::env::var("RECIPE_PROPERTIES").unwrap_or_else(|_| format!("{}/tests/fixtures/properties.json", env!("CARGO_MANIFEST_DIR")));
+    let path = std::env::var("RECIPE_PROPERTIES").unwrap_or_else(|_| {
+        format!(
+            "{}/tests/fixtures/properties.json",
+            env!("CARGO_MANIFEST_DIR")
+        )
+    });
     let fixture: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    let held = Held(fixture["columns"].as_object().unwrap().iter().map(|(name, record)| (name.clone(), array(record))).collect());
+    let held = Held(
+        fixture["columns"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, record)| (name.clone(), array(record)))
+            .collect(),
+    );
     let (sample, defines) = (BTreeMap::new(), BTreeMap::new());
     let scope = Scope::new(&held, &sample, &defines);
     let cases = fixture["cases"].as_array().unwrap();
@@ -69,11 +107,22 @@ fn random_expressions_give_what_the_readme_rules_give() {
         match (result, case["error"] == true) {
             (Err(e), true) if e.1.is_some() => {}
             (Err(e), true) => wrong.push(format!("{text}\n  refused, not a data error: {e}")),
-            (Ok(_), true) => wrong.push(format!("{text}\n  worked out, where its values are ones the recipe cannot take")),
+            (Ok(_), true) => wrong.push(format!(
+                "{text}\n  worked out, where its values are ones the recipe cannot take"
+            )),
             (Ok(ours), false) if same(&ours, &array(case)) => {}
-            (Ok(ours), false) => wrong.push(format!("{text}\n  ours   {ours:?}\n  theirs {:?}", array(case))),
+            (Ok(ours), false) => wrong.push(format!(
+                "{text}\n  ours   {ours:?}\n  theirs {:?}",
+                array(case)
+            )),
             (Err(e), false) => wrong.push(format!("{text}\n  failed: {e}")),
         }
     }
-    assert!(wrong.is_empty(), "{} of {} differ ({path}):\n{}", wrong.len(), cases.len(), wrong.join("\n"));
+    assert!(
+        wrong.is_empty(),
+        "{} of {} differ ({path}):\n{}",
+        wrong.len(),
+        cases.len(),
+        wrong.join("\n")
+    );
 }

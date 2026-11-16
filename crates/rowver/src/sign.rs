@@ -52,17 +52,26 @@ pub(crate) fn verify(header: &Value) -> Result<Option<String>> {
             ))
         })
     };
-    let fields = signature.as_object().map(|s| s.keys().map(String::as_str).collect::<Vec<_>>());
-    if fields.is_none_or(|f| f.len() != 3 || !f.iter().all(|k| ["ed25519", "key", "sha256"].contains(k))) {
+    let fields = signature
+        .as_object()
+        .map(|s| s.keys().map(String::as_str).collect::<Vec<_>>());
+    if fields
+        .is_none_or(|f| f.len() != 3 || !f.iter().all(|k| ["ed25519", "key", "sha256"].contains(k)))
+    {
         return Err(invalid(
             "signature must hold exactly ed25519, key and sha256 (docs/FORMAT.md §9): press its study again",
         ));
     }
     let (key, sum) = (field("key")?, field("sha256")?);
-    let hex = |name: &str, n: usize| invalid(format!("signature.{name} must be {n} lowercase hexadecimal characters (docs/FORMAT.md §9): press its study again"));
+    let hex = |name: &str, n: usize| {
+        invalid(format!("signature.{name} must be {n} lowercase hexadecimal characters (docs/FORMAT.md §9): press its study again"))
+    };
     let sum_bytes = bytes::<32>(sum).map_err(|_| hex("sha256", 64))?;
     if signed_digest(header)? != sum {
-        return Err(invalid(format!("the header changed after it was signed (signature.sha256 does not match it): {}", crate::rvr::MEND)));
+        return Err(invalid(format!(
+            "the header changed after it was signed (signature.sha256 does not match it): {}",
+            crate::rvr::MEND
+        )));
     }
     let key_bytes = bytes::<32>(key).map_err(|_| hex("key", 64))?;
     let signed = bytes::<64>(field("ed25519")?).map_err(|_| hex("ed25519", 128))?;
@@ -79,7 +88,11 @@ pub(crate) fn verify(header: &Value) -> Result<Option<String>> {
     if !below(s, &ORDER) {
         return Err(invalid("signature.ed25519's S is not below L, the order of the group (docs/FORMAT.md §9): press its study again"));
     }
-    let public = VerifyingKey::from_bytes(&key_bytes).map_err(|_| invalid("signature.key is not an ed25519 public key (docs/FORMAT.md §9): press its study again"))?;
+    let public = VerifyingKey::from_bytes(&key_bytes).map_err(|_| {
+        invalid(
+            "signature.key is not an ed25519 public key (docs/FORMAT.md §9): press its study again",
+        )
+    })?;
     if public.is_weak() {
         return Err(invalid("signature.key is an ed25519 public key of small order, for which a signature holds of many headers (docs/FORMAT.md §9): press its study again"));
     }
@@ -91,8 +104,14 @@ pub(crate) fn verify(header: &Value) -> Result<Option<String>> {
 }
 
 /// The field's prime p, 2^255 − 19, and the group's order L, 2^252 + 27742317777372353535851937790883648493, little-endian.
-const PRIME: [u8; 32] = [0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f];
-const ORDER: [u8; 32] = [0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10];
+const PRIME: [u8; 32] = [
+    0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+const ORDER: [u8; 32] = [
+    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
+];
 
 /// Whether the little-endian number `a` is below `b`, of as many bytes.
 fn below(a: &[u8], b: &[u8]) -> bool {

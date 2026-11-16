@@ -41,8 +41,14 @@ pub(super) fn same(a: &Value, b: &Value, numbers: Numbers) -> bool {
                 _ => false,
             },
         },
-        (Value::Array(a), Value::Array(b)) => a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same(a, b, numbers)),
-        (Value::Object(a), Value::Object(b)) => a.len() == b.len() && a.iter().all(|(key, a)| b.get(key).is_some_and(|b| same(a, b, numbers))),
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same(a, b, numbers))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, a)| b.get(key).is_some_and(|b| same(a, b, numbers)))
+        }
         _ => a == b,
     }
 }
@@ -65,11 +71,20 @@ pub(super) fn forms(record: &Value, kind: &str, place: &str) -> Result<()> {
         true => whole(value).map(Decimal::whole),
         false => double(value).map(Decimal::of),
     };
-    let what = if wholes { "whole numbers" } else { "finite numbers" };
+    let what = if wholes {
+        "whole numbers"
+    } else {
+        "finite numbers"
+    };
     let lim = field(record, place, "lim")?;
-    let ends = lim.as_array().filter(|ends| ends.len() == 2).and_then(|ends| ends.iter().map(number).collect::<Option<Vec<_>>>());
+    let ends = lim
+        .as_array()
+        .filter(|ends| ends.len() == 2)
+        .and_then(|ends| ends.iter().map(number).collect::<Option<Vec<_>>>());
     let Some([lo, hi]) = ends.as_deref().map(|ends| [ends[0], ends[1]]) else {
-        return Err(invalid(format!("{place}.lim must be two {what}, [min, max] (docs/FORMAT.md §4): {MEND}")));
+        return Err(invalid(format!(
+            "{place}.lim must be two {what}, [min, max] (docs/FORMAT.md §4): {MEND}"
+        )));
     };
     let ordered = match wholes {
         true => whole(&lim[0]) <= whole(&lim[1]),
@@ -78,28 +93,41 @@ pub(super) fn forms(record: &Value, kind: &str, place: &str) -> Result<()> {
     if !ordered {
         return Err(invalid(format!("{place}.lim is {lim}, and its first end is its least value (docs/FORMAT.md §4): {MEND}")));
     }
-    let want: Vec<Value> = nice(lo, hi, wholes).iter().map(|end| match wholes {
-        true => serde_json::Number::from_i128(end.to_whole().unwrap_or_default()).map_or(Value::Null, Value::Number),
-        false => serde_json::Number::from_f64(end.to_f64()).map_or(Value::Null, Value::Number),
-    }).collect();
+    let want: Vec<Value> = nice(lo, hi, wholes)
+        .iter()
+        .map(|end| match wholes {
+            true => serde_json::Number::from_i128(end.to_whole().unwrap_or_default())
+                .map_or(Value::Null, Value::Number),
+            false => serde_json::Number::from_f64(end.to_f64()).map_or(Value::Null, Value::Number),
+        })
+        .collect();
     let have = field(record, place, "nice")?;
     if !same(have, &Value::Array(want.clone()), numbers(kind)) {
         return Err(invalid(format!("{place}.nice is {have}, and the rule of docs/FORMAT.md §4 makes {} of its lim {lim}: {MEND}", Value::Array(want))));
     }
     let Some(vals) = record.get("vals") else {
-        let (lo, hi) = (whole(&lim[0]).unwrap_or_default(), whole(&lim[1]).unwrap_or_default());
+        let (lo, hi) = (
+            whole(&lim[0]).unwrap_or_default(),
+            whole(&lim[1]).unwrap_or_default(),
+        );
         if wholes && hi.checked_sub(lo).is_some_and(|span| span < 64) {
             return Err(invalid(format!("{place} has no vals, and a whole-number column whose lim {lim} spans 64 values or fewer lists them (docs/FORMAT.md §4): {MEND}")));
         }
         return Ok(());
     };
     if !wholes {
-        return Err(invalid(format!("{place} has vals, which a float column never has (docs/FORMAT.md §4): take it out")));
+        return Err(invalid(format!(
+            "{place} has vals, which a float column never has (docs/FORMAT.md §4): take it out"
+        )));
     }
-    let listed = vals.as_array().and_then(|vals| vals.iter().map(whole).collect::<Option<Vec<_>>>());
+    let listed = vals
+        .as_array()
+        .and_then(|vals| vals.iter().map(whole).collect::<Option<Vec<_>>>());
     let fits = listed.as_ref().is_some_and(|listed| {
         let ends = match (listed.first(), listed.last()) {
-            (Some(first), Some(last)) => Some(*first) == whole(&lim[0]) && Some(*last) == whole(&lim[1]),
+            (Some(first), Some(last)) => {
+                Some(*first) == whole(&lim[0]) && Some(*last) == whole(&lim[1])
+            }
             _ => whole(&lim[0]) == Some(0) && whole(&lim[1]) == Some(0),
         };
         listed.len() <= 64 && listed.windows(2).all(|pair| pair[0] < pair[1]) && ends
@@ -111,7 +139,12 @@ pub(super) fn forms(record: &Value, kind: &str, place: &str) -> Result<()> {
 }
 
 /// Require a record's facts to be `want`'s, compared as numbers, `vals` there exactly when wanted.
-pub(crate) fn agree(record: &Value, want: &Map<String, Value>, kind: &str, place: &str) -> Result<()> {
+pub(crate) fn agree(
+    record: &Value,
+    want: &Map<String, Value>,
+    kind: &str,
+    place: &str,
+) -> Result<()> {
     for key in ["lim", "nice", "vals"] {
         match (record.get(key), want.get(key)) {
             (None, None) => {}

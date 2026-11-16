@@ -98,7 +98,8 @@ impl Choose {
     pub fn of(&self, sample: &Sample) -> Result<Events, String> {
         match self {
             Choose::Options(choice) => choice.of(sample),
-            Choose::Recorded(files) => Events::read(&files[&sample.name]["events"]).map_err(|e| format!("{}: {e}", sample.name)),
+            Choose::Recorded(files) => Events::read(&files[&sample.name]["events"])
+                .map_err(|e| format!("{}: {e}", sample.name)),
         }
     }
 }
@@ -240,7 +241,10 @@ impl Plan {
 
     /// The stored columns read, each with its expression and kind.
     pub fn outputs(&self) -> Vec<Output<'_>> {
-        self.reading.iter().map(|&at| (&self.recipe.columns[at], self.kinds[at])).collect()
+        self.reading
+            .iter()
+            .map(|&at| (&self.recipe.columns[at], self.kinds[at]))
+            .collect()
     }
 }
 
@@ -262,14 +266,27 @@ pub struct Checked {
 
 /// `lines` of the validator of `file`, each named with it.
 fn named(file: &str, lines: &str) -> Vec<String> {
-    lines.lines().map(|line| if line.starts_with(file) { line.to_owned() } else { format!("{file}: {line}") }).collect()
+    lines
+        .lines()
+        .map(|line| {
+            if line.starts_with(file) {
+                line.to_owned()
+            } else {
+                format!("{file}: {line}")
+            }
+        })
+        .collect()
 }
 
 /// A study's texts through their validators and the agreement check, or every problem found.
 pub fn checked(texts: &Texts, choose: &Choose) -> Result<Checked, String> {
     let mut said: Vec<String> = Vec::new();
-    let samples = rowver::study::samples::read(&texts.samples).map_err(|p| said.extend(named("samples.toml", &p.to_string()))).is_ok();
-    let recipe = crate::texts::read_recipe(&texts.recipe).map_err(|e| said.extend(e.lines().map(str::to_owned))).ok();
+    let samples = rowver::study::samples::read(&texts.samples)
+        .map_err(|p| said.extend(named("samples.toml", &p.to_string())))
+        .is_ok();
+    let recipe = crate::texts::read_recipe(&texts.recipe)
+        .map_err(|e| said.extend(e.lines().map(str::to_owned)))
+        .ok();
     let lock = match Lock::read(&texts.lock) {
         Ok(lock) => Some(lock),
         Err(p) => {
@@ -282,7 +299,14 @@ pub fn checked(texts: &Texts, choose: &Choose) -> Result<Checked, String> {
 
 /// The agreement check (docs/SPEC.md §2.3) on what the validators made of `texts` (`samples`
 /// whether samples.toml passed, `said` what they refused), or every problem found.
-pub fn agreed(texts: &Texts, samples: bool, recipe: Option<Recipe>, lock: Option<Lock>, mut said: Vec<String>, choose: &Choose) -> Result<Checked, String> {
+pub fn agreed(
+    texts: &Texts,
+    samples: bool,
+    recipe: Option<Recipe>,
+    lock: Option<Lock>,
+    mut said: Vec<String>,
+    choose: &Choose,
+) -> Result<Checked, String> {
     let mut planned = None;
     if let Some(lock) = lock {
         if samples {
@@ -296,10 +320,23 @@ pub fn agreed(texts: &Texts, samples: bool, recipe: Option<Recipe>, lock: Option
     }
     let mut kinds = None;
     if let (Some(recipe), Some((lock, asked, _))) = (&recipe, &planned) {
-        kinds = crate::agree::recipe(recipe, lock, asked).map_err(|e| said.extend(e)).ok();
+        kinds = crate::agree::recipe(recipe, lock, asked)
+            .map_err(|e| said.extend(e))
+            .ok();
     }
     match (recipe, planned, kinds) {
-        (Some(recipe), Some((lock, asked, Some(read_at))), Some([kinds, derived])) if said.is_empty() => Ok(Checked { recipe, lock, asked, kinds, derived, read_at }),
+        (Some(recipe), Some((lock, asked, Some(read_at))), Some([kinds, derived]))
+            if said.is_empty() =>
+        {
+            Ok(Checked {
+                recipe,
+                lock,
+                asked,
+                kinds,
+                derived,
+                read_at,
+            })
+        }
         _ => Err(said.join("\n")),
     }
 }
@@ -310,12 +347,32 @@ fn inputs(lock: &Lock, asked: &[Events], read_at: &[Vec<String>]) -> Vec<Input> 
     for (sample, s) in lock.samples.iter().enumerate() {
         let entries: Vec<u64> = s.files.iter().map(|f| f.entries).collect();
         let chosen: Vec<Option<Vec<u64>>> = match asked[sample] {
-            Events::Random { n, seed } => rowver::choice::per_file(&entries, n, seed).into_iter().map(Some).collect(),
+            Events::Random { n, seed } => rowver::choice::per_file(&entries, n, seed)
+                .into_iter()
+                .map(Some)
+                .collect(),
             _ => vec![None; entries.len()],
         };
-        for ((file, chosen), read_at) in s.files.iter().zip(chosen).zip(&read_at[sample]).filter(|((f, _), _)| f.stop != Some(0)) {
+        for ((file, chosen), read_at) in s
+            .files
+            .iter()
+            .zip(chosen)
+            .zip(&read_at[sample])
+            .filter(|((f, _), _)| f.stop != Some(0))
+        {
             let order = work.len();
-            work.push(Input { sample, tree: s.tree.clone(), file: file.clone(), read_at: read_at.clone(), chosen, kept: None, before: None, ranges: None, order, unsummed: false });
+            work.push(Input {
+                sample,
+                tree: s.tree.clone(),
+                file: file.clone(),
+                read_at: read_at.clone(),
+                chosen,
+                kept: None,
+                before: None,
+                ranges: None,
+                order,
+                unsummed: false,
+            });
         }
     }
     work
@@ -325,14 +382,29 @@ fn inputs(lock: &Lock, asked: &[Events], read_at: &[Vec<String>]) -> Vec<Input> 
 /// it cannot be: a file's kept entries that lie outside those this press chooses of it.
 fn built_on(work: &mut [Input], lock: &Lock, earlier: &mut Earlier) -> Result<(), String> {
     for input in work.iter_mut() {
-        let key = (lock.samples[input.sample].name.clone(), input.file.at.clone());
+        let key = (
+            lock.samples[input.sample].name.clone(),
+            input.file.at.clone(),
+        );
         let record = &earlier.file().header()["made"]["files"][&key.0]["files"][&key.1];
         input.before = Some(record.clone()).filter(|r| !r.is_null());
         let kept = earlier.kept.remove(&key).unwrap_or_default();
-        let mut holes = input.before.as_ref().map(crate::take::ranges).unwrap_or_default();
+        let mut holes = input
+            .before
+            .as_ref()
+            .map(crate::take::ranges)
+            .unwrap_or_default();
         holes.sort_unstable();
-        if !among(&kept, input.file.stop.unwrap_or(input.file.entries), input.chosen.as_deref(), &holes) {
-            return Err(format!("its rows of {} are not among the entries this press chooses of it", input.file.at));
+        if !among(
+            &kept,
+            input.file.stop.unwrap_or(input.file.entries),
+            input.chosen.as_deref(),
+            &holes,
+        ) {
+            return Err(format!(
+                "its rows of {} are not among the entries this press chooses of it",
+                input.file.at
+            ));
         }
         input.kept = Some(kept);
     }
@@ -358,7 +430,11 @@ fn among(kept: &[u64], limit: u64, chosen: Option<&[u64]>, holes: &[(u64, u64)])
         while holes.get(h).is_some_and(|(_, last)| *last <= entry) {
             h += 1;
         }
-        if holes[h..].iter().take_while(|(first, _)| *first <= entry).any(|(_, last)| entry < *last) {
+        if holes[h..]
+            .iter()
+            .take_while(|(first, _)| *first <= entry)
+            .any(|(_, last)| entry < *last)
+        {
             return false;
         }
     }
@@ -366,13 +442,33 @@ fn among(kept: &[u64], limit: u64, chosen: Option<&[u64]>, holes: &[(u64, u64)])
 }
 
 /// Whether the file's columns `names` are of the kinds this press makes them, or the first that is not.
-pub(crate) fn same_kinds(file: &rowver::rvr::Reader, recipe: &Recipe, kinds: &[(Kind, bool)], names: &[&str]) -> Result<(), String> {
-    for ((name, _), (kind, listed)) in recipe.columns.iter().zip(kinds).filter(|((n, _), _)| names.contains(&n.as_str())) {
-        let Some(record) = file.record(name) else { continue };
+pub(crate) fn same_kinds(
+    file: &rowver::rvr::Reader,
+    recipe: &Recipe,
+    kinds: &[(Kind, bool)],
+    names: &[&str],
+) -> Result<(), String> {
+    for ((name, _), (kind, listed)) in recipe
+        .columns
+        .iter()
+        .zip(kinds)
+        .filter(|((n, _), _)| names.contains(&n.as_str()))
+    {
+        let Some(record) = file.record(name) else {
+            continue;
+        };
         let jagged = record["kind"] == "jagged";
-        let held = if jagged { &record["content"]["kind"] } else { &record["kind"] };
+        let held = if jagged {
+            &record["content"]["kind"]
+        } else {
+            &record["kind"]
+        };
         if held.as_str() != Some(kind.name()) || jagged != *listed {
-            return Err(format!("its column {name} is of another kind than this press makes it ({}{})", if *listed { "a list of " } else { "" }, kind.name()));
+            return Err(format!(
+                "its column {name} is of another kind than this press makes it ({}{})",
+                if *listed { "a list of " } else { "" },
+                kind.name()
+            ));
         }
     }
     Ok(())
@@ -380,23 +476,50 @@ pub(crate) fn same_kinds(file: &rowver::rvr::Reader, recipe: &Recipe, kinds: &[(
 
 /// What the earlier file, `at` the target, gives, and why it gives nothing when it is there (and
 /// whether only for the build that made it).
-fn base(place: &Place, at: At, texts: &Texts, checked: &Checked, on: &On) -> Result<(Base, Option<(String, bool)>), String> {
-    let Checked { recipe, lock, asked, kinds, .. } = checked;
+fn base(
+    place: &Place,
+    at: At,
+    texts: &Texts,
+    checked: &Checked,
+    on: &On,
+) -> Result<(Base, Option<(String, bool)>), String> {
+    let Checked {
+        recipe,
+        lock,
+        asked,
+        kinds,
+        ..
+    } = checked;
     let all: Vec<&str> = recipe.columns.iter().map(|(n, _)| n.as_str()).collect();
     match on {
         On::Full | On::Once => Ok((Base::Nothing, None)),
         On::Holes(holes) => {
             let file = match at.file() {
-                None => return Err(format!("{} is not there: rvr press makes it, and --fill fills its holes", place.target.display())),
+                None => {
+                    return Err(format!(
+                        "{} is not there: rvr press makes it, and --fill fills its holes",
+                        place.target.display()
+                    ))
+                }
                 Some(file) => file.map_err(|e| rowver::plain(&place.target, &e))?,
             };
             let fill = crate::fill::plan(file, texts, lock, asked, holes)?;
-            same_kinds(&fill.file, recipe, kinds, &all).map_err(|why| format!("{} cannot be filled, as {why}: rvr press presses it again", place.target.display()))?;
+            same_kinds(&fill.file, recipe, kinds, &all).map_err(|why| {
+                format!(
+                    "{} cannot be filled, as {why}: rvr press presses it again",
+                    place.target.display()
+                )
+            })?;
             Ok((Base::Holes(fill), None))
         }
-        On::Earlier => match at.file().map(|file| crate::reuse::read(file, texts, recipe, lock, asked, kinds)) {
+        On::Earlier => match at
+            .file()
+            .map(|file| crate::reuse::read(file, texts, recipe, lock, asked, kinds))
+        {
             None => Ok((Base::Nothing, None)),
-            Some(Err(crate::reuse::Unbuilt::Build(said))) => Ok((Base::Nothing, Some((said, true)))),
+            Some(Err(crate::reuse::Unbuilt::Build(said))) => {
+                Ok((Base::Nothing, Some((said, true))))
+            }
             Some(Err(crate::reuse::Unbuilt::Why(why))) => Ok((Base::Nothing, Some((why, false)))),
             Some(Ok(base)) => Ok((base, None)),
         },
@@ -436,8 +559,12 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
                     let shown = place.target.display();
                     let named = rowver::shell(&shown.to_string());
                     let why = match e {
-                        rowver::Error::Tool { fact, .. } | rowver::Error::Breaks { fact, .. } => fact.clone(),
-                        rowver::Error::Json(json) => format!("its header is not JSON as docs/FORMAT.md §1 reads it ({json})"),
+                        rowver::Error::Tool { fact, .. } | rowver::Error::Breaks { fact, .. } => {
+                            fact.clone()
+                        }
+                        rowver::Error::Json(json) => {
+                            format!("its header is not JSON as docs/FORMAT.md §1 reads it ({json})")
+                        }
                         e => e.to_string(),
                     };
                     return Err(format!("{shown} does not open: {why}. A press carries over the tool keys of the file it replaces, so it stops: drop the tool keys that break it (rvr tool {named} names them), or remove the file, then press again."));
@@ -451,7 +578,14 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
         Some((why, build)) => (Some(why), build),
         None => (None, false),
     };
-    let Checked { recipe, lock, asked: events, kinds, derived, read_at } = checked;
+    let Checked {
+        recipe,
+        lock,
+        asked: events,
+        kinds,
+        derived,
+        read_at,
+    } = checked;
     let mut work = inputs(&lock, &events, &read_at);
     if let Base::Columns(earlier) = &mut from {
         if let Err(not) = built_on(&mut work, &lock, earlier) {
@@ -462,13 +596,17 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
         }
     }
     let reading: Vec<usize> = match &from {
-        Base::Columns(earlier) => (0..recipe.columns.len()).filter(|at| !earlier.reused[*at]).collect(),
+        Base::Columns(earlier) => (0..recipe.columns.len())
+            .filter(|at| !earlier.reused[*at])
+            .collect(),
         Base::Current(_) => Vec::new(),
         _ => (0..recipe.columns.len()).collect(),
     };
     // A file that holds the study as it is, recipe and all, is current, or filled: not pressed.
     if let Base::Columns(earlier) = &from {
-        if reading.is_empty() && earlier.file().header()["made"]["recipe"]["text"] == texts.recipe.as_str() {
+        if reading.is_empty()
+            && earlier.file().header()["made"]["recipe"]["text"] == texts.recipe.as_str()
+        {
             from = Base::Current(rowver::rvr::holes(earlier.file().header()).len());
         }
     }
@@ -508,7 +646,14 @@ pub fn build(mut place: Place, texts: Texts, asked: Asked) -> Result<Plan, Strin
         _ => (None, Vec::new()),
     };
     let reads = own_reads.as_ref().map_or(work.len(), Vec::len);
-    let (checked_branches, mentions) = compared(&lock, &reader, &reading.iter().map(|at| &recipe.columns[*at].1).collect::<Vec<_>>())?;
+    let (checked_branches, mentions) = compared(
+        &lock,
+        &reader,
+        &reading
+            .iter()
+            .map(|at| &recipe.columns[*at].1)
+            .collect::<Vec<_>>(),
+    )?;
     let identity = json!({
         "recipe": write::text_checksum(&texts.recipe),
         "samples": write::text_checksum(&texts.samples),
@@ -567,14 +712,19 @@ pub fn a_file_or_none(target: &std::path::Path) -> Result<(), String> {
         Ok(_) => {
             // One that cannot be read is said by what reads it next.
             let mut head = Vec::new();
-            return match std::fs::File::open(target).map(|file| std::io::Read::read_to_end(&mut std::io::Read::take(file, 8), &mut head)) {
+            return match std::fs::File::open(target).map(|file| {
+                std::io::Read::read_to_end(&mut std::io::Read::take(file, 8), &mut head)
+            }) {
                 Ok(Ok(_)) => an_rvr(target, &head),
                 Ok(Err(_)) | Err(_) => Ok(()),
             };
         }
         Err(_) => return Ok(()),
     };
-    Err(format!("{} is {what}, not a file: move it away, or name a file with --out", target.display()))
+    Err(format!(
+        "{} is {what}, not a file: move it away, or name a file with --out",
+        target.display()
+    ))
 }
 
 /// Refuse the file `target` beginning `head` (up to 8 of its bytes), when it is no .rvr file: an
@@ -595,13 +745,20 @@ pub type Standing = (std::fs::FileType, u64, u64);
 pub fn standing(path: &std::path::Path) -> Option<Standing> {
     let there = std::fs::symlink_metadata(path).ok()?;
     #[cfg(unix)]
-    return Some((there.file_type(), std::os::unix::fs::MetadataExt::dev(&there), std::os::unix::fs::MetadataExt::ino(&there)));
+    return Some((
+        there.file_type(),
+        std::os::unix::fs::MetadataExt::dev(&there),
+        std::os::unix::fs::MetadataExt::ino(&there),
+    ));
     #[cfg(not(unix))]
     Some((there.file_type(), 0, 0))
 }
 
 /// What a press of the file at `target` is told when the file lies on a read-only filesystem (`kind`, why it may not be written).
-pub(crate) fn read_only(target: &std::path::Path, kind: Option<std::io::ErrorKind>) -> Option<String> {
+pub(crate) fn read_only(
+    target: &std::path::Path,
+    kind: Option<std::io::ErrorKind>,
+) -> Option<String> {
     (kind == Some(std::io::ErrorKind::ReadOnlyFilesystem)).then(|| format!("{} lies on a read-only filesystem: rvr press cannot write it or a new file beside it; copy the study to a disk you may write", target.display()))
 }
 
@@ -614,12 +771,23 @@ fn compared(lock: &Lock, reader: &Recipe, columns: &[&Expression]) -> Result<Com
         .iter()
         .flat_map(rvr_recipe::Cut::expressions)
         .chain(columns.iter().copied())
-        .chain(reader.totals.iter().filter(|total| total.tree.is_none()).map(|total| &total.value))
+        .chain(
+            reader
+                .totals
+                .iter()
+                .filter(|total| total.tree.is_none())
+                .map(|total| &total.value),
+        )
         .collect();
     let defined = crate::reuse::reached(reader, &roots);
     let mut mentions = BTreeSet::new();
-    let (mut by_name, mut fields, mut by_text) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
-    for expression in roots.iter().copied().chain(defined.iter().map(|d| &reader.defines[d])) {
+    let (mut by_name, mut fields, mut by_text) =
+        (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    for expression in roots
+        .iter()
+        .copied()
+        .chain(defined.iter().map(|d| &reader.defines[d]))
+    {
         rvr_recipe::names(expression, &mut mentions);
         rvr_recipe::reads(expression, &mut by_name);
         rvr_recipe::branch_names(expression, &mut fields, &mut by_text);
@@ -628,9 +796,22 @@ fn compared(lock: &Lock, reader: &Recipe, columns: &[&Expression]) -> Result<Com
     by_name.extend(by_text);
     let mut checked = Vec::new();
     for s in &lock.samples {
-        let list = lock.branches_of(s).expect("the lock validator checks every sample names a branch list it holds");
-        let named = |b: &&Branch| by_name.contains(&b.name) || fields.iter().any(|f| s.metadata.get(f).and_then(Value::as_str) == Some(b.name.as_str()));
-        checked.push(list.list.iter().filter(named).map(|b| (b.name.clone(), b.clone())).collect());
+        let list = lock
+            .branches_of(s)
+            .expect("the lock validator checks every sample names a branch list it holds");
+        let named = |b: &&Branch| {
+            by_name.contains(&b.name)
+                || fields
+                    .iter()
+                    .any(|f| s.metadata.get(f).and_then(Value::as_str) == Some(b.name.as_str()))
+        };
+        checked.push(
+            list.list
+                .iter()
+                .filter(named)
+                .map(|b| (b.name.clone(), b.clone()))
+                .collect(),
+        );
     }
     Ok((checked, mentions))
 }
@@ -653,15 +834,40 @@ mod tests {
     #[test]
     fn the_plan_reads_a_storage_file_from_its_doors_https_url() {
         use rowver::study::lock::File;
-        let file = |at: &str| File { at: at.into(), bytes: 1, adler32: None, uuid: "u".into(), entries: 3, stop: None, take: None };
+        let file = |at: &str| File {
+            at: at.into(),
+            bytes: 1,
+            adler32: None,
+            uuid: "u".into(),
+            entries: 3,
+            stop: None,
+            take: None,
+        };
         let list = rowver::study::lock::Branches::new(Vec::new()).sha256;
         let mut lock = rowver::study::lock::Lock::read(&LOCK.replace("BR", &list)).unwrap();
-        lock.samples[0].files = vec![file("root://eospublic.cern.ch//eos/opendata/x.root"), file("davs://h.org:1094/d/y.root"), file("./z.root")];
+        lock.samples[0].files = vec![
+            file("root://eospublic.cern.ch//eos/opendata/x.root"),
+            file("davs://h.org:1094/d/y.root"),
+            file("./z.root"),
+        ];
         let read_at = crate::agree::doors(&lock).unwrap();
-        let urls: Vec<String> = super::inputs(&lock, &[rowver::choice::Events::All], &read_at).into_iter().map(|i| i.read_at).collect();
-        assert_eq!(urls, ["https://eospublic.cern.ch:443/eos/opendata/x.root", "https://h.org:1094/d/y.root", "./z.root"]);
-        lock.samples[0].files.push(file("root://no-door.invalid//d/w.root"));
-        assert!(crate::agree::doors(&lock).unwrap_err()[0].contains("no-door.invalid has no WebDAV door"));
+        let urls: Vec<String> = super::inputs(&lock, &[rowver::choice::Events::All], &read_at)
+            .into_iter()
+            .map(|i| i.read_at)
+            .collect();
+        assert_eq!(
+            urls,
+            [
+                "https://eospublic.cern.ch:443/eos/opendata/x.root",
+                "https://h.org:1094/d/y.root",
+                "./z.root"
+            ]
+        );
+        lock.samples[0]
+            .files
+            .push(file("root://no-door.invalid//d/w.root"));
+        assert!(crate::agree::doors(&lock).unwrap_err()[0]
+            .contains("no-door.invalid has no WebDAV door"));
     }
 
     const LOCK: &str = "format = \"rvr-samples-lock\"\nversion = 1\nresolved = \"2026-11-03T12:00:00Z\"\nsamples_toml_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\n[[sample]]\nname = \"a\"\nlabel = \"a\"\nasked = [\"./z.root\"]\ntree = \"T\"\nbranches = \"BR\"\nevents = \"all\"\nevents_total = 3\nevents_read = 3\nmetadata = {}\n\n[[sample.file]]\nat = \"./z.root\"\nbytes = 1\nadler32 = \"00000001\"\nuuid = \"31e851e4-b994-11f1-ba5c-1a45bb13c76a\"\nentries = 3\n\n[[branches]]\nsha256 = \"BR\"\nlist = []\n";

@@ -32,17 +32,23 @@ fn run(options: &Options) -> Result<(), String> {
                 Err(e) => println!("samples.toml beside samples.lock could not be read ({e}): these are the files of the lock ({}).", lock.resolved),
             }
             let sample = &lock.samples[crate::open::sample_in(&lock, options.value("--sample"))?];
-            let list = lock.branches_of(sample).expect("the lock validator checks every sample names a branch list it holds");
+            let list = lock
+                .branches_of(sample)
+                .expect("the lock validator checks every sample names a branch list it holds");
             let at = sample.files.first().map_or(String::new(), |f| f.at.clone());
             (sample.name.clone(), sample.tree.clone(), at, list.clone())
         }
         false => {
-            let (sample, at, list) = crate::samples::first_file(&dir.join("samples.toml"), options.value("--sample"))?;
+            let (sample, at, list) =
+                crate::samples::first_file(&dir.join("samples.toml"), options.value("--sample"))?;
             (sample.name, sample.tree, at, list)
         }
     };
     let first = at.rsplit('/').next().unwrap_or(&at);
-    let found = |name: &str| find.as_ref().is_none_or(|text| name.to_lowercase().contains(text));
+    let found = |name: &str| {
+        find.as_ref()
+            .is_none_or(|text| name.to_lowercase().contains(text))
+    };
     let total = count(list.list.len() as u64);
     match &find {
         None => println!("{name}: {first}, tree {tree}, {total} branches"),
@@ -62,7 +68,11 @@ fn run(options: &Options) -> Result<(), String> {
         }
     }
     listed.sort_by_cached_key(|(name, _, _)| name.to_lowercase());
-    let width = listed.iter().map(|(name, _, _)| name.len()).max().unwrap_or(0);
+    let width = listed
+        .iter()
+        .map(|(name, _, _)| name.len())
+        .max()
+        .unwrap_or(0);
     println!();
     for (name, kind, shape) in &listed {
         println!("  {name:width$}  {kind:2}  {shape}");

@@ -19,15 +19,27 @@ pub(crate) const USAGE: &str = "usage:
 /// `rvr tool` with its options: the exit status (2 for a wrong use of it).
 pub fn main(options: &Options) -> u8 {
     let words = options.plain();
-    let acts: Vec<&str> = ["--set", "--get", "--drop"].into_iter().filter(|flag| options.has(flag)).collect();
+    let acts: Vec<&str> = ["--set", "--get", "--drop"]
+        .into_iter()
+        .filter(|flag| options.has(flag))
+        .collect();
     // A word with a dash is a key's name right after FILE, and after it the name of another to drop: anywhere else, a flag mistyped.
-    if let Some(word) = words.iter().enumerate().find(|(at, word)| (*at == 0 || (*at > 1 && acts != ["--drop"])) && crate::options::short(word)).map(|(_, word)| word) {
+    if let Some(word) = words
+        .iter()
+        .enumerate()
+        .find(|(at, word)| {
+            (*at == 0 || (*at > 1 && acts != ["--drop"])) && crate::options::short(word)
+        })
+        .map(|(_, word)| word)
+    {
         return crate::wrong("tool", &format!("{word} is not one of its flags (a tool key whose name begins with - is named right after FILE)"));
     }
     let (file, force) = (Path::new(words[0]), options.has("--force"));
     // -f right after FILE is the key's name (SPEC §5.1.2): said where the force was meant.
     let meant = match words.get(1) {
-        Some(&"-f") => " (-f right after FILE is taken as KEY: give it after KEY, or write --force)",
+        Some(&"-f") => {
+            " (-f right after FILE is taken as KEY: give it after KEY, or write --force)"
+        }
         _ => "",
     };
     let done = match (words.get(1), acts.as_slice(), words.len()) {
@@ -45,8 +57,23 @@ pub fn main(options: &Options) -> u8 {
         (Some(_), _, _) => return crate::wrong("tool", &format!("only --get takes a word after KEY, the file it writes, and --drop more keys{meant}")),
     };
     // Said when the file has no key -f: the force was meant.
-    let keyless = || rowver::rvr::header_text(file).ok().and_then(|text| rowver::rvr::tool_texts(&text).ok()).is_some_and(|keys| keys.iter().all(|(key, _)| key != "-f"));
-    crate::report("tool", done.map_err(|why| if !meant.is_empty() && keyless() { format!("{why}{meant}") } else { why }).map(|()| 0))
+    let keyless = || {
+        rowver::rvr::header_text(file)
+            .ok()
+            .and_then(|text| rowver::rvr::tool_texts(&text).ok())
+            .is_some_and(|keys| keys.iter().all(|(key, _)| key != "-f"))
+    };
+    crate::report(
+        "tool",
+        done.map_err(|why| {
+            if !meant.is_empty() && keyless() {
+                format!("{why}{meant}")
+            } else {
+                why
+            }
+        })
+        .map(|()| 0),
+    )
 }
 
 /// `text` in double quotes as Python reads a string: `"` and `\` escaped, each character outside printable ASCII by its code (`\u202e`, `\U0001f600`).
@@ -79,12 +106,19 @@ fn seen(key: &str) -> String {
 /// The tool keys of the header `text` of `file`, by name, each with its object's bytes as they lie there.
 fn keys(file: &Path, text: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     let spans = rowver::rvr::tool_texts(text).map_err(|e| rowver::plain(file, &e))?;
-    Ok(spans.into_iter().map(|(key, span)| (key, text[span].to_vec())).collect())
+    Ok(spans
+        .into_iter()
+        .map(|(key, span)| (key, text[span].to_vec()))
+        .collect())
 }
 
 /// The bytes of the tool key `key`'s object, as the header `text` of `file` holds them: refused when it holds more than one.
 fn held(file: &Path, text: &[u8], key: &str) -> Result<Vec<u8>, String> {
-    let mut copies: Vec<Vec<u8>> = keys(file, text)?.into_iter().filter(|(name, _)| name == key).map(|(_, bytes)| bytes).collect();
+    let mut copies: Vec<Vec<u8>> = keys(file, text)?
+        .into_iter()
+        .filter(|(name, _)| name == key)
+        .map(|(_, bytes)| bytes)
+        .collect();
     match copies.len() {
         0 => Err(absent(file, key)),
         1 => Ok(copies.remove(0)),
@@ -119,7 +153,10 @@ fn list(file: &Path) -> Result<(), String> {
     match keys.len() {
         0 => println!("{shown} has no tool keys."),
         n => {
-            println!("{shown} has {}:", crate::samples::some(n, "tool key", "tool keys"));
+            println!(
+                "{shown} has {}:",
+                crate::samples::some(n, "tool key", "tool keys")
+            );
             for (key, bytes) in &keys {
                 println!("  {} ({} bytes)", seen(key), bytes.len());
             }
@@ -147,28 +184,61 @@ fn list(file: &Path) -> Result<(), String> {
     // The command that drops `keys`: rvr tool's, which names a key beginning with -- or named -f
     // only right after FILE, and one spelled as its flags in full not at all (SPEC §5.1.2); else Python's.
     let command = |mut keys: Vec<&str>| {
-        let flag = keys.iter().find(|key| ["--set", "--get", "--drop", "--force"].contains(&key.split_once('=').map_or(**key, |(flag, _)| flag)));
+        let flag = keys.iter().find(|key| {
+            ["--set", "--get", "--drop", "--force"]
+                .contains(&key.split_once('=').map_or(**key, |(flag, _)| flag))
+        });
         let first = |key: &&str| key.starts_with("--") || *key == "-f";
         let unseen = keys.iter().find(|key| unplain(key));
         if flag.is_some() || unseen.is_some() || keys.iter().filter(|key| first(key)).count() > 1 {
             let why = match (flag, unseen) {
                 (Some(key), _) => format!("rvr tool reads {key} as its flag"),
-                (_, Some(key)) => format!("{} holds a character outside printable ASCII", seen(key)),
-                _ => "rvr tool names only one key beginning with -- or named -f, right after FILE".to_owned(),
+                (_, Some(key)) => {
+                    format!("{} holds a character outside printable ASCII", seen(key))
+                }
+                _ => "rvr tool names only one key beginning with -- or named -f, right after FILE"
+                    .to_owned(),
             };
-            let quoted: Vec<String> = [shown.to_string().as_str()].into_iter().chain(keys.iter().copied()).map(quoted).collect();
+            let quoted: Vec<String> = [shown.to_string().as_str()]
+                .into_iter()
+                .chain(keys.iter().copied())
+                .map(quoted)
+                .collect();
             return format!("rowver.drop_tool({}) in Python ({why})", quoted.join(", "));
         }
         keys.sort_by_key(|key| !first(key));
         let keys: Vec<String> = keys.iter().map(|key| rowver::shell(key)).collect();
-        format!("rvr tool {} {} --drop", rowver::shell(&shown.to_string()), keys.join(" "))
+        format!(
+            "rvr tool {} {} --drop",
+            rowver::shell(&shown.to_string()),
+            keys.join(" ")
+        )
     };
     match names.iter().find(|name| opens(&[name])) {
-        Some(key) => println!("{shown} does not open ({said}): {} takes out the key that breaks it", command(vec![key])),
+        Some(key) => println!(
+            "{shown} does not open ({said}): {} takes out the key that breaks it",
+            command(vec![key])
+        ),
         None if names.len() > 1 && opens(&names) => {
             // Each key the header does not open without dropping; every key, when those alone would not do.
-            let needed: Vec<&str> = names.iter().copied().filter(|key| !opens(&names.iter().copied().filter(|other| other != key).collect::<Vec<_>>())).collect();
-            let drop = if opens(&needed) { needed } else { names.clone() };
+            let needed: Vec<&str> = names
+                .iter()
+                .copied()
+                .filter(|key| {
+                    !opens(
+                        &names
+                            .iter()
+                            .copied()
+                            .filter(|other| other != key)
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect();
+            let drop = if opens(&needed) {
+                needed
+            } else {
+                names.clone()
+            };
             println!("{shown} does not open ({said}): more than one of its tool keys breaks it, and {} takes them out", command(drop))
         }
         None => println!("{shown} does not open ({said})"),
@@ -190,27 +260,48 @@ fn set(file: &Path, key: &str, data: &Path, force: bool) -> Result<(), String> {
     let text = std::fs::read(data).map_err(|e| rowver::plain_io(data, &e))?;
     // Only data that would be taken is asked about, its size as the header would hold it: a name
     // refused is told against the file, data refused against DATA.json.
-    let value = rowver::change::tool_data(key, &text).map_err(|e| rowver::plain(if rowver::rvr::tool_key(key).is_ok() { data } else { file }, &e))?;
+    let value = rowver::change::tool_data(key, &text).map_err(|e| {
+        rowver::plain(
+            if rowver::rvr::tool_key(key).is_ok() {
+                data
+            } else {
+                file
+            },
+            &e,
+        )
+    })?;
     let new = size(&value);
     let locked = crate::locked(file)?;
     // Its header read once, under the lock, for the change and for the question; the new one checked before it.
-    let (change, header) = Change::setting(&locked, key, value).map_err(|e| rowver::plain(file, &e))?;
+    let (change, header) =
+        Change::setting(&locked, key, value).map_err(|e| rowver::plain(file, &e))?;
     // A key held twice (written by another program) is replaced whole: every copy counted.
-    let held: Vec<usize> = keys(file, change.text())?.into_iter().filter(|(name, _)| name == key).map(|(_, bytes)| bytes.len()).collect();
+    let held: Vec<usize> = keys(file, change.text())?
+        .into_iter()
+        .filter(|(name, _)| name == key)
+        .map(|(_, bytes)| bytes.len())
+        .collect();
     let was = (!held.is_empty()).then(|| held.iter().sum::<usize>());
     let shown = file.display();
     if let Some(was) = was {
-        let question = format!("Replace the tool key {key} of {shown} ({was} bytes) with {} ({new} bytes)? [y/N] ", data.display());
+        let question = format!(
+            "Replace the tool key {key} of {shown} ({was} bytes) with {} ({new} bytes)? [y/N] ",
+            data.display()
+        );
         let nobody = format!("nothing was set: {key} is a tool key of it already, and rvr tool asks before it replaces one, and no one is at a terminal to answer. Give --force (or -f) to replace it without asking.");
         if !asked(force, &question, &nobody)? {
             return Err(format!("{shown} is as it was: {key} not replaced."));
         }
     }
-    change.finish(&header).map_err(|e| rowver::plain(file, &e))?;
+    change
+        .finish(&header)
+        .map_err(|e| rowver::plain(file, &e))?;
     crate::anew(file, &locked);
     match was {
         None => println!("Set the tool key {key} of {shown} ({new} bytes)."),
-        Some(was) => println!("Replaced the tool key {key} of {shown} ({new} bytes; it held {was})."),
+        Some(was) => {
+            println!("Replaced the tool key {key} of {shown} ({new} bytes; it held {was}).")
+        }
     }
     Ok(())
 }
@@ -225,24 +316,44 @@ fn get(file: &Path, key: &str, out: Option<&Path>, force: bool) -> Result<(), St
         return crate::out("tool", text.as_bytes());
     };
     if rowver::write::same_file(out, file) {
-        return Err(format!("{} is {} itself: write the key's object to another file", out.display(), file.display()));
+        return Err(format!(
+            "{} is {} itself: write the key's object to another file",
+            out.display(),
+            file.display()
+        ));
     }
     // A file there, perhaps edited by hand, is written over only once you say so.
     if let Ok(there) = std::fs::metadata(out) {
-        let question = format!("Write the tool key {key} of {} ({n} bytes) over {} ({} bytes)? [y/N] ", file.display(), out.display(), there.len());
+        let question = format!(
+            "Write the tool key {key} of {} ({n} bytes) over {} ({} bytes)? [y/N] ",
+            file.display(),
+            out.display(),
+            there.len()
+        );
         let nobody = format!("nothing was written: {} is there already, and rvr tool asks before it writes over a file, and no one is at a terminal to answer. Give --force (or -f) to write over it without asking.", out.display());
         if !asked(force, &question, &nobody)? {
-            return Err(format!("{} is as it was: the tool key {key} not written to it.", out.display()));
+            return Err(format!(
+                "{} is as it was: the tool key {key} not written to it.",
+                out.display()
+            ));
         }
     }
     crate::tables::put(out, &text).map_err(|e| rowver::plain_io(out, &e))?;
-    println!("Wrote the tool key {key} of {} to {} ({n} bytes).", file.display(), out.display());
+    println!(
+        "Wrote the tool key {key} of {} to {} ({n} bytes).",
+        file.display(),
+        out.display()
+    );
     Ok(())
 }
 
 /// What a file without the tool key `key` is told.
 fn absent(file: &Path, key: &str) -> String {
-    format!("{} has no tool key {key}: rvr tool {} lists its tool keys", file.display(), rowver::shell(&file.display().to_string()))
+    format!(
+        "{} has no tool key {key}: rvr tool {} lists its tool keys",
+        file.display(),
+        rowver::shell(&file.display().to_string())
+    )
 }
 
 /// Drop the tool keys `keys` in one change, asking first: ones that break the header's rules too.
@@ -252,8 +363,16 @@ fn dropped(file: &Path, keys: &[&str], force: bool) -> Result<(), String> {
     // Their bytes found unparsed, so that keys the header's rules refuse are dropped, and the header left checked, before it asks.
     let change = Change::dropping(&locked, keys).map_err(|e| rowver::plain(file, &e))?;
     // A key held more than once is all its copies' bytes.
-    let sizes: Vec<usize> = change.dropped().iter().map(|copies| copies.iter().map(|bytes| bytes.len()).sum()).collect();
-    let held: Vec<String> = keys.iter().zip(&sizes).map(|(key, size)| format!("{} ({size} bytes)", seen(key))).collect();
+    let sizes: Vec<usize> = change
+        .dropped()
+        .iter()
+        .map(|copies| copies.iter().map(|bytes| bytes.len()).sum())
+        .collect();
+    let held: Vec<String> = keys
+        .iter()
+        .zip(&sizes)
+        .map(|(key, size)| format!("{} ({size} bytes)", seen(key)))
+        .collect();
     let named = match keys {
         [key] => format!("the tool key {} of {shown} ({} bytes)", seen(key), sizes[0]),
         _ => format!("the tool keys {} of {shown}", held.join(", ")),
@@ -261,10 +380,15 @@ fn dropped(file: &Path, keys: &[&str], force: bool) -> Result<(), String> {
     let question = format!("Drop {named}? [y/N] ");
     let nobody = "nothing was dropped: rvr tool asks before it drops a tool key, and no one is at a terminal to answer. Give --force (or -f) to drop it without asking.";
     if !asked(force, &question, nobody)? {
-        return Err(format!("{shown} is as it was: {} not dropped.", keys.join(", ")));
+        return Err(format!(
+            "{shown} is as it was: {} not dropped.",
+            keys.join(", ")
+        ));
     }
     let header = change.header().clone();
-    change.finish(&header).map_err(|e| rowver::plain(file, &e))?;
+    change
+        .finish(&header)
+        .map_err(|e| rowver::plain(file, &e))?;
     crate::anew(file, &locked);
     println!("Dropped {named}.");
     Ok(())

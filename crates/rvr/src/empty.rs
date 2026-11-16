@@ -5,8 +5,8 @@ use crate::options::Options;
 use crate::plan::{Asked, At, Choose, On, Place};
 use crate::reproduce::{base, study_texts};
 use crate::samples::some;
-use rowver::study::lock::Lock;
 use rowver::rvr::Reader;
+use rowver::study::lock::Lock;
 use serde_json::Value;
 use std::path::Path;
 
@@ -27,7 +27,16 @@ pub fn empty_main(options: &Options) -> u8 {
     }
     let mut code = 0;
     for file in &options.words {
-        code = code.max(crate::report("empty", empty(Path::new(file), options.value("--study").map(Path::new), options.has("--anyway"), force).map(|()| 0)));
+        code = code.max(crate::report(
+            "empty",
+            empty(
+                Path::new(file),
+                options.value("--study").map(Path::new),
+                options.has("--anyway"),
+                force,
+            )
+            .map(|()| 0),
+        ));
     }
     code
 }
@@ -38,7 +47,15 @@ pub fn refill_main(options: &Options) -> u8 {
         Ok(workers) => workers,
         Err(why) => return crate::wrong("refill", &why),
     };
-    crate::report("refill", refill(Path::new(&options.words[0]), options.value("--study").map(Path::new), workers).map(|()| 0))
+    crate::report(
+        "refill",
+        refill(
+            Path::new(&options.words[0]),
+            options.value("--study").map(Path::new),
+            workers,
+        )
+        .map(|()| 0),
+    )
 }
 
 /// Empty `file`, unless it has holes or, without `anyway`, an input differs from its lock; asked
@@ -64,7 +81,10 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result
     }
     // Staged only once it is to be emptied: a file that is not says so, wherever it lies.
     let held = crate::journal::Staged::lock(locked.path())?;
-    let by = reader.header()["made"]["by"].as_str().unwrap_or("an unknown rvr").to_owned();
+    let by = reader.header()["made"]["by"]
+        .as_str()
+        .unwrap_or("an unknown rvr")
+        .to_owned();
     let this = concat!("rvr ", env!("CARGO_PKG_VERSION"));
     if by != this && !anyway {
         return Err(format!("{shown} was not emptied: {by} pressed it, and a refill must press the same values again, which this {this} may not. Empty it with {by}, or with --anyway."));
@@ -74,7 +94,9 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result
         return Err(format!("{shown} has {}: a refill reads what its press read, and a hole may read otherwise later. Read them with rvr press --fill, or press its study whole, then empty it.", some(holes, "hole", "holes")));
     }
     if !anyway {
-        let text = reader.header()["made"]["lock"]["text"].as_str().unwrap_or_default();
+        let text = reader.header()["made"]["lock"]["text"]
+            .as_str()
+            .unwrap_or_default();
         let lock = Lock::read(text).map_err(|p| format!("{shown} was not emptied: the samples.lock it carries does not check out ({p}). Press its study again with rvr press --full, then empty that file."))?;
         let (changed, unasked) = crate::samples::differing(&lock, &base(file, study, text)?);
         if let Some(why) = unasked.first() {
@@ -89,15 +111,25 @@ fn empty(file: &Path, study: Option<&Path>, anyway: bool, force: bool) -> Result
     let others = links(locked.path()).saturating_sub(1);
     let (linked, until) = match others {
         0 => (String::new(), String::new()),
-        1 => (" Its other hard link keeps its columns until it is removed.".to_owned(), " once its other hard link is removed".to_owned()),
-        n => (format!(" Its {n} other hard links keep its columns until they are removed."), format!(" once its {n} other hard links are removed")),
+        1 => (
+            " Its other hard link keeps its columns until it is removed.".to_owned(),
+            " once its other hard link is removed".to_owned(),
+        ),
+        n => (
+            format!(" Its {n} other hard links keep its columns until they are removed."),
+            format!(" once its {n} other hard links are removed"),
+        ),
     };
     if !force {
         let rows = reader.rows().map_err(|e| rowver::plain(file, &e))?;
-        let columns = reader.header()["data"]["cols"].as_array().map_or(0, Vec::len);
+        let columns = reader.header()["data"]["cols"]
+            .as_array()
+            .map_or(0, Vec::len);
         let size = std::fs::metadata(file).map_or(0, |m| m.len());
         let question = format!("Empty {shown} ({}, {}, {})? Its columns go and its header stays; rvr refill presses them again from the study it carries, reading its inputs again.{linked} [y/N] ", some(rows, "row", "rows"), some(columns, "column", "columns"), amount(size));
-        let yes = crate::yes(&question).map_err(|why| format!("{shown} is as it was: {why}. Give --force (or -f) to empty it without asking."))?;
+        let yes = crate::yes(&question).map_err(|why| {
+            format!("{shown} is as it was: {why}. Give --force (or -f) to empty it without asking.")
+        })?;
         if !yes {
             return Err(format!("{shown} is as it was: not emptied."));
         }
@@ -126,7 +158,10 @@ fn links(path: &Path) -> u64 {
 /// Why `rvr empty` refuses the file at `file`, which opening to be written met `kind`.
 fn unwritable(file: &Path, kind: std::io::ErrorKind) -> String {
     let (is, fix) = rowver::change::unwritable_said(kind, file);
-    format!("{} {is}: rvr empty gives back the space only of a file you may write ({fix} first)", file.display())
+    format!(
+        "{} {is}: rvr empty gives back the space only of a file you may write ({fix} first)",
+        file.display()
+    )
 }
 
 /// A number of bytes as a person reads it.
@@ -151,18 +186,44 @@ fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), Strin
     let real = locked.path().to_path_buf();
     let shell = locked.reader().map_err(|e| rowver::plain(file, &e))?;
     if !shell.empty() {
-        return Err(format!("{shown} holds its columns: there is nothing to refill."));
+        return Err(format!(
+            "{shown} holds its columns: there is nothing to refill."
+        ));
     }
     let (texts, name) = study_texts(shell.header());
     let base = base(file, study, &texts.lock)?;
-    let (staged, out) = (rowver::write::beside(&real, ".refill"), rowver::write::beside(&real, ".refilled"));
-    if let Some(there) = [&staged, &out].into_iter().find(|p| std::fs::symlink_metadata(p).is_ok()) {
-        return Err(format!("{} is in the way: remove it, and refill again.", there.display()));
+    let (staged, out) = (
+        rowver::write::beside(&real, ".refill"),
+        rowver::write::beside(&real, ".refilled"),
+    );
+    if let Some(there) = [&staged, &out]
+        .into_iter()
+        .find(|p| std::fs::symlink_metadata(p).is_ok())
+    {
+        return Err(format!(
+            "{} is in the way: remove it, and refill again.",
+            there.display()
+        ));
     }
-    println!("Pressing the study {shown} carries again, into {}:", staged.display());
-    let place = Place { base, study: name, target: staged.clone(), at: At::Missing, locked: None, found: None };
+    println!(
+        "Pressing the study {shown} carries again, into {}:",
+        staged.display()
+    );
+    let place = Place {
+        base,
+        study: name,
+        target: staged.clone(),
+        at: At::Missing,
+        locked: None,
+        found: None,
+    };
     // The copy pressed beside it is not signed: only its arrays are kept.
-    let asked = Asked { choose: Choose::Recorded(shell.header()["made"]["files"].clone()), on: On::Once, workers, sign: false };
+    let asked = Asked {
+        choose: Choose::Recorded(shell.header()["made"]["files"].clone()),
+        on: On::Once,
+        workers,
+        sign: false,
+    };
     let pressed = crate::plan::build(place, texts, asked).and_then(crate::core::press);
     let checked = pressed.and_then(|holes| settle(file, (&locked, &shell), &staged, &out, holes));
     let _ = std::fs::remove_file(&staged);
@@ -172,7 +233,9 @@ fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), Strin
     })?;
     // The file refilled is checked: when it cannot be put in place it stays, to be moved by hand;
     // but not over a file another program moved there, which it would replace.
-    let synced = std::fs::File::open(&out).and_then(|f| f.sync_all()).map_err(rowver::Error::from);
+    let synced = std::fs::File::open(&out)
+        .and_then(|f| f.sync_all())
+        .map_err(rowver::Error::from);
     match synced.and_then(|()| locked.replace(&out)) {
         Ok(()) => {}
         Err(e @ rowver::Error::Invalid(_)) => {
@@ -189,7 +252,13 @@ fn refill(file: &Path, study: Option<&Path>, workers: usize) -> Result<(), Strin
 }
 
 /// Write at `out` the file refilled with the arrays pressed into `staged`, when their values are what it records, checked; what was done, in words.
-fn settle(file: &Path, (locked, shell): (&rowver::change::Locked, &Reader), staged: &Path, out: &Path, holes: usize) -> Result<String, String> {
+fn settle(
+    file: &Path,
+    (locked, shell): (&rowver::change::Locked, &Reader),
+    staged: &Path,
+    out: &Path,
+    holes: usize,
+) -> Result<String, String> {
     let shown = file.display();
     if holes > 0 {
         return Err(format!("pressed again, it has {} its press did not have: an input could not be read, as the holes listed above say. Their fixes are a press's: for a refill, put each input back as its lock recorded it, then run rvr refill {shown} again.", some(holes, "hole", "holes")));
@@ -199,7 +268,10 @@ fn settle(file: &Path, (locked, shell): (&rowver::change::Locked, &Reader), stag
     // The same bytes, wherever this press laid them: each is put back where the file records it.
     let said = if without(was, &["at"]) == without(now, &["at"]) {
         rowver::write::refilled(locked, staged, out).map_err(|e| e.to_string())?;
-        let signer = shell.header().get("signature").map(|s| crate::key::whose(s["key"].as_str().unwrap_or_default()));
+        let signer = shell
+            .header()
+            .get("signature")
+            .map(|s| crate::key::whose(s["key"].as_str().unwrap_or_default()));
         match signer {
             Some(whose) => format!("every column is back, byte for byte as it was, and its signature, by {whose}, is as it was"),
             None => "every column is back, byte for byte as it was; it is not signed".into(),
@@ -213,7 +285,10 @@ fn settle(file: &Path, (locked, shell): (&rowver::change::Locked, &Reader), stag
         }
         let signer = crate::key::secret()?;
         crate::derive::rewritten(staged, out, &mut header, signer.as_ref())?;
-        let was = shell.header().get("signature").map(|s| s["key"].as_str().unwrap_or_default().to_owned());
+        let was = shell
+            .header()
+            .get("signature")
+            .map(|s| s["key"].as_str().unwrap_or_default().to_owned());
         let signed = crate::key::resigned(signer.as_ref(), was.as_deref());
         format!("every column's values are as its checksums say; this rvr compresses them otherwise, so its header is written again with their new places, {signed}")
     } else {
@@ -222,8 +297,16 @@ fn settle(file: &Path, (locked, shell): (&rowver::change::Locked, &Reader), stag
     match rowver::rvr::validate_file(out) {
         Ok(summary) if !summary.empty => {}
         Ok(_) => return Err("the refilled file holds no arrays".into()),
-        Err(e @ (rowver::Error::Io(_) | rowver::Error::File(..))) => return Err(rowver::plain(out, &e)),
-        Err(e) => return Err(format!("{}, the file refilled, does not check out: {}", out.display(), rowver::words(out, &e))),
+        Err(e @ (rowver::Error::Io(_) | rowver::Error::File(..))) => {
+            return Err(rowver::plain(out, &e))
+        }
+        Err(e) => {
+            return Err(format!(
+                "{}, the file refilled, does not check out: {}",
+                out.display(),
+                rowver::words(out, &e)
+            ))
+        }
     }
     Ok(said)
 }
@@ -236,7 +319,11 @@ fn placeless(value: &Value) -> Value {
 /// `value` without the fields named `keys`, at any depth.
 fn without(value: &Value, keys: &[&str]) -> Value {
     match value {
-        Value::Object(fields) => fields.iter().filter(|(key, _)| !keys.contains(&key.as_str())).map(|(key, value)| (key.clone(), without(value, keys))).collect(),
+        Value::Object(fields) => fields
+            .iter()
+            .filter(|(key, _)| !keys.contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), without(value, keys)))
+            .collect(),
         Value::Array(items) => items.iter().map(|item| without(item, keys)).collect(),
         other => other.clone(),
     }
@@ -287,6 +374,9 @@ mod tests {
         assert_eq!(placeless(&was), placeless(&moved));
         let changed = json!({"rows": 2, "sample": {"at": 0, "size": 9, "sha256": "a"}, "cols": [{"name": "MET", "at": 9, "size": 5, "sha256": "c"}]});
         assert_eq!(differing(&was, &changed), ["MET is"]);
-        assert_eq!(differing(&was, &json!({"rows": 3, "cols": []})), ["its rows, its sample, MET are"]);
+        assert_eq!(
+            differing(&was, &json!({"rows": 3, "cols": []})),
+            ["its rows, its sample, MET are"]
+        );
     }
 }

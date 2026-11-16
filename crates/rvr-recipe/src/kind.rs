@@ -29,7 +29,11 @@ impl Kind {
     pub fn named(name: &str) -> Result<Self> {
         match ALL.into_iter().find(|kind| kind.name() == name) {
             Some(kind) => Ok(kind),
-            None => Err(problem(format!("{name:?} is not a number kind: the kinds are {}.{}", ALL.map(Kind::name).join(", "), crate::meant(name, ALL.into_iter().map(Kind::name))))),
+            None => Err(problem(format!(
+                "{name:?} is not a number kind: the kinds are {}.{}",
+                ALL.map(Kind::name).join(", "),
+                crate::meant(name, ALL.into_iter().map(Kind::name))
+            ))),
         }
     }
 

@@ -64,8 +64,17 @@ impl Spool {
 
     /// The spool at `path`, a plain file, holding only the pieces `held` gave, cut after the last; kept when dropped.
     pub fn reopen(path: &Path, held: &[&Value]) -> Result<Self> {
-        let plain = || std::fs::symlink_metadata(path).ok().filter(std::fs::Metadata::is_file);
-        let not_plain = || crate::invalid(format!("{} is a link or a folder, not a plain file", path.display()));
+        let plain = || {
+            std::fs::symlink_metadata(path)
+                .ok()
+                .filter(std::fs::Metadata::is_file)
+        };
+        let not_plain = || {
+            crate::invalid(format!(
+                "{} is a link or a folder, not a plain file",
+                path.display()
+            ))
+        };
         if !std::fs::symlink_metadata(path)?.is_file() {
             return Err(not_plain());
         }
@@ -89,7 +98,8 @@ impl Spool {
             (span.at.checked_add(span.size as u64)? <= end).then_some(span)
         };
         let piece = |piece: &Value| -> Option<((usize, Order), Part)> {
-            let [column, input, at, kind, values, lanes, counts] = piece.as_array()?.as_slice() else {
+            let [column, input, at, kind, values, lanes, counts] = piece.as_array()?.as_slice()
+            else {
                 return None;
             };
             let part = Part {
@@ -105,21 +115,39 @@ impl Spool {
             let fits = |span: &Span, bytes: usize| span.bytes == bytes;
             let lanes = width(&part.kind).ok()? == part.lanes.len();
             let lanes = lanes && part.lanes.iter().all(|lane| fits(lane, part.values));
-            (lanes && part.counts.as_ref().is_none_or(|counts| counts.bytes % 8 == 0)).then_some(())?;
+            (lanes
+                && part
+                    .counts
+                    .as_ref()
+                    .is_none_or(|counts| counts.bytes % 8 == 0))
+            .then_some(())?;
             let order = (input.as_u64()? as usize, at.as_u64()? as usize);
             Some(((column.as_u64()? as usize, order), part))
         };
         let mut parts = BTreeMap::new();
-        let damaged = |why: &str| invalid(format!("{why}: what names the pieces and the spool do not agree; spool the pieces again"));
-        let held = held.iter().map(|held| held.as_array().ok_or_else(|| damaged("a journal line names no spooled pieces")));
+        let damaged = |why: &str| {
+            invalid(format!(
+                "{why}: what names the pieces and the spool do not agree; spool the pieces again"
+            ))
+        };
+        let held = held.iter().map(|held| {
+            held.as_array()
+                .ok_or_else(|| damaged("a journal line names no spooled pieces"))
+        });
         for value in held.collect::<Result<Vec<_>>>()?.into_iter().flatten() {
-            let (key, part) = piece(value).ok_or_else(|| damaged("a piece the journal names is not in the spool"))?;
+            let (key, part) = piece(value)
+                .ok_or_else(|| damaged("a piece the journal names is not in the spool"))?;
             if parts.insert(key, part).is_some() {
                 return Err(damaged("the journal names a spooled piece twice"));
             }
         }
-        let spans = parts.values().flat_map(|part: &Part| part.lanes.iter().chain(&part.counts));
-        let end = spans.map(|span| span.at + span.size as u64).max().unwrap_or(0);
+        let spans = parts
+            .values()
+            .flat_map(|part: &Part| part.lanes.iter().chain(&part.counts));
+        let end = spans
+            .map(|span| span.at + span.size as u64)
+            .max()
+            .unwrap_or(0);
         file.set_len(end)?;
         Ok(Self {
             path: path.to_owned(),
@@ -133,16 +161,30 @@ impl Spool {
     pub fn held(&self, inputs: &[usize]) -> Value {
         let copied: Vec<((usize, Order), Part)> = {
             let parts = self.parts.lock().unwrap_or_else(|e| e.into_inner());
-            let columns = parts.last_key_value().map_or(0, |((column, _), _)| column + 1);
+            let columns = parts
+                .last_key_value()
+                .map_or(0, |((column, _), _)| column + 1);
             let ranges = (0..columns).flat_map(|column| {
-                inputs.iter().map(move |&input| (column, (input, 0))..(column, (input + 1, 0)))
+                inputs
+                    .iter()
+                    .map(move |&input| (column, (input, 0))..(column, (input + 1, 0)))
             });
-            ranges.flat_map(|range| parts.range(range).map(|(key, part)| (*key, part.clone()))).collect()
+            ranges
+                .flat_map(|range| parts.range(range).map(|(key, part)| (*key, part.clone())))
+                .collect()
         };
         let span = |s: &Span| json!([s.at, s.size, s.bytes, s.packed]);
         let held = copied.iter().map(|((column, (input, piece)), part)| {
             let lanes: Vec<Value> = part.lanes.iter().map(span).collect();
-            json!([column, input, piece, part.kind, part.values, lanes, part.counts.as_ref().map(span)])
+            json!([
+                column,
+                input,
+                piece,
+                part.kind,
+                part.values,
+                lanes,
+                part.counts.as_ref().map(span)
+            ])
         });
         Value::Array(held.collect())
     }
@@ -178,7 +220,8 @@ impl Spool {
     /// Read back what `put` added, which `holds` says.
     fn get(&self, span: &Span, holds: &str) -> Result<Vec<u8>> {
         let mut packed = vec![0; span.size];
-        read_at(&self.file, &mut packed, span.at).map_err(|e| crate::about(&self.path, e.into()))?;
+        read_at(&self.file, &mut packed, span.at)
+            .map_err(|e| crate::about(&self.path, e.into()))?;
         match span.packed {
             true => codec::unpack(&packed, span.bytes, &self.path.display().to_string(), holds),
             false => Ok(packed),
@@ -225,7 +268,9 @@ impl Spool {
                 free.insert(part);
                 Ok(())
             }
-            _ => Err(invalid(format!("piece {order:?} of column {column} was spooled twice: spool each piece once"))),
+            _ => Err(invalid(format!(
+                "piece {order:?} of column {column} was spooled twice: spool each piece once"
+            ))),
         }
     }
 
@@ -276,7 +321,11 @@ impl Pieces for Spooled<'_> {
         self.parts[piece].values
     }
     fn piece(&self, piece: usize) -> Result<Piece<'_>> {
-        let lanes = self.parts[piece].lanes.iter().map(|lane| self.spool.get(lane, "a spooled piece's lane").map(Cow::Owned));
+        let lanes = self.parts[piece].lanes.iter().map(|lane| {
+            self.spool
+                .get(lane, "a spooled piece's lane")
+                .map(Cow::Owned)
+        });
         Ok(Piece::Lanes(lanes.collect::<Result<_>>()?))
     }
     fn counts(&self, piece: usize) -> Result<Option<Cow<'_, [usize]>>> {
@@ -306,7 +355,9 @@ mod tests {
         let w = width(held.kind()).unwrap();
         let (mut bytes, mut counts) = (Vec::new(), Vec::new());
         for piece in 0..held.pieces() {
-            let Piece::Lanes(lanes) = held.piece(piece).unwrap() else { panic!("a spooled piece in lanes") };
+            let Piece::Lanes(lanes) = held.piece(piece).unwrap() else {
+                panic!("a spooled piece in lanes")
+            };
             assert_eq!(lanes.len(), w);
             for value in 0..held.values(piece) {
                 bytes.extend(lanes.iter().map(|lane| lane[value]));
@@ -367,24 +418,38 @@ mod tests {
         };
         // Inputs 0 and 2 finished; input 1 did not, and lies between them.
         let spool = Spool::create(&path).unwrap();
-        spool.add(0, (0, 0), Values::Flat(array(&[5_i16, 6]))).unwrap();
-        spool.add(1, (0, 0), jagged(vec![2, 0], &[3.0, 4.0])).unwrap();
+        spool
+            .add(0, (0, 0), Values::Flat(array(&[5_i16, 6])))
+            .unwrap();
+        spool
+            .add(1, (0, 0), jagged(vec![2, 0], &[3.0, 4.0]))
+            .unwrap();
         spool.add(0, (1, 0), Values::Flat(array(&[9_i16]))).unwrap();
         spool.add(0, (2, 0), Values::Flat(array(&[7_i16]))).unwrap();
         spool.add(0, (2, 1), Values::Flat(array(&[8_i16]))).unwrap();
         spool.add(0, (3, 0), Values::Flat(array(&[4_i16]))).unwrap();
         let (first, third) = (spool.held(&[0]), spool.held(&[2]));
-        assert_eq!(first.as_array().unwrap().len(), 2, "both columns of input 0");
+        assert_eq!(
+            first.as_array().unwrap().len(),
+            2,
+            "both columns of input 0"
+        );
         spool.sync().unwrap();
         drop(spool);
         assert!(path.exists(), "a spool made with create stays");
         let length = std::fs::metadata(&path).unwrap().len();
         let again = Spool::reopen(&path, &[&first, &third]).unwrap();
-        assert!(std::fs::metadata(&path).unwrap().len() < length, "cut after input 2, input 3 gone");
+        assert!(
+            std::fs::metadata(&path).unwrap().len() < length,
+            "cut after input 2, input 3 gone"
+        );
         // Input 1 was not given: its piece is passed over, and can be spooled again.
         again.add(0, (1, 0), Values::Flat(array(&[1_i16]))).unwrap();
         assert!(again.add(0, (2, 0), Values::Flat(array(&[1_i16]))).is_err());
-        assert_eq!(joined(&again.take(0).unwrap().unwrap()).0, array(&[5_i16, 6, 1, 7, 8]).bytes);
+        assert_eq!(
+            joined(&again.take(0).unwrap().unwrap()).0,
+            array(&[5_i16, 6, 1, 7, 8]).bytes
+        );
         assert_eq!(
             joined(&again.take(1).unwrap().unwrap()),
             (array(&[3.0_f32, 4.0]).bytes, vec![2, 0])
@@ -392,12 +457,24 @@ mod tests {
         drop(again);
         let mut beyond = first.clone();
         beyond[0][5][0][0] = 1_000_000.into();
-        assert!(Spool::reopen(&path, &[&beyond]).is_err(), "a piece past the spool's end");
-        assert!(Spool::reopen(&path, &[&first, &first]).is_err(), "a piece named twice");
+        assert!(
+            Spool::reopen(&path, &[&beyond]).is_err(),
+            "a piece past the spool's end"
+        );
+        assert!(
+            Spool::reopen(&path, &[&first, &first]).is_err(),
+            "a piece named twice"
+        );
         let mut short = first.clone();
         short[0][5].as_array_mut().unwrap().pop();
-        assert!(Spool::reopen(&path, &[&short]).is_err(), "an i2 piece with one lane");
-        assert!(Spool::reopen(&path, &[&Value::Null]).is_err(), "a line naming no pieces");
+        assert!(
+            Spool::reopen(&path, &[&short]).is_err(),
+            "an i2 piece with one lane"
+        );
+        assert!(
+            Spool::reopen(&path, &[&Value::Null]).is_err(),
+            "a line naming no pieces"
+        );
         // A link in its place is not written through.
         #[cfg(unix)]
         {
@@ -405,7 +482,9 @@ mod tests {
             std::fs::rename(&path, &kept).unwrap();
             std::os::unix::fs::symlink(&kept, &path).unwrap();
             let length = std::fs::metadata(&kept).unwrap().len();
-            assert!(Spool::reopen(&path, &[&first]).is_err_and(|e| e.to_string().contains("is a link or a folder, not a plain file")));
+            assert!(Spool::reopen(&path, &[&first]).is_err_and(|e| e
+                .to_string()
+                .contains("is a link or a folder, not a plain file")));
             assert_eq!(std::fs::metadata(&kept).unwrap().len(), length);
         }
         std::fs::remove_dir_all(&dir).unwrap();

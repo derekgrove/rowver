@@ -12,7 +12,11 @@ const TEXTS: [&str; 3] = ["recipe", "samples", "lock"];
 /// Whether `text` is a version `15.MINOR.PATCH`, each part digits with no leading zero.
 fn version(text: &str) -> bool {
     let parts: Vec<&str> = text.split('.').collect();
-    let number = |part: &&str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()) && (part.len() == 1 || !part.starts_with('0'));
+    let number = |part: &&str| {
+        !part.is_empty()
+            && part.bytes().all(|b| b.is_ascii_digit())
+            && (part.len() == 1 || !part.starts_with('0'))
+    };
     parts.len() == 3 && parts[0] == crate::VERSION.to_string() && parts.iter().all(number)
 }
 
@@ -26,23 +30,41 @@ fn commit(text: &str) -> bool {
     let (Some(sha), Some(dirty)) = (text.get(..40), text.get(40..)) else {
         return false;
     };
-    hex(sha, 40) && (dirty.is_empty() || dirty == "-dirty" || dirty.strip_prefix("-dirty-").is_some_and(|h| hex(h, 12)))
+    hex(sha, 40)
+        && (dirty.is_empty()
+            || dirty == "-dirty"
+            || dirty.strip_prefix("-dirty-").is_some_and(|h| hex(h, 12)))
 }
 
 /// Whether `name` can be a study folder's name: nonempty, not `.` or `..`, with no `/`, `\` or control character.
 pub fn study_name(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.chars().any(|c| c == '/' || c == '\\' || c.is_control())
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name
+            .chars()
+            .any(|c| c == '/' || c == '\\' || c.is_control())
 }
 
 /// Check what built a program, as `made.toolchain` records it (docs/FORMAT.md §6): what is wrong, if anything.
 pub fn toolchain(toolchain: &Value) -> std::result::Result<(), String> {
     let place = "made.toolchain";
-    let fields = ["program", "version", "rowver", "commit", "compiler", "target"];
-    let held = toolchain.as_object().ok_or_else(|| format!("{place} must be an object"))?;
+    let fields = [
+        "program", "version", "rowver", "commit", "compiler", "target",
+    ];
+    let held = toolchain
+        .as_object()
+        .ok_or_else(|| format!("{place} must be an object"))?;
     if let Some(key) = held.keys().find(|key| !fields.contains(&key.as_str())) {
-        return Err(format!("{place} has a field {key:?}, which the format does not give it"));
+        return Err(format!(
+            "{place} has a field {key:?}, which the format does not give it"
+        ));
     }
-    let text = |key: &str| held.get(key).and_then(Value::as_str).ok_or_else(|| format!("{place}.{key} must be text"));
+    let text = |key: &str| {
+        held.get(key)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{place}.{key} must be text"))
+    };
     if text("program")?.is_empty() {
         return Err(format!("{place}.program must be nonempty text: the name of the program that wrote the file, rvr for RowVer's own"));
     }
@@ -51,7 +73,11 @@ pub fn toolchain(toolchain: &Value) -> std::result::Result<(), String> {
         return Err(format!("{place}.version is {made_with:?}, and it is the program's version, {}.MINOR.PATCH (docs/FORMAT.md §6)", crate::VERSION));
     }
     if text("rowver")? != crate::VERSION.to_string() {
-        return Err(format!("{place}.rowver is {}, and it is \"{}\", the format version (docs/FORMAT.md §6)", toolchain["rowver"], crate::VERSION));
+        return Err(format!(
+            "{place}.rowver is {}, and it is \"{}\", the format version (docs/FORMAT.md §6)",
+            toolchain["rowver"],
+            crate::VERSION
+        ));
     }
     let made_by = text("commit")?;
     if !commit(made_by) {
@@ -68,7 +94,18 @@ pub fn toolchain(toolchain: &Value) -> std::result::Result<(), String> {
 /// Validate `made`: its fields, each value's form, the study's texts against their checksums, and
 /// `made.sha256`.
 pub(super) fn validate(made: &Value) -> Result<()> {
-    let fields = ["study", "title", "built", "by", "toolchain", "recipe", "samples", "lock", "files", "sha256"];
+    let fields = [
+        "study",
+        "title",
+        "built",
+        "by",
+        "toolchain",
+        "recipe",
+        "samples",
+        "lock",
+        "files",
+        "sha256",
+    ];
     exactly(made, "made", &fields, &["title"])?;
     let name = text(made, "made", "study")?;
     if !study_name(name) {
@@ -88,7 +125,12 @@ pub(super) fn validate(made: &Value) -> Result<()> {
         let place = format!("made.{name}");
         let record = object(made, "made", name)?;
         match name {
-            "recipe" => exactly(record, &place, &["sha256", "text", "format", "columns"], &[])?,
+            "recipe" => exactly(
+                record,
+                &place,
+                &["sha256", "text", "format", "columns"],
+                &[],
+            )?,
             _ => exactly(record, &place, &["sha256", "text"], &[])?,
         }
         if digest(text(record, &place, "text")?.as_bytes()) != checksum(record, &place)? {
@@ -97,7 +139,10 @@ pub(super) fn validate(made: &Value) -> Result<()> {
     }
     let recipe = &made["recipe"];
     if text(recipe, "made.recipe", "format")? != "rvr-recipe" {
-        return Err(invalid(format!("made.recipe.format is {}, and it is \"rvr-recipe\" (docs/FORMAT.md §6): {MEND}", recipe["format"])));
+        return Err(invalid(format!(
+            "made.recipe.format is {}, and it is \"rvr-recipe\" (docs/FORMAT.md §6): {MEND}",
+            recipe["format"]
+        )));
     }
     let mut seen = HashSet::new();
     for column in list(recipe, "made.recipe", "columns")? {
@@ -114,12 +159,20 @@ pub(super) fn validate(made: &Value) -> Result<()> {
 
 /// The columns the recipe pressed, in order.
 pub(super) fn pressed(made: &Value) -> Vec<&str> {
-    made["recipe"]["columns"].as_array().into_iter().flatten().filter_map(Value::as_str).collect()
+    made["recipe"]["columns"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
 }
 
 /// Ensure a pressed file holds exactly the recipe's columns, in its order.
 pub(super) fn columns(made: &Value, columns: &[Value]) -> Result<()> {
-    let names: Vec<&str> = columns.iter().filter_map(|column| column["name"].as_str()).collect();
+    let names: Vec<&str> = columns
+        .iter()
+        .filter_map(|column| column["name"].as_str())
+        .collect();
     if names != pressed(made) {
         return Err(invalid(format!("data.cols holds the columns {names:?}, and they are those made.recipe.columns names, in its order ({:?}) (docs/FORMAT.md §3): {MEND}", pressed(made))));
     }

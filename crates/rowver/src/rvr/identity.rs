@@ -20,7 +20,10 @@ impl Read {
     fn within(&self, first: u64, last: u64) -> u64 {
         match self {
             Read::Below(read) => last.min(*read).saturating_sub(first),
-            Read::Chosen(chosen) => (chosen.partition_point(|e| *e < last) - chosen.partition_point(|e| *e < first)) as u64,
+            Read::Chosen(chosen) => {
+                (chosen.partition_point(|e| *e < last) - chosen.partition_point(|e| *e < first))
+                    as u64
+            }
         }
     }
 
@@ -35,8 +38,15 @@ impl Read {
 
 /// Whether a press read a file of these holes, as `rvr::read_file` says.
 pub(super) fn read_file(read: &Read, holes: &[(u64, u64)]) -> bool {
-    let lost = holes.iter().map(|(first, last)| read.within(*first, *last)).sum();
-    super::read_file(read.within(0, u64::MAX), lost, matches!(read, Read::Chosen(_)))
+    let lost = holes
+        .iter()
+        .map(|(first, last)| read.within(*first, *last))
+        .sum();
+    super::read_file(
+        read.within(0, u64::MAX),
+        lost,
+        matches!(read, Read::Chosen(_)),
+    )
 }
 
 /// What the choice read of each file, by sample and path, with the file's holes.
@@ -56,8 +66,12 @@ fn holes(record: &Value, place: &str, limit: u64) -> Result<Vec<(u64, u64)>> {
     for (index, hole) in held.iter().enumerate() {
         let place = format!("{place}.holes[{index}]");
         exactly(hole, &place, &["entries", "kind", "why"], &[])?;
-        let range = hole["entries"].as_array().map(|r| r.iter().map(whole_count).collect::<Vec<_>>());
-        let Some([Some(first), Some(last)]) = range.as_deref().and_then(|r| <[_; 2]>::try_from(r).ok()) else {
+        let range = hole["entries"]
+            .as_array()
+            .map(|r| r.iter().map(whole_count).collect::<Vec<_>>());
+        let Some([Some(first), Some(last)]) =
+            range.as_deref().and_then(|r| <[_; 2]>::try_from(r).ok())
+        else {
             return Err(invalid(format!("{place}.entries must be [first, last], two whole numbers from 0 to 2^63 − 1 (docs/FORMAT.md §6.2): {MEND}")));
         };
         let kind = text(hole, &place, "kind")?;
@@ -81,15 +95,23 @@ fn holes(record: &Value, place: &str, limit: u64) -> Result<Vec<(u64, u64)>> {
 /// A sample's files in row order, as `data.files` names them, with each one's record.
 fn ordered<'a>(data: &'a Value, made: &'a Value, sample: &str) -> Vec<(&'a str, &'a Value)> {
     let records = &made["files"][sample]["files"];
-    entries(data, sample).into_iter().map(|file| {
-        let path = file["path"].as_str().unwrap_or_default();
-        (path, &records[path])
-    }).collect()
+    entries(data, sample)
+        .into_iter()
+        .map(|file| {
+            let path = file["path"].as_str().unwrap_or_default();
+            (path, &records[path])
+        })
+        .collect()
 }
 
 /// The entries of `data.files` of the sample `sample`, in order.
 fn entries<'a>(data: &'a Value, sample: &str) -> Vec<&'a Value> {
-    data["files"].as_array().into_iter().flatten().filter(|file| file["sample"] == sample).collect()
+    data["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|file| file["sample"] == sample)
+        .collect()
 }
 
 /// What a sample's event choice says a press read: each file's first entries, or a random choice
@@ -101,15 +123,21 @@ enum Counted {
 
 /// The refusal of a file's `what` (stop, take) that its sample's event choice does not give.
 fn wrong(place: &str, path: &str, what: &str) -> crate::Error {
-    invalid(format!("{place}: the file {path}'s {what} is not what {place} gives (docs/FORMAT.md §6.1): {MEND}"))
+    invalid(format!(
+        "{place}: the file {path}'s {what} is not what {place} gives (docs/FORMAT.md §6.1): {MEND}"
+    ))
 }
 
 /// A sample's `events` record checked against each file's entries, stop and take: what it says a press read.
 fn counted(files: &[(&str, &Value)], events: &Value, place: &str) -> Result<Counted> {
-    let entries: Vec<u64> = files.iter().map(|(_, record)| whole_count(&record["entries"]).unwrap_or(0)).collect();
+    let entries: Vec<u64> = files
+        .iter()
+        .map(|(_, record)| whole_count(&record["entries"]).unwrap_or(0))
+        .collect();
     let total = lock::entries_in_all(&entries, "the sample's").map_err(|_| invalid(format!("{place}: the sample's files hold more than 2^40 entries, more than a sample of a .rvr file may (docs/FORMAT.md §6.1): {MEND}")))?;
     let field = |record: &Value, key: &str| record.get(key).and_then(whole_count);
-    let choice = Events::read(events).map_err(|e| invalid(format!("{place}: {e} (docs/FORMAT.md §6.1): {MEND}")))?;
+    let choice = Events::read(events)
+        .map_err(|e| invalid(format!("{place}: {e} (docs/FORMAT.md §6.1): {MEND}")))?;
     match choice {
         Events::All => files.iter().zip(&entries).map(|((path, record), &n)| match (field(record, "stop"), field(record, "take")) {
             (None, None) => Ok(n),
@@ -191,10 +219,16 @@ fn file_record(record: &Value, place: &str) -> Result<bool> {
         return Err(invalid(format!("{place}.uuid is {id:?}, and it is the UUID inside the ROOT file as the lock gives it: 36 characters, lowercase hexadecimal in groups of 8, 4, 4, 4 and 12 joined by - (docs/FORMAT.md §6): {MEND}")));
     }
     let entries = count(record, place, "entries")?;
-    for key in ["stop", "take"].iter().filter(|key| record.get(**key).is_some()) {
+    for key in ["stop", "take"]
+        .iter()
+        .filter(|key| record.get(**key).is_some())
+    {
         count(record, place, key)?;
     }
-    let limit = record.get("stop").and_then(whole_count).unwrap_or(entries as u64);
+    let limit = record
+        .get("stop")
+        .and_then(whole_count)
+        .unwrap_or(entries as u64);
     let holed = !holes(record, place, limit)?.is_empty();
     if let Some(totals) = record.get("totals") {
         let totals = totals.as_object().filter(|t| !t.is_empty()).ok_or_else(|| {
@@ -217,7 +251,9 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
         let place = format!("data.samples[{name:?}]");
         exactly(record, &place, &["name", "label", "rows"], &[])?;
         nonempty(record, &place, "label")?;
-        sum = sum.checked_add(count(record, &place, "rows")?).ok_or_else(|| past("data.samples' rows"))?;
+        sum = sum
+            .checked_add(count(record, &place, "rows")?)
+            .ok_or_else(|| past("data.samples' rows"))?;
         if !seen.insert(name) {
             return Err(invalid(format!("{place}: two samples have this name, and each has its own (docs/FORMAT.md §3): {MEND}")));
         }
@@ -236,7 +272,11 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
     for (index, file) in list(data, "data", "files")?.iter().enumerate() {
         let place = format!("data.files[{index}]");
         exactly(file, &place, &["sample", "path", "rows"], &[])?;
-        let (sample, path, held) = (text(file, &place, "sample")?, nonempty(file, &place, "path")?, count(file, &place, "rows")?);
+        let (sample, path, held) = (
+            text(file, &place, "sample")?,
+            nonempty(file, &place, "path")?,
+            count(file, &place, "rows")?,
+        );
         let Some(at) = names.iter().position(|(name, _)| *name == sample) else {
             return Err(invalid(format!("{place}.sample is {sample:?}, which data.samples does not hold (docs/FORMAT.md §3): {MEND}")));
         };
@@ -245,7 +285,9 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
         }
         last = at;
         if !paths.insert((sample, path)) {
-            return Err(invalid(format!("{place}: data.files names {path} of {sample} twice (docs/FORMAT.md §3): {MEND}")));
+            return Err(invalid(format!(
+                "{place}: data.files names {path} of {sample} twice (docs/FORMAT.md §3): {MEND}"
+            )));
         }
         listed.entry(sample).or_default().push((path, held));
     }
@@ -266,18 +308,28 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
         let metadata = object(source, &place, "metadata")?.as_object().unwrap();
         metadata_value(&source["metadata"], &format!("{place}.metadata"))?;
         let files = listed.remove(name).unwrap_or_default();
-        let held = files.iter().try_fold(0_usize, |sum, (_, n)| sum.checked_add(*n)).ok_or_else(|| past(&format!("the rows of {place}'s files in data.files")))?;
+        let held = files
+            .iter()
+            .try_fold(0_usize, |sum, (_, n)| sum.checked_add(*n))
+            .ok_or_else(|| past(&format!("the rows of {place}'s files in data.files")))?;
         if held != *rows {
             return Err(invalid(format!("data.samples[{name:?}].rows is {rows}, and its files' rows in data.files add up to {held} (docs/FORMAT.md §3): {MEND}")));
         }
-        let (keys, paths): (Vec<&str>, Vec<&str>) = (records.keys().map(String::as_str).collect(), files.iter().map(|(p, _)| *p).collect());
+        let (keys, paths): (Vec<&str>, Vec<&str>) = (
+            records.keys().map(String::as_str).collect(),
+            files.iter().map(|(p, _)| *p).collect(),
+        );
         if keys != paths {
             return Err(invalid(format!("{place}.files holds {keys:?}, and it holds the sample's files of data.files, in that order: {paths:?} (docs/FORMAT.md §6): {MEND}")));
         }
         for (path, record) in records {
             holed |= file_record(record, &format!("{place}.files[{path:?}]"))?;
         }
-        counted(&ordered(data, made, name), &source["events"], &format!("{place}.events"))?;
+        counted(
+            &ordered(data, made, name),
+            &source["events"],
+            &format!("{place}.events"),
+        )?;
         sums(records, metadata, &paths, &totals, &place)?;
         for key in ["events_read", "events_total"] {
             if metadata.get(key).and_then(whole_count).is_none() {
@@ -298,9 +350,18 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
 
 /// Check a sample's totals: its metadata holds each of `totals`, its files' summed from +0.0 in
 /// the order of `data.files` (a file without one adds nothing; a sample no file of which holds it, 0.0).
-fn sums(records: &Map<String, Value>, metadata: &Map<String, Value>, paths: &[&str], totals: &std::collections::BTreeSet<&str>, place: &str) -> Result<()> {
+fn sums(
+    records: &Map<String, Value>,
+    metadata: &Map<String, Value>,
+    paths: &[&str],
+    totals: &std::collections::BTreeSet<&str>,
+    place: &str,
+) -> Result<()> {
     for name in totals {
-        let sum = paths.iter().filter_map(|path| records[*path].get("totals")?.get(*name)?.as_f64()).fold(0.0, |sum, value| sum + value);
+        let sum = paths
+            .iter()
+            .filter_map(|path| records[*path].get("totals")?.get(*name)?.as_f64())
+            .fold(0.0, |sum, value| sum + value);
         let held = metadata.get(*name).ok_or_else(|| invalid(format!("{place}.metadata has no total {name}, and every sample's metadata holds each total a file record holds (0.0 for a sample no file of which holds it) (docs/FORMAT.md §6): {MEND}")))?;
         if total(held, &format!("{place}.metadata.{name}"))? != sum {
             return Err(invalid(format!("{place}.metadata.{name} is {held}, and its files' totals of {name}, added from +0.0 in the order of data.files, are {sum:?} (docs/FORMAT.md §6): {MEND}")));
@@ -320,9 +381,20 @@ pub(super) fn choices(header: &Value) -> Result<Reads<'_>> {
         let place = format!("made.files[{name:?}]");
         let files = ordered(data, made, name);
         // Each file's rows, of the entries `ordered` takes: no more than the entries read of it, an empty file's too.
-        let rows: Vec<u64> = entries(data, name).iter().map(|file| file["rows"].as_u64().unwrap_or(0)).collect();
+        let rows: Vec<u64> = entries(data, name)
+            .iter()
+            .map(|file| file["rows"].as_u64().unwrap_or(0))
+            .collect();
         let (mut chosen, mut missing) = (0_u64, 0_u64);
-        for (((path, record), read), rows) in files.iter().zip(reads(&files, &made["files"][name]["events"], &format!("{place}.events"))?).zip(rows) {
+        for (((path, record), read), rows) in files
+            .iter()
+            .zip(reads(
+                &files,
+                &made["files"][name]["events"],
+                &format!("{place}.events"),
+            )?)
+            .zip(rows)
+        {
             let at = format!("{place}.files[{path:?}]");
             let holes = holes(record, &at, u64::MAX)?;
             let all = read.within(0, u64::MAX);
@@ -359,14 +431,25 @@ pub(super) fn choices(header: &Value) -> Result<Reads<'_>> {
 pub fn chosen_in_holes(header: &Value) -> Result<Vec<u64>> {
     let (data, made) = (&header["data"], &header["made"]);
     let mut out = Vec::new();
-    let samples = data["samples"].as_array().into_iter().flatten().filter_map(|s| s["name"].as_str());
+    let samples = data["samples"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s["name"].as_str());
     for name in samples {
         let files = ordered(data, made, name);
-        if !files.iter().any(|(_, record)| record.get("holes").is_some()) {
+        if !files
+            .iter()
+            .any(|(_, record)| record.get("holes").is_some())
+        {
             continue;
         }
         let place = format!("made.files[{name:?}]");
-        for ((path, record), read) in files.iter().zip(reads(&files, &made["files"][name]["events"], &format!("{place}.events"))?) {
+        for ((path, record), read) in files.iter().zip(reads(
+            &files,
+            &made["files"][name]["events"],
+            &format!("{place}.events"),
+        )?) {
             for (first, last) in holes(record, &format!("{place}.files[{path:?}]"), u64::MAX)? {
                 out.push(read.within(first, last));
             }
@@ -374,7 +457,6 @@ pub fn chosen_in_holes(header: &Value) -> Result<Vec<u64>> {
     }
     Ok(out)
 }
-
 
 /// Each row checked against the samples and files, a few rows at a time in row order: the sample
 /// index running through the samples in order, and each file's entries strictly increasing, each
@@ -392,11 +474,24 @@ impl<'h, 'r> Rows<'h, 'r> {
         let data = &header["data"];
         let (mut files, mut start) = (Vec::new(), 0_usize);
         for (at, record) in data["files"].as_array().into_iter().flatten().enumerate() {
-            let end = start.checked_add(whole_count(&record["rows"]).unwrap_or(0) as usize).ok_or_else(|| past("data.files' rows"))?;
-            files.push((start, end, at, record["sample"].as_str().unwrap_or_default(), record["path"].as_str().unwrap_or_default()));
+            let end = start
+                .checked_add(whole_count(&record["rows"]).unwrap_or(0) as usize)
+                .ok_or_else(|| past("data.files' rows"))?;
+            files.push((
+                start,
+                end,
+                at,
+                record["sample"].as_str().unwrap_or_default(),
+                record["path"].as_str().unwrap_or_default(),
+            ));
             start = end;
         }
-        Ok(Self { files, reads, file: 0, previous: None })
+        Ok(Self {
+            files,
+            reads,
+            file: 0,
+            previous: None,
+        })
     }
 
     /// The sample index of a chunk's rows from `first`, as `i4` values: the chunk lies in sample `at`.
@@ -413,11 +508,16 @@ impl<'h, 'r> Rows<'h, 'r> {
     /// The entries of rows from `first` (taken in row order), as `i8` values.
     pub(super) fn entry(&mut self, first: usize, values: &[u8]) -> Result<()> {
         for (offset, value) in values.chunks_exact(8).enumerate() {
-            let (row, held) = (first + offset, i64::from_le_bytes(value.try_into().unwrap_or_default()));
+            let (row, held) = (
+                first + offset,
+                i64::from_le_bytes(value.try_into().unwrap_or_default()),
+            );
             while self.files.get(self.file).is_some_and(|f| row >= f.1) {
                 (self.file, self.previous) = (self.file + 1, None);
             }
-            let Some(&(_, _, at, name, path)) = self.files.get(self.file) else { continue };
+            let Some(&(_, _, at, name, path)) = self.files.get(self.file) else {
+                continue;
+            };
             if self.previous.is_some_and(|previous| held <= previous) {
                 return Err(invalid(format!("data.entry: row {row} holds entry {held} of data.files[{at}] after entry {}, and within a file rows are in strictly increasing order of their entries (docs/FORMAT.md §3): {MEND}", self.previous.unwrap_or_default())));
             }

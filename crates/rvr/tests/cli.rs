@@ -1,7 +1,10 @@
 //! The rvr command on files written here: validate, header, dump, and diff naming what changed.
 
 use rowver::study::lock::{Branch, Branches, File, Lock, Sample, Shape};
-use rowver::write::{array, made_checksum, sample_cols, stream, text_checksum, write_laid, Rows, Sample as Rowed, Source, Values};
+use rowver::write::{
+    array, made_checksum, sample_cols, stream, text_checksum, write_laid, Rows, Sample as Rowed,
+    Source, Values,
+};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::process::Command;
@@ -12,31 +15,89 @@ use common::Study as Scratch;
 /// A small pressed file: samples A (3 rows) and B (2 rows), a flat and a jagged column, and an
 /// `xsec` sample column. `met_b` is MET's first value in sample B; `xsec_b` is B's cross-section.
 fn pressed(path: &Path, met_b: f32, xsec_b: f64) {
-    let sample = |name: &str, rows| Rowed { name: name.into(), label: format!("Sample {name}"), rows };
+    let sample = |name: &str, rows| Rowed {
+        name: name.into(),
+        label: format!("Sample {name}"),
+        rows,
+    };
     let files = vec![
         json!({"sample": "A", "path": "./a.root", "rows": 3}),
         json!({"sample": "B", "path": "./b.root", "rows": 2}),
     ];
-    let rows = Rows { samples: vec![sample("A", 3), sample("B", 2)], files, entry: Source::Values(Values::Flat(array(&[0_i64, 1, 2, 0, 1]))), chunk_rows: 65_536 };
+    let rows = Rows {
+        samples: vec![sample("A", 3), sample("B", 2)],
+        files,
+        entry: Source::Values(Values::Flat(array(&[0_i64, 1, 2, 0, 1]))),
+        chunk_rows: 65_536,
+    };
     let columns = vec![
-        ("MET".to_owned(), Source::Values(Values::Flat(array(&[10_f32, 20., 30., met_b, 50.])))),
-        ("Jet_pt".to_owned(), Source::Values(Values::Jagged { counts: vec![1, 0, 2, 2, 1], content: array(&[40_f32, 50., 60., 70., 80., 90.]) })),
+        (
+            "MET".to_owned(),
+            Source::Values(Values::Flat(array(&[10_f32, 20., 30., met_b, 50.]))),
+        ),
+        (
+            "Jet_pt".to_owned(),
+            Source::Values(Values::Jagged {
+                counts: vec![1, 0, 2, 2, 1],
+                content: array(&[40_f32, 50., 60., 70., 80., 90.]),
+            }),
+        ),
     ];
     let (mut data, laid) = stream(rows, columns, 1, path).unwrap();
     let samples = format!("format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\ntree = \"Events\"\n\n[eras]\n\n\
         [[sample]]\nname = \"A\"\nlabel = \"Sample A\"\nfiles = \"./a.root\"\nmetadata = {{ xsec = 1.5 }}\n\n\
         [[sample]]\nname = \"B\"\nlabel = \"Sample B\"\nfiles = \"./b.root\"\nmetadata = {{ xsec = {xsec_b:?} }}\n");
     let list = Branches::new(vec![
-        Branch { name: "MET".into(), kind: "f4".into(), shape: Shape::Flat, why: None },
-        Branch { name: "Jet_pt".into(), kind: "f4".into(), shape: Shape::Jagged, why: None },
+        Branch {
+            name: "MET".into(),
+            kind: "f4".into(),
+            shape: Shape::Flat,
+            why: None,
+        },
+        Branch {
+            name: "Jet_pt".into(),
+            kind: "f4".into(),
+            shape: Shape::Jagged,
+            why: None,
+        },
     ]);
     let made_samples = rowver::study::samples::read(&samples).unwrap();
-    let locked: Vec<Sample> = made_samples.iter().zip([3, 2]).enumerate().map(|(n, (s, entries))| Sample {
-        name: s.name.clone(), label: s.label.clone(), asked: s.files.clone(), tree: s.tree.clone(),
-        branches: list.sha256.clone(), events: s.events, events_total: 0, events_read: 0, metadata: s.metadata.clone(),
-        files: vec![File { at: s.files[0].clone(), bytes: 4000, adler32: Some("0a1b2c3d".into()), uuid: format!("31e851e4-b994-11f1-ba5c-{n:012x}"), entries, stop: None, take: None }],
-    }.planned(s.events)).collect();
-    let lock = Lock { resolved: "2026-10-16T00:00:00Z".into(), samples_toml_sha256: text_checksum(&samples), samples: locked, branches: vec![list] }.write().unwrap();
+    let locked: Vec<Sample> = made_samples
+        .iter()
+        .zip([3, 2])
+        .enumerate()
+        .map(|(n, (s, entries))| {
+            Sample {
+                name: s.name.clone(),
+                label: s.label.clone(),
+                asked: s.files.clone(),
+                tree: s.tree.clone(),
+                branches: list.sha256.clone(),
+                events: s.events,
+                events_total: 0,
+                events_read: 0,
+                metadata: s.metadata.clone(),
+                files: vec![File {
+                    at: s.files[0].clone(),
+                    bytes: 4000,
+                    adler32: Some("0a1b2c3d".into()),
+                    uuid: format!("31e851e4-b994-11f1-ba5c-{n:012x}"),
+                    entries,
+                    stop: None,
+                    take: None,
+                }],
+            }
+            .planned(s.events)
+        })
+        .collect();
+    let lock = Lock {
+        resolved: "2026-10-16T00:00:00Z".into(),
+        samples_toml_sha256: text_checksum(&samples),
+        samples: locked,
+        branches: vec![list],
+    }
+    .write()
+    .unwrap();
     let lock = Lock::read(&lock).map(|read| (lock, read)).unwrap();
     let text = |text: &str| json!({"sha256": text_checksum(text), "text": text});
     let mut recipe = text("format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"MET\", \"Jet_pt\"]\n\n[totals]\n\n[derived]\n");
@@ -107,10 +168,16 @@ fn validate_header_and_dump_read_a_pressed_file() {
     let (code, said) = rvr(&["validate", file]);
     assert_eq!(
         (code, said),
-        (0, format!("{file}: valid, 5 rows, 2 columns, read all 5 entries, not signed\n"))
+        (
+            0,
+            format!("{file}: valid, 5 rows, 2 columns, read all 5 entries, not signed\n")
+        )
     );
     // A flag it does not know is refused (on stderr), not read past.
-    assert_eq!(rvr(&["validate", file, "--parent", file]), (2, String::new()));
+    assert_eq!(
+        rvr(&["validate", file, "--parent", file]),
+        (2, String::new())
+    );
     let (code, said) = rvr(&["header", file]);
     let header: Value = serde_json::from_str(&said).unwrap();
     assert_eq!((code, header["data"]["rows"].as_u64()), (0, Some(5)));
@@ -163,9 +230,18 @@ fn new_makes_a_study_that_expands_and_never_overwrites() {
     let recipe = std::fs::read_to_string(study.join("recipe.toml")).unwrap();
     assert!(recipe.contains("title = \"higgs_tautau\""));
     // chunk_rows at its default, with a word not to change it without knowing why (SPEC 5.3.1).
-    let line = recipe.lines().find(|l| l.starts_with("chunk_rows")).unwrap_or_default();
-    assert!(line.starts_with("chunk_rows = 65536") && recipe.contains("change it only knowing why"), "{recipe}");
-    assert_eq!(rvr_recipe::Recipe::read(&recipe).map(|r| r.chunk_rows), Ok(Some(65_536)));
+    let line = recipe
+        .lines()
+        .find(|l| l.starts_with("chunk_rows"))
+        .unwrap_or_default();
+    assert!(
+        line.starts_with("chunk_rows = 65536") && recipe.contains("change it only knowing why"),
+        "{recipe}"
+    );
+    assert_eq!(
+        rvr_recipe::Recipe::read(&recipe).map(|r| r.chunk_rows),
+        Ok(Some(65_536))
+    );
     // A folder named with quotes is the recipe's title as it is.
     let odd = dir.0.join("say \"hi\" now");
     assert_eq!(rvr(&["new", odd.to_str().unwrap()]).0, 0);
@@ -175,7 +251,20 @@ fn new_makes_a_study_that_expands_and_never_overwrites() {
     // The .gitignore leaves out exactly what SPEC 5.3.3 names.
     let ignored = std::fs::read_to_string(study.join(".gitignore")).unwrap();
     let lines: Vec<&str> = ignored.lines().filter(|l| !l.starts_with('#')).collect();
-    assert_eq!(lines, ["*.rvr", "*.rvr.partial/", "*.rvr-journal", "*.rvr.anew-*", "*.rvr.empty-*", "*.rvr.refill", "*.rvr.refilled", "*.rvr-new", "*.reproduced/"]);
+    assert_eq!(
+        lines,
+        [
+            "*.rvr",
+            "*.rvr.partial/",
+            "*.rvr-journal",
+            "*.rvr.anew-*",
+            "*.rvr.empty-*",
+            "*.rvr.refill",
+            "*.rvr.refilled",
+            "*.rvr-new",
+            "*.reproduced/"
+        ]
+    );
     let (code, said) = rvr(&[
         "samples",
         "expand",
@@ -213,9 +302,15 @@ fn samples_alone_says_its_commands() {
 }
 
 /// Run rvr with these variables set and those removed: its exit status, standard output and standard error.
-fn run(args: &[&std::ffi::OsStr], set: &[(&str, &Path)], removed: &[&str]) -> (i32, String, String) {
+fn run(
+    args: &[&std::ffi::OsStr],
+    set: &[(&str, &Path)],
+    removed: &[&str],
+) -> (i32, String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
-    command.args(args).env("RVR_CONFIG", std::env::temp_dir().join("rvr-cli-no-config"));
+    command
+        .args(args)
+        .env("RVR_CONFIG", std::env::temp_dir().join("rvr-cli-no-config"));
     for (name, value) in set {
         command.env(name, value);
     }
@@ -223,7 +318,11 @@ fn run(args: &[&std::ffi::OsStr], set: &[(&str, &Path)], removed: &[&str]) -> (i
         command.env_remove(name);
     }
     let out = command.output().unwrap();
-    (out.status.code().unwrap(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+    (
+        out.status.code().unwrap(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
 }
 
 /// `run` of text arguments, with nothing else set.
@@ -243,9 +342,19 @@ fn dump_all_prints_every_value_one_row_a_line() {
     assert_eq!(code, 0);
     assert!(out.starts_with("sample\tentry\tMET\tJet_pt\nA\t0\t10\t[40]\nA\t1\t20\t[]\nA\t2\t30\t[50, 60]\nB\t0\t40\t[70, 80]\nB\t1\t50\t[90]\nxsec "), "{out}");
     let (code, out, _) = said(&["dump", file, "--all"]);
-    assert!(code == 0 && out.contains("##### end samples.lock #####") && out.contains("B\t1\t50\t[90]\n"), "{out}");
+    assert!(
+        code == 0
+            && out.contains("##### end samples.lock #####")
+            && out.contains("B\t1\t50\t[90]\n"),
+        "{out}"
+    );
     let (code, out, err) = said(&["dump", file, "--files", "--all"]);
-    assert!(code == 2 && out.is_empty() && err.contains("--files prints no column: give --all alone or with --columns"), "{err}");
+    assert!(
+        code == 2
+            && out.is_empty()
+            && err.contains("--files prints no column: give --all alone or with --columns"),
+        "{err}"
+    );
 }
 
 // SPEC 5.1.5, 5.1.6, 9.1, 9.4
@@ -261,19 +370,37 @@ fn diff_compares_labels_and_reading_failures_are_said_plainly() {
     std::fs::write(&b, framed(&header, arrays)).unwrap();
     let (a, b) = (a.to_str().unwrap(), b.to_str().unwrap());
     let (code, out, _) = said(&["diff", a, b]);
-    assert_eq!((code, out), (1, format!("sample B: its label is \"Sample B\" in {a}, \"Sample B, again\" in {b}\n")));
+    assert_eq!(
+        (code, out),
+        (
+            1,
+            format!("sample B: its label is \"Sample B\" in {a}, \"Sample B, again\" in {b}\n")
+        )
+    );
     // Full validation ties a label to the lock the file carries.
     let (code, out, _) = said(&["validate", b]);
-    assert!(code == 1 && out.contains("with their names and labels"), "{out}");
+    assert!(
+        code == 1 && out.contains("with their names and labels"),
+        "{out}"
+    );
     let missing = dir.0.join("missing.rvr");
     let missing = missing.to_str().unwrap();
     let (code, out, _) = said(&["validate", missing]);
-    assert_eq!((code, out), (1, format!("{missing}: INVALID: it is not there\n")));
+    assert_eq!(
+        (code, out),
+        (1, format!("{missing}: INVALID: it is not there\n"))
+    );
     let folder = dir.0.to_str().unwrap();
     let (code, _, err) = said(&["dump", folder]);
-    assert!(code == 1 && err.contains(&format!("{folder} is a folder, not a file")), "{err}");
+    assert!(
+        code == 1 && err.contains(&format!("{folder} is a folder, not a file")),
+        "{err}"
+    );
     let (code, out, err) = said(&["diff", a, missing]);
-    assert_eq!((code, out.as_str(), err), (2, "", format!("rvr diff: {missing} is not there\n")));
+    assert_eq!(
+        (code, out.as_str(), err),
+        (2, "", format!("rvr diff: {missing} is not there\n"))
+    );
 }
 
 // SPEC 5.1.3
@@ -281,8 +408,18 @@ fn diff_compares_labels_and_reading_failures_are_said_plainly() {
 #[test]
 fn an_argument_that_is_not_utf8_is_wrong_use() {
     use std::os::unix::ffi::OsStrExt;
-    let (code, _, err) = run(&[std::ffi::OsStr::new("validate"), std::ffi::OsStr::from_bytes(b"caf\xe9.rvr")], &[], &[]);
-    assert!(code == 2 && err.contains("the argument \"caf\u{fffd}.rvr\" is not UTF-8 text"), "{err}");
+    let (code, _, err) = run(
+        &[
+            std::ffi::OsStr::new("validate"),
+            std::ffi::OsStr::from_bytes(b"caf\xe9.rvr"),
+        ],
+        &[],
+        &[],
+    );
+    assert!(
+        code == 2 && err.contains("the argument \"caf\u{fffd}.rvr\" is not UTF-8 text"),
+        "{err}"
+    );
 }
 
 // SPEC 5.1.3, 10.2, 10.3
@@ -291,36 +428,72 @@ fn keys_are_made_once_and_trusted_once_under_one_name() {
     let dir = Scratch::new("keys");
     let config = dir.0.join("config");
     let key = |args: &[&str]| {
-        let args: Vec<&std::ffi::OsStr> = ["key"].iter().chain(args).map(std::ffi::OsStr::new).collect();
+        let args: Vec<&std::ffi::OsStr> = ["key"]
+            .iter()
+            .chain(args)
+            .map(std::ffi::OsStr::new)
+            .collect();
         run(&args, &[("RVR_CONFIG", &config)], &[])
     };
     let (code, out, _) = key(&["new", "Tester"]);
-    assert!(code == 0 && out.contains("rvr key trust ") && out.ends_with(" Tester\n"), "{out}");
+    assert!(
+        code == 0 && out.contains("rvr key trust ") && out.ends_with(" Tester\n"),
+        "{out}"
+    );
     let text = std::fs::read_to_string(config.join("key")).unwrap();
     assert!(text.len() == 65 && text.ends_with('\n'));
     #[cfg(unix)]
-    assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(config.join("key")).unwrap().permissions()) & 0o777, 0o600);
+    assert_eq!(
+        std::os::unix::fs::PermissionsExt::mode(
+            &std::fs::metadata(config.join("key")).unwrap().permissions()
+        ) & 0o777,
+        0o600
+    );
     let (code, _, err) = key(&["new"]);
     assert!(code == 1 && err.contains("You already have a key"), "{err}");
     assert_eq!(std::fs::read_to_string(config.join("key")).unwrap(), text);
-    let left: Vec<_> = std::fs::read_dir(&config).unwrap().map(|e| e.unwrap().file_name()).collect();
+    let left: Vec<_> = std::fs::read_dir(&config)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
     assert_eq!(left, ["key"]);
     assert_eq!(key(&["new", "two", "words"]).0, 2);
     let other = "ab".repeat(32);
     let (code, out, _) = key(&["trust", &other, "Someone", "Else"]);
-    assert!(code == 0 && out.contains("now say they are Someone Else's"), "{out}");
+    assert!(
+        code == 0 && out.contains("now say they are Someone Else's"),
+        "{out}"
+    );
     let (code, out, _) = key(&["trust", &other, "Someone", "Else"]);
-    assert!(code == 0 && out.contains("trusted already, as Someone Else's: nothing to change"), "{out}");
+    assert!(
+        code == 0 && out.contains("trusted already, as Someone Else's: nothing to change"),
+        "{out}"
+    );
     let (code, _, err) = key(&["trust", &other, "Another"]);
-    assert!(code == 1 && err.contains("trusted already, as Someone Else's, and is left so: to trust it as Another's"), "{err}");
-    assert_eq!(std::fs::read_to_string(config.join("trusted")).unwrap(), format!("{other} Someone Else\n"));
+    assert!(
+        code == 1
+            && err.contains(
+                "trusted already, as Someone Else's, and is left so: to trust it as Another's"
+            ),
+        "{err}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(config.join("trusted")).unwrap(),
+        format!("{other} Someone Else\n")
+    );
     // A last line written by hand without its line end stays a line of its own.
     std::fs::write(config.join("trusted"), format!("{other} Someone Else")).unwrap();
     let third = "cd".repeat(32);
     assert_eq!(key(&["trust", &third, "Third"]).0, 0);
-    assert_eq!(std::fs::read_to_string(config.join("trusted")).unwrap(), format!("{other} Someone Else\n{third} Third\n"));
+    assert_eq!(
+        std::fs::read_to_string(config.join("trusted")).unwrap(),
+        format!("{other} Someone Else\n{third} Third\n")
+    );
     let (code, _, err) = key(&["trust", &"AB".repeat(32), "Upper"]);
-    assert!(code == 1 && err.contains("one is 64 lowercase hexadecimal characters"), "{err}");
+    assert!(
+        code == 1 && err.contains("one is 64 lowercase hexadecimal characters"),
+        "{err}"
+    );
 }
 
 // SPEC 5.1.4, 10.4, 10.5
@@ -328,31 +501,78 @@ fn keys_are_made_once_and_trusted_once_under_one_name() {
 fn proxy_says_what_is_wrong_with_a_proxy_and_a_key_without_the_network() {
     let dir = Scratch::new("proxy");
     let proxy = |args: &[&str], set: &[(&str, &Path)]| {
-        let args: Vec<&std::ffi::OsStr> = ["proxy"].iter().chain(args).map(std::ffi::OsStr::new).collect();
+        let args: Vec<&std::ffi::OsStr> = ["proxy"]
+            .iter()
+            .chain(args)
+            .map(std::ffi::OsStr::new)
+            .collect();
         run(&args, set, &["X509_USER_CERT", "X509_USER_KEY"])
     };
     let missing = dir.0.join("x509up_missing");
     let (code, out, _) = proxy(&[], &[("X509_USER_PROXY", &missing)]);
-    assert!(code == 1 && out.contains(&format!("The grid proxy at {} does not exist. Run rvr proxy init to make one.", missing.display())), "{out}");
+    assert!(
+        code == 1
+            && out.contains(&format!(
+                "The grid proxy at {} does not exist. Run rvr proxy init to make one.",
+                missing.display()
+            )),
+        "{out}"
+    );
     let made_up = dir.0.join("x509up_made_up");
-    std::fs::write(&made_up, "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n").unwrap();
+    std::fs::write(
+        &made_up,
+        "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
     #[cfg(unix)]
-    std::fs::set_permissions(&made_up, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+    std::fs::set_permissions(
+        &made_up,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
     let (code, out, _) = proxy(&[], &[("X509_USER_PROXY", &made_up)]);
-    assert!(code == 1 && out.starts_with(&format!("proxy     {}\n", made_up.display())) && out.contains("rvr proxy init"), "{out}");
-    for wrong in [&["init", "--hours", "0"][..], &["init", "--hours", "721"], &["init", "--vo", "cms"], &["extra"]] {
+    assert!(
+        code == 1
+            && out.starts_with(&format!("proxy     {}\n", made_up.display()))
+            && out.contains("rvr proxy init"),
+        "{out}"
+    );
+    for wrong in [
+        &["init", "--hours", "0"][..],
+        &["init", "--hours", "721"],
+        &["init", "--vo", "cms"],
+        &["extra"],
+    ] {
         assert_eq!(proxy(wrong, &[]).0, 2, "{wrong:?}");
     }
     let globus = dir.0.join(".globus");
     std::fs::create_dir_all(&globus).unwrap();
     for name in ["usercert.pem", "userkey.pem"] {
-        std::fs::write(globus.join(name), "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n").unwrap();
+        std::fs::write(
+            globus.join(name),
+            "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n",
+        )
+        .unwrap();
     }
     #[cfg(unix)]
     {
-        std::fs::set_permissions(globus.join("userkey.pem"), std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
-        let (code, _, err) = proxy(&["init"], &[("HOME", &dir.0), ("X509_USER_PROXY", &missing)]);
-        assert!(code == 1 && err.contains(&format!("chmod 600 {}", globus.join("userkey.pem").display())), "{err}");
+        std::fs::set_permissions(
+            globus.join("userkey.pem"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o644),
+        )
+        .unwrap();
+        let (code, _, err) = proxy(
+            &["init"],
+            &[("HOME", &dir.0), ("X509_USER_PROXY", &missing)],
+        );
+        assert!(
+            code == 1
+                && err.contains(&format!(
+                    "chmod 600 {}",
+                    globus.join("userkey.pem").display()
+                )),
+            "{err}"
+        );
         assert!(!missing.exists());
     }
 }

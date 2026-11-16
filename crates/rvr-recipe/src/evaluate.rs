@@ -12,20 +12,75 @@ use std::ops::Range;
 
 /// Every function an expression can call, with the fewest and most values it takes (`usize::MAX`: any number).
 pub const FUNCTIONS: &[(&str, usize, usize)] = &[
-    ("count", 1, 1), ("sum", 1, 1), ("any", 1, 1), ("all", 1, 1), ("least", 2, 2), ("greatest", 2, 2),
-    ("least_index", 2, 2), ("greatest_index", 2, 2), ("first", 2, 2), ("nth", 3, 3), ("index", 1, 1),
-    ("sorted", 1, 2), ("order", 1, 2), ("take", 3, 3), ("listed", 2, 2), ("join", 2, usize::MAX),
-    ("abs", 1, 1), ("sign", 1, 1), ("sqrt", 1, 1), ("exp", 1, 1), ("log", 1, 1), ("log10", 1, 1),
-    ("cos", 1, 1), ("sin", 1, 1), ("tan", 1, 1), ("acos", 1, 1), ("asin", 1, 1), ("atan", 1, 1),
-    ("atan2", 2, 2), ("cosh", 1, 1), ("sinh", 1, 1), ("tanh", 1, 1), ("hypot", 2, 2), ("floor", 1, 1),
-    ("ceil", 1, 1), ("round", 1, 1), ("min", 2, 2), ("max", 2, 2), ("clip", 3, 3), ("isfinite", 1, 1),
-    ("if", 3, 3), ("bit_and", 2, 2), ("shift_right", 2, 2), ("delta_phi", 2, 2), ("delta_r", 4, 4),
-    ("mass", 3, 4), ("pt", 3, 4), ("eta", 3, 4), ("phi", 3, 4), ("rapidity", 3, 4), ("dr_nearest", 4, 5),
-    ("dr_second_nearest", 4, 5), ("dr_farthest", 4, 5), ("dr_second_farthest", 4, 5),
-    ("nearest_index", 4, 5), ("second_nearest_index", 4, 5), ("farthest_index", 4, 5),
-    ("second_farthest_index", 4, 5), ("pair_first", 1, 1), ("pair_second", 1, 1), ("pair_dr", 2, 2),
-    ("pair_mass", 3, 4), ("pair_pt", 3, 4), ("pair_eta", 3, 4), ("pair_phi", 3, 4),
-    ("pair_rapidity", 3, 4), ("contains", 2, 2), ("branch", 1, 1), ("stored", 2, 2),
+    ("count", 1, 1),
+    ("sum", 1, 1),
+    ("any", 1, 1),
+    ("all", 1, 1),
+    ("least", 2, 2),
+    ("greatest", 2, 2),
+    ("least_index", 2, 2),
+    ("greatest_index", 2, 2),
+    ("first", 2, 2),
+    ("nth", 3, 3),
+    ("index", 1, 1),
+    ("sorted", 1, 2),
+    ("order", 1, 2),
+    ("take", 3, 3),
+    ("listed", 2, 2),
+    ("join", 2, usize::MAX),
+    ("abs", 1, 1),
+    ("sign", 1, 1),
+    ("sqrt", 1, 1),
+    ("exp", 1, 1),
+    ("log", 1, 1),
+    ("log10", 1, 1),
+    ("cos", 1, 1),
+    ("sin", 1, 1),
+    ("tan", 1, 1),
+    ("acos", 1, 1),
+    ("asin", 1, 1),
+    ("atan", 1, 1),
+    ("atan2", 2, 2),
+    ("cosh", 1, 1),
+    ("sinh", 1, 1),
+    ("tanh", 1, 1),
+    ("hypot", 2, 2),
+    ("floor", 1, 1),
+    ("ceil", 1, 1),
+    ("round", 1, 1),
+    ("min", 2, 2),
+    ("max", 2, 2),
+    ("clip", 3, 3),
+    ("isfinite", 1, 1),
+    ("if", 3, 3),
+    ("bit_and", 2, 2),
+    ("shift_right", 2, 2),
+    ("delta_phi", 2, 2),
+    ("delta_r", 4, 4),
+    ("mass", 3, 4),
+    ("pt", 3, 4),
+    ("eta", 3, 4),
+    ("phi", 3, 4),
+    ("rapidity", 3, 4),
+    ("dr_nearest", 4, 5),
+    ("dr_second_nearest", 4, 5),
+    ("dr_farthest", 4, 5),
+    ("dr_second_farthest", 4, 5),
+    ("nearest_index", 4, 5),
+    ("second_nearest_index", 4, 5),
+    ("farthest_index", 4, 5),
+    ("second_farthest_index", 4, 5),
+    ("pair_first", 1, 1),
+    ("pair_second", 1, 1),
+    ("pair_dr", 2, 2),
+    ("pair_mass", 3, 4),
+    ("pair_pt", 3, 4),
+    ("pair_eta", 3, 4),
+    ("pair_phi", 3, 4),
+    ("pair_rapidity", 3, 4),
+    ("contains", 2, 2),
+    ("branch", 1, 1),
+    ("stored", 2, 2),
 ];
 
 /// Why `name` cannot be called with `count` values, when it cannot: no function has that name, or
@@ -77,12 +132,22 @@ pub struct Picked<'a> {
 impl<'a> Picked<'a> {
     /// The rows at `positions` (ascending, distinct) of `columns`, which cover `rows`.
     pub fn new(columns: &'a dyn Columns, positions: &'a [usize], rows: usize) -> Self {
-        Picked { columns, rows: Rows::At(positions), whole: positions.len() == rows, cut: RefCell::default() }
+        Picked {
+            columns,
+            rows: Rows::At(positions),
+            whole: positions.len() == rows,
+            cut: RefCell::default(),
+        }
     }
 
     /// Rows `from..to` of `columns`, which cover `rows`.
     pub(crate) fn run(columns: &'a dyn Columns, from: usize, to: usize, rows: usize) -> Self {
-        Picked { columns, rows: Rows::Run(from, to), whole: from == 0 && to == rows, cut: RefCell::default() }
+        Picked {
+            columns,
+            rows: Rows::Run(from, to),
+            whole: from == 0 && to == rows,
+            cut: RefCell::default(),
+        }
     }
 }
 
@@ -108,7 +173,11 @@ impl Columns for Picked<'_> {
 }
 
 /// `work` over the `rows` rows of `columns` with `in_runs`, each part its slice; a failure with the rows it lies in.
-pub fn over_runs<T>(columns: &dyn Columns, rows: usize, work: &mut dyn FnMut(&dyn Columns, usize, usize) -> Result<T>) -> std::result::Result<Vec<T>, (crate::Error, Range<usize>)> {
+pub fn over_runs<T>(
+    columns: &dyn Columns,
+    rows: usize,
+    work: &mut dyn FnMut(&dyn Columns, usize, usize) -> Result<T>,
+) -> std::result::Result<Vec<T>, (crate::Error, Range<usize>)> {
     let mut part = 0..rows;
     let done = crate::in_runs(0, rows, &mut |from, to| {
         part = from..to;
@@ -145,12 +214,20 @@ impl<'a> Scope<'a> {
 
     /// Each defined name worked out so far without fault, with its value.
     pub fn worked_out(&self) -> Vec<(String, Array)> {
-        self.known.borrow().iter().filter_map(|(name, value)| Some((name.clone(), value.clone()?.ok()?))).collect()
+        self.known
+            .borrow()
+            .iter()
+            .filter_map(|(name, value)| Some((name.clone(), value.clone()?.ok()?)))
+            .collect()
     }
 
     /// The same scope, the defined names `known` already worked out over these same events.
     pub fn knowing(self, known: impl IntoIterator<Item = (String, Array)>) -> Self {
-        self.known.borrow_mut().extend(known.into_iter().map(|(name, value)| (name, Some(Ok(value)))));
+        self.known.borrow_mut().extend(
+            known
+                .into_iter()
+                .map(|(name, value)| (name, Some(Ok(value)))),
+        );
         self
     }
 
@@ -174,7 +251,9 @@ impl<'a> Scope<'a> {
 
     /// Fetch a column that must exist.
     fn column(&self, name: &str) -> Result<Array> {
-        self.columns.column(name)?.ok_or_else(|| crate::missing(name))
+        self.columns
+            .column(name)?
+            .ok_or_else(|| crate::missing(name))
     }
 
     /// Evaluate an expression to a constant, one value per event, or a list per event.
@@ -236,14 +315,18 @@ impl<'a> Scope<'a> {
                 self.evaluate(defined)
             }
         };
-        self.known.borrow_mut().insert(name.to_owned(), Some(value.clone()));
+        self.known
+            .borrow_mut()
+            .insert(name.to_owned(), Some(value.clone()));
         value
     }
 
     /// Call a function: its name and number of values are checked before any value is worked out.
     fn call(&self, name: &str, arguments: &[Expression]) -> Result<Array> {
         if self.defines.contains_key(name) {
-            return Err(problem(format!("{name} is a defined name, not a function: write it without brackets, as {name}")));
+            return Err(problem(format!(
+                "{name} is a defined name, not a function: write it without brackets, as {name}"
+            )));
         }
         if let Some(why) = uncallable(name, arguments.len()) {
             return Err(problem(why));
@@ -252,11 +335,20 @@ impl<'a> Scope<'a> {
         if name == "if" {
             let condition = self.evaluate(&arguments[0])?;
             return match condition {
-                Array::Constant(crate::Constant::Truth(truth)) => self.evaluate(&arguments[if truth { 1 } else { 2 }]),
-                condition => f::choose(&condition, &self.evaluate(&arguments[1])?, &self.evaluate(&arguments[2])?),
+                Array::Constant(crate::Constant::Truth(truth)) => {
+                    self.evaluate(&arguments[if truth { 1 } else { 2 }])
+                }
+                condition => f::choose(
+                    &condition,
+                    &self.evaluate(&arguments[1])?,
+                    &self.evaluate(&arguments[2])?,
+                ),
             };
         }
-        let arrays: Vec<Array> = arguments.iter().map(|argument| self.evaluate(argument)).collect::<Result<_>>()?;
+        let arrays: Vec<Array> = arguments
+            .iter()
+            .map(|argument| self.evaluate(argument))
+            .collect::<Result<_>>()?;
         self.apply(name, &arrays)
     }
 
@@ -318,32 +410,51 @@ impl<'a> Scope<'a> {
                     Array::Constant(crate::Constant::Missing(key)) => return Err(lacking(key, "the position in nth")),
                     _ => return Err(problem("nth needs a fixed whole number for the position, the same for every event, counting from 0, such as nth(Jet_pt, 1, -1)")),
                 };
-                let position = usize::try_from(*position).map_err(|_| problem("nth counts positions from 0, so its position is 0 or more"))?;
+                let position = usize::try_from(*position).map_err(|_| {
+                    problem("nth counts positions from 0, so its position is 0 or more")
+                })?;
                 f::nth(&arrays[0], position, &arrays[2], "nth")?
             }
             "listed" => f::listed(&arrays[0], &arrays[1])?,
-            "dr_nearest" | "dr_second_nearest" | "dr_farthest" | "dr_second_farthest" | "nearest_index"
-            | "second_nearest_index" | "farthest_index" | "second_farthest_index" => {
+            "dr_nearest"
+            | "dr_second_nearest"
+            | "dr_farthest"
+            | "dr_second_farthest"
+            | "nearest_index"
+            | "second_nearest_index"
+            | "farthest_index"
+            | "second_farthest_index" => {
                 let rank = name.contains("second") as usize;
                 let farthest = name.contains("farthest");
                 let position = name.ends_with("_index");
                 f::ranked(arrays, rank, farthest, position, name)?
             }
-            "delta_phi" => f::formula(&[&arrays[0], &arrays[1]], "delta_phi", |v| hep_columns::angles::delta_phi(v[0], v[1]))?,
+            "delta_phi" => f::formula(&[&arrays[0], &arrays[1]], "delta_phi", |v| {
+                hep_columns::angles::delta_phi(v[0], v[1])
+            })?,
             "delta_r" => {
                 let parts = [&arrays[0], &arrays[1], &arrays[2], &arrays[3]];
-                f::formula(&parts, "delta_r", |v| hep_columns::angles::delta_r(v[0], v[1], v[2], v[3]))?
+                f::formula(&parts, "delta_r", |v| {
+                    hep_columns::angles::delta_r(v[0], v[1], v[2], v[3])
+                })?
             }
             "clip" => {
                 let floor = f::pairwise(&arrays[0], &arrays[1], true)?;
                 f::pairwise(&floor, &arrays[2], false)?
             }
-            "bit_and" => f::bits(&arrays[0], &arrays[1], "bit_and", |v, m, _| hep_columns::bits::bit_and(v, m))?,
+            "bit_and" => f::bits(&arrays[0], &arrays[1], "bit_and", |v, m, _| {
+                hep_columns::bits::bit_and(v, m)
+            })?,
             "shift_right" => {
-                if matches!(arrays[1], Array::Constant(crate::Constant::Whole(places)) if places < 0) {
-                    return Err(problem("shift_right cannot shift by a negative number of bits"));
+                if matches!(arrays[1], Array::Constant(crate::Constant::Whole(places)) if places < 0)
+                {
+                    return Err(problem(
+                        "shift_right cannot shift by a negative number of bits",
+                    ));
                 }
-                f::bits(&arrays[0], &arrays[1], "shift_right", |v, n, unsigned| hep_columns::bits::shift_right(v, n.min(64) as u32, unsigned))?
+                f::bits(&arrays[0], &arrays[1], "shift_right", |v, n, unsigned| {
+                    hep_columns::bits::shift_right(v, n.min(64) as u32, unsigned)
+                })?
             }
             "least_index" => f::extreme_at(&arrays[0], &arrays[1], false)?,
             "greatest_index" => f::extreme_at(&arrays[0], &arrays[1], true)?,
@@ -369,11 +480,18 @@ impl<'a> Scope<'a> {
             "pair_phi" => kinematic(Momentum::phi, true)?,
             "pair_rapidity" => kinematic(Momentum::rapidity, true)?,
             "contains" => {
-                let found = match (&arrays[0], &arrays[1]) {
-                    (Array::Constant(crate::Constant::Text(whole)), Array::Constant(crate::Constant::Text(part))) => whole.contains(part.as_str()),
-                    (Array::Constant(crate::Constant::Missing(_)), _) | (_, Array::Constant(crate::Constant::Missing(_))) => false,
-                    _ => return Err(problem("contains needs two pieces of text, as contains(sample.kind, 'sig')")),
-                };
+                let found =
+                    match (&arrays[0], &arrays[1]) {
+                        (
+                            Array::Constant(crate::Constant::Text(whole)),
+                            Array::Constant(crate::Constant::Text(part)),
+                        ) => whole.contains(part.as_str()),
+                        (Array::Constant(crate::Constant::Missing(_)), _)
+                        | (_, Array::Constant(crate::Constant::Missing(_))) => false,
+                        _ => return Err(problem(
+                            "contains needs two pieces of text, as contains(sample.kind, 'sig')",
+                        )),
+                    };
                 Array::Constant(crate::Constant::Truth(found))
             }
             "mass" => kinematic(Momentum::mass, false)?,

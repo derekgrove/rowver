@@ -6,11 +6,11 @@ use crate::holes::{passing, Failed, Fault};
 use crate::journal::Staged;
 use crate::open::{connect, Reach};
 use crate::plan::{Base, Input, Plan};
-use rowver::rvr::grouped as count;
 use crate::samples::remote::{second, Watch, AGAIN, QUIET};
 use crate::samples::some;
 use crate::take::{chosen_of, missed, ranges, sentence, take, Shared, Taken};
 use rowver::rvr::derived::fields;
+use rowver::rvr::grouped as count;
 use rowver::study::lock::File;
 use rowver::write::Spool;
 use rvr_recipe::Constant;
@@ -26,10 +26,19 @@ pub fn press(plan: Plan) -> Result<usize, String> {
     let staged = Staged::lock(&plan.target)?;
     // A press is carried on unless it is a reproduction, or its build names no one build.
     let mut picked = crate::journal::pick_up(&staged, &plan.identity, plan.carries);
-    let resumed = picked.as_mut().map(|p| std::mem::take(&mut p.taken)).unwrap_or_default();
+    let resumed = picked
+        .as_mut()
+        .map(|p| std::mem::take(&mut p.taken))
+        .unwrap_or_default();
     let picked_up = !resumed.is_empty();
     let watch = Arc::new(Watch::press(second() * QUIET, second() * AGAIN));
-    let files: Vec<(usize, &File)> = plan.reads().iter().enumerate().filter(|(at, _)| !resumed.contains_key(at)).map(|(_, i)| (i.sample, &i.file)).collect();
+    let files: Vec<(usize, &File)> = plan
+        .reads()
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| !resumed.contains_key(at))
+        .map(|(_, i)| (i.sample, &i.file))
+        .collect();
     let (storage, offline) = connect(&files, &watch);
     let (spool, journal) = crate::journal::stage(&plan.target, &staged, &plan.identity, picked)?;
     announce(&plan);
@@ -40,13 +49,28 @@ pub fn press(plan: Plan) -> Result<usize, String> {
         chosen[input.sample] += chosen_of(input);
         if let Some(taken) = resumed.get(&at) {
             already[input.sample] += taken.entries + taken.missing;
-            holed += taken.record["holes"].as_array().filter(|_| input.kept.is_none()).map_or(0, Vec::len);
+            holed += taken.record["holes"]
+                .as_array()
+                .filter(|_| input.kept.is_none())
+                .map_or(0, Vec::len);
         }
     }
     let names = plan.lock.samples.iter().map(|s| s.name.clone());
-    let bars = names.zip(chosen).zip(already).map(|((name, chosen), done)| (name, chosen, done)).collect();
-    let display = crate::progress::Display::start(bars, resumed.values().map(|t| t.rows as u64).sum(), holed);
-    let reach = Reach { storage: storage.as_ref(), offline: &offline, dir: &plan.base, watch, whole: true, read: display.counts.bytes.clone() };
+    let bars = names
+        .zip(chosen)
+        .zip(already)
+        .map(|((name, chosen), done)| (name, chosen, done))
+        .collect();
+    let display =
+        crate::progress::Display::start(bars, resumed.values().map(|t| t.rows as u64).sum(), holed);
+    let reach = Reach {
+        storage: storage.as_ref(),
+        offline: &offline,
+        dir: &plan.base,
+        watch,
+        whole: true,
+        read: display.counts.bytes.clone(),
+    };
     let shared = Shared {
         recipe: &plan.reader,
         outputs: plan.outputs(),
@@ -60,7 +84,9 @@ pub fn press(plan: Plan) -> Result<usize, String> {
         counts: &display.counts,
         tried: Mutex::new(BTreeSet::new()),
         #[cfg(debug_assertions)]
-        stop_after: std::env::var("RVR_STOP_AFTER").ok().and_then(|n| n.parse().ok()),
+        stop_after: std::env::var("RVR_STOP_AFTER")
+            .ok()
+            .and_then(|n| n.parse().ok()),
     };
     // What was read made durable, and the folder kept when that holds any file.
     let save = || {
@@ -86,23 +112,53 @@ pub fn press(plan: Plan) -> Result<usize, String> {
     }
     // Every file is read: a failure from here on (the disk, the key, the spool) keeps what was
     // read; a sum too large for its kind does not, for its [totals] must change.
-    let stuck = |why: String| format!("{} Mend it, then {}.", sentence(&why), again(&save(), plan.reads().len()));
+    let stuck = |why: String| {
+        format!(
+            "{} Mend it, then {}.",
+            sentence(&why),
+            again(&save(), plan.reads().len())
+        )
+    };
     let taken = match &plan.from {
         // A fill that read none of its holes again, each failing as before, leaves the file.
-        Base::Holes(fill) if read.iter().map(|t| t.missing).sum::<u64>() == plan.reads().iter().map(chosen_of).sum::<u64>() && crate::fill::same_kinds(fill, &plan.lock, plan.reads(), &read) => {
-            let asked = plan.reads().iter().flat_map(|i| i.ranges.iter().flatten()).count();
-            println!("None of the {} could be read: {} is as it was.", some(asked, "hole", "holes"), plan.target.display());
+        Base::Holes(fill)
+            if read.iter().map(|t| t.missing).sum::<u64>()
+                == plan.reads().iter().map(chosen_of).sum::<u64>()
+                && crate::fill::same_kinds(fill, &plan.lock, plan.reads(), &read) =>
+        {
+            let asked = plan
+                .reads()
+                .iter()
+                .flat_map(|i| i.ranges.iter().flatten())
+                .count();
+            println!(
+                "None of the {} could be read: {} is as it was.",
+                some(asked, "hole", "holes"),
+                plan.target.display()
+            );
             return Ok(rowver::rvr::holes(fill.file.header()).len());
         }
         Base::Holes(fill) | Base::Samples(fill) => {
-            let names: Vec<&str> = plan.outputs().iter().map(|((name, _), _)| name.as_str()).collect();
-            crate::fill::spool_old(&spool, fill, &names, &plan.laid, plan.workers).map_err(&stuck)?;
+            let names: Vec<&str> = plan
+                .outputs()
+                .iter()
+                .map(|((name, _), _)| name.as_str())
+                .collect();
+            crate::fill::spool_old(&spool, fill, &names, &plan.laid, plan.workers)
+                .map_err(&stuck)?;
             crate::fill::merged(&plan.work, &plan.lock, fill, &plan.laid, read, &plan.recipe)?
         }
         Base::Columns(_) if plan.reads().is_empty() => copied(&plan, &spool).map_err(&stuck)?,
         _ => read,
     };
-    let done = crate::written::Done { taken, spool: &spool, started, worth, stuck: &stuck, journal: &journal };
+    let done = crate::written::Done {
+        taken,
+        spool: &spool,
+        started,
+        worth,
+        stuck: &stuck,
+        journal: &journal,
+    };
     let holes = crate::written::write(&plan, done)?;
     drop((journal, spool));
     drop(staged);
@@ -112,7 +168,12 @@ pub fn press(plan: Plan) -> Result<usize, String> {
 /// What a press of every column reads: `S samples, F files, E entries`.
 pub(crate) fn pressed(plan: &Plan) -> String {
     let read: u64 = plan.lock.samples.iter().map(|s| s.events_read).sum();
-    format!("{}, {}, {}", some(plan.lock.samples.len(), "sample", "samples"), some(plan.reads().len(), "file", "files"), some(read as usize, "entry", "entries"))
+    format!(
+        "{}, {}, {}",
+        some(plan.lock.samples.len(), "sample", "samples"),
+        some(plan.reads().len(), "file", "files"),
+        some(read as usize, "entry", "entries")
+    )
 }
 
 /// What the press says it presses, before it reads.
@@ -153,7 +214,15 @@ fn announce(plan: &Plan) {
 
 /// The samples a press of other samples than the file's reads: "sample c", "samples c, d".
 pub(crate) fn named(added: &[String]) -> String {
-    format!("{} {}", if added.len() == 1 { "sample" } else { "samples" }, added.join(", "))
+    format!(
+        "{} {}",
+        if added.len() == 1 {
+            "sample"
+        } else {
+            "samples"
+        },
+        added.join(", ")
+    )
 }
 
 /// Building on columns with none to read, what each file gives: the earlier file's rows of it and
@@ -168,19 +237,36 @@ fn copied(plan: &Plan, spool: &Spool) -> Result<Vec<Taken>, String> {
         if rows > 0 {
             crate::gather::spooled(spool, &mut [], &mut entry, (input.order, 0))?;
         }
-        taken.push(Taken { rows, record, entries: chosen_of(input) - missing, missing, cutflow: vec![0; plan.recipe.keep.len()] });
+        taken.push(Taken {
+            rows,
+            record,
+            entries: chosen_of(input) - missing,
+            missing,
+            cutflow: vec![0; plan.recipe.keep.len()],
+        });
     }
     Ok(taken)
 }
 
 /// Read every file the Plan reads with a few workers, but those an earlier press of this one
 /// finished (`picked`, by place), noting each in the journal; what each gave, in the lock's order.
-fn take_all(shared: &Shared, plan: &Plan, picked: BTreeMap<usize, Taken>) -> Result<Vec<Taken>, Failed> {
+fn take_all(
+    shared: &Shared,
+    plan: &Plan,
+    picked: BTreeMap<usize, Taken>,
+) -> Result<Vec<Taken>, Failed> {
     let work = plan.reads();
-    let fields: Vec<BTreeMap<String, Constant>> = plan.lock.samples.iter().map(|s| fields(&s.metadata)).collect();
+    let fields: Vec<BTreeMap<String, Constant>> = plan
+        .lock
+        .samples
+        .iter()
+        .map(|s| fields(&s.metadata))
+        .collect();
     let next = AtomicUsize::new(0);
     let watch = &shared.reach.watch;
-    let todo: Vec<usize> = (0..work.len()).filter(|at| !picked.contains_key(at)).collect();
+    let todo: Vec<usize> = (0..work.len())
+        .filter(|at| !picked.contains_key(at))
+        .collect();
     let finished = AtomicUsize::new(picked.len());
     let mut done: Vec<Option<Result<Taken, Failed>>> = work.iter().map(|_| None).collect();
     for (at, taken) in picked {
@@ -189,11 +275,19 @@ fn take_all(shared: &Shared, plan: &Plan, picked: BTreeMap<usize, Taken>) -> Res
     let done = Mutex::new(done);
     let (ticking, ended) = std::sync::mpsc::channel::<()>();
     let crashed = std::thread::scope(|scope| {
-        let keeper = scope.spawn(move || if shared.carries { shared.journal.keep_up(shared.spool, crate::journal::EVERY, ended) });
+        let keeper = scope.spawn(move || {
+            if shared.carries {
+                shared
+                    .journal
+                    .keep_up(shared.spool, crate::journal::EVERY, ended)
+            }
+        });
         let readers: Vec<_> = (0..plan.workers.min(todo.len()).max(1))
             .map(|_| {
                 scope.spawn(|| loop {
-                    let Some(&at) = todo.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
+                    let Some(&at) = todo.get(next.fetch_add(1, Ordering::Relaxed)) else {
+                        break;
+                    };
                     if watch.stop.load(Ordering::Acquire) {
                         break;
                     }
@@ -202,7 +296,15 @@ fn take_all(shared: &Shared, plan: &Plan, picked: BTreeMap<usize, Taken>) -> Res
                     shared.counts.begin(input.sample);
                     let taken = take(shared, &fields[input.sample], input, &mut progressed);
                     match &taken {
-                        Ok(taken) => finished_one(shared, input, at, taken, progressed, work.len(), &finished),
+                        Ok(taken) => finished_one(
+                            shared,
+                            input,
+                            at,
+                            taken,
+                            progressed,
+                            work.len(),
+                            &finished,
+                        ),
                         Err(_) => watch.stop.store(true, Ordering::Release),
                     }
                     done.lock().unwrap_or_else(|e| e.into_inner())[at] = Some(taken);
@@ -210,12 +312,17 @@ fn take_all(shared: &Shared, plan: &Plan, picked: BTreeMap<usize, Taken>) -> Res
             })
             .collect();
         // Joined by hand: a scope left with a panicked thread would panic in turn.
-        let crashed = readers.into_iter().fold(false, |crashed, reader| reader.join().is_err() || crashed);
+        let crashed = readers
+            .into_iter()
+            .fold(false, |crashed, reader| reader.join().is_err() || crashed);
         drop(ticking);
         keeper.join().is_err() || crashed
     });
     if crashed {
-        return Err(Failed::new(Fault::Bug, "a file reader stopped unexpectedly"));
+        return Err(Failed::new(
+            Fault::Bug,
+            "a file reader stopped unexpectedly",
+        ));
     }
     let done = done.into_inner().unwrap_or_else(|e| e.into_inner());
     let errors = || done.iter().flatten().filter_map(|t| t.as_ref().err());
@@ -226,7 +333,10 @@ fn take_all(shared: &Shared, plan: &Plan, picked: BTreeMap<usize, Taken>) -> Res
     if let Some(why) = watch.gone() {
         return Err(Failed::new(Fault::Save, why));
     }
-    if let Some(error) = errors().find(|e| e.fault != Fault::Stopped).or_else(|| errors().next()) {
+    if let Some(error) = errors()
+        .find(|e| e.fault != Fault::Stopped)
+        .or_else(|| errors().next())
+    {
         return Err(error.clone());
     }
     done.into_iter()
@@ -235,33 +345,59 @@ fn take_all(shared: &Shared, plan: &Plan, picked: BTreeMap<usize, Taken>) -> Res
 }
 
 /// A file read: told to the bars, noted in the journal unless a hole of it may pass, and printed.
-fn finished_one(shared: &Shared, input: &Input, at: usize, taken: &Taken, progressed: u64, files: usize, finished: &AtomicUsize) {
+fn finished_one(
+    shared: &Shared,
+    input: &Input,
+    at: usize,
+    taken: &Taken,
+    progressed: u64,
+    files: usize,
+    finished: &AtomicUsize,
+) {
     // What its runs did not tell the bars: a hole, a file not read.
     let rest = (taken.entries + taken.missing).saturating_sub(progressed);
     shared.counts.ran(input.sample, rest, 0);
     // Building on an earlier file, its holes are carried, not found again.
-    let holes = taken.record["holes"].as_array().filter(|_| input.kept.is_none());
+    let holes = taken.record["holes"]
+        .as_array()
+        .filter(|_| input.kept.is_none());
     let holes: &[Value] = holes.map_or(&[], Vec::as_slice);
     // A file holed for a passing reason is read again by a press that carries on.
-    if shared.carries && !holes.iter().any(|hole| passing(hole["kind"].as_str().unwrap_or(""))) {
+    if shared.carries
+        && !holes
+            .iter()
+            .any(|hole| passing(hole["kind"].as_str().unwrap_or("")))
+    {
         let orders: Vec<usize> = match &input.ranges {
             Some(ranges) => ranges.iter().map(|(_, _, order)| *order).collect(),
             None => vec![input.order],
         };
-        shared.journal.finished(&crate::journal::line(at, taken, shared.spool.held(&orders)));
+        shared
+            .journal
+            .finished(&crate::journal::line(at, taken, shared.spool.held(&orders)));
     }
     let n = finished.fetch_add(1, Ordering::Relaxed) + 1;
     let name = input.file.at.rsplit('/').next().unwrap_or(&input.file.at);
-    crate::progress::file(shared.counts, &format!(
-        "  {n:>w$}/{files}  {:>11} {:7}  {:>9} kept   {name}",
-        count(taken.entries),
-        if taken.entries == 1 { "entry" } else { "entries" },
-        count(taken.rows as u64),
-        w = files.to_string().len()
-    ));
+    crate::progress::file(
+        shared.counts,
+        &format!(
+            "  {n:>w$}/{files}  {:>11} {:7}  {:>9} kept   {name}",
+            count(taken.entries),
+            if taken.entries == 1 {
+                "entry"
+            } else {
+                "entries"
+            },
+            count(taken.rows as u64),
+            w = files.to_string().len()
+        ),
+    );
     for hole in holes {
         shared.counts.holed();
-        let (kind, why) = (hole["kind"].as_str().unwrap_or(""), hole["why"].as_str().unwrap_or(""));
+        let (kind, why) = (
+            hole["kind"].as_str().unwrap_or(""),
+            hole["why"].as_str().unwrap_or(""),
+        );
         crate::progress::say(&format!("    hole ({kind}): {why}"));
     }
     #[cfg(debug_assertions)]
@@ -284,7 +420,12 @@ pub(crate) fn again(saved: &Option<Result<usize, String>>, files: usize) -> Stri
 }
 
 /// What a press that stopped part way says: why, and what pressing again does.
-fn ended(failed: Failed, target: &Path, saved: &Option<Result<usize, String>>, files: usize) -> String {
+fn ended(
+    failed: Failed,
+    target: &Path,
+    saved: &Option<Result<usize, String>>,
+    files: usize,
+) -> String {
     let why = sentence(&failed.why);
     let then = match failed.fault {
         Fault::Save => format!("{why} It is not a file's fault, so no file was made a hole of it: fix it, then {}.", again(saved, files)),

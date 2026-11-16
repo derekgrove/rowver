@@ -66,10 +66,23 @@ fn reader_gives_the_columns_the_fixture_holds() {
     for (name, values) in common::columns(0, 5, 10.) {
         let held = reader.column(&name).unwrap().unwrap();
         match values {
-            Values::Flat(flat) => assert_eq!((&held.kind, &held.bytes, &held.offsets), (&flat.kind, &flat.bytes, &None), "{name}"),
+            Values::Flat(flat) => assert_eq!(
+                (&held.kind, &held.bytes, &held.offsets),
+                (&flat.kind, &flat.bytes, &None),
+                "{name}"
+            ),
             Values::Jagged { counts, content } => {
-                let offsets: Vec<usize> = std::iter::once(0).chain(counts.iter().scan(0, |at, n| { *at += n; Some(*at) })).collect();
-                assert_eq!((&held.kind, &held.bytes, held.offsets.as_deref()), (&content.kind, &content.bytes, Some(&offsets)), "{name}");
+                let offsets: Vec<usize> = std::iter::once(0)
+                    .chain(counts.iter().scan(0, |at, n| {
+                        *at += n;
+                        Some(*at)
+                    }))
+                    .collect();
+                assert_eq!(
+                    (&held.kind, &held.bytes, held.offsets.as_deref()),
+                    (&content.kind, &content.bytes, Some(&offsets)),
+                    "{name}"
+                );
             }
         }
     }
@@ -84,15 +97,27 @@ fn a_header_declaring_more_rows_than_its_arrays_hold_is_refused_not_allocated() 
     // Rows that do not add up are refused on opening.
     let mut short = header.clone();
     short["data"]["rows"] = (1_u64 << 40).into();
-    let Err(said) = Reader::open(written(&to_bytes(&short, std::slice::from_ref(&arrays)), "rows")) else { panic!("opened") };
+    let Err(said) = Reader::open(written(
+        &to_bytes(&short, std::slice::from_ref(&arrays)),
+        "rows",
+    )) else {
+        panic!("opened")
+    };
     assert!(said.to_string().contains("rows"), "{said}");
     // 2^39 rows of sample B, every count agreeing: each array is refused on opening, as too small
     // for its chunks' table and frames, before anything is allocated for them.
     let huge: u64 = 1 << 39;
-    let rows = header["data"]["rows"].as_u64().unwrap() - header["data"]["samples"][1]["rows"].as_u64().unwrap() + huge;
+    let rows = header["data"]["rows"].as_u64().unwrap()
+        - header["data"]["samples"][1]["rows"].as_u64().unwrap()
+        + huge;
     header["data"]["rows"] = rows.into();
     header["data"]["samples"][1]["rows"] = huge.into();
-    for file in header["data"]["files"].as_array_mut().unwrap().iter_mut().filter(|f| f["sample"] == "B") {
+    for file in header["data"]["files"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .filter(|f| f["sample"] == "B")
+    {
         file["rows"] = huge.into();
     }
     let b = &mut header["made"]["files"]["B"];
@@ -107,7 +132,11 @@ fn a_header_declaring_more_rows_than_its_arrays_hold_is_refused_not_allocated() 
     let huge = written(&to_bytes(&header, std::slice::from_ref(&arrays)), "huge");
     let (opened, most) = most_during(|| Reader::open(&huge));
     let Err(said) = opened else { panic!("opened") };
-    assert!(said.to_string().contains("data.sample.size is 252, and its 8388609 chunks take at least"), "{said}");
+    assert!(
+        said.to_string()
+            .contains("data.sample.size is 252, and its 8388609 chunks take at least"),
+        "{said}"
+    );
     assert!(most < 1 << 20, "opening held {most} bytes");
     // 2^62 rows of sample B: refused on opening, and an inspected file's columns refused to read,
     // with as little held.
@@ -116,8 +145,19 @@ fn a_header_declaring_more_rows_than_its_arrays_hold_is_refused_not_allocated() 
     header["data"]["rows"] = rows.into();
     header["data"]["samples"][1]["rows"] = (1_u64 << 62).into();
     let path = written(&to_bytes(&sealed(header), &[arrays]), "huger");
-    let ((opened, inspected), most) = most_during(|| (Reader::open(&path).err(), Reader::inspect(&path).map(|(reader, _)| reader.column("MET").err())));
-    assert!(opened.is_some() && inspected.unwrap().is_some_and(|e| e.to_string().contains("chunks, more than its")), "{opened:?}");
+    let ((opened, inspected), most) = most_during(|| {
+        (
+            Reader::open(&path).err(),
+            Reader::inspect(&path).map(|(reader, _)| reader.column("MET").err()),
+        )
+    });
+    assert!(
+        opened.is_some()
+            && inspected
+                .unwrap()
+                .is_some_and(|e| e.to_string().contains("chunks, more than its")),
+        "{opened:?}"
+    );
     assert!(most < 1 << 20, "opening and reading held {most} bytes");
 }
 
@@ -132,7 +172,12 @@ fn an_empty_file_of_many_rows_makes_no_chunks_to_read_none() {
     header["data"]["rows"] = rows.into();
     header["data"]["chunk_rows"] = 1024.into();
     header["data"]["samples"][1]["rows"] = huge.into();
-    for file in header["data"]["files"].as_array_mut().unwrap().iter_mut().filter(|f| f["sample"] == "B") {
+    for file in header["data"]["files"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .filter(|f| f["sample"] == "B")
+    {
         file["rows"] = huge.into();
     }
     let b = &mut header["made"]["files"]["B"];
@@ -143,8 +188,16 @@ fn an_empty_file_of_many_rows_makes_no_chunks_to_read_none() {
     }
     b["metadata"]["events_total"] = huge.into();
     b["metadata"]["events_read"] = huge.into();
-    let text = header["made"]["recipe"]["text"].as_str().unwrap().replacen("version = 1\n", "version = 1\nchunk_rows = 1024\n", 1);
-    header["made"]["recipe"]["sha256"] = sha2::Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>().into();
+    let text = header["made"]["recipe"]["text"].as_str().unwrap().replacen(
+        "version = 1\n",
+        "version = 1\nchunk_rows = 1024\n",
+        1,
+    );
+    header["made"]["recipe"]["sha256"] = sha2::Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()
+        .into();
     header["made"]["recipe"]["text"] = text.into();
     // Each array's size what its chunks take at least: 13 bytes a lane, 8 lanes, and its table.
     let chunks = 1 + huge / 1024;
@@ -169,9 +222,19 @@ fn an_empty_file_of_many_rows_makes_no_chunks_to_read_none() {
     let empty = written(&to_bytes(&header, &[]), "huge-empty");
     let (asked, most) = most_during(|| {
         let reader = Reader::open(&empty).unwrap();
-        (reader.empty(), reader.sample().is_err(), reader.entry().is_err(), reader.column("MET").is_err(), reader.slice("MET", 0, 1).is_err(), validate_file(&empty).err().map(|e| e.to_string()))
+        (
+            reader.empty(),
+            reader.sample().is_err(),
+            reader.entry().is_err(),
+            reader.column("MET").is_err(),
+            reader.slice("MET", 0, 1).is_err(),
+            validate_file(&empty).err().map(|e| e.to_string()),
+        )
     });
-    assert!(asked.0 && asked.1 && asked.2 && asked.3 && asked.4, "{asked:?}");
+    assert!(
+        asked.0 && asked.1 && asked.2 && asked.3 && asked.4,
+        "{asked:?}"
+    );
     assert!(most < 1 << 20, "an empty file held {most} bytes: {asked:?}");
 }
 
@@ -292,34 +355,99 @@ fn holes_are_ranges_no_row_lies_in_and_the_counts_hold() {
     assert_eq!(opens(&holed(std::slice::from_ref(&empty), counts)), Ok(()));
     let header = holed(std::slice::from_ref(&empty), counts);
     let found = rowver::rvr::holes(&header);
-    assert_eq!((found.len(), found[0].first, found[0].last, found[0].kind.as_str()), (1, 3, 7, "damaged"));
+    assert_eq!(
+        (
+            found.len(),
+            found[0].first,
+            found[0].last,
+            found[0].kind.as_str()
+        ),
+        (1, 3, 7, "damaged")
+    );
 
     let refused = |holes: &[(&str, &str, Value)], counts, said: &str| {
         let why = opens(&holed(holes, counts)).unwrap_err();
         assert!(why.contains(said), "{why}");
     };
-    refused(&[("A", "./fixture-empty.root", json!([hole(1, 5, "damaged"), hole(4, 6, "gone")]))], counts, "in entry order and apart");
-    refused(&[("A", "./fixture-empty.root", json!([hole(3, 11, "damaged")]))], counts, "in entry order and apart");
-    refused(&[("A", "./fixture-empty.root", json!([hole(3, 7, "lost")]))], counts, "not one of unreachable");
-    refused(&[("A", "./fixture-empty.root", json!([]))], counts, "one hole or more");
-    refused(&[("A", "./fixture-a2.root", json!([hole(4, 5, "damaged")]))], [(24, 1), (4, 0)], "or a hole holds");
-    refused(std::slice::from_ref(&empty), [(21, 3), (4, 0)], "events_missing is 3");
-    refused(std::slice::from_ref(&empty), [(22, 4), (4, 0)], "events_read is 22");
+    refused(
+        &[(
+            "A",
+            "./fixture-empty.root",
+            json!([hole(1, 5, "damaged"), hole(4, 6, "gone")]),
+        )],
+        counts,
+        "in entry order and apart",
+    );
+    refused(
+        &[("A", "./fixture-empty.root", json!([hole(3, 11, "damaged")]))],
+        counts,
+        "in entry order and apart",
+    );
+    refused(
+        &[("A", "./fixture-empty.root", json!([hole(3, 7, "lost")]))],
+        counts,
+        "not one of unreachable",
+    );
+    refused(
+        &[("A", "./fixture-empty.root", json!([]))],
+        counts,
+        "one hole or more",
+    );
+    refused(
+        &[("A", "./fixture-a2.root", json!([hole(4, 5, "damaged")]))],
+        [(24, 1), (4, 0)],
+        "or a hole holds",
+    );
+    refused(
+        std::slice::from_ref(&empty),
+        [(21, 3), (4, 0)],
+        "events_missing is 3",
+    );
+    refused(
+        std::slice::from_ref(&empty),
+        [(22, 4), (4, 0)],
+        "events_read is 22",
+    );
     // Every sample of a file with holes counts what it misses.
     let mut uncounted = holed(std::slice::from_ref(&empty), counts);
-    uncounted["made"]["files"]["B"]["metadata"].as_object_mut().unwrap().shift_remove("events_missing");
-    assert!(opens(&sealed(uncounted)).unwrap_err().contains("events_missing"));
+    uncounted["made"]["files"]["B"]["metadata"]
+        .as_object_mut()
+        .unwrap()
+        .shift_remove("events_missing");
+    assert!(opens(&sealed(uncounted))
+        .unwrap_err()
+        .contains("events_missing"));
 
     // A random choice's hole holds some of the chosen entries.
     let chosen = rowver::choice::per_file(&[20], 4, 7).remove(0);
     let unchosen = (0..20).find(|e| !chosen.contains(e)).unwrap();
-    refused(&[("B", "./fixture-b.root", json!([hole(unchosen, unchosen + 1, "unreachable")]))], [(25, 0), (4, 0)], "none of which the event choice chose");
+    refused(
+        &[(
+            "B",
+            "./fixture-b.root",
+            json!([hole(unchosen, unchosen + 1, "unreachable")]),
+        )],
+        [(25, 0), (4, 0)],
+        "none of which the event choice chose",
+    );
 
     // A file never opened is one hole of every entry chosen, with the lock's UUID: never null.
-    assert_eq!(opens(&holed(&[("A", "./fixture-empty.root", json!([hole(0, 10, "unreachable")]))], [(15, 10), (4, 0)])), Ok(()));
+    assert_eq!(
+        opens(&holed(
+            &[(
+                "A",
+                "./fixture-empty.root",
+                json!([hole(0, 10, "unreachable")])
+            )],
+            [(15, 10), (4, 0)]
+        )),
+        Ok(())
+    );
     let mut opened = holed(std::slice::from_ref(&empty), counts);
     opened["made"]["files"]["A"]["files"]["./fixture-empty.root"]["uuid"] = Value::Null;
-    assert!(opens(&sealed(opened)).unwrap_err().contains("uuid must be text"));
+    assert!(opens(&sealed(opened))
+        .unwrap_err()
+        .contains("uuid must be text"));
 }
 
 /// A sample's totals are its files' totals, finite doubles, summed in their order into its
@@ -334,27 +462,47 @@ fn a_samples_totals_are_its_files_totals_summed() {
         header["made"]["recipe"]["text"] = text.as_str().into();
         header["made"]["recipe"]["sha256"] = rowver::write::text_checksum(&text).into();
         for sample in ["A", "B"] {
-            let files: Vec<String> = header["made"]["files"][sample]["files"].as_object().unwrap().keys().cloned().collect();
+            let files: Vec<String> = header["made"]["files"][sample]["files"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect();
             for file in &files {
                 header["made"]["files"][sample]["files"][file]["totals"] = json!({ "sumw": 1.0 });
             }
             header["made"]["files"][sample]["metadata"]["sumw"] = (files.len() as f64).into();
         }
-        header["made"]["files"]["B"]["files"]["./fixture-b.root"]["totals"] = json!({ "sumw": total });
+        header["made"]["files"]["B"]["files"]["./fixture-b.root"]["totals"] =
+            json!({ "sumw": total });
         header["made"]["files"]["B"]["metadata"]["sumw"] = said;
         opens(&sealed(header))
     };
     let asked = "sumw = \"MET\"";
     assert_eq!(totaled(2.5.into(), 2.5.into(), asked), Ok(()));
     let wrong = totaled(2.5.into(), 3.0.into(), asked).unwrap_err();
-    assert!(wrong.contains("made.files[\"B\"].metadata.sumw is 3.0, and its files' totals of sumw"), "{wrong}");
+    assert!(
+        wrong.contains("made.files[\"B\"].metadata.sumw is 3.0, and its files' totals of sumw"),
+        "{wrong}"
+    );
     let text = totaled("2.5".into(), 2.5.into(), asked).unwrap_err();
-    assert!(text.contains("totals.sumw is \"2.5\", and a total is a finite double"), "{text}");
+    assert!(
+        text.contains("totals.sumw is \"2.5\", and a total is a finite double"),
+        "{text}"
+    );
     let whole = totaled(2.into(), 2.0.into(), asked).unwrap_err();
-    assert!(whole.contains("totals.sumw is 2, and a total is a finite double, written with a . or an exponent"), "{whole}");
+    assert!(
+        whole.contains(
+            "totals.sumw is 2, and a total is a finite double, written with a . or an exponent"
+        ),
+        "{whole}"
+    );
     // A total the recipe does not ask for, or one it asks for that a file read does not hold.
     let more = totaled(2.5.into(), 2.5.into(), "").unwrap_err();
-    assert!(more.contains(".totals holds [\"sumw\"], and a file the press read holds each total"), "{more}");
+    assert!(
+        more.contains(".totals holds [\"sumw\"], and a file the press read holds each total"),
+        "{more}"
+    );
     let less = totaled(2.5.into(), 2.5.into(), "sumw = \"MET\"\nn = \"1\"").unwrap_err();
     assert!(less.contains(".totals holds [\"sumw\"]"), "{less}");
 }
@@ -368,12 +516,24 @@ fn a_failed_read_is_said_in_plain_words() {
     let arrays = common::parts(&golden()).1.len();
     std::fs::write(&path, &golden()[..8 + arrays - 10]).unwrap();
     let said = rowver::plain(&path, &reader.column("double").unwrap_err());
-    assert_eq!(said, format!("{} changed while it was read (emptied, or written again): open it again", path.0.display()));
+    assert_eq!(
+        said,
+        format!(
+            "{} changed while it was read (emptied, or written again): open it again",
+            path.0.display()
+        )
+    );
     let gone = path.0.with_extension("gone");
-    assert_eq!(rowver::plain(&gone, &Reader::open(&gone).unwrap_err()), format!("{} is not there", gone.display()));
+    assert_eq!(
+        rowver::plain(&gone, &Reader::open(&gone).unwrap_err()),
+        format!("{} is not there", gone.display())
+    );
     let folder = std::env::temp_dir();
     let said = rowver::plain(&folder, &validate_file(&folder).unwrap_err());
-    assert!(said.ends_with("is a folder, not a file: name a file in it"), "{said}");
+    assert!(
+        said.ends_with("is a folder, not a file: name a file in it"),
+        "{said}"
+    );
 }
 
 // FORMAT 1
@@ -398,7 +558,9 @@ fn a_header_length_one_byte_past_the_room_the_file_leaves_is_refused() {
     assert_eq!(length as usize, n - 20);
     assert!(Reader::open(written(&bytes, "room")).is_ok_and(|reader| reader.empty()));
     bytes[n - 12..n - 8].copy_from_slice(&(length + 1).to_le_bytes());
-    let Err(said) = Reader::open(written(&bytes, "past")) else { panic!("opened") };
+    let Err(said) = Reader::open(written(&bytes, "past")) else {
+        panic!("opened")
+    };
     assert!(said.to_string().contains("the header's length (the 4 bytes before the last 8) is more than the file holds: the file was cut short; copy it again"), "{said}");
 }
 
@@ -409,5 +571,9 @@ fn a_whole_number_column_whose_lim_spans_65_values_opens_without_vals() {
     let nlep = &mut header["data"]["cols"][0];
     (nlep["lim"], nlep["nice"]) = (json!([0, 64]), json!([0, 64]));
     nlep.as_object_mut().unwrap().shift_remove("vals");
-    assert!(Reader::open(written(&to_bytes(&header, std::slice::from_ref(&arrays)), "span")).is_ok());
+    assert!(Reader::open(written(
+        &to_bytes(&header, std::slice::from_ref(&arrays)),
+        "span"
+    ))
+    .is_ok());
 }

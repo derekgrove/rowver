@@ -43,7 +43,8 @@ fn folder_mode(target: &Path) -> u32 {
 fn private_folder(folder: &Path, target: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), folder_mode(target)).create(folder)
+        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), folder_mode(target))
+            .create(folder)
     }
     #[cfg(not(unix))]
     {
@@ -73,7 +74,9 @@ fn narrow(folder: &Path, target: &Path, there: &std::fs::Metadata) -> std::io::R
 /// Refuse `folder`, there already, when it is a link or a file, or wider open than `target` and not
 /// to be narrowed; one gone since is asked again, as its journal is opened.
 fn own(folder: &Path, target: &Path) -> Result<(), String> {
-    let Ok(there) = std::fs::symlink_metadata(folder) else { return Ok(()) };
+    let Ok(there) = std::fs::symlink_metadata(folder) else {
+        return Ok(());
+    };
     // What is there is emptied, so a link (to a folder elsewhere) or a file is not taken.
     if !there.is_dir() {
         let (folder, target) = (folder.display(), target.display());
@@ -96,7 +99,10 @@ pub fn no_folder(target: &Path) -> String {
 
 /// The folder `target` is in.
 pub fn parent(target: &Path) -> &Path {
-    target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."))
+    target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
 }
 
 /// Remove `path`, a folder or a file, if it is there.
@@ -114,7 +120,10 @@ pub fn under_way(folder: &Path) -> bool {
     let Ok(file) = File::open(folder.join(JOURNAL)) else {
         return false;
     };
-    matches!(file.try_lock_shared(), Err(std::fs::TryLockError::WouldBlock))
+    matches!(
+        file.try_lock_shared(),
+        Err(std::fs::TryLockError::WouldBlock)
+    )
 }
 
 /// The folder a press is staged in, locked through its journal; removed when dropped unless `keep`.
@@ -141,7 +150,9 @@ impl Staged {
             // Only the staging folder is made: a target in a folder that is not there is a mistake.
             // No wider open than the file there, as what it holds may be a copy of it.
             match private_folder(&folder, target) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(no_folder(target)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(no_folder(target))
+                }
                 Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(failed(e)),
                 Ok(()) => {}
                 Err(_) => own(&folder, target)?,
@@ -163,7 +174,11 @@ impl Staged {
             if locked && still_there(&journal, &at) {
                 // A press that ends before it is staged leaves a journal it found, and no folder it made.
                 let keep = journal.metadata().map_err(failed)?.len() > 0;
-                return Ok(Staged { folder, journal: Arc::new(journal), keep: Cell::new(keep) });
+                return Ok(Staged {
+                    folder,
+                    journal: Arc::new(journal),
+                    keep: Cell::new(keep),
+                });
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -212,7 +227,12 @@ pub struct Picked {
 /// over; a build that `carries` no press picks up nothing.
 pub fn pick_up(staged: &Staged, press: &Value, carries: bool) -> Option<Picked> {
     let folder = &staged.folder;
-    let over = |why: &str| println!("Starting over: the press that stopped in {} {why}.", folder.display());
+    let over = |why: &str| {
+        println!(
+            "Starting over: the press that stopped in {} {why}.",
+            folder.display()
+        )
+    };
     match found(unfinished_in(&staged.journal), press) {
         Found::Nothing => None,
         Found::Same(done) if done.inputs.is_empty() => None,
@@ -231,7 +251,9 @@ pub fn pick_up(staged: &Staged, press: &Value, carries: bool) -> Option<Picked> 
             match taken.map(|taken| (taken, Spool::reopen(&folder.join(SPOOL), &held))) {
                 Some((taken, Ok(spool))) => Some(Picked { done, taken, spool }),
                 Some((_, Err(why))) => {
-                    over(&format!("cannot be picked up: its spool is not as its journal says ({why})"));
+                    over(&format!(
+                        "cannot be picked up: its spool is not as its journal says ({why})"
+                    ));
                     None
                 }
                 None => {
@@ -248,17 +270,29 @@ pub fn pick_up(staged: &Staged, press: &Value, carries: bool) -> Option<Picked> 
 }
 
 /// The spool and journal of a press (`press`) of `target` staged in `staged`: `picked`'s, or new ones.
-pub fn stage(target: &Path, staged: &Staged, press: &Value, picked: Option<Picked>) -> Result<(Spool, Journal), String> {
+pub fn stage(
+    target: &Path,
+    staged: &Staged,
+    press: &Value,
+    picked: Option<Picked>,
+) -> Result<(Spool, Journal), String> {
     let folder = &staged.folder;
     let failed = |e: &dyn std::fmt::Display| {
-        format!("{} could not be staged in {}: {e}. Make it writable, or free disk space there.", target.display(), folder.display())
+        format!(
+            "{} could not be staged in {}: {e}. Make it writable, or free disk space there.",
+            target.display(),
+            folder.display()
+        )
     };
     let file = staged.journal.clone();
     // Everything but the journal, held locked, and a spool picked up goes.
     let clear = |keep: &[&str]| -> Result<(), String> {
         for entry in std::fs::read_dir(folder).map_err(|e| failed(&e))? {
             let path = entry.map_err(|e| failed(&e))?.path();
-            if !keep.iter().any(|name| path.file_name() == Some(name.as_ref())) {
+            if !keep
+                .iter()
+                .any(|name| path.file_name() == Some(name.as_ref()))
+            {
                 remove(&path).map_err(|e| failed(&e))?;
             }
         }
@@ -266,7 +300,8 @@ pub fn stage(target: &Path, staged: &Staged, press: &Value, picked: Option<Picke
     };
     if let Some(Picked { done, spool, .. }) = picked {
         clear(&[JOURNAL, SPOOL])?;
-        let journal = Journal::on(file, folder.join(JOURNAL), press, Some(&done)).map_err(|e| failed(&e))?;
+        let journal =
+            Journal::on(file, folder.join(JOURNAL), press, Some(&done)).map_err(|e| failed(&e))?;
         staged.keep.set(false);
         let inputs = press["inputs"].as_u64().unwrap_or(0) as usize;
         println!(
@@ -281,7 +316,9 @@ pub fn stage(target: &Path, staged: &Staged, press: &Value, picked: Option<Picke
     // An old journal is emptied on disk before its spool goes, so its checkpoints never come back
     // beside another press's values.
     if staged.keep.get() {
-        file.set_len(0).and_then(|()| file.sync_data()).map_err(|e| failed(&e))?;
+        file.set_len(0)
+            .and_then(|()| file.sync_data())
+            .map_err(|e| failed(&e))?;
     }
     clear(&[JOURNAL])?;
     let spool = Spool::create(&folder.join(SPOOL)).map_err(|e| failed(&e))?;
@@ -315,7 +352,9 @@ pub enum Found {
 /// The journal's whole lines, each with where it ends, and when it was written; a line cut short is left out.
 fn lines(mut file: &File) -> Option<(Vec<(Value, u64)>, String)> {
     let mut bytes = Vec::new();
-    file.seek(SeekFrom::Start(0)).and_then(|_| file.read_to_end(&mut bytes)).ok()?;
+    file.seek(SeekFrom::Start(0))
+        .and_then(|_| file.read_to_end(&mut bytes))
+        .ok()?;
     let when = file
         .metadata()
         .and_then(|m| m.modified())
@@ -345,7 +384,12 @@ fn covered(lines: impl Iterator<Item = (Value, u64)>, when: String, mut end: u64
             named += 1;
         }
     }
-    Done { inputs, when, named, end }
+    Done {
+        inputs,
+        when,
+        named,
+        end,
+    }
 }
 
 /// The journal in `folder`, read against `press` (this press's first line).
@@ -374,10 +418,14 @@ fn left_in(file: &File, target: &Path, current: Option<&Value>) -> Option<String
     let shown = target.display();
     let placed = last_line(file).and_then(|line| line.get("placed").cloned());
     if placed.is_some() && placed == identity(target) {
-        return Some(format!("a press left it, stopped after it put {shown} in place"));
+        return Some(format!(
+            "a press left it, stopped after it put {shown} in place"
+        ));
     }
     let (now, (was, _)) = (current?, unfinished_in(file)?);
-    let makes = ["recipe", "samples", "lock", "events", "toolchain"].iter().all(|key| was.get(key) == now.get(key));
+    let makes = ["recipe", "samples", "lock", "events", "toolchain"]
+        .iter()
+        .all(|key| was.get(key) == now.get(key));
     makes.then(|| format!("the press stopped there would make {shown} as it is"))
 }
 
@@ -390,7 +438,9 @@ pub fn left(folder: &Path, target: &Path, current: Option<&Value>) -> Option<Str
 fn last_line(mut file: &File) -> Option<Value> {
     let len = file.metadata().ok()?.len();
     let mut tail = Vec::new();
-    file.seek(SeekFrom::Start(len.saturating_sub(4096))).and_then(|_| file.read_to_end(&mut tail)).ok()?;
+    file.seek(SeekFrom::Start(len.saturating_sub(4096)))
+        .and_then(|_| file.read_to_end(&mut tail))
+        .ok()?;
     let line = tail.strip_suffix(b"\n")?.rsplit(|b| *b == b'\n').next()?;
     serde_json::from_slice(line).ok()
 }
@@ -400,7 +450,9 @@ fn identity(path: &Path) -> Option<Value> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        std::fs::metadata(path).ok().map(|m| json!([m.dev(), m.ino(), m.len(), m.mtime(), m.mtime_nsec()]))
+        std::fs::metadata(path)
+            .ok()
+            .map(|m| json!([m.dev(), m.ino(), m.len(), m.mtime(), m.mtime_nsec()]))
     }
     #[cfg(not(unix))]
     {
@@ -442,7 +494,10 @@ fn differs(was: &Value, now: &Value) -> String {
         ("recipe", "recipe.toml changed"),
         ("samples", "samples.toml changed"),
         ("lock", "samples.lock was resolved again"),
-        ("events", "it chose other events (--events, --random or --seed)"),
+        (
+            "events",
+            "it chose other events (--events, --random or --seed)",
+        ),
         ("reading", "it read other columns"),
         ("on", "it built on another file, or filled another"),
         ("toolchain", "another build of rvr made it"),
@@ -504,7 +559,12 @@ fn held<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Journal {
     /// The journal in `file` (at `path`): a new one whose first line is `press`, or `done`'s, written on.
-    fn on(mut file: Arc<File>, path: PathBuf, press: &Value, done: Option<&Done>) -> std::io::Result<Self> {
+    fn on(
+        mut file: Arc<File>,
+        path: PathBuf,
+        press: &Value,
+        done: Option<&Done>,
+    ) -> std::io::Result<Self> {
         match done {
             Some(done) => file.set_len(done.end)?,
             None => {
@@ -515,8 +575,15 @@ impl Journal {
         }
         file.seek(SeekFrom::End(0))?;
         let finished = done.map_or(0, |done| done.inputs.len());
-        let waiting = Mutex::new(Waiting { lines: Vec::new(), finished });
-        Ok(Journal { waiting, file: Mutex::new(file), path })
+        let waiting = Mutex::new(Waiting {
+            lines: Vec::new(),
+            finished,
+        });
+        Ok(Journal {
+            waiting,
+            file: Mutex::new(file),
+            path,
+        })
     }
 
     /// An input finished, as `line` says: made durable by the next checkpoint.
@@ -559,7 +626,9 @@ impl Journal {
                 let why = rowver::plain_io(&self.path, &e);
                 // Left as the last checkpoint left it, its lines wait for the next.
                 if let Ok(start) = start {
-                    let _ = file.set_len(start).and_then(|()| file.seek(SeekFrom::Start(start)).map(drop));
+                    let _ = file
+                        .set_len(start)
+                        .and_then(|()| file.seek(SeekFrom::Start(start)).map(drop));
                 }
                 held(&self.waiting).lines.splice(0..0, lines);
                 Err(why)
@@ -580,7 +649,9 @@ impl Journal {
     /// Take back the note `placing` began `at`, the move not made (its inode may be another file's).
     pub fn unplaced(&self, at: u64) {
         let mut file = held(&self.file);
-        let _ = file.set_len(at).and_then(|()| file.seek(SeekFrom::Start(at)).map(drop));
+        let _ = file
+            .set_len(at)
+            .and_then(|()| file.seek(SeekFrom::Start(at)).map(drop));
     }
 
     /// A checkpoint `every` until `ended` closes; one that fails is tried again at the next.
@@ -644,34 +715,67 @@ mod tests {
         let target = dir.join("study.rvr");
         std::fs::write(&target, b"").unwrap();
         // A link to a folder, a link to nothing, and a file are refused, and what they lead to is kept.
-        for (link, to) in [(true, dir.join("elsewhere")), (true, dir.join("nowhere")), (false, PathBuf::new())] {
+        for (link, to) in [
+            (true, dir.join("elsewhere")),
+            (true, dir.join("nowhere")),
+            (false, PathBuf::new()),
+        ] {
             match link {
                 true => std::os::unix::fs::symlink(&to, folder(&target)).unwrap(),
                 false => std::fs::write(folder(&target), b"").unwrap(),
             }
-            assert!(Staged::lock(&target).is_err_and(|why| why.contains("is a link or a file, not a folder")), "{to:?}");
+            assert!(
+                Staged::lock(&target)
+                    .is_err_and(|why| why.contains("is a link or a file, not a folder")),
+                "{to:?}"
+            );
             std::fs::remove_file(folder(&target)).unwrap();
         }
-        assert_eq!(std::fs::read(dir.join("elsewhere/kept.txt")).unwrap(), b"kept");
+        assert_eq!(
+            std::fs::read(dir.join("elsewhere/kept.txt")).unwrap(),
+            b"kept"
+        );
         // A folder there is narrowed to the file's mode when locked.
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
         std::fs::create_dir(folder(&target)).unwrap();
         std::fs::set_permissions(folder(&target), std::fs::Permissions::from_mode(0o755)).unwrap();
         let staged = Staged::lock(&target).unwrap();
-        assert_eq!(std::fs::metadata(&staged.folder).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(
+            std::fs::metadata(&staged.folder)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
         drop(staged);
         // Written by its owner alone, even for a file others may write.
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o664)).unwrap();
         std::fs::create_dir(folder(&target)).unwrap();
         std::fs::set_permissions(folder(&target), std::fs::Permissions::from_mode(0o777)).unwrap();
         let staged = Staged::lock(&target).unwrap();
-        assert_eq!(std::fs::metadata(&staged.folder).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(
+            std::fs::metadata(&staged.folder)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
         drop(staged);
         // A link in the journal's place is refused, and what it leads to is kept.
         std::fs::create_dir(folder(&target)).unwrap();
-        std::os::unix::fs::symlink(dir.join("elsewhere/kept.txt"), folder(&target).join(JOURNAL)).unwrap();
-        assert!(Staged::lock(&target).is_err_and(|why| why.contains("is a link or a folder, not a plain file")));
-        assert_eq!(std::fs::read(dir.join("elsewhere/kept.txt")).unwrap(), b"kept");
+        std::os::unix::fs::symlink(
+            dir.join("elsewhere/kept.txt"),
+            folder(&target).join(JOURNAL),
+        )
+        .unwrap();
+        assert!(Staged::lock(&target)
+            .is_err_and(|why| why.contains("is a link or a folder, not a plain file")));
+        assert_eq!(
+            std::fs::read(dir.join("elsewhere/kept.txt")).unwrap(),
+            b"kept"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -702,19 +806,28 @@ mod tests {
         assert!(!under_way(&folder(&target)));
         // A line cut short by a crash.
         let path = folder(&target).join(JOURNAL);
-        write!(File::options().append(true).open(&path).unwrap(), "{{\"input\": 1, \"rows\"").unwrap();
-        let Found::Same(done) = read(&folder(&target), &press) else { panic!("the same press") };
+        write!(
+            File::options().append(true).open(&path).unwrap(),
+            "{{\"input\": 1, \"rows\""
+        )
+        .unwrap();
+        let Found::Same(done) = read(&folder(&target), &press) else {
+            panic!("the same press")
+        };
         assert_eq!(done.inputs.keys().collect::<Vec<_>>(), [&2]);
         assert_eq!(super::taken(&done.inputs[&2]).unwrap().rows, 4);
         let other = json!({"recipe": "abd", "inputs": 3, "toolchain": crate::press::toolchain()});
-        let Found::Other(why) = read(&folder(&target), &other) else { panic!("another press") };
+        let Found::Other(why) = read(&folder(&target), &other) else {
+            panic!("another press")
+        };
         assert_eq!(why, "recipe.toml changed");
         // Written on from its checkpoint, what followed it is gone; a line waits for a checkpoint
         // no longer than `every`, with no input finishing after it.
         // Picked up, what else the folder holds goes, a link with what it leads to kept.
         std::fs::write(dir.join("kept.txt"), b"kept").unwrap();
         #[cfg(unix)]
-        std::os::unix::fs::symlink(dir.join("kept.txt"), folder(&target).join("pressed.rvr")).unwrap();
+        std::os::unix::fs::symlink(dir.join("kept.txt"), folder(&target).join("pressed.rvr"))
+            .unwrap();
         let staged = Staged::lock(&target).unwrap();
         let picked = pick_up(&staged, &press, true).unwrap();
         let (spool, journal) = stage(&target, &staged, &press, Some(picked)).unwrap();
@@ -727,9 +840,15 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
             drop(ticking);
         });
-        let Found::Same(done) = read(&staged.folder, &press) else { panic!("the same press") };
+        let Found::Same(done) = read(&staged.folder, &press) else {
+            panic!("the same press")
+        };
         assert_eq!(done.inputs.keys().collect::<Vec<_>>(), [&1, &2]);
-        assert_eq!(unfinished(&staged.folder).map(|(press, done)| (press["inputs"].clone(), done.inputs.len())), Some((3.into(), 2)));
+        assert_eq!(
+            unfinished(&staged.folder)
+                .map(|(press, done)| (press["inputs"].clone(), done.inputs.len())),
+            Some((3.into(), 2))
+        );
         // Dropped unkept, the folder goes.
         drop((journal, spool, staged));
         assert!(!folder(&target).exists());

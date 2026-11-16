@@ -30,7 +30,11 @@ pub fn left(seconds: i64) -> String {
 pub fn main(name: &str, options: &crate::options::Options) -> u8 {
     let result = match name {
         "proxy" => show(),
-        _ => match options.value("--hours").map(|h| crate::options::count("--hours", h, 720)).transpose() {
+        _ => match options
+            .value("--hours")
+            .map(|h| crate::options::count("--hours", h, 720))
+            .transpose()
+        {
             Ok(hours) => init(hours.unwrap_or(192) as u32),
             Err(why) => return crate::wrong(name, &why),
         },
@@ -87,7 +91,8 @@ fn show() -> Result<bool, String> {
 /// Make a proxy valid `hours` with the attributes of the VO cms, write it, and show it.
 fn init(hours: u32) -> Result<bool, String> {
     let vo = "cms";
-    let home = crate::samples::resolve::home().ok_or("HOME is not set to a full path, so ~/.globus cannot be found: set HOME")?;
+    let home = crate::samples::resolve::home()
+        .ok_or("HOME is not set to a full path, so ~/.globus cannot be found: set HOME")?;
     let globus = home.join(".globus");
     let named = |name: &str| std::env::var(name).ok();
     let source = Source::find(&globus, named("X509_USER_CERT"), named("X509_USER_KEY"))?;
@@ -101,7 +106,12 @@ fn init(hours: u32) -> Result<bool, String> {
     let passphrase = match source.encrypted()? {
         true => {
             voms_proxy::user::passphrase(&format!("Passphrase for {}: ", source.key().display()))
-                .map_err(|e| format!("the passphrase could not be read ({}): run rvr proxy init at a terminal", rowver::described(&e)))?
+                .map_err(|e| {
+                    format!(
+                        "the passphrase could not be read ({}): run rvr proxy init at a terminal",
+                        rowver::described(&e)
+                    )
+                })?
         }
         false => String::new(),
     };

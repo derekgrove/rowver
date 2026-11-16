@@ -23,7 +23,11 @@ pub fn meant<'a>(asked: &str, names: impl Iterator<Item = &'a str>) -> String {
 
 /// "`place` has no key `key`", with what it takes, and the known key a slip of a letter or two away.
 pub fn unknown(place: &str, key: &str, known: &[&str]) -> String {
-    format!("{place} has no key {key:?}; it takes {}.{}", known.join(", "), meant(key, known.iter().copied()))
+    format!(
+        "{place} has no key {key:?}; it takes {}.{}",
+        known.join(", "),
+        meant(key, known.iter().copied())
+    )
 }
 
 /// Levenshtein distance, by characters.
@@ -47,7 +51,9 @@ fn distance(a: &str, b: &str, swaps: bool) -> usize {
     for i in 1..=a.len() {
         let mut row = vec![i; b.len() + 1];
         for j in 1..=b.len() {
-            row[j] = (last[j - 1] + usize::from(a[i - 1] != b[j - 1])).min(row[j - 1] + 1).min(last[j] + 1);
+            row[j] = (last[j - 1] + usize::from(a[i - 1] != b[j - 1]))
+                .min(row[j - 1] + 1)
+                .min(last[j] + 1);
             if swaps && i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
                 row[j] = row[j].min(before[j - 2] + 1);
             }
@@ -64,9 +70,27 @@ mod tests {
     // FORMAT 11
     #[test]
     fn a_slip_counts_a_swap_of_neighbours_as_one_edit() {
-        assert_eq!((slips("dervied", "derived"), edits("dervied", "derived")), (1, 2));
-        assert_eq!((slips("mde", "made"), slips("data", "data"), slips("", "abc")), (1, 0, 3));
-        assert_eq!((slips("dash", "data"), slips("router", "rowver"), slips("driver", "derived"), slips("signal", "signature")), (2, 2, 2, 4));
+        assert_eq!(
+            (slips("dervied", "derived"), edits("dervied", "derived")),
+            (1, 2)
+        );
+        assert_eq!(
+            (
+                slips("mde", "made"),
+                slips("data", "data"),
+                slips("", "abc")
+            ),
+            (1, 0, 3)
+        );
+        assert_eq!(
+            (
+                slips("dash", "data"),
+                slips("router", "rowver"),
+                slips("driver", "derived"),
+                slips("signal", "signature")
+            ),
+            (2, 2, 2, 4)
+        );
         // A swap is one edit only of neighbours as they stand: ca to abc is three.
         assert_eq!(slips("ca", "abc"), 3);
     }
@@ -77,15 +101,25 @@ mod tests {
         let names = ["choose", "tree", "trees", "files", "events"];
         assert_eq!(nearest("choice", names.into_iter()), ["choose"]);
         assert_eq!(nearest("tress", names.into_iter()), ["trees", "tree"]);
-        let files = ["ST_s-channel_4f_leptonDecays_TuneCP5_13TeV-amcatnlo-pythia8_Summer20UL18_106X.root", "TTJets.root"];
-        let typed = "ST_s-chanel_4f_leptonDecays_TuneCP5_13TeV-amcatnlo-pythia8_Summer20UL18_106X.root";
+        let files = [
+            "ST_s-channel_4f_leptonDecays_TuneCP5_13TeV-amcatnlo-pythia8_Summer20UL18_106X.root",
+            "TTJets.root",
+        ];
+        let typed =
+            "ST_s-chanel_4f_leptonDecays_TuneCP5_13TeV-amcatnlo-pythia8_Summer20UL18_106X.root";
         assert_eq!(nearest(typed, files.into_iter()), [files[0]]);
         assert!(nearest("completely_different_name.root", files.into_iter()).is_empty());
-        let keys = ["name", "label", "files", "tree", "trees", "eras", "events", "choose", "seed", "metadata"];
+        let keys = [
+            "name", "label", "files", "tree", "trees", "eras", "events", "choose", "seed",
+            "metadata",
+        ];
         for slip in ["kind", "xsec", "lumi"] {
             assert!(nearest(slip, keys.into_iter()).is_empty(), "{slip}");
         }
-        assert_eq!(meant("kep", ["keep", "keep"].into_iter()), " Did you mean: keep?");
+        assert_eq!(
+            meant("kep", ["keep", "keep"].into_iter()),
+            " Did you mean: keep?"
+        );
         assert_eq!(meant("zzzzzz", ["keep"].into_iter()), "");
     }
 }

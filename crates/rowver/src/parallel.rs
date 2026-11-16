@@ -119,7 +119,17 @@ pub fn ordered<R: Send, E: Send + From<&'static str>>(
         return (0..items).try_for_each(|item| each(work(item)?));
     }
     let ahead = 2 * workers;
-    let shared = Shared { queue: Mutex::new(Queue { next: 0, taken: 0, done: BTreeMap::new(), stop: false, lost: false }), ready: Condvar::new(), room: Condvar::new() };
+    let shared = Shared {
+        queue: Mutex::new(Queue {
+            next: 0,
+            taken: 0,
+            done: BTreeMap::new(),
+            stop: false,
+            lost: false,
+        }),
+        ready: Condvar::new(),
+        room: Condvar::new(),
+    };
     std::thread::scope(|scope| {
         let threads: Vec<_> = (0..workers.min(items))
             .map(|_| {
@@ -128,7 +138,8 @@ pub fn ordered<R: Send, E: Send + From<&'static str>>(
                     let _ending = Ending(&shared, true);
                     loop {
                         let mut queue = shared.lock();
-                        while !queue.stop && queue.next < items && queue.next >= queue.taken + ahead {
+                        while !queue.stop && queue.next < items && queue.next >= queue.taken + ahead
+                        {
                             queue = shared.room.wait(queue).unwrap_or_else(|e| e.into_inner());
                         }
                         if queue.stop || queue.next >= items {
@@ -168,7 +179,9 @@ pub fn ordered<R: Send, E: Send + From<&'static str>>(
             Ok(())
         })();
         // Joined by hand: a scope left with a panicked thread would panic in turn.
-        let crashed = threads.into_iter().fold(false, |crashed, thread| thread.join().is_err() || crashed);
+        let crashed = threads
+            .into_iter()
+            .fold(false, |crashed, thread| thread.join().is_err() || crashed);
         match crashed {
             true => Err("A worker stopped unexpectedly".into()),
             false => handed,
@@ -194,9 +207,15 @@ pub(crate) enum Pending<T> {
 
 impl<'env> Pool<'env> {
     /// `workers` threads in `scope`; with fewer than 2 (or in a worker of `map`), every job runs at once where it is handed over.
-    pub(crate) fn new<'scope>(scope: &'scope std::thread::Scope<'scope, 'env>, workers: usize) -> Self {
+    pub(crate) fn new<'scope>(
+        scope: &'scope std::thread::Scope<'scope, 'env>,
+        workers: usize,
+    ) -> Self {
         if workers < 2 || WORKER.get() {
-            return Self { jobs: None, workers: 1 };
+            return Self {
+                jobs: None,
+                workers: 1,
+            };
         }
         let (jobs, taken) = std::sync::mpsc::channel::<Job<'env>>();
         let taken = std::sync::Arc::new(Mutex::new(taken));
@@ -208,13 +227,18 @@ impl<'env> Pool<'env> {
                     let job = taken.lock().unwrap_or_else(|e| e.into_inner()).recv();
                     // A job that panics loses its result, which is then waited for in vain, and not the thread.
                     match job {
-                        Ok(job) => drop(std::panic::catch_unwind(std::panic::AssertUnwindSafe(job))),
+                        Ok(job) => {
+                            drop(std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)))
+                        }
                         Err(_) => break,
                     }
                 }
             });
         }
-        Self { jobs: Some(jobs), workers }
+        Self {
+            jobs: Some(jobs),
+            workers,
+        }
     }
 
     /// How many threads run its jobs: 1 when every job runs where it is handed over.
@@ -261,11 +285,23 @@ mod tests {
         let held: Vec<u64> = (0..100).collect();
         let sums = std::thread::scope(|scope| {
             let pool = Pool::new(scope, 4);
-            let pending: Vec<Pending<u64>> = (0..20).map(|n| { let held = &held; pool.run(move || held.iter().map(|v| v * n).sum()) }).collect();
-            pending.into_iter().map(|p| p.wait().unwrap()).collect::<Vec<u64>>()
+            let pending: Vec<Pending<u64>> = (0..20)
+                .map(|n| {
+                    let held = &held;
+                    pool.run(move || held.iter().map(|v| v * n).sum())
+                })
+                .collect();
+            pending
+                .into_iter()
+                .map(|p| p.wait().unwrap())
+                .collect::<Vec<u64>>()
         });
         assert_eq!(sums, (0..20).map(|n| 4950 * n).collect::<Vec<u64>>());
-        let panicked = std::thread::scope(|scope| Pool::new(scope, 2).run(|| -> u64 { panic!("a bug") }).wait());
+        let panicked = std::thread::scope(|scope| {
+            Pool::new(scope, 2)
+                .run(|| -> u64 { panic!("a bug") })
+                .wait()
+        });
         assert_eq!(panicked, None);
     }
 
@@ -275,7 +311,9 @@ mod tests {
         let items: Vec<usize> = (0..500).collect();
         let mut seen = Vec::new();
         let slow = |n: usize| -> Result<usize, String> {
-            std::thread::sleep(std::time::Duration::from_micros((n * 7919 % 13) as u64 * 50));
+            std::thread::sleep(std::time::Duration::from_micros(
+                (n * 7919 % 13) as u64 * 50,
+            ));
             Ok(n * 2)
         };
         ordered(500, 4, slow, |n| {
@@ -284,7 +322,13 @@ mod tests {
         })
         .unwrap();
         assert_eq!(seen, items.iter().map(|n| n * 2).collect::<Vec<_>>());
-        let (mut seen, failing) = (Vec::new(), |n: usize| if n == 300 { Err(format!("item {n}")) } else { Ok(n) });
+        let (mut seen, failing) = (Vec::new(), |n: usize| {
+            if n == 300 {
+                Err(format!("item {n}"))
+            } else {
+                Ok(n)
+            }
+        });
         let handed = ordered(500, 4, failing, |n| {
             seen.push(n);
             Ok(())
@@ -292,8 +336,34 @@ mod tests {
         assert_eq!(handed, Err("item 300".into()));
         assert_eq!(seen, (0..300).collect::<Vec<_>>());
         let mut handed = 0;
-        assert_eq!(ordered(500, 4, Ok::<_, String>, |_| { handed += 1; if handed == 10 { Err("enough".into()) } else { Ok(()) } }), Err("enough".into()));
-        let panicked = std::panic::catch_unwind(|| ordered(500, 4, |n| if n == 50 { panic!("a bug") } else { Ok::<_, String>(n) }, |_| Ok(())));
-        assert_eq!(panicked.ok(), Some(Err("A worker stopped unexpectedly".into())));
+        assert_eq!(
+            ordered(500, 4, Ok::<_, String>, |_| {
+                handed += 1;
+                if handed == 10 {
+                    Err("enough".into())
+                } else {
+                    Ok(())
+                }
+            }),
+            Err("enough".into())
+        );
+        let panicked = std::panic::catch_unwind(|| {
+            ordered(
+                500,
+                4,
+                |n| {
+                    if n == 50 {
+                        panic!("a bug")
+                    } else {
+                        Ok::<_, String>(n)
+                    }
+                },
+                |_| Ok(()),
+            )
+        });
+        assert_eq!(
+            panicked.ok(),
+            Some(Err("A worker stopped unexpectedly".into()))
+        );
     }
 }

@@ -40,13 +40,29 @@ pub(crate) fn untrue(sort: Sort, what: &str) -> Option<String> {
 /// Whether function `name` takes a list per event, never a fixed value, as its value `at`.
 fn list_at(name: &str, at: usize) -> bool {
     match name {
-        "count" | "sum" | "any" | "all" | "least" | "greatest" | "least_index" | "greatest_index" | "first" | "nth"
-        | "index" | "sorted" | "order" | "pair_first" | "pair_second" => at == 0,
+        "count" | "sum" | "any" | "all" | "least" | "greatest" | "least_index"
+        | "greatest_index" | "first" | "nth" | "index" | "sorted" | "order" | "pair_first"
+        | "pair_second" => at == 0,
         "take" | "listed" | "pair_dr" => at < 2,
         "join" => true,
-        "dr_nearest" | "dr_second_nearest" | "dr_farthest" | "dr_second_farthest" | "nearest_index" | "second_nearest_index"
-        | "farthest_index" | "second_farthest_index" | "mass" | "pt" | "eta" | "phi" | "rapidity" | "pair_mass" | "pair_pt"
-        | "pair_eta" | "pair_phi" | "pair_rapidity" => at < 4,
+        "dr_nearest"
+        | "dr_second_nearest"
+        | "dr_farthest"
+        | "dr_second_farthest"
+        | "nearest_index"
+        | "second_nearest_index"
+        | "farthest_index"
+        | "second_farthest_index"
+        | "mass"
+        | "pt"
+        | "eta"
+        | "phi"
+        | "rapidity"
+        | "pair_mass"
+        | "pair_pt"
+        | "pair_eta"
+        | "pair_phi"
+        | "pair_rapidity" => at < 4,
         _ => false,
     }
 }
@@ -69,13 +85,17 @@ impl Checks<'_> {
             Name(name) => self.sorts.get(name).copied().unwrap_or(Unknown),
             Sample(field) => {
                 if crate::ADDED.contains(&field.as_str()) {
-                    self.said.push(format!("sample.{}", crate::array::recorded(field)));
+                    self.said
+                        .push(format!("sample.{}", crate::array::recorded(field)));
                 }
                 Unknown
             }
             Negate(inner) => {
                 match self.sort(inner) {
-                    Truth => self.said.push("- needs a number, not a true-or-false value: write if(x, -1, 0), or not x".into()),
+                    Truth => self.said.push(
+                        "- needs a number, not a true-or-false value: write if(x, -1, 0), or not x"
+                            .into(),
+                    ),
                     Text => self.said.push("- needs a number, not text".into()),
                     _ => {}
                 }
@@ -92,7 +112,9 @@ impl Checks<'_> {
             }
             Pick(values, mask) => {
                 if fixed(values) {
-                    self.said.push("A pick needs a list per event to pick from, not a fixed value".into());
+                    self.said.push(
+                        "A pick needs a list per event to pick from, not a fixed value".into(),
+                    );
                 }
                 let sort = self.sort(mask);
                 let position = match &**mask {
@@ -126,8 +148,10 @@ impl Checks<'_> {
         use Operator::*;
         match operator {
             And | Or => {
-                self.said.extend(untrue(a, &format!("{}'s left side", operator.word())));
-                self.said.extend(untrue(b, &format!("{}'s right side", operator.word())));
+                self.said
+                    .extend(untrue(a, &format!("{}'s left side", operator.word())));
+                self.said
+                    .extend(untrue(b, &format!("{}'s right side", operator.word())));
                 Truth
             }
             _ if operator.arithmetic() => {
@@ -151,9 +175,14 @@ impl Checks<'_> {
     /// What a call gives, saying every problem with its name, its number of values, and the
     /// fixed values it takes.
     fn call(&mut self, name: &str, arguments: &[Expression]) -> Sort {
-        let sorts: Vec<Sort> = arguments.iter().map(|argument| self.sort(argument)).collect();
+        let sorts: Vec<Sort> = arguments
+            .iter()
+            .map(|argument| self.sort(argument))
+            .collect();
         if self.sorts.contains_key(name) {
-            self.said.push(format!("{name} is a defined name, not a function: write it without brackets, as {name}"));
+            self.said.push(format!(
+                "{name} is a defined name, not a function: write it without brackets, as {name}"
+            ));
             return Unknown;
         }
         if let Some(why) = uncallable(name, arguments.len()) {
@@ -162,7 +191,8 @@ impl Checks<'_> {
         }
         for (at, argument) in arguments.iter().enumerate() {
             if list_at(name, at) && fixed(argument) {
-                self.said.push(format!("{name} needs a list per event, not a fixed value"));
+                self.said
+                    .push(format!("{name} needs a list per event, not a fixed value"));
             }
         }
         let literal = |at: usize| match arguments.get(at) {
@@ -176,13 +206,19 @@ impl Checks<'_> {
         };
         // A direction or a kind written bare, as a name no [define] gives, is meant as text.
         let bare = match arguments.get(1) {
-            Some(Expression::Name(word)) if !self.sorts.contains_key(word.as_str()) => Some(word.clone()),
+            Some(Expression::Name(word)) if !self.sorts.contains_key(word.as_str()) => {
+                Some(word.clone())
+            }
             _ => None,
         };
         let mut say = |said: String| self.said.push(said);
         match (name, bare) {
-            ("order" | "sorted", Some(word)) if word == "ascending" || word == "descending" => say(format!("{name} takes its direction as text, in quotes: {name}(…, '{word}')")),
-            ("stored", Some(word)) if crate::Kind::named(&word).is_ok() => say(format!("stored takes its kind as text, in quotes: stored(…, '{word}')")),
+            ("order" | "sorted", Some(word)) if word == "ascending" || word == "descending" => say(
+                format!("{name} takes its direction as text, in quotes: {name}(…, '{word}')"),
+            ),
+            ("stored", Some(word)) if crate::Kind::named(&word).is_ok() => say(format!(
+                "stored takes its kind as text, in quotes: stored(…, '{word}')"
+            )),
             _ => {}
         }
         match (name, literal(1)) {
@@ -204,7 +240,9 @@ impl Checks<'_> {
             _ => {}
         }
         match (name, literal(0)) {
-            ("branch", Some(Constant::Whole(_) | Constant::Float(_) | Constant::Truth(_))) => say("branch needs a branch name as text, as branch('Jet.pt')".into()),
+            ("branch", Some(Constant::Whole(_) | Constant::Float(_) | Constant::Truth(_))) => {
+                say("branch needs a branch name as text, as branch('Jet.pt')".into())
+            }
             ("stored", Some(_)) => say("stored needs a column, not a fixed value".into()),
             _ => {}
         }
@@ -216,8 +254,12 @@ impl Checks<'_> {
             _ => None,
         };
         match otherwise.and_then(literal) {
-            Some(Constant::Text(_)) => say(format!("{name} needs a number to use when there is none, not text")),
-            Some(Constant::Float(_) | Constant::Truth(_)) if index => say(format!("{name} needs a whole number to use when there is no member, such as -1")),
+            Some(Constant::Text(_)) => say(format!(
+                "{name} needs a number to use when there is none, not text"
+            )),
+            Some(Constant::Float(_) | Constant::Truth(_)) if index => say(format!(
+                "{name} needs a whole number to use when there is no member, such as -1"
+            )),
             _ => {}
         }
         if name == "if" {
@@ -230,7 +272,9 @@ impl Checks<'_> {
             "nth" | "take" => either(sorts[0], sorts[2]),
             "clip" => either(either(sorts[0], sorts[1]), sorts[2]),
             "if" => either(sorts[1], sorts[2]),
-            "join" => sorts[1..].iter().fold(sorts[0], |held, sort| either(held, *sort)),
+            "join" => sorts[1..]
+                .iter()
+                .fold(sorts[0], |held, sort| either(held, *sort)),
             "branch" => Unknown,
             "stored" => match literal(1) {
                 Some(Constant::Text(kind)) if kind == "b1" => Truth,

@@ -110,9 +110,7 @@ impl Held {
     fn fetch(&self, ranges: &[(u64, usize)]) -> hep_root::Result<Vec<Vec<u8>>> {
         let read = match &self.again {
             Some((waits, watch)) => {
-                let read = read_again(waits, watch, &self.shown, || {
-                    self.inner.read_ranges(ranges)
-                });
+                let read = read_again(waits, watch, &self.shown, || self.inner.read_ranges(ranges));
                 if read.is_ok() {
                     self.answered();
                 }

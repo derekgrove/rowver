@@ -19,7 +19,8 @@ const MAGIC: &[u8; 8] = b"\x89RVJ\r\n\x1a\n";
 const NAMED: u64 = 65_536;
 
 /// What a file too long to address is told.
-pub(crate) const LONG: &str = "the file is longer than this computer can address: read it on a 64-bit computer";
+pub(crate) const LONG: &str =
+    "the file is longer than this computer can address: read it on a 64-bit computer";
 
 /// Why a file that may not be written, refused with `kind` when opened to be written, is not
 /// changed in place.
@@ -34,7 +35,10 @@ fn unwritable(kind: ErrorKind) -> Option<&'static str> {
 /// Why the file at `path` met `kind` when opened to be written, and what lets it be written.
 pub fn unwritable_said(kind: ErrorKind, path: &Path) -> (&'static str, String) {
     match kind {
-        ErrorKind::ReadOnlyFilesystem => ("lies on a read-only filesystem", "mount it to be written".to_owned()),
+        ErrorKind::ReadOnlyFilesystem => (
+            "lies on a read-only filesystem",
+            "mount it to be written".to_owned(),
+        ),
         _ => ("is read-only", format!("chmod u+w {}", path.display())),
     }
 }
@@ -47,7 +51,9 @@ pub fn journal(path: &Path) -> PathBuf {
 /// The file `path` names: a symbolic link resolved, so that the file it names is the one changed.
 pub fn resolved(path: &Path) -> PathBuf {
     match std::fs::symlink_metadata(path) {
-        Ok(held) if held.file_type().is_symlink() => std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
+        Ok(held) if held.file_type().is_symlink() => {
+            std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+        }
         _ => path.to_path_buf(),
     }
 }
@@ -77,7 +83,9 @@ pub fn restore(path: impl AsRef<Path>) -> Result<Restored> {
     }
     match std::fs::metadata(path) {
         // Left by a change to a file since removed: a file made there later is not the one it is of.
-        Err(e) if e.kind() == ErrorKind::NotFound => let_go_journal(path).map(|()| Restored::NoFile),
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            let_go_journal(path).map(|()| Restored::NoFile)
+        }
         _ => Locked::take(path).map(|locked| locked.restored),
     }
 }
@@ -87,7 +95,9 @@ pub fn restore(path: impl AsRef<Path>) -> Result<Restored> {
 fn opened_to_write(path: &Path) -> std::io::Result<File> {
     #[cfg(debug_assertions)]
     if let Some(named) = std::env::var_os("RVR_READ_ONLY_DISK") {
-        if std::fs::canonicalize(&named).is_ok_and(|named| std::fs::canonicalize(path).is_ok_and(|path| path == named)) {
+        if std::fs::canonicalize(&named)
+            .is_ok_and(|named| std::fs::canonicalize(path).is_ok_and(|path| path == named))
+        {
             return Err(ErrorKind::ReadOnlyFilesystem.into());
         }
     }
@@ -118,7 +128,12 @@ pub fn probe(path: impl AsRef<Path>) -> (Option<ErrorKind>, Option<String>) {
         return (None, None);
     }
     let file = match opened_to_write(path) {
-        Err(e) => return (unwritable(e.kind()).map(|_| e.kind()), unwritable(e.kind()).map(str::to_owned)),
+        Err(e) => {
+            return (
+                unwritable(e.kind()).map(|_| e.kind()),
+                unwritable(e.kind()).map(str::to_owned),
+            )
+        }
         Ok(file) => file,
     };
     // A file this program holds locked is not asked about.
@@ -126,7 +141,13 @@ pub fn probe(path: impl AsRef<Path>) -> (Option<ErrorKind>, Option<String>) {
         return (None, None);
     };
     match file.try_lock_shared() {
-        Err(std::fs::TryLockError::Error(e)) => (None, Some(format!("its filesystem gives no lock: {}", crate::described(&e)))),
+        Err(std::fs::TryLockError::Error(e)) => (
+            None,
+            Some(format!(
+                "its filesystem gives no lock: {}",
+                crate::described(&e)
+            )),
+        ),
         _ => (None, None),
     }
 }
@@ -160,11 +181,25 @@ impl Locked {
     /// Lock the file `path` names, refused while another writer holds it, a change cut short put back.
     pub fn take(path: impl AsRef<Path>) -> Result<Self> {
         let path = resolved(path.as_ref());
-        Self::taken(&path, |write| if write { opened_to_write(&path) } else { File::open(&path) }, File::try_lock)
+        Self::taken(
+            &path,
+            |write| {
+                if write {
+                    opened_to_write(&path)
+                } else {
+                    File::open(&path)
+                }
+            },
+            File::try_lock,
+        )
     }
 
     /// `take` of the file at `path`, opened by `open` (to be written, or only read), locked by `lock`.
-    fn taken(path: &Path, open: impl Fn(bool) -> std::io::Result<File>, lock: impl Fn(&File) -> std::result::Result<(), std::fs::TryLockError>) -> Result<Self> {
+    fn taken(
+        path: &Path,
+        open: impl Fn(bool) -> std::io::Result<File>,
+        lock: impl Fn(&File) -> std::result::Result<(), std::fs::TryLockError>,
+    ) -> Result<Self> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let token = NEXT.fetch_add(1, Ordering::Relaxed);
         let taken = Self::tried(path, token, open, lock);
@@ -175,7 +210,12 @@ impl Locked {
     }
 
     /// `taken`, the file claimed for the lock `token` among those this program holds.
-    fn tried(path: &Path, token: u64, open: impl Fn(bool) -> std::io::Result<File>, lock: impl Fn(&File) -> std::result::Result<(), std::fs::TryLockError>) -> Result<Self> {
+    fn tried(
+        path: &Path,
+        token: u64,
+        open: impl Fn(bool) -> std::io::Result<File>,
+        lock: impl Fn(&File) -> std::result::Result<(), std::fs::TryLockError>,
+    ) -> Result<Self> {
         // A lock held for a moment (rvr status asking), or a file replaced as it was opened (a new
         // one moved over it), is asked again; the last try says why it gave up.
         let mut busy = false;
@@ -185,10 +225,13 @@ impl Locked {
             if let Ok(there) = std::fs::metadata(path) {
                 claim(token, ids(&there), path)?;
             }
-            let opened = open(true).map(|file| (file, None)).or_else(|e| match unwritable(e.kind()) {
-                Some(_) => open(false).map(|file| (file, Some(e.kind()))),
-                None => Err(e),
-            });
+            let opened =
+                open(true)
+                    .map(|file| (file, None))
+                    .or_else(|e| match unwritable(e.kind()) {
+                        Some(_) => open(false).map(|file| (file, Some(e.kind()))),
+                        None => Err(e),
+                    });
             let (file, unwritable) = opened.map_err(|e| crate::about(path, e.into()))?;
             let file = claimed(token, file, path)?;
             let lockless = match lock(&file) {
@@ -259,8 +302,18 @@ impl Locked {
     /// The file read through the descriptor that holds its lock, as `Reader::inspect` reads one.
     pub fn inspect(&self) -> Result<(crate::rvr::Reader, Result<()>)> {
         let (size, start, tail) = self.tail()?;
-        let (mut reader, checked) = crate::rvr::Reader::locked(&self.path, self.file.clone(), &tail[..tail.len() - 12], start)?;
-        reader.seen = Some((size, start, tail, (self.token, self.changes.load(Ordering::Relaxed))));
+        let (mut reader, checked) = crate::rvr::Reader::locked(
+            &self.path,
+            self.file.clone(),
+            &tail[..tail.len() - 12],
+            start,
+        )?;
+        reader.seen = Some((
+            size,
+            start,
+            tail,
+            (self.token, self.changes.load(Ordering::Relaxed)),
+        ));
         Ok((reader, checked))
     }
 
@@ -309,7 +362,10 @@ impl Locked {
     /// and the tail, its frame checked.
     pub(crate) fn tail(&self) -> Result<(u64, u64, Vec<u8>)> {
         if self.moved.load(Ordering::Relaxed) {
-            return Err(invalid(format!("{} was written anew and moved over since it was locked: lock it again", self.path.display())));
+            return Err(invalid(format!(
+                "{} was written anew and moved over since it was locked: lock it again",
+                self.path.display()
+            )));
         }
         let size = usize::try_from(self.file.metadata()?.len()).map_err(|_| invalid(LONG))?;
         let start = crate::rvr::frame(&self.file, size)?;
@@ -384,7 +440,9 @@ impl From<Arc<File>> for Handle {
 impl std::ops::Deref for Handle {
     type Target = Arc<File>;
     fn deref(&self) -> &Arc<File> {
-        self.0.as_ref().expect("a handle is let go only as it is dropped")
+        self.0
+            .as_ref()
+            .expect("a handle is let go only as it is dropped")
     }
 }
 
@@ -402,7 +460,11 @@ fn claim(token: u64, id: (u64, u64), path: &Path) -> Result<()> {
     }
     let mut held = held();
     let here = std::thread::current().id();
-    if let Some(thread) = held.iter().find(|(held, at, ..)| *held != token && *at == id).map(|(_, _, thread, _)| *thread) {
+    if let Some(thread) = held
+        .iter()
+        .find(|(held, at, ..)| *held != token && *at == id)
+        .map(|(_, _, thread, _)| *thread)
+    {
         drop(held);
         let shown = path.display();
         if thread != here {
@@ -452,9 +514,14 @@ pub(crate) fn unheld(file: File, path: &Path) -> Result<File> {
 
 /// Refuse `path` when it no longer names `file`, the file opened there: another program moved a file over it.
 fn unreplaced(file: &File, path: &Path) -> Result<()> {
-    match std::fs::metadata(path).ok().map(|m| ids(&m)) == Some(identity(file).map_err(|e| crate::about(path, e.into()))?) {
+    match std::fs::metadata(path).ok().map(|m| ids(&m))
+        == Some(identity(file).map_err(|e| crate::about(path, e.into()))?)
+    {
         true => Ok(()),
-        false => Err(invalid(format!("{} was replaced by another program while rvr held it: run the command again", path.display()))),
+        false => Err(invalid(format!(
+            "{} was replaced by another program while rvr held it: run the command again",
+            path.display()
+        ))),
     }
 }
 
@@ -464,7 +531,12 @@ fn unreplaced(file: &File, path: &Path) -> Result<()> {
 fn moved_over(old: &File, staged: &Path, path: &Path) -> Result<()> {
     let failed = |e: std::io::Error| crate::about(path, e.into());
     unreplaced(old, path)?;
-    crate::write::moved_over(staged, path, Some(old.metadata().map_err(failed)?.permissions())).map_err(failed)?;
+    crate::write::moved_over(
+        staged,
+        path,
+        Some(old.metadata().map_err(failed)?.permissions()),
+    )
+    .map_err(failed)?;
     synced(path);
     Ok(())
 }
@@ -497,7 +569,9 @@ fn opens(header: &Value, path: &Path, advice: &str, given: Option<&str>) -> Resu
         _ => None,
     };
     match crate::rvr::checked_header(&text) {
-        Err(e) if given.is_some() && under(&e).as_deref() == given => Err(crate::about(path, crate::rvr::to_write(e))),
+        Err(e) if given.is_some() && under(&e).as_deref() == given => {
+            Err(crate::about(path, crate::rvr::to_write(e)))
+        }
         checked => checked.map(drop).map_err(|e| crate::about(path, e)),
     }
 }
@@ -527,14 +601,22 @@ pub fn opens_without(text: &[u8], keys: &[&str]) -> bool {
 
 /// Whether the header `text`, which does not open, would with its tool keys taken out: only they keep it from opening (docs/FORMAT.md §11).
 pub fn shut_by_tools(text: &[u8]) -> bool {
-    let names: Vec<String> = crate::rvr::tool_texts(text).map(|keys| keys.into_iter().map(|(name, _)| name).collect()).unwrap_or_default();
-    !names.is_empty() && crate::rvr::checked_header(text).is_err() && opens_without(text, &names.iter().map(String::as_str).collect::<Vec<_>>())
+    let names: Vec<String> = crate::rvr::tool_texts(text)
+        .map(|keys| keys.into_iter().map(|(name, _)| name).collect())
+        .unwrap_or_default();
+    !names.is_empty()
+        && crate::rvr::checked_header(text).is_err()
+        && opens_without(text, &names.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
 /// Drop the tool keys `keys` of the file `locked` in one change: each key's copies, as bytes.
 pub fn drop_tool(locked: &Locked, keys: &[&str]) -> Result<Vec<Vec<Vec<u8>>>> {
     let change = Change::dropping(locked, keys)?;
-    let dropped = change.dropped().into_iter().map(|copies| copies.into_iter().map(<[u8]>::to_vec).collect()).collect();
+    let dropped = change
+        .dropped()
+        .into_iter()
+        .map(|copies| copies.into_iter().map(<[u8]>::to_vec).collect())
+        .collect();
     let header = change.header().clone();
     change.finish(&header)?;
     Ok(dropped)
@@ -553,19 +635,56 @@ type Without = (Vec<u8>, Cuts, usize);
 // serde_json's 128) is dropped all the same.
 fn without<'k>(text: &[u8], keys: &[&'k str]) -> std::result::Result<Without, Option<&'k str>> {
     let members = crate::json::members(text).ok_or(None)?;
-    let names: Vec<String> = members.iter().map(|m| crate::json::name(&text[m.name.clone()])).collect();
-    let held = |key: &str| members.iter().zip(&names).filter(|(_, name)| *name == key).map(|(m, _)| m.value.clone()).collect::<Vec<_>>();
-    let cuts: Cuts = keys.iter().map(|&key| Some(held(key)).filter(|cut| !cut.is_empty()).ok_or(Some(key))).collect::<std::result::Result<_, _>>()?;
-    let at = keys.first().and_then(|key| names.iter().position(|name| name == key)).unwrap_or_default();
-    let named: Vec<bool> = names.iter().map(|name| keys.contains(&name.as_str())).collect();
+    let names: Vec<String> = members
+        .iter()
+        .map(|m| crate::json::name(&text[m.name.clone()]))
+        .collect();
+    let held = |key: &str| {
+        members
+            .iter()
+            .zip(&names)
+            .filter(|(_, name)| *name == key)
+            .map(|(m, _)| m.value.clone())
+            .collect::<Vec<_>>()
+    };
+    let cuts: Cuts = keys
+        .iter()
+        .map(|&key| {
+            Some(held(key))
+                .filter(|cut| !cut.is_empty())
+                .ok_or(Some(key))
+        })
+        .collect::<std::result::Result<_, _>>()?;
+    let at = keys
+        .first()
+        .and_then(|key| names.iter().position(|name| name == key))
+        .unwrap_or_default();
+    let named: Vec<bool> = names
+        .iter()
+        .map(|name| keys.contains(&name.as_str()))
+        .collect();
     let mut out = text.to_vec();
     for (m, _) in members.iter().zip(&named).filter(|(_, named)| **named) {
-        out[m.name.start..m.value.end].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
+        out[m.name.start..m.value.end]
+            .iter_mut()
+            .filter(|b| **b != b'\n')
+            .for_each(|b| *b = b' ');
     }
     // Every comma goes, and one comes back after each member kept but the last.
-    members.iter().filter_map(|m| m.comma).for_each(|at| out[at] = b' ');
-    let kept: Vec<&crate::json::Member> = members.iter().zip(&named).filter(|(_, named)| !**named).map(|(m, _)| m).collect();
-    kept.iter().take(kept.len().saturating_sub(1)).filter_map(|m| m.comma).for_each(|at| out[at] = b',');
+    members
+        .iter()
+        .filter_map(|m| m.comma)
+        .for_each(|at| out[at] = b' ');
+    let kept: Vec<&crate::json::Member> = members
+        .iter()
+        .zip(&named)
+        .filter(|(_, named)| !**named)
+        .map(|(m, _)| m)
+        .collect();
+    kept.iter()
+        .take(kept.len().saturating_sub(1))
+        .filter_map(|m| m.comma)
+        .for_each(|at| out[at] = b',');
     Ok((out, cuts, at))
 }
 
@@ -607,9 +726,14 @@ impl<'a> Change<'a> {
         let shown = locked.path.display();
         let change = Self::begun(locked, |text| match without(text, keys) {
             Ok((rest, cuts, _)) => Ok((crate::json::strict(&rest)?, cuts)),
-            Err(Some(missing)) => Err(invalid(format!("{shown} has no tool key {missing}: rvr tool {} lists its tool keys", crate::shell(&shown.to_string())))),
+            Err(Some(missing)) => Err(invalid(format!(
+                "{shown} has no tool key {missing}: rvr tool {} lists its tool keys",
+                crate::shell(&shown.to_string())
+            ))),
             // A header that is not one object is refused as it is.
-            Err(None) => Err(crate::rvr::checked_header(text).err().unwrap_or_else(|| invalid(format!("{shown}'s header is not one JSON object")))),
+            Err(None) => Err(crate::rvr::checked_header(text)
+                .err()
+                .unwrap_or_else(|| invalid(format!("{shown}'s header is not one JSON object")))),
         })?;
         opens(&change.header, &locked.path, crate::write::FEWER, None)?;
         Ok(change)
@@ -635,23 +759,39 @@ impl<'a> Change<'a> {
             }
             _ => header[key] = value,
         }
-        opens(&header, &locked.path, "give the tool key less to hold", Some(key))?;
+        opens(
+            &header,
+            &locked.path,
+            "give the tool key less to hold",
+            Some(key),
+        )?;
         Ok((change, header))
     }
 
     /// `begin` from what `reader` (of `locked.inspect`) read, or read again if the file changed since.
     pub fn of(locked: &'a Locked, reader: &crate::rvr::Reader) -> Result<Self> {
         match &reader.seen {
-            Some((size, start, tail, at)) if *at == (locked.token, locked.changes.load(Ordering::Relaxed)) && !locked.moved.load(Ordering::Relaxed) => {
+            Some((size, start, tail, at))
+                if *at == (locked.token, locked.changes.load(Ordering::Relaxed))
+                    && !locked.moved.load(Ordering::Relaxed) =>
+            {
                 stop(1);
-                Self::from(locked, (*size, *start, tail.clone()), reader.header().clone(), Vec::new())
+                Self::from(
+                    locked,
+                    (*size, *start, tail.clone()),
+                    reader.header().clone(),
+                    Vec::new(),
+                )
             }
             _ => Self::begin(locked),
         }
     }
 
     /// `begin`, the header read from its text by `read`: its value, and where the objects of the tool keys it drops lie.
-    fn begun(locked: &'a Locked, read: impl FnOnce(&[u8]) -> Result<(Value, Cuts)>) -> Result<Self> {
+    fn begun(
+        locked: &'a Locked,
+        read: impl FnOnce(&[u8]) -> Result<(Value, Cuts)>,
+    ) -> Result<Self> {
         let path = &locked.path;
         stop(1);
         let (size, start, tail) = locked.tail().map_err(|e| crate::about(path, e))?;
@@ -661,9 +801,27 @@ impl<'a> Change<'a> {
 
     /// The change of the file `locked` from its tail (its length, where the tail starts, and the
     /// tail) and the header it holds, parsed; `cut`, the objects of the tool keys it drops.
-    fn from(locked: &'a Locked, (size, start, tail): (u64, u64, Vec<u8>), header: Value, cut: Cuts) -> Result<Self> {
-        let end = crate::rvr::placed(&header, start as usize - 8).map_err(|e| crate::about(&locked.path, e))?;
-        Ok(Self { locked, header, size, start, tail, cut, end: start - 8, empty: start == 8 && end > 0, staged: None, prepared: false, finished: false })
+    fn from(
+        locked: &'a Locked,
+        (size, start, tail): (u64, u64, Vec<u8>),
+        header: Value,
+        cut: Cuts,
+    ) -> Result<Self> {
+        let end = crate::rvr::placed(&header, start as usize - 8)
+            .map_err(|e| crate::about(&locked.path, e))?;
+        Ok(Self {
+            locked,
+            header,
+            size,
+            start,
+            tail,
+            cut,
+            end: start - 8,
+            empty: start == 8 && end > 0,
+            staged: None,
+            prepared: false,
+            finished: false,
+        })
     }
 
     /// The file's header as it was when the change began, without the tool key it drops or sets.
@@ -678,7 +836,10 @@ impl<'a> Change<'a> {
 
     /// The bytes of each tool key the change takes out, every copy, as the header held them.
     pub fn dropped(&self) -> Vec<Vec<&[u8]>> {
-        self.cut.iter().map(|copies| copies.iter().map(|cut| &self.text()[cut.clone()]).collect()).collect()
+        self.cut
+            .iter()
+            .map(|copies| copies.iter().map(|cut| &self.text()[cut.clone()]).collect())
+            .collect()
     }
 
     /// The file written: the file itself, or the new one it is written anew in.
@@ -706,10 +867,21 @@ impl<'a> Change<'a> {
             self.prepare(u64::MAX, &[])?;
         }
         // A failed read or write of the file written is told against it: the new one when written anew.
-        let written = self.staged.as_ref().map_or_else(|| path.clone(), |(at, _)| at.clone());
+        let written = self
+            .staged
+            .as_ref()
+            .map_or_else(|| path.clone(), |(at, _)| at.clone());
         // Unjournaled, the file is not handed over at all: what its columns would take is only counted.
         let into = self.prepared.then(|| self.file().clone());
-        let (records, end) = crate::write::added(into, self.end, &self.header["data"], columns, workers, &written).map_err(|e| crate::about(path, e))?;
+        let (records, end) = crate::write::added(
+            into,
+            self.end,
+            &self.header["data"],
+            columns,
+            workers,
+            &written,
+        )
+        .map_err(|e| crate::about(path, e))?;
         if end != self.end && !self.prepared {
             return Err(invalid(format!("{}: a bug in rowver: columns of no rows would take bytes, and the change is not journaled to write them, so the file is as it was; please report it", path.display())));
         }
@@ -719,8 +891,15 @@ impl<'a> Change<'a> {
 
     /// The records of `derived` under `header`, from the arrays packed so far (one the file has is kept).
     pub fn derived(&self, header: &Value, derived: &[(String, String)]) -> Result<Vec<Value>> {
-        let before = self.header["derived"]["columns"].as_array().map_or(&[][..], Vec::as_slice);
-        let file = crate::rvr::Reader::laid(&self.locked.path, self.file().clone(), self.end, header.clone())?;
+        let before = self.header["derived"]["columns"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice);
+        let file = crate::rvr::Reader::laid(
+            &self.locked.path,
+            self.file().clone(),
+            self.end,
+            header.clone(),
+        )?;
         crate::rvr::derived::records(&file, derived, before)
     }
 
@@ -732,16 +911,33 @@ impl<'a> Change<'a> {
         let bytes = opening(header, crate::write::FEWER).map_err(|e| invalid(format!("{shown} is as it was: the header the change would write would not open ({e}), so it was not written")))?;
         // Its records lay out exactly the arrays written (an empty file's, what its records did), or
         // the change is a bug: refused, the file put back.
-        let bug = |why: String| invalid(format!("{}: a bug in rowver: the header it was about to write lays out other arrays than the file holds ({why}), so the file is put back as it was; please report it", path.display()));
+        let bug = |why: String| {
+            invalid(format!("{}: a bug in rowver: the header it was about to write lays out other arrays than the file holds ({why}), so the file is put back as it was; please report it", path.display()))
+        };
         let (end, spans) = crate::rvr::spans(header).map_err(|e| bug(e.to_string()))?;
         match self.empty {
-            true if spans != crate::rvr::spans(&self.header).map_err(|e| bug(e.to_string()))?.1 => return Err(bug("an empty file's records lay out the arrays they did".into())),
-            false if end != self.end => return Err(bug(format!("its arrays end at byte {end} after byte 8, and those written at {}", self.end))),
+            true if spans
+                != crate::rvr::spans(&self.header)
+                    .map_err(|e| bug(e.to_string()))?
+                    .1 =>
+            {
+                return Err(bug(
+                    "an empty file's records lay out the arrays they did".into()
+                ))
+            }
+            false if end != self.end => {
+                return Err(bug(format!(
+                    "its arrays end at byte {end} after byte 8, and those written at {}",
+                    self.end
+                )))
+            }
             _ => {}
         }
         self.prepare(8 + self.end + bytes.len() as u64, &bytes)?;
         let (file, at) = (self.file(), 8 + self.end);
-        let written = write_at(file, &bytes, at).and_then(|()| file.set_len(at + bytes.len() as u64)).and_then(|()| file.sync_all());
+        let written = write_at(file, &bytes, at)
+            .and_then(|()| file.set_len(at + bytes.len() as u64))
+            .and_then(|()| file.sync_all());
         written.map_err(|e| crate::about(&path, e.into()))?;
         stop(3);
         match &self.staged {
@@ -775,7 +971,9 @@ impl<'a> Change<'a> {
             Some(_) => {
                 let path = &self.locked.path;
                 let (at, mut out) = staged(self.locked, ".anew")?;
-                if let Err(e) = crate::write::copied(&self.locked.file, 0, self.start, path, &mut out, &at) {
+                if let Err(e) =
+                    crate::write::copied(&self.locked.file, 0, self.start, path, &mut out, &at)
+                {
                     let _ = std::fs::remove_file(&at);
                     return Err(e);
                 }
@@ -793,7 +991,10 @@ impl<'a> Change<'a> {
         for number in [self.size, self.start, after] {
             kept.extend(number.to_le_bytes());
         }
-        kept.extend(named(&self.locked.file, self.start).map_err(|e| crate::about(&self.locked.path, e.into()))?);
+        kept.extend(
+            named(&self.locked.file, self.start)
+                .map_err(|e| crate::about(&self.locked.path, e.into()))?,
+        );
         kept.extend(&self.tail);
         kept.extend(new);
         let sum = Sha256::digest(&kept);
@@ -801,15 +1002,23 @@ impl<'a> Change<'a> {
         let at = journal(&self.locked.path);
         // A file in the way at the journal's place is said, not the folder.
         let there = at.symlink_metadata().is_ok();
-        let made = private(File::options().write(true).create(true).truncate(true), self.locked.file.metadata().ok()).open(&at);
+        let made = private(
+            File::options().write(true).create(true).truncate(true),
+            self.locked.file.metadata().ok(),
+        )
+        .open(&at);
         let ours = made.is_ok();
-        let written = made.and_then(|mut out| std::io::Write::write_all(&mut out, &kept).and_then(|()| out.sync_all()));
+        let written = made.and_then(|mut out| {
+            std::io::Write::write_all(&mut out, &kept).and_then(|()| out.sync_all())
+        });
         if let Err(e) = written {
             if ours {
                 let _ = std::fs::remove_file(&at);
             }
             return Err(match e.kind() {
-                ErrorKind::PermissionDenied if !there => invalid(shut(&self.locked.path, "the journal of the change")),
+                ErrorKind::PermissionDenied if !there => {
+                    invalid(shut(&self.locked.path, "the journal of the change"))
+                }
                 _ => crate::about(&at, e.into()),
             });
         }
@@ -831,7 +1040,10 @@ pub(crate) fn staged(locked: &Locked, suffix: &str) -> Result<(PathBuf, File)> {
 
 /// Why the file at `path` cannot be changed when its folder may not be written, where `what` goes first.
 fn shut(path: &Path, what: &str) -> String {
-    let folder = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let folder = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     format!("{} cannot be changed: its folder may not be written, and {what} is written there first: give yourself the right to write it (chmod u+w {}, if it is yours), or copy the file to a folder you may write, and change the copy", path.display(), folder.display())
 }
 
@@ -848,9 +1060,17 @@ impl Drop for Change<'_> {
 }
 
 /// `options` making a file no wider open than the file `like` (only its owner's without one): a staged file or a journal holds a copy of it.
-fn private(options: &mut std::fs::OpenOptions, like: Option<std::fs::Metadata>) -> &mut std::fs::OpenOptions {
+fn private(
+    options: &mut std::fs::OpenOptions,
+    like: Option<std::fs::Metadata>,
+) -> &mut std::fs::OpenOptions {
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(options, like.map_or(0, |m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o666) | 0o600);
+    std::os::unix::fs::OpenOptionsExt::mode(
+        options,
+        like.map_or(0, |m| {
+            std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o666
+        }) | 0o600,
+    );
     #[cfg(not(unix))]
     let _ = like;
     options
@@ -861,10 +1081,26 @@ static STAGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
 
 /// A new file beside `path` that no other writer shares, `FILE{suffix}-PID-N`, and its path; a name
 /// taken (left by a crash of a program of this process ID) is passed over, never written over.
-pub(crate) fn staging(path: &Path, suffix: &str, like: Option<std::fs::Metadata>) -> std::io::Result<(PathBuf, File)> {
+pub(crate) fn staging(
+    path: &Path,
+    suffix: &str,
+    like: Option<std::fs::Metadata>,
+) -> std::io::Result<(PathBuf, File)> {
     loop {
-        let at = crate::write::beside(path, &format!("{suffix}-{}-{}", std::process::id(), STAGED.fetch_add(1, Ordering::Relaxed)));
-        match private(File::options().read(true).write(true).create_new(true), like.clone()).open(&at) {
+        let at = crate::write::beside(
+            path,
+            &format!(
+                "{suffix}-{}-{}",
+                std::process::id(),
+                STAGED.fetch_add(1, Ordering::Relaxed)
+            ),
+        );
+        match private(
+            File::options().read(true).write(true).create_new(true),
+            like.clone(),
+        )
+        .open(&at)
+        {
             Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(crate::tagged(&at, e)),
             Ok(file) => return Ok((at, file)),
@@ -878,7 +1114,12 @@ pub(crate) fn staging(path: &Path, suffix: &str, like: Option<std::fs::Metadata>
 /// go once the file is synced, the file untouched; one of another file is refused. A change of
 /// this program's that did not finish (`unfinished`) is put back even when its new tail is
 /// written, as it may not be kept. What became of it.
-fn put_back(file: &File, path: &Path, can: impl Fn() -> Result<()>, unfinished: bool) -> Result<Restored> {
+fn put_back(
+    file: &File,
+    path: &Path,
+    can: impl Fn() -> Result<()>,
+    unfinished: bool,
+) -> Result<Restored> {
     let journaled = journal(path);
     let kept = match std::fs::read(&journaled) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Restored::Nothing),
@@ -895,7 +1136,9 @@ fn put_back(file: &File, path: &Path, can: impl Fn() -> Result<()>, unfinished: 
             }
             if restored == Restored::PutBack {
                 let (_, size, start, _, tail, _) = journaled;
-                let put = write_at(file, tail, start).and_then(|()| file.set_len(size)).and_then(|()| file.sync_all());
+                let put = write_at(file, tail, start)
+                    .and_then(|()| file.set_len(size))
+                    .and_then(|()| file.sync_all());
                 put.map_err(|e| crate::about(path, e.into()))?;
             }
             restored
@@ -909,13 +1152,23 @@ fn put_back(file: &File, path: &Path, can: impl Fn() -> Result<()>, unfinished: 
 
 /// Whether the file at `path` (`file`) is the one `journaled` is of, a change to it cut short, to
 /// be put back once `can` lets it be written (`PutBack`), or finished (`Finished`); else refused.
-fn settled(file: &File, path: &Path, (name, size, start, after, tail, new): &Kept, can: impl Fn() -> Result<()>) -> Result<Restored> {
+fn settled(
+    file: &File,
+    path: &Path,
+    (name, size, start, after, tail, new): &Kept,
+    can: impl Fn() -> Result<()>,
+) -> Result<Restored> {
     let (shown, beside) = (path.display(), journal(path));
-    let refused = || invalid(format!("{} is not of this {shown} ({shown} was replaced since a change to it was cut short): remove {} if {shown} is the file you want", beside.display(), beside.display()));
+    let refused = || {
+        invalid(format!("{} is not of this {shown} ({shown} was replaced since a change to it was cut short): remove {} if {shown} is the file you want", beside.display(), beside.display()))
+    };
     let length = file.metadata()?.len();
     let Some(new) = new else {
         // A change that adds arrays is named by the bytes before its tail (its length after, 2^64 - 1, bounds nothing).
-        if length < *start || length > (*size).max(*after) || named(file, *start)?.as_slice() != *name {
+        if length < *start
+            || length > (*size).max(*after)
+            || named(file, *start)?.as_slice() != *name
+        {
             return Err(refused());
         }
         can()?;
@@ -924,7 +1177,10 @@ fn settled(file: &File, path: &Path, (name, size, start, after, tail, new): &Kep
     // A change that writes only a header leaves the file between its two lengths, each byte of its
     // tail the old tail's, the new one's, or 0 past the shorter length (a page a crash did not keep,
     // as the change or its putting back grew the file).
-    if length < (*size).min(*after) || length > (*size).max(*after) || named(file, *start)?.as_slice() != *name {
+    if length < (*size).min(*after)
+        || length > (*size).max(*after)
+        || named(file, *start)?.as_slice() != *name
+    {
         return Err(refused());
     }
     let mut now = vec![0; (length - start) as usize];
@@ -932,7 +1188,11 @@ fn settled(file: &File, path: &Path, (name, size, start, after, tail, new): &Kep
     if now == *new {
         return Ok(Restored::Finished);
     }
-    let torn = now.iter().enumerate().all(|(at, byte)| tail.get(at) == Some(byte) || new.get(at) == Some(byte) || (*byte == 0 && start + at as u64 >= (*size).min(*after)));
+    let torn = now.iter().enumerate().all(|(at, byte)| {
+        tail.get(at) == Some(byte)
+            || new.get(at) == Some(byte)
+            || (*byte == 0 && start + at as u64 >= (*size).min(*after))
+    });
     if !torn {
         return Err(refused());
     }
@@ -953,7 +1213,13 @@ fn parsed(kept: &[u8]) -> Option<Kept<'_>> {
         return None;
     }
     let number = |at: usize| u64::from_le_bytes(body[at..at + 8].try_into().unwrap_or_default());
-    let (size, start, after, name, tails) = (number(8), number(16), number(24), &body[32..64], &body[64..]);
+    let (size, start, after, name, tails) = (
+        number(8),
+        number(16),
+        number(24),
+        &body[32..64],
+        &body[64..],
+    );
     let old = usize::try_from(size.checked_sub(start)?).ok()?;
     let new = match after {
         u64::MAX => 0,
@@ -963,7 +1229,14 @@ fn parsed(kept: &[u8]) -> Option<Kept<'_>> {
         return None;
     }
     let (tail, new) = tails.split_at(old);
-    Some((name, size, start, after, tail, (after != u64::MAX).then_some(new)))
+    Some((
+        name,
+        size,
+        start,
+        after,
+        tail,
+        (after != u64::MAX).then_some(new),
+    ))
 }
 
 /// The SHA-256 of the up to 65,536 bytes of `file` before `start`, its tail's first byte: bytes a
@@ -983,7 +1256,10 @@ fn identity(file: &File) -> std::io::Result<(u64, u64)> {
 /// The device and inode a file's metadata names (none where the system has no inodes).
 pub(crate) fn ids(held: &std::fs::Metadata) -> (u64, u64) {
     #[cfg(unix)]
-    return (std::os::unix::fs::MetadataExt::dev(held), std::os::unix::fs::MetadataExt::ino(held));
+    return (
+        std::os::unix::fs::MetadataExt::dev(held),
+        std::os::unix::fs::MetadataExt::ino(held),
+    );
     #[cfg(not(unix))]
     {
         let _ = held;
@@ -993,7 +1269,10 @@ pub(crate) fn ids(held: &std::fs::Metadata) -> (u64, u64) {
 
 /// Make the entries of the folder `path` is in durable, as far as the system lets it.
 pub(crate) fn synced(path: &Path) {
-    let folder = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let folder = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     let _ = File::open(folder).and_then(|f| f.sync_all());
 }
 
@@ -1001,7 +1280,11 @@ pub(crate) fn synced(path: &Path) {
 /// leaving what a change cut short there leaves (docs/SPEC.md §8.12).
 fn stop(step: u8) {
     #[cfg(debug_assertions)]
-    if std::env::var("RVR_STOP_CHANGE").ok().and_then(|n| n.parse().ok()) == Some(step) {
+    if std::env::var("RVR_STOP_CHANGE")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        == Some(step)
+    {
         eprintln!("Stopped after step {step} of the change, as RVR_STOP_CHANGE asks.");
         std::process::exit(99);
     }
@@ -1015,21 +1298,34 @@ mod tests {
     // SPEC 8.12
     #[test]
     #[cfg(unix)]
-    fn a_reader_let_go_while_this_program_holds_its_file_locked_keeps_its_descriptor_open_until_the_lock_lets_go() {
+    fn a_reader_let_go_while_this_program_holds_its_file_locked_keeps_its_descriptor_open_until_the_lock_lets_go(
+    ) {
         use std::os::fd::AsRawFd;
-        let fixture = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/conformance/rvr/valid/fixture.rvr")).unwrap();
-        let path = std::env::temp_dir().join(format!("rowver-unit-{}-kept.rvr", std::process::id()));
+        let fixture = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/conformance/rvr/valid/fixture.rvr"
+        ))
+        .unwrap();
+        let path =
+            std::env::temp_dir().join(format!("rowver-unit-{}-kept.rvr", std::process::id()));
         std::fs::write(&path, &fixture).unwrap();
         let id = super::ids(&std::fs::metadata(&path).unwrap());
         // The inode the descriptor `fd` names now, as the system says (none once it is closed).
-        let names = |fd: i32| std::fs::metadata(format!("/dev/fd/{fd}")).ok().map(|m| std::os::unix::fs::MetadataExt::ino(&m));
+        let names = |fd: i32| {
+            std::fs::metadata(format!("/dev/fd/{fd}"))
+                .ok()
+                .map(|m| std::os::unix::fs::MetadataExt::ino(&m))
+        };
         // A reader opened first (a rowver.File in Python), then the file locked, then the reader let go by another thread.
         let reader = crate::rvr::Reader::open(&path).unwrap();
         let locked = Locked::take(&path).unwrap();
         std::thread::spawn(move || drop(reader)).join().unwrap();
         let fd = {
             let held = super::held();
-            let (.., kept) = held.iter().find(|(token, ..)| *token == locked.token).unwrap();
+            let (.., kept) = held
+                .iter()
+                .find(|(token, ..)| *token == locked.token)
+                .unwrap();
             assert_eq!(kept.len(), 1, "the reader's descriptor, kept by the lock");
             kept[0].as_raw_fd()
         };
@@ -1045,23 +1341,64 @@ mod tests {
 
     /// The fixture written at a path of its own, and the lock of a filesystem that gives none.
     fn lockless(name: &str) -> (std::path::PathBuf, Locked) {
-        let fixture = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/conformance/rvr/valid/fixture.rvr")).unwrap();
-        let path = std::env::temp_dir().join(format!("rowver-unit-{}-{name}.rvr", std::process::id()));
+        let fixture = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/conformance/rvr/valid/fixture.rvr"
+        ))
+        .unwrap();
+        let path =
+            std::env::temp_dir().join(format!("rowver-unit-{}-{name}.rvr", std::process::id()));
         std::fs::write(&path, &fixture).unwrap();
-        let file = std::fs::File::options().read(true).write(true).open(&path).unwrap();
-        (path.clone(), Locked { path, file: super::Handle::new(file), lockless: Some("Operation not supported".into()), unwritable: None, restored: Restored::Nothing, moved: false.into(), changes: 0.into(), token: 0 })
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        (
+            path.clone(),
+            Locked {
+                path,
+                file: super::Handle::new(file),
+                lockless: Some("Operation not supported".into()),
+                unwritable: None,
+                restored: Restored::Nothing,
+                moved: false.into(),
+                changes: 0.into(),
+                token: 0,
+            },
+        )
     }
 
     /// Another lock of the file at `path` on a filesystem that gives none, as another program's.
     fn lockless_at(path: &std::path::Path) -> Locked {
-        let file = std::fs::File::options().read(true).write(true).open(path).unwrap();
-        Locked { path: path.to_path_buf(), file: super::Handle::new(file), lockless: Some("Operation not supported".into()), unwritable: None, restored: Restored::Nothing, moved: false.into(), changes: 0.into(), token: 0 }
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        Locked {
+            path: path.to_path_buf(),
+            file: super::Handle::new(file),
+            lockless: Some("Operation not supported".into()),
+            unwritable: None,
+            restored: Restored::Nothing,
+            moved: false.into(),
+            changes: 0.into(),
+            token: 0,
+        }
     }
 
     /// The files staged beside the file at `path`: `FILE.anew-…` and `FILE.empty-…`.
     fn staged_beside(path: &std::path::Path) -> Vec<String> {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        let mut staged: Vec<String> = std::fs::read_dir(path.parent().unwrap()).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with(&format!("{name}.anew-")) || n.starts_with(&format!("{name}.empty-"))).collect();
+        let mut staged: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| {
+                n.starts_with(&format!("{name}.anew-")) || n.starts_with(&format!("{name}.empty-"))
+            })
+            .collect();
         staged.sort();
         staged
     }
@@ -1071,7 +1408,10 @@ mod tests {
     fn two_writers_without_locks_stage_apart_and_the_second_to_move_over_is_refused() {
         let (path, first) = lockless("two-writers");
         let second = lockless_at(&path);
-        let (mut one, mut two) = (Change::begin(&first).unwrap(), Change::begin(&second).unwrap());
+        let (mut one, mut two) = (
+            Change::begin(&first).unwrap(),
+            Change::begin(&second).unwrap(),
+        );
         // Each begun at once, its magic and arrays copied into a new file of its own beside the file.
         one.prepare(u64::MAX, &[]).unwrap();
         two.prepare(u64::MAX, &[]).unwrap();
@@ -1084,10 +1424,20 @@ mod tests {
         let (first_header, second_header) = (with(&one, "one"), with(&two, "two"));
         one.finish(&first_header).unwrap();
         let said = two.finish(&second_header).unwrap_err().to_string();
-        assert!(said.contains(&format!("{} was replaced by another program while rvr held it: run the command again", path.display())), "{said}");
+        assert!(
+            said.contains(&format!(
+                "{} was replaced by another program while rvr held it: run the command again",
+                path.display()
+            )),
+            "{said}"
+        );
         crate::rvr::validate_file(&path).unwrap();
         let header = crate::rvr::Reader::open(&path).unwrap().header().clone();
-        assert_eq!((header.get("one").is_some(), header.get("two").is_some()), (true, false), "the first change in it, not the second");
+        assert_eq!(
+            (header.get("one").is_some(), header.get("two").is_some()),
+            (true, false),
+            "the first change in it, not the second"
+        );
         assert_eq!(staged_beside(&path), Vec::<String>::new());
         std::fs::remove_file(&path).unwrap();
     }
@@ -1098,16 +1448,25 @@ mod tests {
         let (path, locked) = lockless("left-by-a-crash");
         // Left by a crash of a program whose process ID this one has now, under the next names it would take.
         let next = super::STAGED.load(std::sync::atomic::Ordering::Relaxed);
-        let left: Vec<std::path::PathBuf> = [".anew", ".empty"].iter().flat_map(|suffix| (next..next + 3).map(move |n| (suffix, n))).map(|(suffix, n)| crate::write::beside(&path, &format!("{suffix}-{}-{n}", std::process::id()))).collect();
+        let left: Vec<std::path::PathBuf> = [".anew", ".empty"]
+            .iter()
+            .flat_map(|suffix| (next..next + 3).map(move |n| (suffix, n)))
+            .map(|(suffix, n)| {
+                crate::write::beside(&path, &format!("{suffix}-{}-{n}", std::process::id()))
+            })
+            .collect();
         for at in &left {
             std::fs::write(at, b"left by a crash").unwrap();
-            std::fs::set_permissions(at, std::os::unix::fs::PermissionsExt::from_mode(0o444)).unwrap();
+            std::fs::set_permissions(at, std::os::unix::fs::PermissionsExt::from_mode(0o444))
+                .unwrap();
         }
         super::set_tool(&locked, "k", serde_json::json!({})).unwrap();
         drop(locked);
         crate::write::empty(lockless_at(&path)).unwrap();
         assert!(crate::rvr::Reader::open(&path).unwrap().empty());
-        assert!(left.iter().all(|at| std::fs::read(at).unwrap() == b"left by a crash"));
+        assert!(left
+            .iter()
+            .all(|at| std::fs::read(at).unwrap() == b"left by a crash"));
         assert_eq!(staged_beside(&path).len(), left.len());
         for at in left.iter().chain([&path]) {
             std::fs::remove_file(at).unwrap();
@@ -1117,7 +1476,8 @@ mod tests {
     // SPEC 8.12
     #[test]
     #[cfg(unix)]
-    fn descriptors_refused_as_a_file_another_thread_holds_was_opened_are_kept_by_its_lock_and_closed_as_it_lets_go() {
+    fn descriptors_refused_as_a_file_another_thread_holds_was_opened_are_kept_by_its_lock_and_closed_as_it_lets_go(
+    ) {
         let (path, _) = lockless("race-kept");
         let open = || std::fs::read_dir("/dev/fd").unwrap().count();
         let before = open();
@@ -1136,28 +1496,45 @@ mod tests {
             let token = taken.1.recv().unwrap();
             for _ in 0..100 {
                 let file = std::fs::File::open(&path).unwrap();
-                assert!(super::unheld(file, &path).unwrap_err().to_string().contains("another of its threads holds its lock"));
+                assert!(super::unheld(file, &path)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("another of its threads holds its lock"));
             }
-            let kept = super::held().iter().find(|(held, ..)| *held == token).map(|(.., kept)| kept.len());
-            assert_eq!(kept, Some(100), "each kept by the lock, open while it is held");
+            let kept = super::held()
+                .iter()
+                .find(|(held, ..)| *held == token)
+                .map(|(.., kept)| kept.len());
+            assert_eq!(
+                kept,
+                Some(100),
+                "each kept by the lock, open while it is held"
+            );
             release.0.send(()).unwrap();
             holder.join().unwrap();
         }
         // Other tests open and close files as this runs: a leak would be a thousand more.
         let after = open();
-        assert!(after < before + 50, "{before} descriptors open before, {after} after");
+        assert!(
+            after < before + 50,
+            "{before} descriptors open before, {after} after"
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
     // SPEC 8.12
     #[test]
     fn a_journal_of_no_file_that_another_command_let_go_first_counts_as_let_go() {
-        let path = std::env::temp_dir().join(format!("rowver-unit-{}-let-go.rvr", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("rowver-unit-{}-let-go.rvr", std::process::id()));
         super::let_go_journal(&path).unwrap();
         // One that cannot be removed (a folder there) is told, naming it.
         std::fs::create_dir(super::journal(&path)).unwrap();
         let said = super::let_go_journal(&path).unwrap_err().to_string();
-        assert!(said.contains(&super::journal(&path).display().to_string()), "{said}");
+        assert!(
+            said.contains(&super::journal(&path).display().to_string()),
+            "{said}"
+        );
         std::fs::remove_dir(super::journal(&path)).unwrap();
     }
 
@@ -1166,9 +1543,16 @@ mod tests {
     fn a_file_on_a_filesystem_without_locks_is_changed_anew() {
         let (path, locked) = lockless("lockless");
         let was = super::ids(&std::fs::metadata(&path).unwrap());
-        assert_eq!(locked.anew().as_deref(), Some("its filesystem gives no lock: Operation not supported"));
+        assert_eq!(
+            locked.anew().as_deref(),
+            Some("its filesystem gives no lock: Operation not supported")
+        );
         super::set_tool(&locked, "k", serde_json::json!({})).unwrap();
-        assert_ne!(super::ids(&std::fs::metadata(&path).unwrap()), was, "a new file, moved over it");
+        assert_ne!(
+            super::ids(&std::fs::metadata(&path).unwrap()),
+            was,
+            "a new file, moved over it"
+        );
         let header = crate::rvr::Reader::open(&path).unwrap().header().clone();
         assert_eq!(header["k"], serde_json::json!({}));
         std::fs::remove_file(&path).unwrap();
@@ -1185,7 +1569,13 @@ mod tests {
             false => std::fs::File::open(&path),
         };
         let locked = Locked::taken(&path, open, std::fs::File::try_lock).unwrap();
-        assert_eq!((locked.unwritable(), locked.anew().as_deref()), (Some(std::io::ErrorKind::ReadOnlyFilesystem), Some("its filesystem is read-only")));
+        assert_eq!(
+            (locked.unwritable(), locked.anew().as_deref()),
+            (
+                Some(std::io::ErrorKind::ReadOnlyFilesystem),
+                Some("its filesystem is read-only")
+            )
+        );
         assert_eq!(locked.reader().unwrap().header()["rowver"], 15);
         drop(locked);
         // A change to it cut short: told how it is put back.
@@ -1194,11 +1584,19 @@ mod tests {
         change.journal(u64::MAX, &[]).unwrap();
         std::mem::forget(change);
         drop(held);
-        let said = Locked::taken(&path, open, std::fs::File::try_lock).unwrap_err().to_string();
+        let said = Locked::taken(&path, open, std::fs::File::try_lock)
+            .unwrap_err()
+            .to_string();
         let shown = path.display();
         assert_eq!(said, format!("{shown} has the journal of a change to it cut short, and lies on a read-only filesystem, so it cannot be put back: mount it to be written, then run any rvr command on it."));
         assert!(Locked::take(&path).is_ok());
-        assert_eq!((std::fs::read(&path).unwrap(), super::journal(&path).exists()), (before, false));
+        assert_eq!(
+            (
+                std::fs::read(&path).unwrap(),
+                super::journal(&path).exists()
+            ),
+            (before, false)
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -1208,22 +1606,53 @@ mod tests {
     fn a_file_opened_only_to_be_read_whose_lock_fails_is_changed_anew_for_it_may_not_be_written() {
         let (path, _) = lockless("read-only-lock");
         // Linux NFS: an exclusive lock is an fcntl write lock, refused on a descriptor only read.
-        let refused = |_: &std::fs::File| Err(std::fs::TryLockError::Error(std::io::Error::from_raw_os_error(9)));
+        let refused = |_: &std::fs::File| {
+            Err(std::fs::TryLockError::Error(
+                std::io::Error::from_raw_os_error(9),
+            ))
+        };
         let open = |write: bool| match write {
             true => Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
             false => std::fs::File::open(&path),
         };
-        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o444)).unwrap();
-        assert_eq!(super::probe(&path), (Some(std::io::ErrorKind::PermissionDenied), Some("you may not write it".into())), "as rvr status tells it, holding no lock");
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o444))
+            .unwrap();
+        assert_eq!(
+            super::probe(&path),
+            (
+                Some(std::io::ErrorKind::PermissionDenied),
+                Some("you may not write it".into())
+            ),
+            "as rvr status tells it, holding no lock"
+        );
         let locked = Locked::taken(&path, open, refused).unwrap();
-        assert_eq!((locked.unwritable(), locked.anew().as_deref()), (Some(std::io::ErrorKind::PermissionDenied), Some("you may not write it")));
+        assert_eq!(
+            (locked.unwritable(), locked.anew().as_deref()),
+            (
+                Some(std::io::ErrorKind::PermissionDenied),
+                Some("you may not write it")
+            )
+        );
         let was = super::ids(&std::fs::metadata(&path).unwrap());
         super::set_tool(&locked, "k", serde_json::json!({})).unwrap();
-        assert_ne!(super::ids(&std::fs::metadata(&path).unwrap()), was, "a new file, moved over it");
+        assert_ne!(
+            super::ids(&std::fs::metadata(&path).unwrap()),
+            was,
+            "a new file, moved over it"
+        );
         // Opened to be written, a lock refused so is the filesystem's: it gives none.
-        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
-        let locked = Locked::taken(&path, |write| std::fs::File::options().read(true).write(write).open(&path), refused).unwrap();
-        assert_eq!(locked.anew().as_deref(), Some("its filesystem gives no lock: Bad file descriptor"));
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o644))
+            .unwrap();
+        let locked = Locked::taken(
+            &path,
+            |write| std::fs::File::options().read(true).write(write).open(&path),
+            refused,
+        )
+        .unwrap();
+        assert_eq!(
+            locked.anew().as_deref(),
+            Some("its filesystem gives no lock: Bad file descriptor")
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -1239,7 +1668,9 @@ mod tests {
         };
         // Each time it is opened, the file at its path is another.
         let open = |_: bool| std::fs::File::open(&other);
-        let said = Locked::taken(&path, open, held_once).unwrap_err().to_string();
+        let said = Locked::taken(&path, open, held_once)
+            .unwrap_err()
+            .to_string();
         assert_eq!(said, format!("{} was replaced each time it was opened, so another program is writing it: wait for it to finish, then try again", path.display()));
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_file(&other).unwrap();
@@ -1273,11 +1704,34 @@ mod tests {
         change.journal(u64::MAX, &[]).unwrap();
         std::mem::forget(change);
         drop(held);
-        std::fs::OpenOptions::new().append(true).open(&path).and_then(|mut f| std::io::Write::write_all(&mut f, b"cut short")).unwrap();
-        let file = std::fs::File::options().read(true).write(true).open(&path).unwrap();
-        let locked = Locked { path: path.clone(), file: super::Handle::new(file), lockless: Some("Operation not supported".into()), unwritable: None, restored: Restored::Nothing, moved: false.into(), changes: 0.into(), token: 0 };
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, b"cut short"))
+            .unwrap();
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let locked = Locked {
+            path: path.clone(),
+            file: super::Handle::new(file),
+            lockless: Some("Operation not supported".into()),
+            unwritable: None,
+            restored: Restored::Nothing,
+            moved: false.into(),
+            changes: 0.into(),
+            token: 0,
+        };
         assert_eq!(locked.put_back().unwrap(), Restored::PutBackWithoutLock);
-        assert_eq!((std::fs::read(&path).unwrap(), super::journal(&path).exists()), (before, false));
+        assert_eq!(
+            (
+                std::fs::read(&path).unwrap(),
+                super::journal(&path).exists()
+            ),
+            (before, false)
+        );
         std::fs::remove_file(&path).unwrap();
     }
     // SPEC 8.12
@@ -1289,12 +1743,23 @@ mod tests {
         let mut change = Change::begin(&held).unwrap();
         let mut header = change.header().clone();
         header["k"] = serde_json::json!({});
-        let (bytes, at) = (super::opening(&header, crate::write::FEWER).unwrap(), 8 + change.end);
+        let (bytes, at) = (
+            super::opening(&header, crate::write::FEWER).unwrap(),
+            8 + change.end,
+        );
         change.prepare(at + bytes.len() as u64, &bytes).unwrap();
         // The new header written whole, as finish writes it, and the sync that would keep it failed.
-        super::write_at(change.file(), &bytes, at).and_then(|()| change.file().set_len(at + bytes.len() as u64)).unwrap();
+        super::write_at(change.file(), &bytes, at)
+            .and_then(|()| change.file().set_len(at + bytes.len() as u64))
+            .unwrap();
         drop(change);
-        assert_eq!((std::fs::read(&path).unwrap(), super::journal(&path).exists()), (before, false));
+        assert_eq!(
+            (
+                std::fs::read(&path).unwrap(),
+                super::journal(&path).exists()
+            ),
+            (before, false)
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -1302,20 +1767,40 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn a_change_whose_journal_cannot_go_is_put_back_and_said() {
-        let folder = std::env::temp_dir().join(format!("rowver-unit-{}-appended", std::process::id()));
+        let folder =
+            std::env::temp_dir().join(format!("rowver-unit-{}-appended", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let path = folder.join("f.rvr");
-        std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/conformance/rvr/valid/fixture.rvr"), &path).unwrap();
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/conformance/rvr/valid/fixture.rvr"
+            ),
+            &path,
+        )
+        .unwrap();
         // A folder entries may be added to but not taken from.
-        let flag = |on: &str| assert!(std::process::Command::new("chflags").arg(on).arg(&folder).status().unwrap().success());
+        let flag = |on: &str| {
+            assert!(std::process::Command::new("chflags")
+                .arg(on)
+                .arg(&folder)
+                .status()
+                .unwrap()
+                .success())
+        };
         let before = std::fs::read(&path).unwrap();
         flag("uappnd");
         // Nothing that may panic until the flag is cleared, or the folder could not be removed.
-        let made = Locked::take(&path).and_then(|locked| super::set_tool(&locked, "k", serde_json::json!({})));
+        let made = Locked::take(&path)
+            .and_then(|locked| super::set_tool(&locked, "k", serde_json::json!({})));
         let (left, now) = (super::journal(&path).exists(), std::fs::read(&path));
         flag("nouappnd");
         let said = made.unwrap_err().to_string();
-        assert!(said.contains("is as it was: the change was made, but its journal") && said.contains("so the change is put back"), "{said}");
+        assert!(
+            said.contains("is as it was: the change was made, but its journal")
+                && said.contains("so the change is put back"),
+            "{said}"
+        );
         assert!(left, "the journal could not go");
         assert_eq!(now.unwrap(), before);
         assert_eq!(Locked::take(&path).unwrap().restored, Restored::PutBack);

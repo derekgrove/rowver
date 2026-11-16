@@ -150,10 +150,7 @@ mod tests {
         let sent = answer(&[(10, b"abc"), (500, tricky), (0, &[0, 255, 10, 13])], true);
         let read = parts(&sent[..], "B", 30).unwrap();
         assert_eq!(read.len(), 3);
-        assert_eq!(
-            (read[0].at, &read[0].bytes[..]),
-            (10, &b"abc"[..])
-        );
+        assert_eq!((read[0].at, &read[0].bytes[..]), (10, &b"abc"[..]));
         assert_eq!((read[1].at, &read[1].bytes[..]), (500, tricky));
         assert_eq!(read[2].bytes, [0, 255, 10, 13]);
         assert_eq!(

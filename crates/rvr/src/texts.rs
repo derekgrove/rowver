@@ -68,12 +68,19 @@ pub(crate) fn study_file(dir: &Path, file: &str) -> Result<String, String> {
 /// A study's three texts, as they are; every one missing said at once.
 pub fn read(dir: &Path) -> Result<Texts, String> {
     let read = ["recipe.toml", "samples.toml", "samples.lock"].map(|file| study_file(dir, file));
-    let said: Vec<&str> = read.iter().filter_map(|r| r.as_ref().err().map(String::as_str)).collect();
+    let said: Vec<&str> = read
+        .iter()
+        .filter_map(|r| r.as_ref().err().map(String::as_str))
+        .collect();
     if !said.is_empty() {
         return Err(said.join("\n"));
     }
     let [recipe, samples, lock] = read.map(Result::unwrap_or_default);
-    Ok(Texts { recipe, samples, lock })
+    Ok(Texts {
+        recipe,
+        samples,
+        lock,
+    })
 }
 
 /// A study's lock, read on rails.
@@ -83,10 +90,20 @@ pub fn lock(dir: &Path) -> Result<Lock, String> {
 
 /// The lock `text` holds, read on rails; `name` names it in a refusal.
 pub fn lock_of(text: &str, name: &str) -> Result<Lock, String> {
-    Lock::read(text).map_err(|p| format!("{name} does not check out: {}. Run rvr samples resolve samples.toml again.", p.to_string().replace('\n', "; ")))
+    Lock::read(text).map_err(|p| {
+        format!(
+            "{name} does not check out: {}. Run rvr samples resolve samples.toml again.",
+            p.to_string().replace('\n', "; ")
+        )
+    })
 }
 
 /// The recipe a press runs, or every problem `Recipe::read` finds with it, one a line.
 pub fn read_recipe(source: &str) -> Result<Recipe, String> {
-    Recipe::read(source).map_err(|e| e.0.lines().map(|line| format!("recipe.toml: {line}")).collect::<Vec<_>>().join("\n"))
+    Recipe::read(source).map_err(|e| {
+        e.0.lines()
+            .map(|line| format!("recipe.toml: {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
 }

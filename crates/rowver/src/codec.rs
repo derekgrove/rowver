@@ -57,7 +57,10 @@ pub(crate) fn frame(head: &[u8], expected: usize, place: &str, holds: &str) -> R
         return Err(broken(place, "has a dictionary ID (its dictionary ID flag is not 0), and an array uses no dictionary"));
     }
     if descriptor & 0x04 == 0 {
-        return Err(broken(place, "has no content checksum (its checksum flag is 0)"));
+        return Err(broken(
+            place,
+            "has no content checksum (its checksum flag is 0)",
+        ));
     }
     let mut at = 5;
     let mut window = None;
@@ -85,10 +88,19 @@ pub(crate) fn frame(head: &[u8], expected: usize, place: &str, holds: &str) -> R
     };
     let window = window.or(declared).unwrap_or(0);
     if window > WINDOW {
-        return Err(broken(place, &format!("asks for a window of {window} bytes, more than 2^27")));
+        return Err(broken(
+            place,
+            &format!("asks for a window of {window} bytes, more than 2^27"),
+        ));
     }
     if declared.is_some_and(|size| size != expected as u64) {
-        return Err(broken(place, &format!("declares {} bytes of content, and {holds} holds {expected}", declared.unwrap_or_default())));
+        return Err(broken(
+            place,
+            &format!(
+                "declares {} bytes of content, and {holds} holds {expected}",
+                declared.unwrap_or_default()
+            ),
+        ));
     }
     Ok(())
 }
@@ -144,7 +156,13 @@ pub(crate) fn pack(raw: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(zstd_safe::compress_bound(raw.len()));
     let packed = PACKER.with_borrow_mut(|packer| packer.compress2(&mut out, raw));
     // A buffer of the bound's size: it cannot fail.
-    packed.unwrap_or_else(|code| panic!("zstd could not compress {} bytes: {}", raw.len(), zstd_safe::get_error_name(code)));
+    packed.unwrap_or_else(|code| {
+        panic!(
+            "zstd could not compress {} bytes: {}",
+            raw.len(),
+            zstd_safe::get_error_name(code)
+        )
+    });
     out.shrink_to_fit();
     out
 }
@@ -156,10 +174,21 @@ pub(crate) fn unpack(packed: &[u8], expected: usize, place: &str, holds: &str) -
         return Err(broken(place, &format!("is too small to hold {holds}")));
     }
     frame(packed, expected, place, holds)?;
-    let fails = |code| broken(place, &format!("does not decode ({})", zstd_safe::get_error_name(code)));
+    let fails = |code| {
+        broken(
+            place,
+            &format!("does not decode ({})", zstd_safe::get_error_name(code)),
+        )
+    };
     let size = zstd_safe::find_frame_compressed_size(packed).map_err(fails)?;
     if size != packed.len() {
-        return Err(broken(place, &format!("ends {} bytes before {holds} does: it is exactly one frame", packed.len() - size)));
+        return Err(broken(
+            place,
+            &format!(
+                "ends {} bytes before {holds} does: it is exactly one frame",
+                packed.len() - size
+            ),
+        ));
     }
     // One byte past the declared length, so a frame that holds more is caught.
     let mut out = Vec::with_capacity(expected + 1);
@@ -169,14 +198,23 @@ pub(crate) fn unpack(packed: &[u8], expected: usize, place: &str, holds: &str) -
         Err(code) => {
             use zstd_safe::zstd_sys::ZSTD_ErrorCode as Kind;
             return Err(match code {
-                code if is(code, Kind::ZSTD_error_dstSize_tooSmall) => broken(place, &format!("decodes to more than the {expected} bytes {holds} holds")),
-                code if is(code, Kind::ZSTD_error_checksum_wrong) => broken(place, "has a content checksum that is not that of its content"),
+                code if is(code, Kind::ZSTD_error_dstSize_tooSmall) => broken(
+                    place,
+                    &format!("decodes to more than the {expected} bytes {holds} holds"),
+                ),
+                code if is(code, Kind::ZSTD_error_checksum_wrong) => broken(
+                    place,
+                    "has a content checksum that is not that of its content",
+                ),
                 code => fails(code),
             });
         }
     };
     if written != expected {
-        return Err(broken(place, &format!("decodes to {written} bytes, and {holds} holds {expected}")));
+        return Err(broken(
+            place,
+            &format!("decodes to {written} bytes, and {holds} holds {expected}"),
+        ));
     }
     Ok(out)
 }
@@ -192,17 +230,32 @@ mod tests {
             .flat_map(|v| (v * 7919).to_le_bytes())
             .collect();
         let packed = pack(&raw);
-        assert_eq!(unpack(&packed, raw.len(), "x", "its chunk's lane").unwrap(), raw);
+        assert_eq!(
+            unpack(&packed, raw.len(), "x", "its chunk's lane").unwrap(),
+            raw
+        );
         assert!(unpack(&packed, raw.len() - 1, "x", "its chunk's lane").is_err());
         assert!(unpack(&packed, raw.len() + 1, "x", "its chunk's lane").is_err());
-        assert!(unpack(&packed[..packed.len() - 1], raw.len(), "x", "its chunk's lane").is_err());
+        assert!(unpack(
+            &packed[..packed.len() - 1],
+            raw.len(),
+            "x",
+            "its chunk's lane"
+        )
+        .is_err());
         assert_eq!(
             shuffle(&[1, 2, 3, 4, 5, 6, 7, 8], 4),
             [1, 5, 2, 6, 3, 7, 4, 8]
         );
-        assert_eq!(unpack(&pack(&[]), 0, "x", "its chunk's lane").unwrap(), Vec::<u8>::new());
+        assert_eq!(
+            unpack(&pack(&[]), 0, "x", "its chunk's lane").unwrap(),
+            Vec::<u8>::new()
+        );
         let zeros = vec![0; 1 << 20];
-        assert_eq!(unpack(&pack(&zeros), zeros.len(), "x", "its chunk's lane").unwrap(), zeros);
+        assert_eq!(
+            unpack(&pack(&zeros), zeros.len(), "x", "its chunk's lane").unwrap(),
+            zeros
+        );
     }
 
     // FORMAT 7
@@ -210,7 +263,11 @@ mod tests {
     fn a_frame_off_the_format_is_refused() {
         let raw: Vec<u8> = (0..300_u16).flat_map(u16::to_le_bytes).collect();
         let good = pack(&raw);
-        let said = |bytes: Vec<u8>| unpack(&bytes, raw.len(), "x", "its chunk's lane").unwrap_err().to_string();
+        let said = |bytes: Vec<u8>| {
+            unpack(&bytes, raw.len(), "x", "its chunk's lane")
+                .unwrap_err()
+                .to_string()
+        };
         assert!(said([good.clone(), good.clone()].concat()).contains("exactly one frame"));
         let skippable = [&[0x50, 0x2A, 0x4D, 0x18, 0, 0, 0, 0][..], &good].concat();
         assert!(said(skippable).contains("magic"));
@@ -224,8 +281,14 @@ mod tests {
         dictionary[4] |= 0x01;
         assert!(said(dictionary).contains("dictionary"));
         // A frame with a window descriptor, as another zstd writes one: ruzstd's.
-        let mut wide = ruzstd::encoding::compress_to_vec(&raw[..], ruzstd::encoding::CompressionLevel::Fastest);
-        assert_eq!(unpack(&wide, raw.len(), "x", "its chunk's lane").unwrap(), raw);
+        let mut wide = ruzstd::encoding::compress_to_vec(
+            &raw[..],
+            ruzstd::encoding::CompressionLevel::Fastest,
+        );
+        assert_eq!(
+            unpack(&wide, raw.len(), "x", "its chunk's lane").unwrap(),
+            raw
+        );
         wide[5] = 18 << 3;
         assert!(said(wide).contains("window"));
     }
@@ -236,14 +299,22 @@ mod tests {
         // A frame header with a checksum: a window descriptor (exponent, mantissa), or a single
         // segment whose window is its declared content size (8 bytes of it).
         let windowed = |descriptor: u8| [0x28, 0xB5, 0x2F, 0xFD, 0x04, descriptor];
-        let single = |size: u64| [&[0x28, 0xB5, 0x2F, 0xFD, 0xE4][..], &size.to_le_bytes()].concat();
-        let said = |head: &[u8], n: usize| frame(head, n, "x", "its chunk's lane").err().map(|e| e.to_string());
+        let single =
+            |size: u64| [&[0x28, 0xB5, 0x2F, 0xFD, 0xE4][..], &size.to_le_bytes()].concat();
+        let said = |head: &[u8], n: usize| {
+            frame(head, n, "x", "its chunk's lane")
+                .err()
+                .map(|e| e.to_string())
+        };
         assert_eq!(said(&windowed(17 << 3), 5), None, "2^27 exactly");
         let past = said(&windowed((17 << 3) | 1), 5).unwrap();
         assert!(past.starts_with("x: its zstd frame asks for a window of 150994944 bytes, more than 2^27 (docs/FORMAT.md §7): the file is damaged"), "{past}");
         assert_eq!(said(&single(1 << 27), 1 << 27), None);
         let past = said(&single((1 << 27) + 1), (1 << 27) + 1).unwrap();
-        assert!(past.contains("asks for a window of 134217729 bytes, more than 2^27"), "{past}");
+        assert!(
+            past.contains("asks for a window of 134217729 bytes, more than 2^27"),
+            "{past}"
+        );
     }
 
     // FORMAT 7
@@ -253,10 +324,17 @@ mod tests {
         let packed = pack(&zeros);
         let bound = most(packed.len());
         assert_eq!(bound, packed.len() * 32_768 + 128 * 1024);
-        let past = unpack(&packed, bound + 1, "x", "its chunk's lane").unwrap_err().to_string();
-        assert!(past.contains("too small to hold its chunk's lane"), "{past}");
+        let past = unpack(&packed, bound + 1, "x", "its chunk's lane")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            past.contains("too small to hold its chunk's lane"),
+            "{past}"
+        );
         // At the bound it is decoded, and refused only for what it decodes to.
-        let at = unpack(&packed, bound, "x", "its chunk's lane").unwrap_err().to_string();
+        let at = unpack(&packed, bound, "x", "its chunk's lane")
+            .unwrap_err()
+            .to_string();
         assert!(!at.contains("too small"), "{at}");
     }
 }

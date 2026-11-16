@@ -33,7 +33,9 @@ impl Drop for Study {
 
 /// The fixture `file` of tests/fixtures.
 pub fn fixture(file: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(file)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(file)
 }
 
 /// samples.toml with these samples, their tree `analysis` unless they say otherwise.
@@ -77,12 +79,16 @@ pub fn rvr_at_home(dir: &Path, home: &Path, args: &[&str]) -> (i32, String) {
 /// Run rvr in `dir` with these variables set.
 pub fn rvr_with(dir: &Path, set: &[(&str, &str)], args: &[&str]) -> (i32, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
-    command.args(args).current_dir(dir).env("RVR_CONFIG", dir.join(".rvr-config"));
+    command
+        .args(args)
+        .current_dir(dir)
+        .env("RVR_CONFIG", dir.join(".rvr-config"));
     for (name, value) in set {
         command.env(name, value);
     }
     let out = command.output().unwrap();
-    let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     (out.status.code().unwrap_or(-1), text)
 }
 
@@ -109,7 +115,14 @@ pub fn parts(bytes: &[u8]) -> (&[u8], &[u8]) {
 
 /// A file of these arrays and this header text: the magic, the arrays, the header, its length, the magic.
 pub fn framed(text: &[u8], arrays: &[u8]) -> Vec<u8> {
-    [&MAGIC[..], arrays, text, &(text.len() as u32).to_le_bytes(), MAGIC].concat()
+    [
+        &MAGIC[..],
+        arrays,
+        text,
+        &(text.len() as u32).to_le_bytes(),
+        MAGIC,
+    ]
+    .concat()
 }
 
 /// The journal beside the file at `path` while a change to it is made (SPEC 8.12).
@@ -130,14 +143,26 @@ pub fn at_terminal(dir: &Path, args: &[&str], answer: &str) -> (i32, String) {
 }
 
 /// `at_terminal`, running `asked` while the question waits for its answer.
-pub fn at_terminal_then(dir: &Path, args: &[&str], answer: &str, asked: impl FnOnce()) -> (i32, String) {
+pub fn at_terminal_then(
+    dir: &Path,
+    args: &[&str],
+    answer: &str,
+    asked: impl FnOnce(),
+) -> (i32, String) {
     let rvr = env!("CARGO_BIN_EXE_rvr");
     let mut command = Command::new("script");
     match cfg!(target_os = "macos") {
         true => command.args(["-q", "/dev/null", rvr]).args(args),
         false => command.args(["-qec", &format!("{rvr} {}", args.join(" ")), "/dev/null"]),
     };
-    let mut child = command.current_dir(dir).env("RVR_CONFIG", dir.join(".rvr-config")).env("TERM", "dumb").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    let mut child = command
+        .current_dir(dir)
+        .env("RVR_CONFIG", dir.join(".rvr-config"))
+        .env("TERM", "dumb")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
     let mut out = child.stdout.take().unwrap();
     let said = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let reading = {

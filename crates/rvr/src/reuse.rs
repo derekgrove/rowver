@@ -4,8 +4,8 @@
 use crate::fill::{unplanned, Plan};
 use crate::plan::Base;
 use rowver::choice::Events;
-use rowver::study::lock::Lock;
 use rowver::rvr::Reader;
+use rowver::study::lock::Lock;
 use rvr_recipe::{uses, Cut, Expression, Recipe};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -100,7 +100,11 @@ impl Earlier {
 }
 
 /// Whether a file's header is a press of this study's samples by this build of rvr, or why not.
-pub fn pressed_alike(header: &Value, texts: &crate::texts::Texts, lock: &Lock) -> Result<(), String> {
+pub fn pressed_alike(
+    header: &Value,
+    texts: &crate::texts::Texts,
+    lock: &Lock,
+) -> Result<(), String> {
     if header["made"]["samples"]["text"].as_str() != Some(texts.samples.as_str()) {
         return Err("samples.toml has changed since".into());
     }
@@ -110,9 +114,17 @@ pub fn pressed_alike(header: &Value, texts: &crate::texts::Texts, lock: &Lock) -
 
 /// Whether a file holds the lock's samples, by name and in order.
 fn same_samples(header: &Value, lock: &Lock) -> Result<(), String> {
-    let samples = header["data"]["samples"].as_array().ok_or("it has no samples")?;
+    let samples = header["data"]["samples"]
+        .as_array()
+        .ok_or("it has no samples")?;
     let names: Vec<&str> = samples.iter().filter_map(|s| s["name"].as_str()).collect();
-    match names == lock.samples.iter().map(|s| s.name.as_str()).collect::<Vec<_>>() {
+    match names
+        == lock
+            .samples
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+    {
         true => Ok(()),
         false => Err("its samples are not the lock's".into()),
     }
@@ -135,14 +147,22 @@ pub fn same_build(made: &Value) -> Result<(), String> {
     by_rvr(made)?;
     let made = &made["toolchain"];
     if !one_build(made, &crate::press::toolchain()) {
-        return Err(format!("it was made by another build of rvr ({} at {})", made["version"].as_str().unwrap_or("?"), made["commit"].as_str().unwrap_or("?")));
+        return Err(format!(
+            "it was made by another build of rvr ({} at {})",
+            made["version"].as_str().unwrap_or("?"),
+            made["commit"].as_str().unwrap_or("?")
+        ));
     }
     Ok(())
 }
 
 /// Whether two `made.toolchain`s name one build: by the fields `builds` names, and rowver ("15" in every file that opens).
 fn one_build(made: &Value, this: &Value) -> bool {
-    ["program", "version", "commit", "compiler", "target", "rowver"].iter().all(|key| made[key] == this[key])
+    [
+        "program", "version", "commit", "compiler", "target", "rowver",
+    ]
+    .iter()
+    .all(|key| made[key] == this[key])
 }
 
 /// Refuse a file (its `made`) that another program made: `it was made by PROGRAM VERSION, not rvr`.
@@ -150,7 +170,10 @@ fn by_rvr(made: &Value) -> Result<(), String> {
     let text = |key: &str| made["toolchain"][key].as_str().unwrap_or("?");
     match text("program") {
         "rvr" => Ok(()),
-        program => Err(format!("it was made by {program} {}, not rvr", text("version"))),
+        program => Err(format!(
+            "it was made by {program} {}, not rvr",
+            text("version")
+        )),
     }
 }
 
@@ -165,7 +188,14 @@ pub enum Unbuilt {
 /// What a file at the target gives a press of columns of `kinds`, or why it cannot (SPEC §8.6).
 // For its build only when all else would let it be built on. Its header is judged first: its
 // arrays are read only once it will be built on.
-pub fn read(file: rowver::Result<Reader>, texts: &crate::texts::Texts, recipe: &Recipe, lock: &Lock, asked: &[Events], kinds: &[(rvr_recipe::Kind, bool)]) -> Result<Base, Unbuilt> {
+pub fn read(
+    file: rowver::Result<Reader>,
+    texts: &crate::texts::Texts,
+    recipe: &Recipe,
+    lock: &Lock,
+    asked: &[Events],
+    kinds: &[(rvr_recipe::Kind, bool)],
+) -> Result<Base, Unbuilt> {
     let file = file.map_err(|e| match e {
         rowver::Error::Io(e) => rowver::plain_it(&e),
         e => format!("it could not be read ({e})"),
@@ -175,12 +205,22 @@ pub fn read(file: rowver::Result<Reader>, texts: &crate::texts::Texts, recipe: &
     let judged = judged(&file, texts, recipe, lock, asked).map_err(Unbuilt::Why)?;
     // The columns it gives are of this press's kinds, which no build would change.
     let given: Vec<&str> = match &judged {
-        Judged::Columns(reused, _) => recipe.columns.iter().zip(reused).filter(|(_, r)| **r).map(|((n, _), _)| n.as_str()).collect(),
+        Judged::Columns(reused, _) => recipe
+            .columns
+            .iter()
+            .zip(reused)
+            .filter(|(_, r)| **r)
+            .map(|((n, _), _)| n.as_str())
+            .collect(),
         Judged::Samples(..) => recipe.columns.iter().map(|(n, _)| n.as_str()).collect(),
     };
     crate::plan::same_kinds(&file, recipe, kinds, &given).map_err(Unbuilt::Why)?;
     if same_build(made).is_err() {
-        return Err(Unbuilt::Build(builds(&file.path().display().to_string(), &made["toolchain"], &crate::press::toolchain())));
+        return Err(Unbuilt::Build(builds(
+            &file.path().display().to_string(),
+            &made["toolchain"],
+            &crate::press::toolchain(),
+        )));
     }
     filled(file, judged).map_err(Unbuilt::Why)
 }
@@ -190,11 +230,25 @@ pub fn read(file: rowver::Result<Reader>, texts: &crate::texts::Texts, recipe: &
 fn builds(path: &str, made: &Value, this: &Value) -> String {
     let text = |build: &Value, key: &str| build[key].as_str().unwrap_or("?").to_owned();
     let named = |build: &Value, more: bool| match more {
-        true => format!("{} {} (commit {}, {}, {})", text(build, "program"), text(build, "version"), text(build, "commit"), text(build, "compiler"), text(build, "target")),
-        false => format!("{} {} (commit {})", text(build, "program"), text(build, "version"), text(build, "commit")),
+        true => format!(
+            "{} {} (commit {}, {}, {})",
+            text(build, "program"),
+            text(build, "version"),
+            text(build, "commit"),
+            text(build, "compiler"),
+            text(build, "target")
+        ),
+        false => format!(
+            "{} {} (commit {})",
+            text(build, "program"),
+            text(build, "version"),
+            text(build, "commit")
+        ),
     };
     let commit = text(this, "commit");
-    let alike = ["program", "version", "commit"].iter().all(|key| made[key] == this[key]);
+    let alike = ["program", "version", "commit"]
+        .iter()
+        .all(|key| made[key] == this[key]);
     match commit.as_str() {
         "unknown" => format!("{path} was made by {}; this rvr's commit is unknown (it was not built from a git checkout), and such a build builds on no file.", named(made, false)),
         dirty if dirty.ends_with("-dirty") => format!("{path} was made by {}; this rvr has uncommitted changes (its commit is {dirty}), and such a build builds on no file.", named(made, false)),
@@ -211,9 +265,17 @@ enum Judged {
 }
 
 /// What a file at the target gives this press, its build aside, or why it cannot: from its header.
-fn judged(file: &Reader, texts: &crate::texts::Texts, recipe: &Recipe, lock: &Lock, asked: &[Events]) -> Result<Judged, String> {
+fn judged(
+    file: &Reader,
+    texts: &crate::texts::Texts,
+    recipe: &Recipe,
+    lock: &Lock,
+    asked: &[Events],
+) -> Result<Judged, String> {
     if file.empty() {
-        return Err("it is empty (rvr refill gives its columns back, checked against its checksums)".into());
+        return Err(
+            "it is empty (rvr refill gives its columns back, checked against its checksums)".into(),
+        );
     }
     let header = file.header();
     let made = &header["made"];
@@ -237,7 +299,8 @@ fn judged(file: &Reader, texts: &crate::texts::Texts, recipe: &Recipe, lock: &Lo
             file.record(name).is_some() && only(&old, &[name]) == only(recipe, &[name])
         })
         .collect();
-    if text("samples") != Some(texts.samples.as_str()) || text("lock") != Some(texts.lock.as_str()) {
+    if text("samples") != Some(texts.samples.as_str()) || text("lock") != Some(texts.lock.as_str())
+    {
         return samples(file, recipe, &reused, lock, asked);
     }
     same_samples(header, lock)?;
@@ -258,9 +321,27 @@ fn judged(file: &Reader, texts: &crate::texts::Texts, recipe: &Recipe, lock: &Lo
 fn filled(file: Reader, judged: Judged) -> Result<Base, String> {
     match judged {
         Judged::Columns(reused, in_place) => {
-            let rows = crate::fill::rows(file, &[], &HashSet::new()).map_err(|e| format!("it could not be read ({e})"))?;
-            let kept = rows.files.iter().map(|(key, plan)| (key.clone(), rows.entries[plan.rows.clone()].iter().map(|&e| e as u64).collect())).collect();
-            Ok(Base::Columns(Earlier { file: rows.file, reused, kept, in_place }))
+            let rows = crate::fill::rows(file, &[], &HashSet::new())
+                .map_err(|e| format!("it could not be read ({e})"))?;
+            let kept = rows
+                .files
+                .iter()
+                .map(|(key, plan)| {
+                    (
+                        key.clone(),
+                        rows.entries[plan.rows.clone()]
+                            .iter()
+                            .map(|&e| e as u64)
+                            .collect(),
+                    )
+                })
+                .collect();
+            Ok(Base::Columns(Earlier {
+                file: rows.file,
+                reused,
+                kept,
+                in_place,
+            }))
         }
         Judged::Samples(plans, added) => {
             let mut fill = crate::fill::rows(file, &[], &HashSet::new())?;
@@ -275,26 +356,72 @@ fn filled(file: Reader, judged: Judged) -> Result<Base, String> {
 /// it has kept as it is (`reused`) and in its order, every derived column with its expression, and
 /// one more at least.
 fn only_added(header: &Value, recipe: &Recipe, reused: &[bool]) -> bool {
-    let names = |list: &Value| -> Vec<String> { list.as_array().into_iter().flatten().filter_map(|c| c["name"].as_str().map(str::to_owned)).collect() };
-    let kept: Vec<String> = recipe.columns.iter().zip(reused).filter(|(_, same)| **same).map(|((name, _), _)| name.clone()).collect();
-    let derived = header["derived"]["columns"].as_array().into_iter().flatten();
-    let derived_kept = derived.into_iter().all(|record| recipe.derived.iter().any(|(name, expression)| record["name"] == name.as_str() && record["expression"] == expression.as_str()));
-    let more = kept.len() < recipe.columns.len() || header["derived"]["columns"].as_array().map_or(0, Vec::len) < recipe.derived.len();
+    let names = |list: &Value| -> Vec<String> {
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| c["name"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let kept: Vec<String> = recipe
+        .columns
+        .iter()
+        .zip(reused)
+        .filter(|(_, same)| **same)
+        .map(|((name, _), _)| name.clone())
+        .collect();
+    let derived = header["derived"]["columns"]
+        .as_array()
+        .into_iter()
+        .flatten();
+    let derived_kept = derived.into_iter().all(|record| {
+        recipe.derived.iter().any(|(name, expression)| {
+            record["name"] == name.as_str() && record["expression"] == expression.as_str()
+        })
+    });
+    let more = kept.len() < recipe.columns.len()
+        || header["derived"]["columns"].as_array().map_or(0, Vec::len) < recipe.derived.len();
     names(&header["data"]["cols"]) == kept && derived_kept && more
 }
 
 /// When the lock's samples changed since the file was pressed, its rows of the samples the lock
 /// holds as it did (the same files, tree, metadata and event choice); the others are read whole.
 /// Its columns must be the recipe's.
-fn samples(file: &Reader, recipe: &Recipe, reused: &[bool], lock: &Lock, asked: &[Events]) -> Result<Judged, String> {
-    let changed: Vec<&str> = recipe.columns.iter().zip(reused).filter(|(_, same)| !**same).map(|((n, _), _)| n.as_str()).collect();
+fn samples(
+    file: &Reader,
+    recipe: &Recipe,
+    reused: &[bool],
+    lock: &Lock,
+    asked: &[Events],
+) -> Result<Judged, String> {
+    let changed: Vec<&str> = recipe
+        .columns
+        .iter()
+        .zip(reused)
+        .filter(|(_, same)| !**same)
+        .map(|((n, _), _)| n.as_str())
+        .collect();
     if !changed.is_empty() {
         return Err(format!("samples.lock has changed since, and so have the columns ({} new or changed): a press builds on a file for a change of either, not of both", changed.join(", ")));
     }
     let made = &file.header()["made"];
-    let old = Lock::read(made["lock"]["text"].as_str().unwrap_or_default()).map_err(|p| format!("its samples.lock does not check out ({p})"))?;
-    let names = |samples: &Value| -> Vec<String> { samples.as_array().into_iter().flatten().filter_map(|s| s["name"].as_str().map(str::to_owned)).collect() };
-    if names(&file.header()["data"]["samples"]) != old.samples.iter().map(|s| s.name.clone()).collect::<Vec<_>>() {
+    let old = Lock::read(made["lock"]["text"].as_str().unwrap_or_default())
+        .map_err(|p| format!("its samples.lock does not check out ({p})"))?;
+    let names = |samples: &Value| -> Vec<String> {
+        samples
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["name"].as_str().map(str::to_owned))
+            .collect()
+    };
+    if names(&file.header()["data"]["samples"])
+        != old
+            .samples
+            .iter()
+            .map(|s| s.name.clone())
+            .collect::<Vec<_>>()
+    {
         return Err("its samples are not its own lock's".into());
     }
     let (mut added, mut plans) = (Vec::new(), Vec::new());
@@ -302,18 +429,32 @@ fn samples(file: &Reader, recipe: &Recipe, reused: &[bool], lock: &Lock, asked: 
         let Some(was) = old.samples.iter().find(|s| s.name == sample.name) else {
             for f in &sample.files {
                 let read = vec![(0, f.stop.unwrap_or(f.entries))];
-                let plan = Plan { rows: 0..0, read, kept: Vec::new(), record: Value::Null, unread: true };
+                let plan = Plan {
+                    rows: 0..0,
+                    read,
+                    kept: Vec::new(),
+                    record: Value::Null,
+                    unread: true,
+                };
                 plans.push(((sample.name.clone(), f.at.clone()), plan));
             }
             added.push(sample.name.clone());
             continue;
         };
-        let files = |s: &rowver::study::lock::Sample| s.files.iter().map(unplanned).collect::<Vec<_>>();
-        if was.tree != sample.tree || was.metadata != sample.metadata || files(was) != files(sample) {
-            return Err(format!("{} is another sample in samples.lock now (its files, tree or metadata)", sample.name));
+        let files =
+            |s: &rowver::study::lock::Sample| s.files.iter().map(unplanned).collect::<Vec<_>>();
+        if was.tree != sample.tree || was.metadata != sample.metadata || files(was) != files(sample)
+        {
+            return Err(format!(
+                "{} is another sample in samples.lock now (its files, tree or metadata)",
+                sample.name
+            ));
         }
         if made["files"][&sample.name]["events"] != want.record() {
-            return Err(format!("it chose other events of {} (another --events, --random or --seed)", sample.name));
+            return Err(format!(
+                "it chose other events of {} (another --events, --random or --seed)",
+                sample.name
+            ));
         }
     }
     Ok(Judged::Samples(plans, added))
@@ -329,7 +470,15 @@ mod tests {
         let build = |version: &str, commit: &str, compiler: &str, target: &str| serde_json::json!({"program": "rvr", "version": version, "rowver": "15", "commit": commit, "compiler": compiler, "target": target});
         let made = build("15.0.0", "aaa", "rustc 1.91.0", "aarch64-apple-darwin");
         let said = |this: Value| builds("f.rvr", &made, &this);
-        assert_eq!(said(build("15.0.1", "bbb", "rustc 1.91.0", "aarch64-apple-darwin")), "f.rvr was made by rvr 15.0.0 (commit aaa); this is rvr 15.0.1 (commit bbb).");
+        assert_eq!(
+            said(build(
+                "15.0.1",
+                "bbb",
+                "rustc 1.91.0",
+                "aarch64-apple-darwin"
+            )),
+            "f.rvr was made by rvr 15.0.0 (commit aaa); this is rvr 15.0.1 (commit bbb)."
+        );
         assert_eq!(
             said(build("15.0.0", "aaa", "rustc 1.92.0", "x86_64-unknown-linux-gnu")),
             "f.rvr was made by rvr 15.0.0 (commit aaa, rustc 1.91.0, aarch64-apple-darwin); this is rvr 15.0.0 (commit aaa, rustc 1.92.0, x86_64-unknown-linux-gnu)."
@@ -346,13 +495,22 @@ mod tests {
         let mut alike = this.clone();
         alike["more"] = "a field no build is named by".into();
         assert!(one_build(&alike, &this));
-        for (key, other) in [("version", "15.0.1"), ("commit", "bbb"), ("compiler", "rustc 1.92.0"), ("target", "x86_64-unknown-linux-gnu")] {
+        for (key, other) in [
+            ("version", "15.0.1"),
+            ("commit", "bbb"),
+            ("compiler", "rustc 1.92.0"),
+            ("target", "x86_64-unknown-linux-gnu"),
+        ] {
             let mut made = this.clone();
             made[key] = other.into();
             assert!(!one_build(&made, &this), "{key}");
             let said = builds("f.rvr", &made, &this);
             let (was, now) = said.trim_end_matches('.').split_once("; this is ").unwrap();
-            assert_ne!(was.trim_start_matches("f.rvr was made by "), now, "{key}: {said}");
+            assert_ne!(
+                was.trim_start_matches("f.rvr was made by "),
+                now,
+                "{key}: {said}"
+            );
         }
     }
 
@@ -401,7 +559,10 @@ n_hard = "count(hard_jet)"
         let tighter = BASE.replace("Jet_pt > 30", "Jet_pt > 40");
         assert!(!same(BASE, &tighter, "n_jet"));
         assert!(same(BASE, &tighter, "MET"), "MET reaches no defined name");
-        assert!(same(BASE, &tighter, "n_hard"), "n_hard reaches hard_jet, not good_jet");
+        assert!(
+            same(BASE, &tighter, "n_hard"),
+            "n_hard reaches hard_jet, not good_jet"
+        );
         assert!(!same_cuts(BASE, &tighter));
         let harder = BASE.replace("Jet_pt > 80", "Jet_pt >= 80");
         assert!(!same(BASE, &harder, "n_hard"));

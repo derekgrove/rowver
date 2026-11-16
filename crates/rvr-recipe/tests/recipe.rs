@@ -206,9 +206,15 @@ fn mistakes_are_refused_with_a_reason() {
     assert!(message("Jet.pt")
         .contains("Only sample has a field after a dot, as in sample.era (the dot at column 4)"));
     assert!(message("sample.").contains("Expected a name after sample."));
-    assert_eq!(message("count(Jet where pt > 30)"), "Expected ) at column 11");
+    assert_eq!(
+        message("count(Jet where pt > 30)"),
+        "Expected ) at column 11"
+    );
     assert!(message("nothing(3)").contains("There is no function named nothing"));
-    assert!(message("nothing(MET)").contains("There is no function named nothing"), "the name is checked before its values");
+    assert!(
+        message("nothing(MET)").contains("There is no function named nothing"),
+        "the name is checked before its values"
+    );
     assert!(message("sqrt(1, 2)").contains("takes 1 value, not 2"));
     assert!(message("'a' + 1").contains("Text"));
     assert!(message("sample.absent + 1").contains("sample.absent is used as a number, but this sample has no absent: give it one in samples.toml"));
@@ -293,14 +299,29 @@ fn edge_cases_follow_the_documented_rules() {
         "a mask of other lists"
     );
     // join takes lists only, two or more; the kinematics take three or four of one list.
-    assert_eq!(run("join(Jet_pt)").unwrap_err().0, "join takes 2 values or more, not 1");
-    assert!(run("join(Jet_pt, nJet)").unwrap_err().0.contains("join needs a list per event"));
-    assert_eq!(run("pt(Jet_pt, Jet_pt)").unwrap_err().0, "pt takes 3 or 4 values (pt, eta, phi, and optionally a mass), not 2");
-    assert!(run("pair_rapidity(Jet_pt)").unwrap_err().0.contains("pair_rapidity takes 3 or 4 values (pt, eta, phi"));
+    assert_eq!(
+        run("join(Jet_pt)").unwrap_err().0,
+        "join takes 2 values or more, not 1"
+    );
+    assert!(run("join(Jet_pt, nJet)")
+        .unwrap_err()
+        .0
+        .contains("join needs a list per event"));
+    assert_eq!(
+        run("pt(Jet_pt, Jet_pt)").unwrap_err().0,
+        "pt takes 3 or 4 values (pt, eta, phi, and optionally a mass), not 2"
+    );
+    assert!(run("pair_rapidity(Jet_pt)")
+        .unwrap_err()
+        .0
+        .contains("pair_rapidity takes 3 or 4 values (pt, eta, phi"));
     let unlike = run("rapidity(Jet_pt, Jet_pt, Muon_pt)").unwrap_err();
     assert!(unlike.0.starts_with("rapidity needs pt, eta, phi, and any mass of the same list, member by member, and in this event one has 2 members and the other 1"), "{unlike:?}");
     assert_eq!(unlike.1, Some(0));
-    assert!(run("floor(Jet_pt > 30)").is_ok(), "floor keeps true-or-false values, as NumPy");
+    assert!(
+        run("floor(Jet_pt > 30)").is_ok(),
+        "floor keeps true-or-false values, as NumPy"
+    );
 }
 
 // RECIPE math-value-by-value, functions-exactly, fixed-values-beside-a-column, what-differs-from-numpy; FORMAT 10
@@ -312,18 +333,33 @@ fn float_functions_give_the_same_bits_on_every_platform() {
     let (sample, defines) = (BTreeMap::new(), BTreeMap::new());
     let scope = Scope::new(&held, &sample, &defines);
     let bits = |text: &str| match scope.evaluate(&parse(text).unwrap()).unwrap() {
-        Array::Event(Values { store: Store::Float(held), .. }) => held.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+        Array::Event(Values {
+            store: Store::Float(held),
+            ..
+        }) => held.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
         other => panic!("{other:?}"),
     };
     assert_eq!(bits("cos(x)")[0], 0x3fecac76498be14c);
     assert_eq!(bits("exp(x)")[1], 0x3ff4f59d48ad2682);
     // A constant is rounded as it stands, halves to even; a whole number stays one.
     let run = |text: &str| scope.evaluate(&parse(text).unwrap());
-    assert_eq!(run("round(2.5)").unwrap(), Array::Constant(Constant::Float(2.0)));
-    assert_eq!(run("round(-3)").unwrap(), Array::Constant(Constant::Whole(-3)));
+    assert_eq!(
+        run("round(2.5)").unwrap(),
+        Array::Constant(Constant::Float(2.0))
+    );
+    assert_eq!(
+        run("round(-3)").unwrap(),
+        Array::Constant(Constant::Whole(-3))
+    );
     // NumPy rounds true-or-false values as 16-bit floats, a kind no column has.
-    assert!(run("round(x > 0.3)").unwrap_err().0.starts_with("round rounds numbers, not true-or-false values"));
-    assert_eq!(run("floor(1 > 0)").unwrap(), Array::Constant(Constant::Truth(true)));
+    assert!(run("round(x > 0.3)")
+        .unwrap_err()
+        .0
+        .starts_with("round rounds numbers, not true-or-false values"));
+    assert_eq!(
+        run("floor(1 > 0)").unwrap(),
+        Array::Constant(Constant::Truth(true))
+    );
 }
 
 /// A bare name is a defined name or a column; any other is refused as an unknown column,
@@ -473,14 +509,19 @@ fn list_operations_place_nan_as_awkward_does_and_refuse_mistakes() {
     assert!(message("bit_and(x > 1, 1)").contains("not true-or-false"));
     assert!(message("shift_right(n, -1)").contains("negative"));
     assert!(message("bit_and(x, 1)").contains("whole numbers"));
-    assert!(message("bit_and(n, n)").contains("needs a fixed whole number, the same for every event, as its second value"));
+    assert!(message("bit_and(n, n)")
+        .contains("needs a fixed whole number, the same for every event, as its second value"));
     // Words that say how to mend what was meant.
     assert!(message("count(false and x > 1)").contains("is given a fixed value, the same for every event: a sample's metadata, say, or an and or or a fixed value decides"));
-    assert!(message("nth(x, n, 0)").contains("nth needs a fixed whole number for the position, the same for every event"));
+    assert!(message("nth(x, n, 0)")
+        .contains("nth needs a fixed whole number for the position, the same for every event"));
     assert!(message("np.sqrt(n)").contains("such as sqrt(…), not np.sqrt(…)"));
     // in works out every member, as or does not past a fixed true.
     assert!(matches!(run("1 in [1, x]").unwrap(), Array::Object { .. }));
-    assert!(matches!(run("1 == 1 or 1 == x").unwrap(), Array::Constant(_)));
+    assert!(matches!(
+        run("1 == 1 or 1 == x").unwrap(),
+        Array::Constant(_)
+    ));
     assert!(message("x.sum()").contains("such as sum(…), not x.sum(…)"));
     assert!(message("order(x, 'up')").contains("'ascending' or 'descending'"));
     assert!(message("take(x, x, 0)").contains("whole-number positions"));
@@ -569,7 +610,10 @@ n_negative = "count(negative)"
     let shadowed = Scope::new(&counted, &sample, &both);
     assert!(shadowed.evaluate(&parse("PT_lep > 1").unwrap()).unwrap_err().0.contains("PT_lep is a name [define] gives an expression, and also the name of a branch of this file"));
     // `where` is a name like any other: after a value it is text left over.
-    assert_eq!(run("count(PT_lep where PT_lep > 1)").unwrap_err().0, "Expected ) at column 14");
+    assert_eq!(
+        run("count(PT_lep where PT_lep > 1)").unwrap_err().0,
+        "Expected ) at column 14"
+    );
     assert!(parse("sample.where == 'x'").is_ok() && parse("branch('where') > 1").is_ok());
     // A name with several dots is suggested whole.
     assert!(parse("sum(recoMuons_muons__RECO.obj.pt_)")
@@ -583,7 +627,10 @@ n_negative = "count(negative)"
     );
     assert!(refused("[define]\na = \"a + 1\"\n").contains("[define] a uses a, itself"));
     // branch('b') reads the branch b, not the name b defined below it.
-    assert!(Recipe::read(&complete("[define]\na = \"branch('b') * 2\"\nb = \"PT_lep\"\n")).is_ok());
+    assert!(Recipe::read(&complete(
+        "[define]\na = \"branch('b') * 2\"\nb = \"PT_lep\"\n"
+    ))
+    .is_ok());
     // A function always has brackets, so a defined name may share a function's name.
     assert!(Recipe::read(&complete("[define]\nfirst = \"PT_lep\"\n")).is_ok());
     assert!(refused("[define]\n\"good-lep\" = \"PT_lep\"\n").contains("one plain name"));
@@ -619,28 +666,82 @@ n_negative = "count(negative)"
         .contains("a branch whose name holds a dot is written branch('AnalysisJetsAuxDyn.pt')"));
     // A derived column uses what the file holds: the stored columns and the derived ones above.
     let derived = "[define]\ngood = \"PT_lep > 1\"\n[columns]\nbranches = [\"PT_lep\"]\nn = \"count(good)\"\n";
-    let read = Recipe::read(&complete(&format!("{derived}[derived]\nhalf = \"n / 2\"\nquarter = \"half / 2\"\n"))).unwrap();
-    assert_eq!(read.derived, [("half".to_owned(), "n / 2".to_owned()), ("quarter".to_owned(), "half / 2".to_owned())]);
+    let read = Recipe::read(&complete(&format!(
+        "{derived}[derived]\nhalf = \"n / 2\"\nquarter = \"half / 2\"\n"
+    )))
+    .unwrap();
+    assert_eq!(
+        read.derived,
+        [
+            ("half".to_owned(), "n / 2".to_owned()),
+            ("quarter".to_owned(), "half / 2".to_owned())
+        ]
+    );
     for (line, said) in [
-        ("x = \"good\"", "x uses good, but good is a line of [define], which the file does not keep"),
-        ("x = \"Eta_lep\"", "x uses Eta_lep, but the file does not store Eta_lep"),
-        ("x = \"y\"\ny = \"n\"", "x uses y, but y is a derived column below it"),
-        ("n = \"PT_lep\"", "n is already the name of a column, a total or a line of [define]"),
-        ("good = \"n\"", "good is already the name of a column, a total or a line of [define]"),
-        ("entry = \"n\"", "a derived column is named with one plain name"),
-        ("x = \"branch('Eta_lep')\"", "x uses Eta_lep, but the file does not store Eta_lep"),
-        ("x = \"branch('y') + 1\"\ny = \"n\"", "x uses y, but y is a derived column below it"),
-        ("x = \"branch(sample.trigger)\"", "branch(sample.KEY) names another column for each sample"),
+        (
+            "x = \"good\"",
+            "x uses good, but good is a line of [define], which the file does not keep",
+        ),
+        (
+            "x = \"Eta_lep\"",
+            "x uses Eta_lep, but the file does not store Eta_lep",
+        ),
+        (
+            "x = \"y\"\ny = \"n\"",
+            "x uses y, but y is a derived column below it",
+        ),
+        (
+            "n = \"PT_lep\"",
+            "n is already the name of a column, a total or a line of [define]",
+        ),
+        (
+            "good = \"n\"",
+            "good is already the name of a column, a total or a line of [define]",
+        ),
+        (
+            "entry = \"n\"",
+            "a derived column is named with one plain name",
+        ),
+        (
+            "x = \"branch('Eta_lep')\"",
+            "x uses Eta_lep, but the file does not store Eta_lep",
+        ),
+        (
+            "x = \"branch('y') + 1\"\ny = \"n\"",
+            "x uses y, but y is a derived column below it",
+        ),
+        (
+            "x = \"branch(sample.trigger)\"",
+            "branch(sample.KEY) names another column for each sample",
+        ),
     ] {
-        let wrong = Recipe::read(&complete(&format!("{derived}[derived]\n{line}\n"))).unwrap_err().0;
+        let wrong = Recipe::read(&complete(&format!("{derived}[derived]\n{line}\n")))
+            .unwrap_err()
+            .0;
         assert!(wrong.contains(said), "{line}: {wrong}");
     }
     // A table left out is refused, each named; a [columns] that stores nothing is refused too.
     let bare = Recipe::read("format = \"rvr-recipe\"\nversion = 1\n").unwrap_err();
     assert_eq!(bare.lacking(), rvr_recipe::TABLES);
-    assert!(bare.0.starts_with("A recipe has no [define], [keep], [columns], [totals] or [derived] table") && bare.0.contains("\nThe recipe stores nothing"), "{}", bare.0);
-    let empty = Recipe::read("format = \"rvr-recipe\"\nversion = 1\n[define]\n[keep]\n[columns]\n[totals]\n[derived]\n").unwrap_err();
-    assert!(empty.lacking().is_empty() && empty.0.starts_with("The recipe stores nothing: under [columns]"), "{}", empty.0);
+    assert!(
+        bare.0.starts_with(
+            "A recipe has no [define], [keep], [columns], [totals] or [derived] table"
+        ) && bare.0.contains("\nThe recipe stores nothing"),
+        "{}",
+        bare.0
+    );
+    let empty = Recipe::read(
+        "format = \"rvr-recipe\"\nversion = 1\n[define]\n[keep]\n[columns]\n[totals]\n[derived]\n",
+    )
+    .unwrap_err();
+    assert!(
+        empty.lacking().is_empty()
+            && empty
+                .0
+                .starts_with("The recipe stores nothing: under [columns]"),
+        "{}",
+        empty.0
+    );
 }
 
 /// Integer list reductions keep adjacent 64-bit values distinct without passing through floats.
@@ -754,9 +855,22 @@ fn stored_float_to_u64_preserves_values_above_signed_range() {
     );
 
     // A value outside the kind, or NaN, is a data error of its value.
-    for (value, said) in [(-1.0, "-1.0 does not fit in u8"), (f64::NAN, "NaN is no number"), (f64::INFINITY, "inf does not fit in u8"), (18446744073709551616.0, "1.8446744073709552e19 does not fit in u8")] {
-        let error = Values::float(Kind::F8, vec![0.0, value]).convert(Kind::U8).unwrap_err();
-        assert!(error.0.starts_with(said) && error.1 == Some(1), "{value}: {error:?}");
+    for (value, said) in [
+        (-1.0, "-1.0 does not fit in u8"),
+        (f64::NAN, "NaN is no number"),
+        (f64::INFINITY, "inf does not fit in u8"),
+        (
+            18446744073709551616.0,
+            "1.8446744073709552e19 does not fit in u8",
+        ),
+    ] {
+        let error = Values::float(Kind::F8, vec![0.0, value])
+            .convert(Kind::U8)
+            .unwrap_err();
+        assert!(
+            error.0.starts_with(said) && error.1 == Some(1),
+            "{value}: {error:?}"
+        );
     }
 }
 
@@ -794,9 +908,16 @@ fn mass_preserves_nan_instead_of_clipping_it_to_zero() {
 fn totals_are_sums_only_derived_columns_use() {
     let text = complete("[columns]\nbranches = [\"w\"]\n[totals]\nsumw = \"genWeight\"\nruns = { value = \"genEventSumw\", tree = \"Runs\" }\n[derived]\nweight = \"w / sample.sumw\"\n");
     let read = Recipe::read(&text).unwrap();
-    let totals: Vec<(&str, Option<&str>)> = read.totals.iter().map(|t| (t.name.as_str(), t.tree.as_deref())).collect();
+    let totals: Vec<(&str, Option<&str>)> = read
+        .totals
+        .iter()
+        .map(|t| (t.name.as_str(), t.tree.as_deref()))
+        .collect();
     assert_eq!(totals, [("sumw", None), ("runs", Some("Runs"))]);
-    assert_eq!(read.derived, [("weight".to_owned(), "w / sample.sumw".to_owned())]);
+    assert_eq!(
+        read.derived,
+        [("weight".to_owned(), "w / sample.sumw".to_owned())]
+    );
     let refused = |body: &str| Recipe::read(&complete(body)).unwrap_err().0;
     for (body, said) in [
         ("[keep]\nx = \"sample.sumw > 0\"\n[totals]\nsumw = \"w\"\n", "[keep] x uses sample.sumw, a total of [totals], known only once every event is read: use it under [derived]"),

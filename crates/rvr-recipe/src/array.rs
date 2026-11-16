@@ -51,9 +51,17 @@ pub(crate) fn recorded(key: &str) -> String {
 /// What `operator` refuses text with, when it is not `==` or `!=`.
 pub(crate) fn text_refused(operator: Operator) -> String {
     match operator {
-        _ if operator.arithmetic() => format!("Text cannot be combined with a number: {} takes numbers", operator.word()),
-        Operator::And | Operator::Or => format!("{} needs a true-or-false value, not text", operator.word()),
-        _ => format!("Text can only be compared with == and !=, not {}", operator.word()),
+        _ if operator.arithmetic() => format!(
+            "Text cannot be combined with a number: {} takes numbers",
+            operator.word()
+        ),
+        Operator::And | Operator::Or => {
+            format!("{} needs a true-or-false value, not text", operator.word())
+        }
+        _ => format!(
+            "Text can only be compared with == and !=, not {}",
+            operator.word()
+        ),
     }
 }
 
@@ -128,7 +136,9 @@ const QUIET_NAN: f64 = f64::from_bits(QUIET_NAN_F8);
 fn widened(value: f32) -> f64 {
     let bits = value.to_bits();
     match value.is_nan() {
-        true => f64::from_bits(u64::from(bits >> 31) << 63 | 0x7ff << 52 | u64::from(bits & 0x007f_ffff) << 29),
+        true => f64::from_bits(
+            u64::from(bits >> 31) << 63 | 0x7ff << 52 | u64::from(bits & 0x007f_ffff) << 29,
+        ),
         false => f64::from(value),
     }
 }
@@ -139,7 +149,11 @@ fn narrowed(value: f64) -> f32 {
     let payload = (bits >> 29) as u32 & 0x007f_ffff;
     match value.is_nan() {
         // A payload below what an f4 holds keeps it a NaN as the quiet one.
-        true => f32::from_bits(((bits >> 63) as u32) << 31 | 0xff << 23 | if payload == 0 { 0x0040_0000 } else { payload }),
+        true => f32::from_bits(
+            ((bits >> 63) as u32) << 31
+                | 0xff << 23
+                | if payload == 0 { 0x0040_0000 } else { payload },
+        ),
         false => value as f32,
     }
 }
@@ -149,7 +163,10 @@ impl Values {
     fn settled(mut self) -> Values {
         if let Store::Float(values) = &mut self.store {
             if let Some(first) = values.iter().position(|v| v.is_nan()) {
-                Arc::make_mut(values)[first..].iter_mut().filter(|v| v.is_nan()).for_each(|v| *v = QUIET_NAN);
+                Arc::make_mut(values)[first..]
+                    .iter_mut()
+                    .filter(|v| v.is_nan())
+                    .for_each(|v| *v = QUIET_NAN);
             }
         }
         self
@@ -183,7 +200,15 @@ impl Values {
             }};
         }
         match kind {
-            Kind::F4 => Self::float(kind, bytes.as_chunks::<4>().0.iter().map(|part| widened(f32::from_le_bytes(*part))).collect()),
+            Kind::F4 => Self::float(
+                kind,
+                bytes
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|part| widened(f32::from_le_bytes(*part)))
+                    .collect(),
+            ),
             Kind::F8 => Self::float(kind, read!(f64, f64)),
             Kind::B1 => Self::whole(kind, bytes.iter().map(|byte| (*byte != 0) as i64).collect()),
             Kind::I1 => Self::whole(kind, read!(i8, i64)),
@@ -297,20 +322,30 @@ impl Values {
                     out.push(match kind {
                         Kind::B1 => (wide != 0) as i64,
                         _ if wide < low || wide > high => {
-                            return Err(data(at, format!("{wide} does not fit in {named}, which holds {low} to {high}")))
+                            return Err(data(
+                                at,
+                                format!(
+                                    "{wide} does not fit in {named}, which holds {low} to {high}"
+                                ),
+                            ))
                         }
                         _ => wide as i64,
                     });
                 }
                 Ok(Values::whole(kind, out))
             }
-            Store::Float(values) if kind.float() => Ok(Values::float(kind, values.iter().map(|v| kind.round(*v)).collect())),
+            Store::Float(values) if kind.float() => Ok(Values::float(
+                kind,
+                values.iter().map(|v| kind.round(*v)).collect(),
+            )),
             Store::Float(values) => {
                 let mut out = Vec::with_capacity(values.len());
                 for (at, value) in values.iter().enumerate() {
                     if value.is_nan() {
                         let said = match kind {
-                            Kind::B1 => "NaN is neither true nor false, so it has no b1 value".to_owned(),
+                            Kind::B1 => {
+                                "NaN is neither true nor false, so it has no b1 value".to_owned()
+                            }
                             _ => format!("NaN is no number, so it has no {named} value"),
                         };
                         return Err(data(at, said));
@@ -320,7 +355,12 @@ impl Values {
                         Kind::B1 => (*value != 0.0) as i64,
                         // Every bound is a power of two, or one less, so that above is the next one up.
                         _ if whole < low as f64 || whole >= high as f64 + 1.0 => {
-                            return Err(data(at, format!("{value:?} does not fit in {named}, which holds {low} to {high}")))
+                            return Err(data(
+                                at,
+                                format!(
+                                "{value:?} does not fit in {named}, which holds {low} to {high}"
+                            ),
+                            ))
                         }
                         Kind::U8 => whole as u64 as i64,
                         _ => whole as i64,
@@ -346,7 +386,10 @@ impl Values {
             Store::Whole(held) => Store::Whole(Arc::new(held[from..to].to_vec())),
             Store::Float(held) => Store::Float(Arc::new(held[from..to].to_vec())),
         };
-        Values { kind: self.kind, store }
+        Values {
+            kind: self.kind,
+            store,
+        }
     }
 
     /// Keep the values at the given positions.
@@ -468,23 +511,34 @@ fn holds<T: PartialOrd>(operator: Operator, a: T, b: T) -> bool {
 
 /// The words a truth operator refuses a number with.
 pub(crate) fn not_truth(what: &str, kind: &str) -> Error {
-    problem(format!("{what} needs a true-or-false value, not {kind}: to test a number, compare it, as x != 0"))
+    problem(format!(
+        "{what} needs a true-or-false value, not {kind}: to test a number, compare it, as x != 0"
+    ))
 }
 
 /// Apply one operator to two columns of the same length.
 fn apply(operator: Operator, left: &Values, right: &Values) -> Result<Values> {
     use Operator::*;
     if matches!(operator, And | Or) {
-        let (a, b) = (left.truths(operator.word())?, right.truths(operator.word())?);
+        let (a, b) = (
+            left.truths(operator.word())?,
+            right.truths(operator.word())?,
+        );
         let join = |(a, b): (&i64, &i64)| if operator == And { a & b } else { a | b };
-        return Ok(Values::whole(Kind::B1, a.iter().zip(b.iter()).map(join).collect()));
+        return Ok(Values::whole(
+            Kind::B1,
+            a.iter().zip(b.iter()).map(join).collect(),
+        ));
     }
     let arithmetic = operator.arithmetic();
     // Two whole numbers compare exactly, each as its own kind holds it, never through a float.
     if let (false, Some(a), Some(b)) = (arithmetic, left.wholes(), right.wholes()) {
         let (from, to) = (left.kind, right.kind);
         let compare = |(a, b): (&i64, &i64)| holds(operator, from.widen(*a), to.widen(*b)) as i64;
-        return Ok(Values::whole(Kind::B1, a.iter().zip(b).map(compare).collect()));
+        return Ok(Values::whole(
+            Kind::B1,
+            a.iter().zip(b).map(compare).collect(),
+        ));
     }
     let (mut left, mut right) = together(left, right)?;
     if arithmetic && left.kind == Kind::B1 {
@@ -498,7 +552,10 @@ fn apply(operator: Operator, left: &Values, right: &Values) -> Result<Values> {
         (Store::Float(a), Store::Float(b)) => {
             let pairs = a.iter().zip(b.iter());
             if !arithmetic {
-                return Ok(Values::whole(Kind::B1, pairs.map(|(a, b)| holds(operator, a, b) as i64).collect()));
+                return Ok(Values::whole(
+                    Kind::B1,
+                    pairs.map(|(a, b)| holds(operator, a, b) as i64).collect(),
+                ));
             }
             let compute = |(a, b): (&f64, &f64)| match operator {
                 Add => a + b,
@@ -509,7 +566,10 @@ fn apply(operator: Operator, left: &Values, right: &Values) -> Result<Values> {
                 _ if *b == 2.0 => a * a,
                 _ => libm::pow(*a, *b),
             };
-            Ok(Values::float(kind, pairs.map(compute).map(|value| kind.round(value)).collect()))
+            Ok(Values::float(
+                kind,
+                pairs.map(compute).map(|value| kind.round(value)).collect(),
+            ))
         }
         (Store::Whole(a), Store::Whole(b)) => {
             let mut out = Vec::with_capacity(a.len());
@@ -540,16 +600,34 @@ pub(crate) fn differs(a: &[usize], b: &[usize]) -> Option<usize> {
 /// Refuse two lists `what` needs alike, at the first event where their lengths differ.
 pub(crate) fn unlike(a: &[usize], b: &[usize], what: &str) -> Error {
     match differs(a, b) {
-        Some(e) => data(e, format!("{what}, and in this event one has {} members and the other {}", a[e + 1] - a[e], b[e + 1] - b[e])),
-        None => problem(format!("{what}, and they cover {} and {} events", a.len() - 1, b.len() - 1)),
+        Some(e) => data(
+            e,
+            format!(
+                "{what}, and in this event one has {} members and the other {}",
+                a[e + 1] - a[e],
+                b[e + 1] - b[e]
+            ),
+        ),
+        None => problem(format!(
+            "{what}, and they cover {} and {} events",
+            a.len() - 1,
+            b.len() - 1
+        )),
     }
 }
 
 /// The lists `offsets` lays out over `values`, a data error among the members being of their event.
 fn listed(offsets: &Arc<Vec<usize>>, values: Result<Values>) -> Result<Array> {
     match values {
-        Ok(values) => Ok(Array::Object { offsets: offsets.clone(), values }),
-        Err(Error(said, at, cause)) => Err(Error(said, at.map(|member| offsets.partition_point(|offset| *offset <= member) - 1), cause)),
+        Ok(values) => Ok(Array::Object {
+            offsets: offsets.clone(),
+            values,
+        }),
+        Err(Error(said, at, cause)) => Err(Error(
+            said,
+            at.map(|member| offsets.partition_point(|offset| *offset <= member) - 1),
+            cause,
+        )),
     }
 }
 
@@ -558,7 +636,10 @@ impl Array {
     pub fn settled(self) -> Array {
         match self {
             Array::Event(values) => Array::Event(values.settled()),
-            Array::Object { offsets, values } => Array::Object { offsets, values: values.settled() },
+            Array::Object { offsets, values } => Array::Object {
+                offsets,
+                values: values.settled(),
+            },
             constant => constant,
         }
     }
@@ -611,7 +692,11 @@ impl Array {
     }
 
     /// This array's values `map`ped in its shape; a constant is `fixed`'s.
-    pub(crate) fn map_values(&self, fixed: impl FnOnce(&Constant) -> Result<Array>, map: impl FnOnce(&Values) -> Result<Values>) -> Result<Array> {
+    pub(crate) fn map_values(
+        &self,
+        fixed: impl FnOnce(&Constant) -> Result<Array>,
+        map: impl FnOnce(&Values) -> Result<Values>,
+    ) -> Result<Array> {
         match self {
             Array::Constant(constant) => fixed(constant),
             Array::Event(values) => Ok(Array::Event(map(values)?)),
@@ -623,11 +708,17 @@ impl Array {
     pub(crate) fn combine(&self, operator: Operator, other: &Array) -> Result<Array> {
         let compares = !matches!(operator, Operator::And | Operator::Or) && !operator.arithmetic();
         match (self, other) {
-            (Array::Constant(Constant::Missing(_)), beside) | (beside, Array::Constant(Constant::Missing(_))) if compares => {
+            (Array::Constant(Constant::Missing(_)), beside)
+            | (beside, Array::Constant(Constant::Missing(_)))
+                if compares =>
+            {
                 return Ok(beside.all(false));
             }
             // Text beside a column of numbers: never equal, and nothing else.
-            (Array::Constant(Constant::Text(_)), beside) | (beside, Array::Constant(Constant::Text(_))) if beside.events().is_some() => {
+            (Array::Constant(Constant::Text(_)), beside)
+            | (beside, Array::Constant(Constant::Text(_)))
+                if beside.events().is_some() =>
+            {
                 return match operator {
                     Operator::Equal => Ok(beside.all(false)),
                     Operator::NotEqual => Ok(beside.all(true)),
@@ -650,7 +741,10 @@ impl Array {
         match self {
             Array::Constant(_) => Array::Constant(Constant::Truth(truth)),
             Array::Event(values) => Array::Event(every(values)),
-            Array::Object { offsets, values } => Array::Object { offsets: offsets.clone(), values: every(values) },
+            Array::Object { offsets, values } => Array::Object {
+                offsets: offsets.clone(),
+                values: every(values),
+            },
         }
     }
 
@@ -662,7 +756,10 @@ impl Array {
             Array::Object { offsets, values } => {
                 let (start, end) = (offsets[from], offsets[to]);
                 let offsets: Vec<usize> = offsets[from..=to].iter().map(|o| o - start).collect();
-                Array::Object { offsets: Arc::new(offsets), values: values.slice(start, end) }
+                Array::Object {
+                    offsets: Arc::new(offsets),
+                    values: values.slice(start, end),
+                }
             }
         }
     }
@@ -673,13 +770,17 @@ impl Array {
             Array::Constant(_) => self.clone(),
             Array::Event(values) => Array::Event(values.take(positions)),
             Array::Object { offsets, values } => {
-                let (mut members, mut lists) = (Vec::new(), Vec::with_capacity(positions.len() + 1));
+                let (mut members, mut lists) =
+                    (Vec::new(), Vec::with_capacity(positions.len() + 1));
                 lists.push(0);
                 for &at in positions {
                     members.extend(offsets[at]..offsets[at + 1]);
                     lists.push(members.len());
                 }
-                Array::Object { offsets: Arc::new(lists), values: values.take(&members) }
+                Array::Object {
+                    offsets: Arc::new(lists),
+                    values: values.take(&members),
+                }
             }
         }
     }
@@ -691,7 +792,8 @@ impl Array {
             1 => return Ok(runs.remove(0)),
             _ => {}
         }
-        let differ = || problem("The runs of one expression gave columns of different kinds or shapes");
+        let differ =
+            || problem("The runs of one expression gave columns of different kinds or shapes");
         // Each run's values, only those its lists cover, and its lists counted from 0.
         let mut parts: Vec<(Values, Option<Vec<usize>>)> = Vec::with_capacity(runs.len());
         for run in &runs {
@@ -699,18 +801,34 @@ impl Array {
                 Array::Event(values) => (values.clone(), None),
                 Array::Object { offsets, values } => {
                     let (start, end) = (offsets[0], offsets[offsets.len() - 1]);
-                    (values.slice(start, end), Some(offsets.iter().map(|o| o - start).collect()))
+                    (
+                        values.slice(start, end),
+                        Some(offsets.iter().map(|o| o - start).collect()),
+                    )
                 }
                 Array::Constant(_) => return Err(differ()),
             });
         }
         let (kind, listed) = (parts[0].0.kind, parts[0].1.is_some());
-        if parts.iter().any(|(values, lists)| values.kind != kind || lists.is_some() != listed) {
+        if parts
+            .iter()
+            .any(|(values, lists)| values.kind != kind || lists.is_some() != listed)
+        {
             return Err(differ());
         }
         let store = match &parts[0].0.store {
-            Store::Whole(_) => Store::Whole(Arc::new(parts.iter().flat_map(|(v, _)| v.wholes().into_iter().flatten().copied()).collect())),
-            Store::Float(_) => Store::Float(Arc::new(parts.iter().flat_map(|(v, _)| v.floats().into_iter().flatten().copied()).collect())),
+            Store::Whole(_) => Store::Whole(Arc::new(
+                parts
+                    .iter()
+                    .flat_map(|(v, _)| v.wholes().into_iter().flatten().copied())
+                    .collect(),
+            )),
+            Store::Float(_) => Store::Float(Arc::new(
+                parts
+                    .iter()
+                    .flat_map(|(v, _)| v.floats().into_iter().flatten().copied())
+                    .collect(),
+            )),
         };
         let values = Values { kind, store };
         if !listed {
@@ -721,12 +839,18 @@ impl Array {
             let end = offsets[offsets.len() - 1];
             offsets.extend(own.iter().flatten().skip(1).map(|o| end + o));
         }
-        Ok(Array::Object { offsets: Arc::new(offsets), values })
+        Ok(Array::Object {
+            offsets: Arc::new(offsets),
+            values,
+        })
     }
 
     /// Every value converted to `kind` (`Values::convert`), a data error naming its event.
     pub fn convert(&self, kind: Kind) -> Result<Array> {
-        self.map_values(|_| Err(problem("stored needs a column, not a fixed value")), |values| values.convert(kind))
+        self.map_values(
+            |_| Err(problem("stored needs a column, not a fixed value")),
+            |values| values.convert(kind),
+        )
     }
 
     /// Two arrays value by value: `adopt` makes a constant a column, `both` takes two constants, `apply` two columns.
@@ -742,8 +866,12 @@ impl Array {
             (Constant(a), Constant(b)) => both(a, b).map(Constant),
             (Constant(a), Event(b)) => Ok(Event(apply(&adopt(a, b)?, b)?)),
             (Event(a), Constant(b)) => Ok(Event(apply(a, &adopt(b, a)?)?)),
-            (Constant(a), Object { offsets, values }) => listed(offsets, apply(&adopt(a, values)?, values)),
-            (Object { offsets, values }, Constant(b)) => listed(offsets, apply(values, &adopt(b, values)?)),
+            (Constant(a), Object { offsets, values }) => {
+                listed(offsets, apply(&adopt(a, values)?, values))
+            }
+            (Object { offsets, values }, Constant(b)) => {
+                listed(offsets, apply(values, &adopt(b, values)?))
+            }
             (Event(a), Event(b)) => {
                 same(a.len(), b.len())?;
                 Ok(Event(apply(a, b)?))
@@ -764,7 +892,11 @@ impl Array {
                 },
             ) => {
                 if offsets != others {
-                    return Err(unlike(offsets, others, "Two lists are combined member by member"));
+                    return Err(unlike(
+                        offsets,
+                        others,
+                        "Two lists are combined member by member",
+                    ));
                 }
                 listed(offsets, apply(values, b))
             }
@@ -778,7 +910,10 @@ fn beside_column(operator: Operator, constant: &Constant, beside: &Values) -> Re
         return match constant {
             Constant::Truth(_) => constant.repeat(Kind::B1, beside.len()),
             Constant::Missing(key) => Err(lacking(key, "a true-or-false value")),
-            Constant::Text(text) => Err(problem(format!("{} needs a true-or-false value, not the text {text:?}", operator.word()))),
+            Constant::Text(text) => Err(problem(format!(
+                "{} needs a true-or-false value, not the text {text:?}",
+                operator.word()
+            ))),
             _ => Err(not_truth(operator.word(), "a number")),
         };
     }
@@ -839,5 +974,7 @@ fn constants(operator: Operator, left: &Constant, right: &Constant) -> Result<Co
         };
     }
     let (a, b) = (left.alone(1)?, right.alone(1)?);
-    Ok(apply(operator, &a, &b).map_err(|e| problem(e.0))?.constant())
+    Ok(apply(operator, &a, &b)
+        .map_err(|e| problem(e.0))?
+        .constant())
 }

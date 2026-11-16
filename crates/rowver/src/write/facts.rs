@@ -61,7 +61,12 @@ impl Facts {
                 }
             });
         }
-        let (lo, hi, distinct, last) = (&mut self.lo, &mut self.hi, &mut self.distinct, &mut self.last);
+        let (lo, hi, distinct, last) = (
+            &mut self.lo,
+            &mut self.hi,
+            &mut self.distinct,
+            &mut self.last,
+        );
         // Rows of a sample often repeat a value; only a change can add to the set.
         each_integer(&self.kind, bytes, |value| {
             *lo = (*lo).min(value);
@@ -102,7 +107,10 @@ impl Facts {
             };
             let ends = nice(Decimal::of(lo), Decimal::of(hi), false);
             out.insert("lim".into(), Value::Array(vec![float(lo), float(hi)]));
-            out.insert("nice".into(), ends.iter().map(|end| float(end.to_f64())).collect());
+            out.insert(
+                "nice".into(),
+                ends.iter().map(|end| float(end.to_f64())).collect(),
+            );
             return out;
         }
         let [lo, hi] = match self.bytes {
@@ -111,9 +119,22 @@ impl Facts {
         };
         let ends = nice(Decimal::whole(lo), Decimal::whole(hi), true);
         out.insert("lim".into(), Value::Array(vec![whole(lo), whole(hi)]));
-        out.insert("nice".into(), ends.iter().map(|end| whole(end.to_whole().expect("a nice end of a whole number is whole"))).collect());
+        out.insert(
+            "nice".into(),
+            ends.iter()
+                .map(|end| {
+                    whole(
+                        end.to_whole()
+                            .expect("a nice end of a whole number is whole"),
+                    )
+                })
+                .collect(),
+        );
         if self.distinct.len() <= FEW {
-            out.insert("vals".into(), self.distinct.iter().copied().map(whole).collect());
+            out.insert(
+                "vals".into(),
+                self.distinct.iter().copied().map(whole).collect(),
+            );
         }
         out
     }
@@ -126,10 +147,24 @@ mod tests {
     // FORMAT 4
     #[test]
     fn facts_merged_in_chunk_order_are_those_of_one_pass_in_row_order() {
-        let bytes = |values: &[f64]| values.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+        let bytes = |values: &[f64]| {
+            values
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<u8>>()
+        };
         // A zero of each sign, at the low end and at the high end, in the first chunk and a later one.
-        for (rest, first, later) in [(1.0, 0.0, -0.0), (1.0, -0.0, 0.0), (-1.0, 0.0, -0.0), (-1.0, -0.0, 0.0)] {
-            let chunks = [vec![rest, first, rest], vec![rest; 3], vec![rest, later, rest]];
+        for (rest, first, later) in [
+            (1.0, 0.0, -0.0),
+            (1.0, -0.0, 0.0),
+            (-1.0, 0.0, -0.0),
+            (-1.0, -0.0, 0.0),
+        ] {
+            let chunks = [
+                vec![rest, first, rest],
+                vec![rest; 3],
+                vec![rest, later, rest],
+            ];
             let mut once = Facts::new("f8");
             once.add(&bytes(&chunks.concat())).unwrap();
             let mut merged = Facts::new("f8");
@@ -139,9 +174,21 @@ mod tests {
                 merged.merge(seen);
             }
             let (once, merged) = (once.finish(), merged.finish());
-            assert_eq!(serde_json::to_string(&merged).unwrap(), serde_json::to_string(&once).unwrap(), "{rest} {first} {later}");
-            let zero = if first.is_sign_negative() { "-0.0" } else { "0.0" };
-            let lim = if rest > 0.0 { format!("[{zero},1.0]") } else { format!("[-1.0,{zero}]") };
+            assert_eq!(
+                serde_json::to_string(&merged).unwrap(),
+                serde_json::to_string(&once).unwrap(),
+                "{rest} {first} {later}"
+            );
+            let zero = if first.is_sign_negative() {
+                "-0.0"
+            } else {
+                "0.0"
+            };
+            let lim = if rest > 0.0 {
+                format!("[{zero},1.0]")
+            } else {
+                format!("[-1.0,{zero}]")
+            };
             assert_eq!(once["lim"].to_string(), lim, "the zero first seen");
         }
     }

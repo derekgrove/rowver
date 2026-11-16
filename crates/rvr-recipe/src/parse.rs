@@ -28,11 +28,16 @@ pub enum Expression {
 impl Expression {
     /// The expressions it holds, in the order written.
     pub(crate) fn children(&self) -> impl Iterator<Item = &Expression> {
-        let (one, two, rest): (Option<&Expression>, Option<&Expression>, &[Expression]) = match self {
-            Expression::Constant(_) | Expression::Name(_) | Expression::Sample(_) => (None, None, &[]),
+        let (one, two, rest): (Option<&Expression>, Option<&Expression>, &[Expression]) = match self
+        {
+            Expression::Constant(_) | Expression::Name(_) | Expression::Sample(_) => {
+                (None, None, &[])
+            }
             Expression::Call(_, arguments) => (None, None, arguments),
             Expression::Negate(inner) | Expression::Not(inner) => (Some(inner), None, &[]),
-            Expression::Binary(_, left, right) | Expression::Pick(left, right) => (Some(left), Some(right), &[]),
+            Expression::Binary(_, left, right) | Expression::Pick(left, right) => {
+                (Some(left), Some(right), &[])
+            }
             Expression::In(left, list) => (Some(left), None, list),
         };
         one.into_iter().chain(two).chain(rest)
@@ -118,8 +123,14 @@ fn tokens(text: &str) -> Result<Vec<(Token, usize)>> {
         } else {
             let rest: String = characters[at..].iter().take(2).collect();
             let Some(symbol) = SYMBOLS.iter().find(|symbol| rest.starts_with(**symbol)) else {
-                let doubled = rest.len() == 2 && rest.chars().all(|c| c == character) && "&|".contains(character);
-                let found = if doubled { rest.as_str() } else { &rest[..character.len_utf8()] };
+                let doubled = rest.len() == 2
+                    && rest.chars().all(|c| c == character)
+                    && "&|".contains(character);
+                let found = if doubled {
+                    rest.as_str()
+                } else {
+                    &rest[..character.len_utf8()]
+                };
                 let write = match character {
                     '=' => ": to compare, write ==, as x == 1",
                     '!' => ": write not, as not x",
@@ -127,7 +138,10 @@ fn tokens(text: &str) -> Result<Vec<(Token, usize)>> {
                     '|' => ": write or, as a or b",
                     _ => "",
                 };
-                return Err(problem(format!("Unexpected {found} at column {}{write}", start + 1)));
+                return Err(problem(format!(
+                    "Unexpected {found} at column {}{write}",
+                    start + 1
+                )));
             };
             out.push((Token::Symbol(symbol), start));
             at += symbol.len();
@@ -242,7 +256,11 @@ impl Parser<'_> {
     }
 
     /// A chain of one binary operator level, built left to right.
-    fn chain(&mut self, next: fn(&mut Self) -> Result<Parsed>, operator: fn(&mut Self) -> Option<Operator>) -> Result<Parsed> {
+    fn chain(
+        &mut self,
+        next: fn(&mut Self) -> Result<Parsed>,
+        operator: fn(&mut Self) -> Option<Operator>,
+    ) -> Result<Parsed> {
         let (mut left, mut depth) = next(self)?;
         while let Some(found) = operator(self) {
             let (right, deep) = next(self)?;
@@ -254,12 +272,16 @@ impl Parser<'_> {
 
     /// A whole expression: `and-expression (or and-expression)*`.
     fn expression(&mut self) -> Result<Parsed> {
-        self.chain(Self::both, |parser| parser.word("or").then_some(Operator::Or))
+        self.chain(Self::both, |parser| {
+            parser.word("or").then_some(Operator::Or)
+        })
     }
 
     /// `not-expression (and not-expression)*`.
     fn both(&mut self) -> Result<Parsed> {
-        self.chain(Self::negation, |parser| parser.word("and").then_some(Operator::And))
+        self.chain(Self::negation, |parser| {
+            parser.word("and").then_some(Operator::And)
+        })
     }
 
     /// `not not-expression`, or a comparison.
@@ -292,7 +314,10 @@ impl Parser<'_> {
         if self.word("in") {
             self.expect("[")?;
             let (members, deep) = self.members("]")?;
-            return Ok((Expression::In(Box::new(left), members), self.level(depth.max(deep))?));
+            return Ok((
+                Expression::In(Box::new(left), members),
+                self.level(depth.max(deep))?,
+            ));
         }
         let pairs = [
             ("<=", Operator::LessEqual),
@@ -305,7 +330,9 @@ impl Parser<'_> {
         for (symbol, operator) in pairs {
             if self.symbol(symbol) {
                 let (right, deep) = self.sum()?;
-                if pairs.iter().any(|(next, _)| matches!(self.peek(), Some(Token::Symbol(found)) if found == next)) {
+                if pairs.iter().any(
+                    |(next, _)| matches!(self.peek(), Some(Token::Symbol(found)) if found == next),
+                ) {
                     return Err(problem(format!("Comparisons do not chain (the second at {}): write a < b and b < c, not a < b < c", self.place())));
                 }
                 let compared = Expression::Binary(operator, Box::new(left), Box::new(right));
@@ -421,7 +448,13 @@ pub fn parse(text: &str) -> Result<Expression> {
 
 /// Read one expression, and how many levels deep it is with each name as deep as `named` says.
 pub(crate) fn parsed(text: &str, named: &dyn Fn(&str) -> usize) -> Result<Parsed> {
-    let mut parser = Parser { tokens: tokens(text)?, at: 0, length: text.chars().count(), nested: 0, named };
+    let mut parser = Parser {
+        tokens: tokens(text)?,
+        at: 0,
+        length: text.chars().count(),
+        nested: 0,
+        named,
+    };
     let parsed = parser.expression()?;
     if parser.at < parser.tokens.len() {
         return Err(problem(format!("Unexpected text at {}", parser.place())));

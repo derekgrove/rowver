@@ -14,13 +14,17 @@ mod nearest;
 mod parse;
 
 pub use array::{Array, Constant, Operator, Store, Values, QUIET_NAN_F4, QUIET_NAN_F8};
-pub use document::{branch_names, compared, fields_of, given, names, taken, plain, reads, uses, Cut, Recipe, Total, ADDED, CHUNK_BOUNDS, CHUNK_ROWS, RESERVED, TABLES};
+pub use document::{
+    branch_names, compared, fields_of, given, names, plain, reads, taken, uses, Cut, Recipe, Total,
+    ADDED, CHUNK_BOUNDS, CHUNK_ROWS, RESERVED, TABLES,
+};
 pub use evaluate::{over_runs, per_event, Columns, Picked, Scope, FUNCTIONS};
 pub use kind::Kind;
 pub use nearest::{meant, nearest, slips, unknown};
 
 /// Where the recipe reference, which lists every function with an example, is read.
-pub const REFERENCE: &str = "https://gitlab.cern.ch/dgrove/rowver/-/blob/main/crates/rvr-recipe/README.md";
+pub const REFERENCE: &str =
+    "https://gitlab.cern.ch/dgrove/rowver/-/blob/main/crates/rvr-recipe/README.md";
 pub use parse::{parse, Expression, DEEPEST};
 
 /// Why an expression could not be read or evaluated: its words, its event (a data error's), and what kind of problem it is.
@@ -63,7 +67,11 @@ pub(crate) fn crowded(message: impl Into<String>) -> Error {
 
 /// Say that an expression names `name`, which is no column.
 pub(crate) fn missing(name: &str) -> Error {
-    Error(format!("There is no column named {name}"), None, Cause::Missing(name.to_owned()))
+    Error(
+        format!("There is no column named {name}"),
+        None,
+        Cause::Missing(name.to_owned()),
+    )
 }
 
 /// Say that the defined name `name` is also a column's.
@@ -72,7 +80,11 @@ pub(crate) fn clash(name: &str) -> Error {
 }
 
 /// Work `work` out over rows `first..last` in order, halving any run too `crowded` to work on at once.
-pub fn in_runs<T>(first: usize, last: usize, work: &mut dyn FnMut(usize, usize) -> Result<T>) -> Result<Vec<T>> {
+pub fn in_runs<T>(
+    first: usize,
+    last: usize,
+    work: &mut dyn FnMut(usize, usize) -> Result<T>,
+) -> Result<Vec<T>> {
     let (mut done, mut pending) = (Vec::new(), vec![(first, last)]);
     while let Some((from, to)) = pending.pop() {
         match work(from, to) {
@@ -152,16 +164,24 @@ mod tests {
         };
         let parts = in_runs(0, 10, &mut work).unwrap();
         assert_eq!(parts.concat(), (0..10).collect::<Vec<_>>());
-        assert_eq!(tried, [(0, 10), (0, 5), (0, 2), (2, 5), (5, 10), (5, 7), (7, 10)]);
+        assert_eq!(
+            tried,
+            [(0, 10), (0, 5), (0, 2), (2, 5), (5, 10), (5, 7), (7, 10)]
+        );
         // One row that is still crowded, or any other mistake, is said as it is.
-        assert!(in_runs(0, 1, &mut |_, _| Err::<(), _>(crowded("too many"))).unwrap_err().crowded());
+        assert!(in_runs(0, 1, &mut |_, _| Err::<(), _>(crowded("too many")))
+            .unwrap_err()
+            .crowded());
         let mut mistaken = |from: usize, to: usize| match (from, to - from > 4) {
             (_, true) => Err(crowded("too many")),
             (4, _) => Err(data(1, "bad")),
             _ => Ok(()),
         };
         let said = in_runs(0, 8, &mut mistaken).unwrap_err();
-        assert_eq!((said.0.as_str(), said.1, said.crowded()), ("bad", Some(1), false));
+        assert_eq!(
+            (said.0.as_str(), said.1, said.crowded()),
+            ("bad", Some(1), false)
+        );
         assert!(!problem("more pairs than one run of events may hold at once").crowded());
     }
 
@@ -188,6 +208,9 @@ mod tests {
             _ => Ok(()),
         };
         let (error, part) = over_runs(&Nothing, 12, &mut work).unwrap_err();
-        assert_eq!((error.0.as_str(), error.1, part), ("unreadable", None, 6..9));
+        assert_eq!(
+            (error.0.as_str(), error.1, part),
+            ("unreadable", None, 6..9)
+        );
     }
 }

@@ -33,12 +33,17 @@ type Column<'py> = (
 fn handed(py: Python<'_>, read: Vec<Option<Held>>) -> Vec<Option<Column<'_>>> {
     let mut shared: Vec<(std::sync::Arc<Vec<usize>>, Bound<'_, PyArray1<i64>>)> = Vec::new();
     let mut one = |mut held: Held| {
-        let offsets = held.offsets.take().map(|offsets| match shared.iter().find(|(known, _)| std::sync::Arc::ptr_eq(known, &offsets)) {
-            Some((_, array)) => array.clone(),
-            None => {
-                let array = counted(py, &offsets);
-                shared.push((offsets, array.clone()));
-                array
+        let offsets = held.offsets.take().map(|offsets| {
+            match shared
+                .iter()
+                .find(|(known, _)| std::sync::Arc::ptr_eq(known, &offsets))
+            {
+                Some((_, array)) => array.clone(),
+                None => {
+                    let array = counted(py, &offsets);
+                    shared.push((offsets, array.clone()));
+                    array
+                }
             }
         });
         (held.kind, held.bytes.into_pyarray(py), offsets)
@@ -48,13 +53,19 @@ fn handed(py: Python<'_>, read: Vec<Option<Held>>) -> Vec<Option<Column<'_>>> {
 
 /// A list column's offsets as NumPy holds them.
 fn counted<'py>(py: Python<'py>, offsets: &[usize]) -> Bound<'py, PyArray1<i64>> {
-    offsets.iter().map(|o| *o as i64).collect::<Vec<_>>().into_pyarray(py)
+    offsets
+        .iter()
+        .map(|o| *o as i64)
+        .collect::<Vec<_>>()
+        .into_pyarray(py)
 }
 
 /// A row number as Python gives it, any whole number: past what an i64 holds, the most one holds of its sign.
 fn row(at: &Bound<'_, PyAny>) -> PyResult<i64> {
     match at.extract::<i64>() {
-        Err(e) if e.is_instance_of::<pyo3::exceptions::PyOverflowError>(at.py()) => Ok(if at.lt(0)? { i64::MIN } else { i64::MAX }),
+        Err(e) if e.is_instance_of::<pyo3::exceptions::PyOverflowError>(at.py()) => {
+            Ok(if at.lt(0)? { i64::MIN } else { i64::MAX })
+        }
         held => held,
     }
 }
@@ -78,8 +89,12 @@ impl File {
     #[new]
     fn new(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
         match py.detach(|| Reader::open(&path)) {
-            Ok(reader) => Ok(File { reader: reader.trusting() }),
-            Err(rowver::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(pyo3::exceptions::PyFileNotFoundError::new_err(rowver::plain_io(&path, &e))),
+            Ok(reader) => Ok(File {
+                reader: reader.trusting(),
+            }),
+            Err(rowver::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(
+                pyo3::exceptions::PyFileNotFoundError::new_err(rowver::plain_io(&path, &e)),
+            ),
             Err(e) => Err(failed(rowver::plain(&path, &e))),
         }
     }
@@ -93,12 +108,17 @@ impl File {
 
     /// The names of the file's tool keys (docs/FORMAT.md §11), in the header's order.
     fn tools(&self) -> Vec<String> {
-        rowver::rvr::tool_names(self.reader.header()).map(str::to_owned).collect()
+        rowver::rvr::tool_names(self.reader.header())
+            .map(str::to_owned)
+            .collect()
     }
 
     /// Every hole the header records, as (sample, file, first entry, entry after the last, kind, why).
     fn holes(&self) -> Vec<(String, String, u64, u64, String, String)> {
-        rowver::rvr::holes(self.reader.header()).into_iter().map(|h| (h.sample, h.file, h.first, h.last, h.kind, h.why)).collect()
+        rowver::rvr::holes(self.reader.header())
+            .into_iter()
+            .map(|h| (h.sample, h.file, h.first, h.last, h.kind, h.why))
+            .collect()
     }
 
     /// Whether the file is empty: its header alone, its columns let go by `rvr empty`.
@@ -109,8 +129,17 @@ impl File {
 
     /// Rows `start..stop` of the columns (or `sample`, `entry`) of these names, the columns' chunks
     /// that hold them decoded in one pool of threads; `None` for a name the file holds no column of.
-    fn rows<'py>(&self, py: Python<'py>, names: Vec<String>, start: &Bound<'py, PyAny>, stop: &Bound<'py, PyAny>) -> PyResult<Vec<Option<Column<'py>>>> {
-        let (start, stop) = self.reader.asked(&names.join(", "), row(start)?, row(stop)?).map_err(|e| self.located(&e))?;
+    fn rows<'py>(
+        &self,
+        py: Python<'py>,
+        names: Vec<String>,
+        start: &Bound<'py, PyAny>,
+        stop: &Bound<'py, PyAny>,
+    ) -> PyResult<Vec<Option<Column<'py>>>> {
+        let (start, stop) = self
+            .reader
+            .asked(&names.join(", "), row(start)?, row(stop)?)
+            .map_err(|e| self.located(&e))?;
         let read = py.detach(|| self.reader.slices(&names, start, stop));
         Ok(handed(py, read.map_err(|e| self.located(&e))?))
     }
@@ -122,7 +151,11 @@ impl File {
 
     /// The columns (or `sample`, `entry`) of these names: every chunk of the stored ones decoded in one pool of
     /// threads, then the derived ones worked out together; `None` for a name the file holds no column of.
-    fn columns<'py>(&self, py: Python<'py>, names: Vec<String>) -> PyResult<Vec<Option<Column<'py>>>> {
+    fn columns<'py>(
+        &self,
+        py: Python<'py>,
+        names: Vec<String>,
+    ) -> PyResult<Vec<Option<Column<'py>>>> {
         let read = py.detach(|| self.reader.columns(&names));
         Ok(handed(py, read.map_err(|e| self.located(&e))?))
     }
@@ -141,21 +174,31 @@ fn validate(py: Python<'_>, path: PathBuf) -> PyResult<(usize, usize)> {
 #[pyfunction]
 fn set_tool(py: Python<'_>, path: PathBuf, key: String, text: Vec<u8>) -> PyResult<()> {
     // The value's own failures are its, not the file's: "the value given for the tool key k …"; a name refused is the file's.
-    let value = rowver::change::tool_data(&key, &text).map_err(|e| match rowver::rvr::tool_key(&key) {
-        Ok(()) => failed(format!("the value given for {e}")),
-        Err(_) => failed(rowver::plain(&path, &e)),
-    })?;
+    let value =
+        rowver::change::tool_data(&key, &text).map_err(|e| match rowver::rvr::tool_key(&key) {
+            Ok(()) => failed(format!("the value given for {e}")),
+            Err(_) => failed(rowver::plain(&path, &e)),
+        })?;
     let set = || rowver::change::set_tool(&rowver::change::Locked::take(&path)?, &key, value);
     py.detach(set).map_err(|e| failed(rowver::plain(&path, &e)))
 }
 
 /// Drop the tool keys `keys` of the file at `path` in one change: each one's bytes as the header held them, every copy of a key held more than once.
 #[pyfunction]
-fn drop_tool<'py>(py: Python<'py>, path: PathBuf, keys: Vec<String>) -> PyResult<Vec<Vec<Bound<'py, PyBytes>>>> {
+fn drop_tool<'py>(
+    py: Python<'py>,
+    path: PathBuf,
+    keys: Vec<String>,
+) -> PyResult<Vec<Vec<Bound<'py, PyBytes>>>> {
     let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
     let dropped = || rowver::change::drop_tool(&rowver::change::Locked::take(&path)?, &keys);
-    let dropped = py.detach(dropped).map_err(|e| failed(rowver::plain(&path, &e)))?;
-    Ok(dropped.iter().map(|copies| copies.iter().map(|bytes| PyBytes::new(py, bytes)).collect()).collect())
+    let dropped = py
+        .detach(dropped)
+        .map_err(|e| failed(rowver::plain(&path, &e)))?;
+    Ok(dropped
+        .iter()
+        .map(|copies| copies.iter().map(|bytes| PyBytes::new(py, bytes)).collect())
+        .collect())
 }
 
 /// One argument to `rvr`: text, or the bytes the system gave (`os.fsencode`).

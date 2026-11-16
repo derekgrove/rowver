@@ -36,7 +36,9 @@ pub(crate) fn kind_of(values: &[&Value]) -> Option<&'static str> {
 
 /// Hash a sample column's values as the bytes of its kind, or refuse values its kind does not allow.
 pub(crate) fn value_checksum(kind: &str, values: &[&Value], name: &str) -> Result<String> {
-    let refused = || invalid(format!("data.sample_cols[{name:?}] has a value its kind {kind} does not allow (docs/FORMAT.md §5): {MEND}"));
+    let refused = || {
+        invalid(format!("data.sample_cols[{name:?}] has a value its kind {kind} does not allow (docs/FORMAT.md §5): {MEND}"))
+    };
     let mut bytes = Vec::new();
     for value in values {
         match (kind, value) {
@@ -88,19 +90,36 @@ pub(super) fn columns(data: &Value, made: &Value) -> Result<()> {
         }
         held.insert(name, (kind, values));
     }
-    let records: Vec<&Value> = samples.iter().map(|sample| &made["files"][sample["name"].as_str().unwrap_or_default()]).collect();
+    let records: Vec<&Value> = samples
+        .iter()
+        .map(|sample| &made["files"][sample["name"].as_str().unwrap_or_default()])
+        .collect();
     let out: HashSet<&str> = pressed.into_iter().chain(RESERVED).collect();
     let mut expected = 0;
-    let keys = records.iter().filter_map(|record| record["metadata"].as_object()).flat_map(|metadata| metadata.keys());
+    let keys = records
+        .iter()
+        .filter_map(|record| record["metadata"].as_object())
+        .flat_map(|metadata| metadata.keys());
     for key in keys.collect::<HashSet<_>>() {
-        let values: Vec<&Value> = records.iter().map(|record| record["metadata"].get(key).unwrap_or(&Value::Null)).collect();
-        let Some(kind) = (!out.contains(key.as_str())).then(|| kind_of(&values)).flatten() else {
+        let values: Vec<&Value> = records
+            .iter()
+            .map(|record| record["metadata"].get(key).unwrap_or(&Value::Null))
+            .collect();
+        let Some(kind) = (!out.contains(key.as_str()))
+            .then(|| kind_of(&values))
+            .flatten()
+        else {
             continue;
         };
         expected += 1;
         // Numbers as numbers, whatever their spelling: an f8 column's as doubles, an i8 one's as whole numbers.
         let numbers = super::facts::numbers(kind);
-        let agrees = held.get(key.as_str()).is_some_and(|(k, v)| *k == kind && v.iter().zip(&values).all(|(a, b)| super::facts::same(a, b, numbers)));
+        let agrees = held.get(key.as_str()).is_some_and(|(k, v)| {
+            *k == kind
+                && v.iter()
+                    .zip(&values)
+                    .all(|(a, b)| super::facts::same(a, b, numbers))
+        });
         if !agrees {
             return Err(invalid(format!("data.sample_cols has no column {key:?} of kind {kind} holding each sample's metadata value, which the samples' metadata gives (docs/FORMAT.md §5): {MEND}")));
         }

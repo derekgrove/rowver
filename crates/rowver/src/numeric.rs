@@ -8,7 +8,9 @@ pub fn width(kind: &str) -> Result<usize> {
 
 /// The first byte of `b1` values that is neither 0 nor 1; none for another kind.
 pub(crate) fn untrue(kind: &str, values: &[u8]) -> Option<u8> {
-    (kind == "b1").then(|| values.iter().find(|byte| **byte > 1).copied()).flatten()
+    (kind == "b1")
+        .then(|| values.iter().find(|byte| **byte > 1).copied())
+        .flatten()
 }
 
 /// Whether a kind holds whole numbers (every kind but `f4` and `f8`).
@@ -46,7 +48,12 @@ pub fn push_shown(kind: &str, bytes: &[u8], out: &mut String) -> Result<()> {
         v[..w].copy_from_slice(b);
         let four = [v[0], v[1], v[2], v[3]];
         let _ = match kind {
-            "f8" | "f4" if other_nan(kind, u64::from_le_bytes(v)) => write!(out, "NaN (bits {:#0w$x})", u64::from_le_bytes(v), w = 2 + 2 * w),
+            "f8" | "f4" if other_nan(kind, u64::from_le_bytes(v)) => write!(
+                out,
+                "NaN (bits {:#0w$x})",
+                u64::from_le_bytes(v),
+                w = 2 + 2 * w
+            ),
             "f8" => write!(out, "{}", f64::from_le_bytes(v)),
             "f4" => write!(out, "{}", f32::from_le_bytes(four)),
             "i8" => write!(out, "{}", i64::from_le_bytes(v)),
@@ -106,7 +113,11 @@ pub(crate) fn each_integer(kind: &str, bytes: &[u8], mut each: impl FnMut(i128))
         "u4" => scan!(u32),
         "u2" => scan!(u16),
         "u1" | "b1" => scan!(u8),
-        kind => return Err(invalid(format!("a bug in rowver: an array of {kind} was read as whole numbers; please report it"))),
+        kind => {
+            return Err(invalid(format!(
+                "a bug in rowver: an array of {kind} was read as whole numbers; please report it"
+            )))
+        }
     }
     Ok(())
 }

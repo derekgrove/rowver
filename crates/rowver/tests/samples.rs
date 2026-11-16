@@ -36,7 +36,10 @@ fn each_rule_refuses_a_text_that_breaks_it_alone() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     // The forms of 3.8.5 are named, all three.
     let forms = refused(&sample("files = \"file:///d/x.root\""));
-    assert!(forms.contains("davs://") && forms.contains("https://"), "{forms}");
+    assert!(
+        forms.contains("davs://") && forms.contains("https://"),
+        "{forms}"
+    );
 }
 
 /// A sample `a` of tree T, with `body`.
@@ -100,9 +103,25 @@ fn accepted_texts_make_the_values_the_rules_give() {
     let made = read(&text("p = \"/data/\"", "tree = \"T\"", "[eras.E]\nn = 7", "[[sample]]\nname = \"a\"\nfiles = [\"{p}/{n}.root\", \"~/b.root\", \"c/d.root\", \"root://h.org//e.root\", \"davs://h.org:443/f.root\", \"https://h.org/g.root\"]\neras = [\"E\"]\ntrees = { p1 = \"T1\" }\n")).unwrap();
     // One trailing / of a place dropped; a whole-number era value put in text as its digits.
     assert_eq!(made[0].files[0], "/data/7.root");
-    assert_eq!(&made[0].files[1..], ["~/b.root", "c/d.root", "root://h.org//e.root", "davs://h.org:443/f.root", "https://h.org/g.root"]);
+    assert_eq!(
+        &made[0].files[1..],
+        [
+            "~/b.root",
+            "c/d.root",
+            "root://h.org//e.root",
+            "davs://h.org:443/f.root",
+            "https://h.org/g.root"
+        ]
+    );
     // A sample's own trees replaces a default tree; the label is the name when left out.
-    assert_eq!((made[0].tree.as_str(), made[0].name.as_str(), made[0].label.as_str()), ("T1", "a_p1_E", "a p1 (E)"));
+    assert_eq!(
+        (
+            made[0].tree.as_str(),
+            made[0].name.as_str(),
+            made[0].label.as_str()
+        ),
+        ("T1", "a_p1_E", "a p1 (E)")
+    );
     let plain = read(&format!("{HEAD}{ONE}")).unwrap();
     assert_eq!(plain[0].label, "a");
 }

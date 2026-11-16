@@ -40,7 +40,10 @@ pub struct Options {
 impl Options {
     /// The value given to `flag`.
     pub fn value(&self, flag: &str) -> Option<&str> {
-        self.flags.iter().find(|(f, _)| *f == flag).and_then(|(_, v)| v.as_deref())
+        self.flags
+            .iter()
+            .find(|(f, _)| *f == flag)
+            .and_then(|(_, v)| v.as_deref())
     }
 
     /// Whether `flag` was given.
@@ -56,7 +59,8 @@ impl Options {
 
 /// Whether a word reads as a short flag, as `-y`: a dash, then letters alone.
 pub(crate) fn short(word: &str) -> bool {
-    word.strip_prefix('-').is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphabetic()))
+    word.strip_prefix('-')
+        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphabetic()))
 }
 
 /// Whether `word` names kinds of hole: every comma-separated part one.
@@ -67,16 +71,33 @@ pub fn kinds(word: &str) -> bool {
 /// Why the word after `--fill`, which is not kinds, is refused, when it reads as kinds meant: it
 /// holds a comma, or a part of it is a slip from a kind, and it is no folder there.
 fn slipped(word: &str) -> Option<String> {
-    let near = |part: &str| rvr_recipe::nearest(part, HOLE_KINDS.iter().copied()).first().map(|kind| kind.to_string());
+    let near = |part: &str| {
+        rvr_recipe::nearest(part, HOLE_KINDS.iter().copied())
+            .first()
+            .map(|kind| kind.to_string())
+    };
     let meant: Vec<Option<String>> = word.split(',').map(near).collect();
-    let slip = word.split(',').zip(&meant).any(|(part, kind)| kind.as_deref().is_some_and(|kind| kind != part));
+    let slip = word
+        .split(',')
+        .zip(&meant)
+        .any(|(part, kind)| kind.as_deref().is_some_and(|kind| kind != part));
     if !(word.contains(',') || slip) || std::path::Path::new(word).is_dir() {
         return None;
     }
-    let wrong: Vec<String> = word.split(',').filter(|part| !HOLE_KINDS.contains(part)).map(|part| format!("{part:?}")).collect();
+    let wrong: Vec<String> = word
+        .split(',')
+        .filter(|part| !HOLE_KINDS.contains(part))
+        .map(|part| format!("{part:?}"))
+        .collect();
     let all: Option<Vec<String>> = meant.into_iter().collect();
-    let hint = all.map_or(String::new(), |all| format!(" (did you mean --fill {}?)", all.join(",")));
-    Some(format!("--fill takes kinds of hole from {}, not {}{hint}, and {word} is not a study folder", HOLE_KINDS.join(", "), wrong.join(" or ")))
+    let hint = all.map_or(String::new(), |all| {
+        format!(" (did you mean --fill {}?)", all.join(","))
+    });
+    Some(format!(
+        "--fill takes kinds of hole from {}, not {}{hint}, and {word} is not a study folder",
+        HOLE_KINDS.join(", "),
+        wrong.join(" or ")
+    ))
 }
 
 /// Read `args` as `command` takes them, or say how they are wrong (wrong use, SPEC §5.1.3).
@@ -87,20 +108,32 @@ pub fn read(command: &Command, args: &[&str]) -> Result<Options, String> {
     let mut after_first = false;
     while let Some(word) = args.next() {
         // rvr tool's argument right after FILE is KEY, unless it is one of its flags in full (SPEC §5.1.2).
-        if std::mem::take(&mut after_first) && command.name == "tool" && !names.contains(&word.split_once('=').map_or(word, |(flag, _)| flag)) {
+        if std::mem::take(&mut after_first)
+            && command.name == "tool"
+            && !names.contains(&word.split_once('=').map_or(word, |(flag, _)| flag))
+        {
             options.words.push(word.to_owned());
             continue;
         }
         // A short flag is its long one (SPEC §5.1.2): the one flag, however it is written.
-        let Some(&(name, takes, short)) = command.flags.iter().find(|(name, _, short)| *name == word || *short == Some(word)) else {
+        let Some(&(name, takes, short)) = command
+            .flags
+            .iter()
+            .find(|(name, _, short)| *name == word || *short == Some(word))
+        else {
             if word.starts_with("--") || (short(word) && !command.dashes) {
                 let (flag, value) = word.split_once('=').unwrap_or((word, ""));
                 if !value.is_empty() && names.contains(&flag) {
-                    return Err(format!("{word} is not read: write {flag} {value}, the value after the flag"));
+                    return Err(format!(
+                        "{word} is not read: write {flag} {value}, the value after the flag"
+                    ));
                 }
                 return Err(match names.is_empty() {
                     true => format!("{word} is not one of its flags: it takes none"),
-                    false => format!("{word} is not one of its flags.{}", rvr_recipe::meant(word, names.iter().copied())),
+                    false => format!(
+                        "{word} is not one of its flags.{}",
+                        rvr_recipe::meant(word, names.iter().copied())
+                    ),
                 });
             }
             options.words.push(word.to_owned());
@@ -133,7 +166,15 @@ pub fn read(command: &Command, args: &[&str]) -> Result<Options, String> {
     if given < least || given > most {
         let said = match options.words.is_empty() {
             true => "none was given".to_owned(),
-            false => format!("it was given {}", options.words.iter().map(|w| format!("{w:?}")).collect::<Vec<_>>().join(", ")),
+            false => format!(
+                "it was given {}",
+                options
+                    .words
+                    .iter()
+                    .map(|w| format!("{w:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         };
         return Err(format!("{} takes {what}, and {said}", command.name));
     }
@@ -144,7 +185,9 @@ pub fn read(command: &Command, args: &[&str]) -> Result<Options, String> {
 fn whole(text: &str) -> Option<u64> {
     let digits = text.bytes().all(|b| b.is_ascii_digit() || b == b'_');
     let between = !text.starts_with('_') && !text.ends_with('_') && !text.contains("__");
-    (digits && between && !text.is_empty()).then(|| text.replace('_', "").parse().ok()).flatten()
+    (digits && between && !text.is_empty())
+        .then(|| text.replace('_', "").parse().ok())
+        .flatten()
 }
 
 /// A count given as `flag`'s value: a whole number from 1 to `most` (SPEC §5.1.4).
@@ -160,7 +203,9 @@ pub fn count(flag: &str, text: &str, most: u64) -> Result<u64, String> {
 
 /// `--seed S`: a whole number from 0 to 2^64 − 1.
 pub fn seed(text: &str) -> Result<u64, String> {
-    whole(text).ok_or_else(|| format!("--seed is a whole number from 0 to 2^64 − 1, written in digits, not {text:?}"))
+    whole(text).ok_or_else(|| {
+        format!("--seed is a whole number from 0 to 2^64 − 1, written in digits, not {text:?}")
+    })
 }
 
 /// `--events N|all`: every event, or the first N, from 1 to 2^63 − 1.
@@ -174,7 +219,9 @@ pub fn events(text: &str) -> Result<rowver::choice::Events, String> {
 /// `--workers N`, or the number of cores (1 when the system says none).
 pub fn workers(options: &Options) -> Result<usize, String> {
     match options.value("--workers") {
-        Some(n) => count("--workers", n, u64::MAX).map(|n| usize::try_from(n).unwrap_or(usize::MAX)),
+        Some(n) => {
+            count("--workers", n, u64::MAX).map(|n| usize::try_from(n).unwrap_or(usize::MAX))
+        }
         None => Ok(rowver::parallel::cores().max(1)),
     }
 }
@@ -185,7 +232,12 @@ mod tests {
 
     const PRESS: Command = Command {
         name: "press",
-        flags: &[("--events", Takes::Value, None), ("--random", Takes::No, None), ("--fill", Takes::Kinds, None), ("--drop", Takes::No, None)],
+        flags: &[
+            ("--events", Takes::Value, None),
+            ("--random", Takes::No, None),
+            ("--fill", Takes::Kinds, None),
+            ("--drop", Takes::No, None),
+        ],
         words: (0, 1, "at most one study folder"),
         dashes: false,
         usage: "",
@@ -196,25 +248,62 @@ mod tests {
     fn flags_are_read_one_way_and_wrong_use_is_said() {
         let read = |args: &[&str]| super::read(&PRESS, args);
         let options = read(&["study", "--events", "10", "--fill", "gone,damaged"]).unwrap();
-        assert_eq!((options.plain(), options.value("--events"), options.value("--fill")), (vec!["study"], Some("10"), Some("gone,damaged")));
+        assert_eq!(
+            (
+                options.plain(),
+                options.value("--events"),
+                options.value("--fill")
+            ),
+            (vec!["study"], Some("10"), Some("gone,damaged"))
+        );
         // The word after --fill is KINDS only when every part is a kind, whatever the folders are.
-        assert_eq!(read(&["--fill", "gone"]).unwrap().value("--fill"), Some("gone"));
+        assert_eq!(
+            read(&["--fill", "gone"]).unwrap().value("--fill"),
+            Some("gone")
+        );
         let folder = read(&["--fill", "study"]).unwrap();
-        assert_eq!((folder.value("--fill"), folder.plain()), (None, vec!["study"]));
+        assert_eq!(
+            (folder.value("--fill"), folder.plain()),
+            (None, vec!["study"])
+        );
         // One that reads as kinds meant, and is no folder, is refused wherever it stands.
         for args in [&["--fill", "gon"][..], &["--fill", "gone,damage", "study"]] {
-            assert!(read(args).unwrap_err().contains("did you mean --fill gone"), "{args:?}");
+            assert!(
+                read(args).unwrap_err().contains("did you mean --fill gone"),
+                "{args:?}"
+            );
         }
-        assert!(read(&["--evnts", "1"]).unwrap_err().contains("Did you mean: --events?"));
-        assert!(read(&["--events=1"]).unwrap_err().contains("write --events 1"));
+        assert!(read(&["--evnts", "1"])
+            .unwrap_err()
+            .contains("Did you mean: --events?"));
+        assert!(read(&["--events=1"])
+            .unwrap_err()
+            .contains("write --events 1"));
         assert!(read(&["--events"]).unwrap_err().contains("needs a value"));
-        assert!(read(&["--events", "--random"]).unwrap_err().contains("needs a value"));
-        assert!(read(&["--random", "--random"]).unwrap_err().contains("given twice"));
-        assert!(read(&["--drop", "--drop"]).is_ok(), "--drop may be given again");
-        let empty = Command { name: "empty", flags: &[("--force", Takes::No, Some("-f"))], words: (1, 9, "files"), dashes: false, usage: "" };
+        assert!(read(&["--events", "--random"])
+            .unwrap_err()
+            .contains("needs a value"));
+        assert!(read(&["--random", "--random"])
+            .unwrap_err()
+            .contains("given twice"));
+        assert!(
+            read(&["--drop", "--drop"]).is_ok(),
+            "--drop may be given again"
+        );
+        let empty = Command {
+            name: "empty",
+            flags: &[("--force", Takes::No, Some("-f"))],
+            words: (1, 9, "files"),
+            dashes: false,
+            usage: "",
+        };
         assert!(super::read(&empty, &["a", "-f"]).unwrap().has("--force"));
-        assert!(super::read(&empty, &["a", "-f", "--force"]).unwrap_err().contains("--force (or -f) is given twice"));
-        assert!(read(&["a", "b"]).unwrap_err().contains("takes at most one study folder"));
+        assert!(super::read(&empty, &["a", "-f", "--force"])
+            .unwrap_err()
+            .contains("--force (or -f) is given twice"));
+        assert!(read(&["a", "b"])
+            .unwrap_err()
+            .contains("takes at most one study folder"));
         assert!(read(&["-y"]).unwrap_err().contains("not one of its flags"));
         assert_eq!(count("--events", "50_000", 100_000), Ok(50_000));
         for wrong in ["0", "_5", "5_", "5__0", "-1", "1e3", ""] {

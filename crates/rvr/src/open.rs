@@ -6,12 +6,12 @@ use crate::holes::{fault_of, Failed, Fault, Seen};
 use crate::samples::remote::{digest_seen, HttpsFile, Storage, Watch, READING};
 use crate::samples::resolve::{self, adler32_file};
 use hep_root::{ByteSource, RootFile, Tree};
+use rowver::rvr::grouped as count;
 use rowver::study::lock::{File, Lock};
 use rvr_recipe::{Array, Columns, Constant, Kind, Recipe, Values};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
-use rowver::rvr::grouped as count;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -47,7 +47,14 @@ impl<'a, S: ByteSource> Branches<'a, S> {
     /// Entries `first..last` of a tree.
     pub fn over(file: &'a RootFile<S>, tree: &'a Tree, first: i64, last: i64) -> Self {
         let read = RefCell::new(HashMap::new());
-        Branches { file, tree, first, last, read, failure: RefCell::new(None) }
+        Branches {
+            file,
+            tree,
+            first,
+            last,
+            read,
+            failure: RefCell::new(None),
+        }
     }
 
     /// The first failure to read a branch, if one failed.
@@ -88,7 +95,9 @@ impl<S: ByteSource> Columns for Branches<'_, S> {
                 // Counts that do not add up to the values read are the file's bytes, not the recipe.
                 Err(e) => {
                     let said = rvr_recipe::problem(format!("{name}: {}", e.0));
-                    self.failure.borrow_mut().get_or_insert(hep_root::Error::format(0, e.0));
+                    self.failure
+                        .borrow_mut()
+                        .get_or_insert(hep_root::Error::format(0, e.0));
                     return Err(said);
                 }
             },
@@ -99,7 +108,6 @@ impl<S: ByteSource> Columns for Branches<'_, S> {
             .insert(name.to_owned(), array.clone());
         Ok(Some(array))
     }
-
 }
 
 /// Whether a branch may be asked for: its name appears in the recipe, or among the sample's text
@@ -116,7 +124,11 @@ pub(crate) fn mentioned(
 }
 
 /// Refuse a file that differs from what the lock recorded of it.
-pub(crate) fn changed(file: &File, bytes: Option<u64>, adler32: Option<String>) -> Result<(), Failed> {
+pub(crate) fn changed(
+    file: &File,
+    bytes: Option<u64>,
+    adler32: Option<String>,
+) -> Result<(), Failed> {
     match resolve::differs(file, bytes, adler32.as_deref()) {
         None => Ok(()),
         Some(how) => Err(Failed::new(Fault::Changed, format!("{how}. It has changed since samples.lock was written: if the change is wanted, run rvr samples resolve samples.toml and review the new lock."))),
@@ -125,14 +137,20 @@ pub(crate) fn changed(file: &File, bytes: Option<u64>, adler32: Option<String>) 
 
 /// Check one input against the lock and open it from `read_at` (its path, or its door's HTTPS URL),
 /// a failure said by the lock's name for it; one gone says to put it back and `then`, or to resolve again and run `command`.
-pub(crate) fn open(reach: &Reach, file: &File, read_at: &str, (then, command): (&str, &str)) -> Result<RootFile<Held>, Failed> {
+pub(crate) fn open(
+    reach: &Reach,
+    file: &File,
+    read_at: &str,
+    (then, command): (&str, &str),
+) -> Result<RootFile<Held>, Failed> {
     let at = &file.at;
     // Storage that could not be set up is not the file's fault: every remote file would fail the same.
     let offline = || Failed::new(Fault::Save, format!("{at}: {}", reach.offline));
     let again = Some((READING, reach.watch.clone()));
     if !read_at.contains("://") {
         // A relative path is the lock's own: relative to the study folder.
-        let path = resolve::local(read_at, reach.dir).map_err(|why| Failed::new(Fault::Save, why))?;
+        let path =
+            resolve::local(read_at, reach.dir).map_err(|why| Failed::new(Fault::Save, why))?;
         // A file whose folder is not there either may be on a disk not mounted: not the file's fault.
         let folder = path.parent().is_none_or(Path::exists);
         let meta = std::fs::metadata(&path).map_err(|e| match e.kind() {
@@ -168,14 +186,30 @@ pub(crate) fn open(reach: &Reach, file: &File, read_at: &str, (then, command): (
     std::thread::scope(|scope| {
         let agent = storage.agent();
         let digest = scope.spawn(move || {
-            digest_seen(&agent, at, https, storage.waits, storage.proxy.is_some(), &storage.watch)
+            digest_seen(
+                &agent,
+                at,
+                https,
+                storage.waits,
+                storage.proxy.is_some(),
+                &storage.watch,
+            )
         });
         let seen = Arc::new(Seen::default());
         let remote = HttpsFile::reading(storage, at, https, file.bytes);
-        let root = opened(file, Box::new(remote.seeing(&seen)), again, Some(seen), &reach.read);
-        let (bytes, adler32) = digest
-            .join()
-            .map_err(|_| Failed::new(Fault::Bug, format!("{at}: asking its storage stopped unexpectedly")))??;
+        let root = opened(
+            file,
+            Box::new(remote.seeing(&seen)),
+            again,
+            Some(seen),
+            &reach.read,
+        );
+        let (bytes, adler32) = digest.join().map_err(|_| {
+            Failed::new(
+                Fault::Bug,
+                format!("{at}: asking its storage stopped unexpectedly"),
+            )
+        })??;
         changed(file, bytes, adler32)?;
         root
     })
@@ -184,10 +218,17 @@ pub(crate) fn open(reach: &Reach, file: &File, read_at: &str, (then, command): (
 /// Where the sample `named` is among the `names` of `file` (the first sample when none is named).
 pub(crate) fn sample_at(names: &[&str], named: Option<&str>, file: &str) -> Result<usize, String> {
     if names.is_empty() {
-        return Err(format!("{file} has no samples: add one to samples.toml and resolve again"));
+        return Err(format!(
+            "{file} has no samples: add one to samples.toml and resolve again"
+        ));
     }
     let Some(name) = named else { return Ok(0) };
-    names.iter().position(|s| *s == name).ok_or_else(|| format!("{file} has no sample named {name}; it has {}", names.join(", ")))
+    names.iter().position(|s| *s == name).ok_or_else(|| {
+        format!(
+            "{file} has no sample named {name}; it has {}",
+            names.join(", ")
+        )
+    })
 }
 
 /// Where the sample `named` is in the lock (the first sample when none is named).
@@ -197,22 +238,36 @@ pub(crate) fn sample_in(lock: &Lock, named: Option<&str>) -> Result<usize, Strin
 }
 
 /// The first of a sample's files with entries, opened, with its entry in the lock.
-pub(crate) fn first_readable<'a>(lock: &'a Lock, sample: usize, dir: &Path) -> Result<(RootFile<Held>, &'a File), String> {
+pub(crate) fn first_readable<'a>(
+    lock: &'a Lock,
+    sample: usize,
+    dir: &Path,
+) -> Result<(RootFile<Held>, &'a File), String> {
     let s = &lock.samples[sample];
-    let file = s
-        .files
-        .iter()
-        .find(|f| f.entries != 0)
-        .ok_or_else(|| format!("sample {} has no file with events: try another sample, with --sample NAME", s.name))?;
+    let file = s.files.iter().find(|f| f.entries != 0).ok_or_else(|| {
+        format!(
+            "sample {} has no file with events: try another sample, with --sample NAME",
+            s.name
+        )
+    })?;
     let watch = Arc::new(Watch::default());
     let (storage, offline) = connect(&[(sample, file)], &watch);
     let read = Default::default();
-    let reach = Reach { storage: storage.as_ref(), offline: &offline, dir, watch, whole: false, read };
+    let reach = Reach {
+        storage: storage.as_ref(),
+        offline: &offline,
+        dir,
+        watch,
+        whole: false,
+        read,
+    };
     let url = match file.at.contains("://") {
         true => crate::samples::remote::https(&file.at)?,
         false => file.at.clone(),
     };
-    open(&reach, file, &url, ("run rvr try again", "rvr try")).map(|root| (root, file)).map_err(|failed| failed.why)
+    open(&reach, file, &url, ("run rvr try again", "rvr try"))
+        .map(|root| (root, file))
+        .map_err(|failed| failed.why)
 }
 
 /// Open a checked input and refuse one whose ROOT UUID is not the lock's; `again`, `seen` and
@@ -236,10 +291,13 @@ pub(crate) fn opened(
     let root = RootFile::open(source).map_err(|e| {
         let fault = fault_of(&e, seen.as_deref());
         match e {
-            hep_root::Error::Remote(_) | hep_root::Error::SourceChanged(_) | hep_root::Error::Io(_) => {
-                Failed::new(fault, format!("{at} could not be read: {e}"))
-            }
-            e => Failed::new(fault, format!("{at} is not a ROOT file this reader can open: {e}")),
+            hep_root::Error::Remote(_)
+            | hep_root::Error::SourceChanged(_)
+            | hep_root::Error::Io(_) => Failed::new(fault, format!("{at} could not be read: {e}")),
+            e => Failed::new(
+                fault,
+                format!("{at} is not a ROOT file this reader can open: {e}"),
+            ),
         }
     })?;
     let uuid = root.header().uuid_string();
@@ -250,10 +308,16 @@ pub(crate) fn opened(
 }
 
 /// Where a failure is among entries from `first`: its event's entry, or the entries of the `part` it was read in.
-pub(crate) fn entries(error: &rvr_recipe::Error, first: u64, part: &std::ops::Range<usize>) -> String {
+pub(crate) fn entries(
+    error: &rvr_recipe::Error,
+    first: u64,
+    part: &std::ops::Range<usize>,
+) -> String {
     match error.1 {
         Some(row) => format!("entry {}", count(first + row as u64)),
-        None if part.end > part.start => rowver::rvr::span(first + part.start as u64, first + part.end as u64),
+        None if part.end > part.start => {
+            rowver::rvr::span(first + part.start as u64, first + part.end as u64)
+        }
         None => "no entries".into(),
     }
 }

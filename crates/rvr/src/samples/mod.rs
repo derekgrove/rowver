@@ -5,9 +5,9 @@ pub(crate) mod multipart;
 pub(crate) mod remote;
 pub(crate) mod resolve;
 
-use rowver::rvr::grouped as count;
 use resolve::Context;
 use rowver::choice::Events;
+use rowver::rvr::grouped as count;
 use rowver::study::lock::{self, Branches, Lock};
 use rowver::study::samples;
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,7 +24,12 @@ fn reading(sample: &lock::Sample) -> String {
         format!("all {} events", count(sample.events_total))
     } else {
         let random = matches!(sample.events, Events::Random { .. });
-        format!("{} of {} events{}", count(sample.events_read), count(sample.events_total), if random { " (random)" } else { "" })
+        format!(
+            "{} of {} events{}",
+            count(sample.events_read),
+            count(sample.events_total),
+            if random { " (random)" } else { "" }
+        )
     }
 }
 
@@ -36,7 +41,9 @@ fn size(bytes: u64) -> String {
 }
 
 /// Values made once a run, each by the first to ask for it while the others wait (a folder's listing).
-pub(crate) struct Once<K, V>(std::sync::Mutex<std::collections::HashMap<K, std::sync::Arc<std::sync::OnceLock<V>>>>);
+pub(crate) struct Once<K, V>(
+    std::sync::Mutex<std::collections::HashMap<K, std::sync::Arc<std::sync::OnceLock<V>>>>,
+);
 
 impl<K, V> Default for Once<K, V> {
     fn default() -> Self {
@@ -47,7 +54,13 @@ impl<K, V> Default for Once<K, V> {
 impl<K: Eq + std::hash::Hash, V: Clone> Once<K, V> {
     /// The value for `key`, made by `make` when no one has made it yet.
     pub fn get(&self, key: K, make: impl FnOnce() -> V) -> V {
-        let slot = self.0.lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_default().clone();
+        let slot = self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(key)
+            .or_default()
+            .clone();
         slot.get_or_init(make).clone()
     }
 }
@@ -61,7 +74,10 @@ impl Proxy {
             return;
         }
         let trust = self.trust();
-        self.said.iter().chain(&trust).for_each(|said| eprintln!("rvr: {said}"));
+        self.said
+            .iter()
+            .chain(&trust)
+            .for_each(|said| eprintln!("rvr: {said}"));
     }
 
     /// That the certificate folder adds no authority, when it adds none, and what to do.
@@ -69,9 +85,18 @@ impl Proxy {
         let ca = self.ca.as_ref()?;
         let named = std::env::var("X509_CERT_DIR").is_ok_and(|ca| !ca.trim().is_empty());
         let (what, mend) = match std::fs::read_dir(ca) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => ("is not there".to_owned(), "name a folder that is there in X509_CERT_DIR"),
-            Err(e) => (format!("cannot be read ({})", rowver::described(&e)), "make it readable, or name another in X509_CERT_DIR"),
-            Ok(_) if grid_trust::roots(Some(ca)).1.added == 0 => ("holds no certificate authority rvr can read (.pem or hash.0 files)".to_owned(), "name the folder that does in X509_CERT_DIR"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
+                "is not there".to_owned(),
+                "name a folder that is there in X509_CERT_DIR",
+            ),
+            Err(e) => (
+                format!("cannot be read ({})", rowver::described(&e)),
+                "make it readable, or name another in X509_CERT_DIR",
+            ),
+            Ok(_) if grid_trust::roots(Some(ca)).1.added == 0 => (
+                "holds no certificate authority rvr can read (.pem or hash.0 files)".to_owned(),
+                "name the folder that does in X509_CERT_DIR",
+            ),
             Ok(_) => return None,
         };
         let unset = if named { ", or unset it" } else { "" };
@@ -121,7 +146,9 @@ fn read_samples(path: &Path, offering: bool) -> Result<(String, Vec<samples::Sam
     let text = std::fs::read_to_string(path).map_err(|e| rowver::plain_io(path, &e))?;
     match samples::read(&text) {
         Ok(made) => Ok((text, made)),
-        Err(problems) if offering && problems.said.is_empty() && offer(path, &text, &problems.missing)? => {
+        Err(problems)
+            if offering && problems.said.is_empty() && offer(path, &text, &problems.missing)? =>
+        {
             let text = std::fs::read_to_string(path).map_err(|e| rowver::plain_io(path, &e))?;
             let made = samples::read(&text).map_err(|p| format!("{}: {p}", path.display()))?;
             Ok((text, made))
@@ -144,7 +171,10 @@ fn offer(path: &Path, source: &str, missing: &[&'static str]) -> Result<bool, St
             return Ok(false);
         }
     };
-    let names: Vec<&str> = samples::TABLES.iter().filter_map(|t| t.strip_prefix('[')?.strip_suffix(']')).collect();
+    let names: Vec<&str> = samples::TABLES
+        .iter()
+        .filter_map(|t| t.strip_prefix('[')?.strip_suffix(']'))
+        .collect();
     let named = missing.join(", ");
     let question = format!(
         "samples.toml leaves out {named}: every samples.toml starts with {} and {}, and writes {}, each even when empty.\nWrite {} in, in {}, then go on resolving? [y/N] ",
@@ -154,7 +184,14 @@ fn offer(path: &Path, source: &str, missing: &[&'static str]) -> Result<bool, St
         if missing.len() == 1 { "it" } else { "them" },
         if missing.len() == 1 { "its place" } else { "their places" }
     );
-    crate::tables::ask_and_write(path, source, &text, &question, &format!("write {named} into it"), "resolve")?;
+    crate::tables::ask_and_write(
+        path,
+        source,
+        &text,
+        &question,
+        &format!("write {named} into it"),
+        "resolve",
+    )?;
     eprintln!("Wrote {named} into samples.toml.");
     Ok(true)
 }
@@ -163,24 +200,44 @@ fn offer(path: &Path, source: &str, missing: &[&'static str]) -> Result<bool, St
 /// byte-order mark), the tables in their places; refused unless it reads as before with only
 /// these added.
 fn mended(source: &str, missing: &[&str]) -> Result<String, String> {
-    let root: toml::Table = source.parse().map_err(|e| format!("samples.toml is not TOML: {e}"))?;
-    let tables: Vec<&str> = missing.iter().filter_map(|m| m.strip_prefix('[')?.strip_suffix(']')).collect();
-    let heads: Vec<&str> = missing.iter().copied().filter(|m| !m.starts_with('[')).collect();
+    let root: toml::Table = source
+        .parse()
+        .map_err(|e| format!("samples.toml is not TOML: {e}"))?;
+    let tables: Vec<&str> = missing
+        .iter()
+        .filter_map(|m| m.strip_prefix('[')?.strip_suffix(']'))
+        .collect();
+    let heads: Vec<&str> = missing
+        .iter()
+        .copied()
+        .filter(|m| !m.starts_with('['))
+        .collect();
     // The tables in their order, then the samples.
-    let names = samples::TABLES.iter().filter_map(|t| t.strip_prefix('[')?.strip_suffix(']'));
+    let names = samples::TABLES
+        .iter()
+        .filter_map(|t| t.strip_prefix('[')?.strip_suffix(']'));
     let order: Vec<&str> = names.chain(["sample"]).collect();
     let body = crate::tables::written(source, &root, &tables, &order, "samples.toml")?;
-    let (mark, body) = body.strip_prefix('\u{feff}').map_or(("", body.as_str()), |rest| ("\u{feff}", rest));
+    let (mark, body) = body
+        .strip_prefix('\u{feff}')
+        .map_or(("", body.as_str()), |rest| ("\u{feff}", rest));
     let text = match heads.is_empty() {
         true => format!("{mark}{body}"),
         false => format!("{mark}{}\n\n{body}", heads.join("\n")),
     };
     let mut expected = root.clone();
     expected.extend(heads.join("\n").parse::<toml::Table>().unwrap_or_default());
-    expected.extend(tables.iter().map(|t| (t.to_string(), toml::Value::Table(Default::default()))));
+    expected.extend(
+        tables
+            .iter()
+            .map(|t| (t.to_string(), toml::Value::Table(Default::default()))),
+    );
     match text.parse::<toml::Table>().ok() == Some(expected) {
         true => Ok(text),
-        false => Err(format!("{} could not be written into samples.toml, so it is as it was.", missing.join(", "))),
+        false => Err(format!(
+            "{} could not be written into samples.toml, so it is as it was.",
+            missing.join(", ")
+        )),
     }
 }
 
@@ -206,9 +263,19 @@ fn expand(path: &Path, json: bool) -> Result<(), String> {
         Events::First(n) => format!("first {n}"),
         Events::Random { n, seed } => format!("random {n}, seed {seed}"),
     };
-    println!("  {:34} {:40} {:18} {:22} reads", "name", "label", "tree", "events");
+    println!(
+        "  {:34} {:40} {:18} {:22} reads",
+        "name", "label", "tree", "events"
+    );
     for s in &made {
-        println!("  {:34} {:40} {:18} {:22} {}", s.name, s.label, s.tree, choice(s.events), s.files.join(" + "));
+        println!(
+            "  {:34} {:40} {:18} {:22} {}",
+            s.name,
+            s.label,
+            s.tree,
+            choice(s.events),
+            s.files.join(" + ")
+        );
     }
     Ok(())
 }
@@ -216,7 +283,10 @@ fn expand(path: &Path, json: bool) -> Result<(), String> {
 /// The sample `named` (the first when none is) of samples.toml at `path`, its first file found as
 /// resolve finds it and opened, nothing else asked (no adler32, no digest): the sample, its first
 /// file and that file's branch list. Nothing is written.
-pub(crate) fn first_file(path: &Path, named: Option<&str>) -> Result<(samples::Sample, String, Branches), String> {
+pub(crate) fn first_file(
+    path: &Path,
+    named: Option<&str>,
+) -> Result<(samples::Sample, String, Branches), String> {
     let (_, made) = read_samples(path, false)?;
     let names: Vec<&str> = made.iter().map(|s| s.name.as_str()).collect();
     let sample = made[crate::open::sample_at(&names, named, "samples.toml")?].clone();
@@ -224,7 +294,11 @@ pub(crate) fn first_file(path: &Path, named: Option<&str>) -> Result<(samples::S
     if sample.files.iter().any(|f| f.contains("://")) {
         proxy.say();
     }
-    let mut ctx = Context::new(path.parent().map(Path::to_path_buf).unwrap_or_default(), proxy.path, proxy.ca);
+    let mut ctx = Context::new(
+        path.parent().map(Path::to_path_buf).unwrap_or_default(),
+        proxy.path,
+        proxy.ca,
+    );
     ctx.pins = false;
     let first = std::sync::OnceLock::new();
     let resolved = resolve::resolve(&ctx, &sample, &|locked, list| {
@@ -234,7 +308,11 @@ pub(crate) fn first_file(path: &Path, named: Option<&str>) -> Result<(samples::S
     // A sample resolves only with a branch list, which `first` is given before resolve returns.
     match first.into_inner() {
         Some((at, list)) => Ok((sample, at, list)),
-        None => Err(format!("{}: {}", sample.name, resolved.err().unwrap_or_default())),
+        None => Err(format!(
+            "{}: {}",
+            sample.name,
+            resolved.err().unwrap_or_default()
+        )),
     }
 }
 
@@ -242,7 +320,10 @@ pub(crate) fn first_file(path: &Path, named: Option<&str>) -> Result<(samples::S
 /// terminal, the tables it leaves out are offered first. resolve writes no lock a recipe cannot be
 /// pressed from.
 fn recipe_beside(path: &Path) -> Result<(String, rvr_recipe::Recipe), String> {
-    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     let text = crate::texts::study_file(dir, "recipe.toml")?;
     match crate::texts::read_recipe(&text) {
         Ok(recipe) => Ok((text, recipe)),
@@ -277,9 +358,15 @@ impl Early<'_> {
         if held.iter().any(Option::is_none) {
             return;
         }
-        let (samples, branches): (Vec<lock::Sample>, Vec<Branches>) = held.iter().flatten().flatten().cloned().unzip();
+        let (samples, branches): (Vec<lock::Sample>, Vec<Branches>) =
+            held.iter().flatten().flatten().cloned().unzip();
         let asked: Vec<Events> = samples.iter().map(|s| s.events).collect();
-        let lock = Lock { resolved: String::new(), samples_toml_sha256: String::new(), samples, branches };
+        let lock = Lock {
+            resolved: String::new(),
+            samples_toml_sha256: String::new(),
+            samples,
+            branches,
+        };
         if let Err(said) = crate::agree::recipe(self.recipe, &lock, &asked) {
             let _ = self.refused.set(said.join("\n"));
             ctx.stop();
@@ -299,7 +386,9 @@ fn resolve_all(path: &Path) -> Result<(), String> {
     let (text, made) = read_samples(path, true)?;
     let (recipe_text, recipe) = recipe_beside(path)?;
     let proxy = proxy();
-    let remote = made.iter().any(|s| s.files.iter().any(|f| f.contains("://")));
+    let remote = made
+        .iter()
+        .any(|s| s.files.iter().any(|f| f.contains("://")));
     if remote {
         proxy.say();
     }
@@ -308,14 +397,21 @@ fn resolve_all(path: &Path) -> Result<(), String> {
     let started = std::time::Instant::now();
     let next = std::sync::atomic::AtomicUsize::new(0);
     type Resolved = Result<(lock::Sample, Branches), String>;
-    let results: Vec<std::sync::Mutex<Option<Resolved>>> = made.iter().map(|_| Default::default()).collect();
-    let early = Early { recipe: &recipe, firsts: std::sync::Mutex::new(vec![None; made.len()]), refused: Default::default() };
+    let results: Vec<std::sync::Mutex<Option<Resolved>>> =
+        made.iter().map(|_| Default::default()).collect();
+    let early = Early {
+        recipe: &recipe,
+        firsts: std::sync::Mutex::new(vec![None; made.len()]),
+        refused: Default::default(),
+    };
     std::thread::scope(|s| {
         for _ in 0..12 {
             s.spawn(|| loop {
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let Some(sample) = made.get(i) else { break };
-                let resolved = resolve::resolve(&ctx, sample, &|first, list| early.tell(&ctx, i, Some((first, list.clone()))));
+                let resolved = resolve::resolve(&ctx, sample, &|first, list| {
+                    early.tell(&ctx, i, Some((first, list.clone())))
+                });
                 early.tell(&ctx, i, None);
                 *results[i].lock().unwrap() = Some(resolved);
             });
@@ -329,8 +425,17 @@ fn resolve_all(path: &Path) -> Result<(), String> {
         match result.into_inner().unwrap().unwrap() {
             Ok((l, list)) => {
                 let bytes: u64 = l.files.iter().map(|f| f.bytes).sum();
-                let files = if l.files.len() == 1 { "1 file ".to_string() } else { format!("{} files", l.files.len()) };
-                println!("  ok    {:40} {files:>9} {:>10}   {}", l.name, size(bytes), reading(&l));
+                let files = if l.files.len() == 1 {
+                    "1 file ".to_string()
+                } else {
+                    format!("{} files", l.files.len())
+                };
+                println!(
+                    "  ok    {:40} {files:>9} {:>10}   {}",
+                    l.name,
+                    size(bytes),
+                    reading(&l)
+                );
                 if !lists.iter().any(|b| b.sha256 == list.sha256) {
                     lists.push(list);
                 }
@@ -344,7 +449,10 @@ fn resolve_all(path: &Path) -> Result<(), String> {
             }
         }
     }
-    let distinct: BTreeMap<&str, u64> = locked.iter().flat_map(|l| l.files.iter().map(|f| (f.at.as_str(), f.bytes))).collect();
+    let distinct: BTreeMap<&str, u64> = locked
+        .iter()
+        .flat_map(|l| l.files.iter().map(|f| (f.at.as_str(), f.bytes)))
+        .collect();
     println!(
         "\n{}, {}, {} in {:.1} s.",
         some(locked.len(), "sample", "samples"),
@@ -367,11 +475,19 @@ fn resolve_all(path: &Path) -> Result<(), String> {
     };
     let body = lock.write()?;
     // What resolve writes is what every reader checks: a lock that does not read back is a bug.
-    let read = Lock::read(&body).map_err(|p| format!("the lock resolve made does not check out (a bug in rvr: please report it): {p}"))?;
+    let read = Lock::read(&body).map_err(|p| {
+        format!("the lock resolve made does not check out (a bug in rvr: please report it): {p}")
+    })?;
     // The agreement check a press makes, but for its options and the file it builds on.
-    let texts = crate::texts::Texts { recipe: recipe_text, samples: text, lock: body.clone() };
+    let texts = crate::texts::Texts {
+        recipe: recipe_text,
+        samples: text,
+        lock: body.clone(),
+    };
     let choose = crate::plan::Choose::Options(Choice::default());
-    if let Err(said) = crate::plan::agreed(&texts, true, Some(recipe), Some(read), Vec::new(), &choose) {
+    if let Err(said) =
+        crate::plan::agreed(&texts, true, Some(recipe), Some(read), Vec::new(), &choose)
+    {
         return Err(unfit(&said));
     }
     let out = path.with_file_name("samples.lock");
@@ -389,8 +505,18 @@ fn unread(ctx: &Context, read: &BTreeMap<&str, u64>) {
     let mut unread = Vec::new();
     for folder in folders {
         let names: Vec<String> = match folder.contains("://") {
-            true => ctx.storage.as_ref().and_then(|s| s.list(folder).ok()).unwrap_or_default().into_iter().map(|e| e.name).collect(),
-            false => resolve::local(folder, &ctx.base).ok().and_then(|dir| ctx.listed(&dir).ok().map(|names| names.to_vec())).unwrap_or_default(),
+            true => ctx
+                .storage
+                .as_ref()
+                .and_then(|s| s.list(folder).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| e.name)
+                .collect(),
+            false => resolve::local(folder, &ctx.base)
+                .ok()
+                .and_then(|dir| ctx.listed(&dir).ok().map(|names| names.to_vec()))
+                .unwrap_or_default(),
         };
         for name in names.into_iter().filter(|n| n.ends_with(".root")) {
             let at = resolve::join(folder, &name);
@@ -401,7 +527,10 @@ fn unread(ctx: &Context, read: &BTreeMap<&str, u64>) {
     }
     if !unread.is_empty() {
         unread.sort();
-        println!("The folders read also hold {} no sample reads (not an error; check none was meant):", some(unread.len(), ".root file", ".root files"));
+        println!(
+            "The folders read also hold {} no sample reads (not an error; check none was meant):",
+            some(unread.len(), ".root file", ".root files")
+        );
         for at in unread.iter().take(3) {
             println!("  {at}");
         }
@@ -422,7 +551,11 @@ pub(crate) fn read_lock(path: &Path) -> Result<Lock, String> {
 /// that could not be asked, with why. Both empty when every file is as recorded.
 pub(crate) fn differing(lock: &Lock, base: &Path) -> (Vec<String>, Vec<String>) {
     let proxy = proxy();
-    let files: BTreeMap<&str, &lock::File> = lock.samples.iter().flat_map(|s| s.files.iter().map(|f| (f.at.as_str(), f))).collect();
+    let files: BTreeMap<&str, &lock::File> = lock
+        .samples
+        .iter()
+        .flat_map(|s| s.files.iter().map(|f| (f.at.as_str(), f)))
+        .collect();
     if files.keys().any(|at| at.contains("://")) {
         proxy.say();
     }
@@ -448,9 +581,13 @@ pub(crate) fn differing(lock: &Lock, base: &Path) -> (Vec<String>, Vec<String>) 
                             changed.push(format!("{at} no longer exists"));
                             continue;
                         }
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!("{at}: its folder is not there either (a disk not mounted?)")),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!(
+                            "{at}: its folder is not there either (a disk not mounted?)"
+                        )),
                         Err(e) => Err(format!("{at} could not be read: {e}")),
-                        Ok(m) => resolve::adler32_file(&local).map(|a| (Some(m.len()), Some(a))).map_err(|e| format!("{at} could not be read: {e}")),
+                        Ok(m) => resolve::adler32_file(&local)
+                            .map(|a| (Some(m.len()), Some(a)))
+                            .map_err(|e| format!("{at} could not be read: {e}")),
                     }
                 }
             }
@@ -478,18 +615,36 @@ fn check(path: &Path) -> Result<bool, String> {
             same = false;
         }
         Err(e) => {
-            println!("samples.toml beside the lock could not be read: {}.", rowver::plain_it(&e));
+            println!(
+                "samples.toml beside the lock could not be read: {}.",
+                rowver::plain_it(&e)
+            );
             same = false;
         }
     }
     let (changed, unasked) = differing(&lock, path.parent().unwrap_or(Path::new("")));
-    let files: BTreeSet<&str> = lock.samples.iter().flat_map(|s| s.files.iter().map(|f| f.at.as_str())).collect();
+    let files: BTreeSet<&str> = lock
+        .samples
+        .iter()
+        .flat_map(|s| s.files.iter().map(|f| f.at.as_str()))
+        .collect();
     if changed.is_empty() && unasked.is_empty() {
-        println!("Every one of the {} is as the lock recorded it ({}).", some(files.len(), "file", "files"), lock.resolved);
+        println!(
+            "Every one of the {} is as the lock recorded it ({}).",
+            some(files.len(), "file", "files"),
+            lock.resolved
+        );
     }
     if !changed.is_empty() {
         same = false;
-        println!("{} from the lock:", if changed.len() == 1 { "1 file differs".to_owned() } else { format!("{} files differ", changed.len()) });
+        println!(
+            "{} from the lock:",
+            if changed.len() == 1 {
+                "1 file differs".to_owned()
+            } else {
+                format!("{} files differ", changed.len())
+            }
+        );
         for c in &changed {
             println!("  {c}");
         }
@@ -497,7 +652,10 @@ fn check(path: &Path) -> Result<bool, String> {
     }
     if !unasked.is_empty() {
         same = false;
-        println!("{} could not be asked:", some(unasked.len(), "file", "files"));
+        println!(
+            "{} could not be asked:",
+            some(unasked.len(), "file", "files")
+        );
         for u in &unasked {
             println!("  {u}");
         }
@@ -519,22 +677,42 @@ pub struct Choice {
 impl Choice {
     /// The choice the options give, refused when a value is not of its form or `--events all --random`.
     pub fn read(options: &crate::options::Options) -> Result<Choice, String> {
-        let events = options.value("--events").map(crate::options::events).transpose()?;
-        let seed = options.value("--seed").map(crate::options::seed).transpose()?;
-        let choice = Choice { events, random: options.has("--random"), seed };
+        let events = options
+            .value("--events")
+            .map(crate::options::events)
+            .transpose()?;
+        let seed = options
+            .value("--seed")
+            .map(crate::options::seed)
+            .transpose()?;
+        let choice = Choice {
+            events,
+            random: options.has("--random"),
+            seed,
+        };
         if choice.random && choice.events == Some(Events::All) {
-            return Err("--random chooses N events at random: give it with --events N, not --events all".into());
+            return Err(
+                "--random chooses N events at random: give it with --events N, not --events all"
+                    .into(),
+            );
         }
         Ok(choice)
     }
 
     /// The options in words.
     pub fn said(&self) -> String {
-        let seed = self.seed.map_or(String::new(), |seed| format!(" --seed {seed}"));
+        let seed = self
+            .seed
+            .map_or(String::new(), |seed| format!(" --seed {seed}"));
         match (self.events, self.random) {
-            (None, false) if self.seed.is_some() => format!("{}: as samples.toml asks, with that seed for a random choice", seed.trim_start()),
+            (None, false) if self.seed.is_some() => format!(
+                "{}: as samples.toml asks, with that seed for a random choice",
+                seed.trim_start()
+            ),
             (None, false) => "as samples.toml asks".to_string(),
-            (Some(Events::First(n)), r) => format!("--events {n}{}{seed}", if r { " --random" } else { "" }),
+            (Some(Events::First(n)), r) => {
+                format!("--events {n}{}{seed}", if r { " --random" } else { "" })
+            }
             (Some(_), _) => "--events all: every sample whole".to_string(),
             (None, true) => format!("--random{seed}: each sample's own number, chosen at random"),
         }
@@ -563,7 +741,10 @@ impl Choice {
     pub fn check(&self, samples: &[lock::Sample]) -> Result<(), String> {
         let random = |s| matches!(self.of(s), Ok(Events::Random { .. }));
         if self.seed.is_some() && !samples.iter().any(random) {
-            return Err("--seed is for a random choice, and no sample is chosen at random: add --random".into());
+            return Err(
+                "--seed is for a random choice, and no sample is chosen at random: add --random"
+                    .into(),
+            );
         }
         Ok(())
     }
@@ -575,24 +756,42 @@ impl Choice {
 fn plan_all(path: &Path, choice: &Choice) -> Result<(), String> {
     let lock = read_lock(path)?;
     let started = std::time::Instant::now();
-    let (lock, _) = crate::agree::planned(lock, &crate::plan::Choose::Options(choice.clone())).map_err(|said| said.join("\n"))?;
+    let (lock, _) = crate::agree::planned(lock, &crate::plan::Choose::Options(choice.clone()))
+        .map_err(|said| said.join("\n"))?;
     println!(
         "What a press would read ({}), planned from the lock in {:.1} ms:",
         choice.said(),
         started.elapsed().as_secs_f64() * 1e3
     );
     for sample in &lock.samples {
-        let read = sample.files.iter().filter(|f| f.stop != Some(0) && f.take != Some(0)).count();
+        let read = sample
+            .files
+            .iter()
+            .filter(|f| f.stop != Some(0) && f.take != Some(0))
+            .count();
         let files = format!("{read} of {} files", sample.files.len());
         let cut = sample
             .files
             .iter()
             .find_map(|f| Some((f.stop.filter(|n| *n > 0)?, f)))
-            .map(|(stop, f)| format!("; stops at entry {} of {}", count(stop), f.at.rsplit('/').next().unwrap_or(&f.at)))
+            .map(|(stop, f)| {
+                format!(
+                    "; stops at entry {} of {}",
+                    count(stop),
+                    f.at.rsplit('/').next().unwrap_or(&f.at)
+                )
+            })
             .unwrap_or_default();
-        println!("  {:40} {:>34}   {files}{cut}", sample.name, reading(sample));
+        println!(
+            "  {:40} {:>34}   {files}{cut}",
+            sample.name,
+            reading(sample)
+        );
     }
-    let (read, total): (u64, u64) = lock.samples.iter().fold((0, 0), |(r, t), s| (r + s.events_read, t + s.events_total));
+    let (read, total): (u64, u64) = lock
+        .samples
+        .iter()
+        .fold((0, 0), |(r, t), s| (r + s.events_read, t + s.events_total));
     println!("{} of {} events in all.", count(read), count(total));
     Ok(())
 }
@@ -626,11 +825,19 @@ mod tests {
     // SPEC 1.4, 3.1.4
     #[test]
     fn what_samples_toml_leaves_out_is_written_in_its_place() {
-        let missing = [samples::FORMAT, samples::VERSION, samples::TABLES[0], samples::TABLES[1]];
+        let missing = [
+            samples::FORMAT,
+            samples::VERSION,
+            samples::TABLES[0],
+            samples::TABLES[1],
+        ];
         let source = "\u{feff}# my study\n[eras.UL18]\nera = 3\n\n[[sample]]\nname = \"a\"\nfiles = \"x\"\ntree = \"T\"\n";
         let text = mended(source, &missing).unwrap();
         // The file's first comment stays first; the tables go before the era's.
         assert!(text.starts_with("\u{feff}format = \"rvr-samples\"\nversion = 1\n\n# my study\n\n[places]\n\n[defaults]\n\n[eras.UL18]"), "{text:?}");
-        assert!(samples::read(text.trim_start_matches('\u{feff}')).is_ok(), "{text}");
+        assert!(
+            samples::read(text.trim_start_matches('\u{feff}')).is_ok(),
+            "{text}"
+        );
     }
 }

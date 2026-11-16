@@ -7,11 +7,11 @@ use super::spool::Spooled;
 use super::Values;
 use crate::chunks::{self, Frames, Rows};
 use crate::numeric::width;
+use crate::parallel::{Pending, Pool};
 use crate::rvr::Reader;
 use crate::{invalid, Result};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use crate::parallel::{Pending, Pool};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
@@ -204,19 +204,38 @@ impl Out {
     /// Arrays written into `file` from its byte 8 + `at`; with no file, only their bytes counted.
     pub(crate) fn new(file: Option<Arc<std::fs::File>>, at: u64) -> Self {
         let file = std::io::BufWriter::with_capacity(1 << 20, Placed { file, at: 8 + at });
-        Self { file, at, arrays: Vec::new(), coming: VecDeque::new(), chunks: 0, waiting: 0, shared: HashMap::new() }
+        Self {
+            file,
+            at,
+            arrays: Vec::new(),
+            coming: VecDeque::new(),
+            chunks: 0,
+            waiting: 0,
+            shared: HashMap::new(),
+        }
     }
 
     /// An offsets array a file already holds, by its record there: one a new list column may share.
     pub(crate) fn share(&mut self, record: &Map<String, Value>) {
-        if let Some(sha256) = record.get("sha256").and_then(Value::as_str).filter(|_| record.get("size").and_then(Value::as_u64) > Some(0)) {
-            self.shared.entry(sha256.to_owned()).or_insert_with(|| record.clone());
+        if let Some(sha256) = record
+            .get("sha256")
+            .and_then(Value::as_str)
+            .filter(|_| record.get("size").and_then(Value::as_u64) > Some(0))
+        {
+            self.shared
+                .entry(sha256.to_owned())
+                .or_insert_with(|| record.clone());
         }
     }
 
     /// The end of the offsets array `id`, as `ended` hands it over; or, when an array written
     /// holds the same offsets, that one's record, and this one's bytes given back to the next array.
-    fn ended_or_shared(&mut self, id: usize, samples: Option<usize>, workers: usize) -> Result<Map<String, Value>> {
+    fn ended_or_shared(
+        &mut self,
+        id: usize,
+        samples: Option<usize>,
+        workers: usize,
+    ) -> Result<Map<String, Value>> {
         self.settle()?;
         let sha256 = chunks::joined(&self.arrays[id].hashes);
         if let Some(shared) = self.shared.get(&sha256).cloned() {
@@ -239,7 +258,12 @@ impl Out {
 
     /// The end of array `id` handed over, with its file's `samples` when it has `by_sample`: its
     /// record's `at`, `size` and checksums to come, which `placed` gives once it is written.
-    fn ended(&mut self, id: usize, samples: Option<usize>, workers: usize) -> Result<Map<String, Value>> {
+    fn ended(
+        &mut self,
+        id: usize,
+        samples: Option<usize>,
+        workers: usize,
+    ) -> Result<Map<String, Value>> {
         self.arrays[id].samples = samples;
         self.hand(Coming::End(id), workers)?;
         let mut record = Map::new();
@@ -254,7 +278,10 @@ impl Out {
 
     /// Every array written into the file.
     pub(crate) fn flushed(self) -> Result<()> {
-        self.file.into_inner().map(drop).map_err(|e| e.into_error().into())
+        self.file
+            .into_inner()
+            .map(drop)
+            .map_err(|e| e.into_error().into())
     }
 
     /// Hand over what comes next, then write from the head until at most two chunks for each of
@@ -276,7 +303,9 @@ impl Out {
         match self.coming.pop_front() {
             Some(Coming::Chunk(id, bytes, pending)) => {
                 (self.chunks, self.waiting) = (self.chunks - 1, self.waiting - bytes);
-                let (digest, frames) = pending.wait().ok_or_else(|| invalid("a bug in rowver: a thread packing a chunk stopped; please report it"))??;
+                let (digest, frames) = pending.wait().ok_or_else(|| {
+                    invalid("a bug in rowver: a thread packing a chunk stopped; please report it")
+                })??;
                 let sizes: Vec<u64> = match &frames {
                     Frames::Apart(frames) => {
                         for frame in frames {
@@ -330,9 +359,15 @@ impl Out {
         if record.get("sha256") != Some(&Value::Null) {
             return Ok(());
         }
-        let bug = || invalid("a bug in rowver: an array's record was made before it was written; please report it");
+        let bug = || {
+            invalid("a bug in rowver: an array's record was made before it was written; please report it")
+        };
         let id = record["at"].as_u64().ok_or_else(bug)? as usize;
-        let array = self.arrays.get(id).filter(|_| self.coming.is_empty()).ok_or_else(bug)?;
+        let array = self
+            .arrays
+            .get(id)
+            .filter(|_| self.coming.is_empty())
+            .ok_or_else(bug)?;
         let (sha256, by_sample) = chunks::sums(rows, &array.hashes, array.samples.unwrap_or(0));
         record.insert("at".into(), array.start.ok_or_else(bug)?.into());
         record.insert("size".into(), array.size.into());
@@ -385,7 +420,12 @@ impl<'o> Chunked<'o> {
             let id = out.array();
             (out, packer, id)
         });
-        Ok(Self { w: width(kind)?, out, hashes: Vec::new(), share: false })
+        Ok(Self {
+            w: width(kind)?,
+            out,
+            hashes: Vec::new(),
+            share: false,
+        })
     }
 
     /// The next chunk's values, little-endian, and its byte lanes when they are at hand.
@@ -461,20 +501,48 @@ impl<'o> Cutting<'o> {
     }
 
     /// A list column `name` of values of `kind` over the chunks `rows`, its offsets written to `out`.
-    fn offsets(name: &str, kind: &str, rows: &[Rows], out: (&'o mut Out, Packer<'o>)) -> Result<Self> {
-        Self::made(name, kind, rows, Cut::Offsets(Chunked { share: !rows.is_empty(), ..Chunked::new("i8", Some(out))? }))
+    fn offsets(
+        name: &str,
+        kind: &str,
+        rows: &[Rows],
+        out: (&'o mut Out, Packer<'o>),
+    ) -> Result<Self> {
+        Self::made(
+            name,
+            kind,
+            rows,
+            Cut::Offsets(Chunked {
+                share: !rows.is_empty(),
+                ..Chunked::new("i8", Some(out))?
+            }),
+        )
     }
 
     /// A list column `name` of values of `kind` over the chunks `rows`, its content written to `out`.
-    fn content(name: &str, kind: &str, rows: &[Rows], out: (&'o mut Out, Packer<'o>)) -> Result<Self> {
-        Self::made(name, kind, rows, Cut::Content(Chunked::new(kind, Some(out))?))
+    fn content(
+        name: &str,
+        kind: &str,
+        rows: &[Rows],
+        out: (&'o mut Out, Packer<'o>),
+    ) -> Result<Self> {
+        Self::made(
+            name,
+            kind,
+            rows,
+            Cut::Content(Chunked::new(kind, Some(out))?),
+        )
     }
 
     /// A column `name` of `kind`, a list column when `listed`, over the chunks `rows`, only
     /// measured: its records' checksums and facts, no array written.
     fn measuring(name: &str, kind: &str, listed: bool, rows: &[Rows]) -> Result<Self> {
         let offsets = listed.then(|| Chunked::new("i8", None)).transpose()?;
-        Self::made(name, kind, rows, Cut::Measured(offsets, Chunked::new(kind, None)?))
+        Self::made(
+            name,
+            kind,
+            rows,
+            Cut::Measured(offsets, Chunked::new(kind, None)?),
+        )
     }
 
     /// A cutting of a column that makes `cut` of it.
@@ -514,9 +582,15 @@ impl<'o> Cutting<'o> {
         }
         let (name, rows) = (self.name.clone(), self.rows.last().map_or(0, |last| last.2));
         let per = if counts.is_some() { "list" } else { "value" };
-        let too_many = move || invalid(format!("{name}: it holds more rows than the file's {rows}: give it one {per} per row"));
+        let too_many = move || {
+            invalid(format!(
+                "{name}: it holds more rows than the file's {rows}: give it one {per} per row"
+            ))
+        };
         let Some(counts) = counts else {
-            let values = values.ok_or_else(|| invalid("a bug in rowver: a flat column's values were not read; please report it"))?;
+            let values = values.ok_or_else(|| {
+                invalid("a bug in rowver: a flat column's values were not read; please report it")
+            })?;
             let mut at = 0;
             while at < n {
                 let end = self.rows.get(self.next).ok_or_else(&too_many)?.2;
@@ -588,9 +662,14 @@ impl<'o> Cutting<'o> {
             Cut::Measured(offsets, array) => (Some(array), offsets.as_mut()),
         };
         if let Some(array) = array {
-            let lanes = self.lanes.as_mut().map(|lanes| std::mem::replace(lanes, vec![Vec::new(); self.w]));
+            let lanes = self
+                .lanes
+                .as_mut()
+                .map(|lanes| std::mem::replace(lanes, vec![Vec::new(); self.w]));
             let values = match &lanes {
-                Some(lanes) => crate::codec::merge(lanes, self.w, lanes.first().map_or(0, Vec::len)),
+                Some(lanes) => {
+                    crate::codec::merge(lanes, self.w, lanes.first().map_or(0, Vec::len))
+                }
                 None => std::mem::take(&mut self.values),
             };
             if let Some(facts) = &mut self.facts {
@@ -618,8 +697,14 @@ impl<'o> Cutting<'o> {
     /// `content` alone (with its kind and count).
     fn finish(self, samples: usize) -> Result<Map<String, Value>> {
         let rows = self.rows.last().map_or(0, |last| last.2);
-        if self.next != self.rows.len() || !self.values.is_empty() || self.lanes.iter().flatten().any(|lane| !lane.is_empty()) {
-            return Err(invalid(format!("{}: it holds {} rows, and the file {rows}: give it one value (or list) per row", self.name, self.taken)));
+        if self.next != self.rows.len()
+            || !self.values.is_empty()
+            || self.lanes.iter().flatten().any(|lane| !lane.is_empty())
+        {
+            return Err(invalid(format!(
+                "{}: it holds {} rows, and the file {rows}: give it one value (or list) per row",
+                self.name, self.taken
+            )));
         }
         let content = |array: Chunked| -> Result<Map<String, Value>> {
             let mut content = Map::new();
@@ -640,7 +725,10 @@ impl<'o> Cutting<'o> {
             }
             Cut::Measured(Some(offsets), array) => {
                 record.insert("kind".into(), "jagged".into());
-                record.insert("offsets".into(), Value::Object(offsets.finish(&self.rows, Some(samples))?));
+                record.insert(
+                    "offsets".into(),
+                    Value::Object(offsets.finish(&self.rows, Some(samples))?),
+                );
                 record.insert("content".into(), Value::Object(content(array)?));
                 Ok(record)
             }
@@ -656,7 +744,12 @@ type Read<'e> = (Option<Piece<'e>>, Option<Cow<'e, [usize]>>);
 /// Feed every value of `pieces` to `cutting` a piece at a time, the next few read on `pool`
 /// while one is cut, each first handed to `check`; for a list column's offsets, only each piece's
 /// counts are read.
-fn fed<'e>(pieces: &'e dyn Pieces, cutting: &mut Cutting, pool: &Pool<'e>, check: &mut dyn FnMut(usize, &Piece) -> Result<()>) -> Result<()> {
+fn fed<'e>(
+    pieces: &'e dyn Pieces,
+    cutting: &mut Cutting,
+    pool: &Pool<'e>,
+    check: &mut dyn FnMut(usize, &Piece) -> Result<()>,
+) -> Result<()> {
     let w = width(pieces.kind())?;
     let counts_only = matches!(cutting.cut, Cut::Offsets(_));
     let read = move |at: usize| -> Result<Read<'e>> {
@@ -674,7 +767,9 @@ fn fed<'e>(pieces: &'e dyn Pieces, cutting: &mut Cutting, pool: &Pool<'e>, check
             let next = at + coming.len();
             coming.push_back(pool.run(move || read(next)));
         }
-        let read = coming.pop_front().and_then(Pending::wait).ok_or_else(|| invalid("a bug in rowver: a thread reading a column stopped; please report it"))?;
+        let read = coming.pop_front().and_then(Pending::wait).ok_or_else(|| {
+            invalid("a bug in rowver: a thread reading a column stopped; please report it")
+        })?;
         let (values, counts) = read?;
         if let Some(values) = &values {
             check(at, values)?;
@@ -687,7 +782,16 @@ fn fed<'e>(pieces: &'e dyn Pieces, cutting: &mut Cutting, pool: &Pool<'e>, check
 /// Pack the `sample` array: each chunk holds its sample's index, which no checksum but its own has.
 pub(super) fn sample(rows: &[Rows], out: &mut Out, pool: &Pool) -> Result<Map<String, Value>> {
     let pack = |job| pool.run(job);
-    let mut array = Chunked::new("i4", Some((out, Packer { run: &pack, workers: pool.workers() })))?;
+    let mut array = Chunked::new(
+        "i4",
+        Some((
+            out,
+            Packer {
+                run: &pack,
+                workers: pool.workers(),
+            },
+        )),
+    )?;
     for (sample, first, end) in rows {
         let index = i32::try_from(*sample).map_err(|_| invalid("Too many samples"))?;
         array.chunk(index.to_le_bytes().repeat(end - first), None)?;
@@ -715,7 +819,10 @@ pub(super) fn sample_sha256(edges: &[usize], rows: &[Rows]) -> Result<String> {
         }
         array.chunk(values, None)?;
     }
-    Ok(array.finish(rows, None)?["sha256"].as_str().unwrap_or_default().to_owned())
+    Ok(array.finish(rows, None)?["sha256"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned())
 }
 
 /// Where entries first differ: the row, the entry given there, and the file's (none past the end of either).
@@ -771,7 +878,14 @@ impl<'a> Ready<'a> {
 }
 
 /// Pack the column `name` from what `ready` holds: copied from another file, or from its pieces.
-pub(super) fn packed<'e>(name: &str, ready: &'e Ready, rows: &[Rows], samples: usize, out: &mut Out, pool: &Pool<'e>) -> Result<Map<String, Value>> {
+pub(super) fn packed<'e>(
+    name: &str,
+    ready: &'e Ready,
+    rows: &[Rows],
+    samples: usize,
+    out: &mut Out,
+    pool: &Pool<'e>,
+) -> Result<Map<String, Value>> {
     match ready {
         Ready::Copied(reader, from) => copied(name, reader, from, rows, samples, out, pool),
         Ready::Whole(whole) => column(name, whole, rows, samples, out, pool),
@@ -781,14 +895,32 @@ pub(super) fn packed<'e>(name: &str, ready: &'e Ready, rows: &[Rows], samples: u
 
 /// Pack the `entry` array, which must hold one `i8` value per row, from its pieces; `files` are
 /// the files' row bounds, within each of which the entries strictly increase.
-pub(super) fn entry<'e>(pieces: &'e dyn Pieces, rows: &[Rows], samples: usize, files: &[usize], out: &mut Out, pool: &Pool<'e>) -> Result<Map<String, Value>> {
+pub(super) fn entry<'e>(
+    pieces: &'e dyn Pieces,
+    rows: &[Rows],
+    samples: usize,
+    files: &[usize],
+    out: &mut Out,
+    pool: &Pool<'e>,
+) -> Result<Map<String, Value>> {
     let total: usize = (0..pieces.pieces()).map(|p| pieces.values(p)).sum();
     let end = rows.last().map_or(0, |last| last.2);
     if pieces.listed() || pieces.kind() != "i8" || total != end {
         return Err(invalid(format!("the entry array holds {total} {} values{}, and it holds one i8 value per row, {end}: give each row's entry as an i8", pieces.kind(), if pieces.listed() { " in lists" } else { "" })));
     }
     let pack = |job| pool.run(job);
-    let mut cutting = Cutting::flat("entry", "i8", rows, (out, Packer { run: &pack, workers: pool.workers() }))?;
+    let mut cutting = Cutting::flat(
+        "entry",
+        "i8",
+        rows,
+        (
+            out,
+            Packer {
+                run: &pack,
+                workers: pool.workers(),
+            },
+        ),
+    )?;
     cutting.facts = None;
     let (mut row, mut file, mut last) = (0_usize, 0_usize, None::<i64>);
     // The entries are checked as values; they are written as they came, in lanes or not.
@@ -821,9 +953,19 @@ pub(super) fn entry<'e>(pieces: &'e dyn Pieces, rows: &[Rows], samples: usize, f
 
 /// Pack one column of the chunks `rows` from its pieces: a list column's offsets, from its counts
 /// alone, then its content.
-pub(super) fn column<'e>(name: &str, pieces: &'e dyn Pieces, rows: &[Rows], samples: usize, out: &mut Out, pool: &Pool<'e>) -> Result<Map<String, Value>> {
+pub(super) fn column<'e>(
+    name: &str,
+    pieces: &'e dyn Pieces,
+    rows: &[Rows],
+    samples: usize,
+    out: &mut Out,
+    pool: &Pool<'e>,
+) -> Result<Map<String, Value>> {
     let pack = |job| pool.run(job);
-    let pack = Packer { run: &pack, workers: pool.workers() };
+    let pack = Packer {
+        run: &pack,
+        workers: pool.workers(),
+    };
     let mut record = Map::new();
     record.insert("name".into(), name.into());
     let none = &mut |_: usize, _: &Piece| Ok(());
@@ -858,7 +1000,8 @@ impl Measuring {
     /// The next rows: their values, and for a list column how many each row holds.
     pub(crate) fn take(&mut self, values: &[u8], counts: Option<&[usize]>) -> Result<()> {
         let n = values.len() / self.0.w;
-        self.0.take(Some(&Piece::Raw(Cow::Borrowed(values))), n, counts)
+        self.0
+            .take(Some(&Piece::Raw(Cow::Borrowed(values))), n, counts)
     }
 
     /// The record, from its kind on, every row taken.
@@ -871,9 +1014,19 @@ impl Measuring {
 /// each chunk decoded and checked on `pool` and written in order through `out`, as packed chunks
 /// are; its facts made again, and equal to its record's there. Its record is that file's, its
 /// arrays where `out` writes them.
-pub(super) fn copied<'e>(name: &str, reader: &'e Reader, from: &str, rows: &[Rows], samples: usize, out: &mut Out, pool: &Pool<'e>) -> Result<Map<String, Value>> {
+pub(super) fn copied<'e>(
+    name: &str,
+    reader: &'e Reader,
+    from: &str,
+    rows: &[Rows],
+    samples: usize,
+    out: &mut Out,
+    pool: &Pool<'e>,
+) -> Result<Map<String, Value>> {
     let Some(held) = reader.record(from).filter(|held| held.is_object()) else {
-        return Err(invalid(format!("{name}: the file it is copied from does not hold {from}")));
+        return Err(invalid(format!(
+            "{name}: the file it is copied from does not hold {from}"
+        )));
     };
     if reader.chunks()?.as_slice() != rows {
         return Err(invalid(format!("{name}: the file it is copied from, {}, is not cut into the same chunks: press again with --full", reader.path().display())));
@@ -884,30 +1037,55 @@ pub(super) fn copied<'e>(name: &str, reader: &'e Reader, from: &str, rows: &[Row
     let unlike: Arc<str> = format!("{name}: its array in {path} does not hold what its record says. Run rvr validate on that file, or press again with --full.").into();
     let damaged: Arc<str> = format!("{name}: its array in {path} is damaged. Run rvr validate on that file, or press again with --full.").into();
     let place = format!("data.cols[{from:?}]");
-    let mut copying = Copying { reader, out, pool, chunks: rows.len(), samples, unlike: unlike.clone(), damaged: damaged.clone() };
+    let mut copying = Copying {
+        reader,
+        out,
+        pool,
+        chunks: rows.len(),
+        samples,
+        unlike: unlike.clone(),
+        damaged: damaged.clone(),
+    };
     let kind = |held: &Value| held["kind"].as_str().unwrap_or("").to_owned();
     if held["kind"] != "jagged" {
         let kind = kind(held);
-        let facts = Arc::new(Mutex::new((0..rows.len()).map(|_| Facts::new(&kind)).collect()));
-        record.extend(copying.array(held, &kind, &place, &|k| rows[k].2 - rows[k].1, Some(&facts))?);
+        let facts = Arc::new(Mutex::new(
+            (0..rows.len()).map(|_| Facts::new(&kind)).collect(),
+        ));
+        record.extend(copying.array(
+            held,
+            &kind,
+            &place,
+            &|k| rows[k].2 - rows[k].1,
+            Some(&facts),
+        )?);
         // Once every chunk is written, its facts merged in row order, as a press takes them.
         let expected = held.clone();
         let check = move || {
-            let mut chunks = std::mem::take(&mut *facts.lock().unwrap_or_else(|e| e.into_inner())).into_iter();
+            let mut chunks =
+                std::mem::take(&mut *facts.lock().unwrap_or_else(|e| e.into_inner())).into_iter();
             let mut made = chunks.next().unwrap_or_else(|| Facts::new(&kind));
             chunks.for_each(|chunk| made.merge(chunk));
-            crate::rvr::facts::agree(&expected, &made.finish(), &kind, "").map_err(|_| invalid(&*unlike))
+            crate::rvr::facts::agree(&expected, &made.finish(), &kind, "")
+                .map_err(|_| invalid(&*unlike))
         };
         out.hand(Coming::Check(Box::new(check)), pool.workers())?;
         return Ok(record);
     }
     let (offsets, content) = (&held["offsets"], &held["content"]);
     // The offsets first, a few chunks ahead on the pool: they give each content chunk's values.
-    let chunks = reader.array_chunks(offsets, "i8", &format!("{place}.offsets")).map_err(|e| refused(e, &unlike))?;
+    let chunks = reader
+        .array_chunks(offsets, "i8", &format!("{place}.offsets"))
+        .map_err(|e| refused(e, &unlike))?;
     // Offsets an earlier list column wrote or the file holds are that array, shared: read here
     // only for each content chunk's values.
     let sha256 = offsets["sha256"].as_str().unwrap_or_default().to_owned();
-    let shared = copying.out.shared.get(&sha256).filter(|_| !rows.is_empty()).cloned();
+    let shared = copying
+        .out
+        .shared
+        .get(&sha256)
+        .filter(|_| !rows.is_empty())
+        .cloned();
     let id = shared.is_none().then(|| copying.out.array());
     let (mut members, mut coming) = (Vec::with_capacity(rows.len()), VecDeque::new());
     for k in 0..rows.len() {
@@ -916,11 +1094,20 @@ pub(super) fn copied<'e>(name: &str, reader: &'e Reader, from: &str, rows: &[Row
             let n = rows[next].2 - rows[next].1 + 1;
             coming.push_back(pool.run(move || chunks.read(next, n)));
         }
-        let read = coming.pop_front().and_then(Pending::wait).ok_or_else(|| invalid("a bug in rowver: a thread reading a column stopped; please report it"))?;
+        let read = coming.pop_front().and_then(Pending::wait).ok_or_else(|| {
+            invalid("a bug in rowver: a thread reading a column stopped; please report it")
+        })?;
         let (digest, frames, values) = read.map_err(|e| refused(e, &damaged))?;
-        members.push(crate::chunks::offsets(&values, name).map_err(|_| invalid(&*unlike))?.1);
+        members.push(
+            crate::chunks::offsets(&values, name)
+                .map_err(|_| invalid(&*unlike))?
+                .1,
+        );
         if let Some(id) = id {
-            copying.out.hand(Coming::Chunk(id, values.len(), Pending::Done(Ok((digest, frames)))), pool.workers())?;
+            copying.out.hand(
+                Coming::Chunk(id, values.len(), Pending::Done(Ok((digest, frames)))),
+                pool.workers(),
+            )?;
         }
     }
     let placed = match id {
@@ -933,12 +1120,20 @@ pub(super) fn copied<'e>(name: &str, reader: &'e Reader, from: &str, rows: &[Row
         }
     };
     record.insert("offsets".into(), Value::Object(placed));
-    let total = members.iter().try_fold(0_u64, |sum, m| sum.checked_add(*m as u64));
+    let total = members
+        .iter()
+        .try_fold(0_u64, |sum, m| sum.checked_add(*m as u64));
     if total.is_none() || total != content["count"].as_u64() {
         return Err(invalid(&*unlike));
     }
     let mut placed = content.as_object().cloned().unwrap_or_default();
-    placed.extend(copying.array(content, &kind(content), &format!("{place}.content"), &|k| members[k], None)?);
+    placed.extend(copying.array(
+        content,
+        &kind(content),
+        &format!("{place}.content"),
+        &|k| members[k],
+        None,
+    )?);
     record.insert("content".into(), Value::Object(placed));
     Ok(record)
 }
@@ -961,14 +1156,25 @@ impl Copying<'_, '_> {
     /// each chunk read, decoded and checked on the pool, its values' facts put in `facts[k]`, and
     /// written in order; its record's `at`, `size` and checksums, which `Out::placed` gives once
     /// it is written.
-    fn array(&mut self, record: &Value, kind: &str, label: &str, n: &dyn Fn(usize) -> usize, facts: Option<&Arc<Mutex<Vec<Facts>>>>) -> Result<Map<String, Value>> {
-        let chunks = self.reader.array_chunks(record, kind, label).map_err(|e| refused(e, &self.unlike))?;
+    fn array(
+        &mut self,
+        record: &Value,
+        kind: &str,
+        label: &str,
+        n: &dyn Fn(usize) -> usize,
+        facts: Option<&Arc<Mutex<Vec<Facts>>>>,
+    ) -> Result<Map<String, Value>> {
+        let chunks = self
+            .reader
+            .array_chunks(record, kind, label)
+            .map_err(|e| refused(e, &self.unlike))?;
         let (id, w) = (self.out.array(), width(kind)?);
         for k in 0..self.chunks {
             let (chunks, facts, kind, n) = (chunks.clone(), facts.cloned(), kind.to_owned(), n(k));
             let (unlike, damaged) = (self.unlike.clone(), self.damaged.clone());
             let job = move || -> Stored {
-                let (digest, frames, values) = chunks.read(k, n).map_err(|e| refused(e, &damaged))?;
+                let (digest, frames, values) =
+                    chunks.read(k, n).map_err(|e| refused(e, &damaged))?;
                 if crate::numeric::untrue(&kind, &values).is_some() {
                     return Err(invalid(&*unlike));
                 }
@@ -979,7 +1185,10 @@ impl Copying<'_, '_> {
                 }
                 Ok((digest, frames))
             };
-            self.out.hand(Coming::Chunk(id, n * w, self.pool.run(job)), self.pool.workers())?;
+            self.out.hand(
+                Coming::Chunk(id, n * w, self.pool.run(job)),
+                self.pool.workers(),
+            )?;
         }
         self.out.ended(id, Some(self.samples), self.pool.workers())
     }
@@ -1004,22 +1213,37 @@ mod tests {
         let by_row = |edges: &[usize], rows: &[crate::chunks::Rows]| {
             let mut array = Chunked::new("i4", None).unwrap();
             for (_, first, end) in rows {
-                let values: Vec<u8> = (*first..*end).flat_map(|row| (edges.partition_point(|edge| *edge <= row).saturating_sub(1) as i32).to_le_bytes()).collect();
+                let values: Vec<u8> = (*first..*end)
+                    .flat_map(|row| {
+                        (edges.partition_point(|edge| *edge <= row).saturating_sub(1) as i32)
+                            .to_le_bytes()
+                    })
+                    .collect();
                 array.chunk(values, None).unwrap();
             }
-            array.finish(rows, None).unwrap()["sha256"].as_str().unwrap().to_owned()
+            array.finish(rows, None).unwrap()["sha256"]
+                .as_str()
+                .unwrap()
+                .to_owned()
         };
         let cases: [(Vec<usize>, Vec<crate::chunks::Rows>); 5] = [
             (vec![0, 4, 7], vec![(0, 0, 2), (0, 2, 4), (1, 4, 7)]),
             // Samples of no rows, first, between and last.
-            (vec![0, 0, 3, 3, 7, 7], vec![(1, 0, 3), (3, 3, 5), (3, 5, 7)]),
+            (
+                vec![0, 0, 3, 3, 7, 7],
+                vec![(1, 0, 3), (3, 3, 5), (3, 5, 7)],
+            ),
             // A chunk across two samples' rows, as rows given otherwise than the file's lay them.
             (vec![0, 2, 7], vec![(0, 0, 3), (1, 3, 7)]),
             (vec![0, 1, 2, 3], vec![(0, 0, 3)]),
             (vec![0, 0], vec![]),
         ];
         for (edges, rows) in cases {
-            assert_eq!(super::sample_sha256(&edges, &rows).unwrap(), by_row(&edges, &rows), "{edges:?} {rows:?}");
+            assert_eq!(
+                super::sample_sha256(&edges, &rows).unwrap(),
+                by_row(&edges, &rows),
+                "{edges:?} {rows:?}"
+            );
         }
     }
 
@@ -1041,7 +1265,10 @@ mod tests {
             let pool = crate::parallel::Pool::new(scope, 2);
             assert_eq!(pool.workers(), 2);
             let pack = |job| pool.run(job);
-            let packer = Packer { run: &pack, workers: pool.workers() };
+            let packer = Packer {
+                run: &pack,
+                workers: pool.workers(),
+            };
             let mut records = Vec::new();
             for n in 0..20_u64 {
                 let mut array = Chunked::new("i8", Some((&mut out, packer))).unwrap();
@@ -1049,7 +1276,10 @@ mod tests {
                 records.push(array.finish(&rows, None).unwrap());
                 assert!(out.chunks <= 4, "{} chunks wait", out.chunks);
                 if n == 2 {
-                    assert_eq!(out.chunks, 3, "no array waits for the one before it to be written");
+                    assert_eq!(
+                        out.chunks, 3,
+                        "no array waits for the one before it to be written"
+                    );
                 }
             }
             out.settle().unwrap();

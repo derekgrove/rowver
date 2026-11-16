@@ -25,12 +25,21 @@ pub(crate) struct Gathered {
 impl Gathered {
     /// Nothing yet of a column of `kind`, a list per event when `listed`.
     pub(crate) fn new(name: &str, (kind, listed): (Kind, bool)) -> Self {
-        Gathered { name: name.to_owned(), kind, bytes: Vec::new(), counts: listed.then(Vec::new) }
+        Gathered {
+            name: name.to_owned(),
+            kind,
+            bytes: Vec::new(),
+            counts: listed.then(Vec::new),
+        }
     }
 }
 
 /// Which events one cut lets through: those it does not apply to, and those that pass it.
-fn lets_through(cut: &rvr_recipe::Cut, scope: &Scope, entries: usize) -> Result<Vec<bool>, rvr_recipe::Error> {
+fn lets_through(
+    cut: &rvr_recipe::Cut,
+    scope: &Scope,
+    entries: usize,
+) -> Result<Vec<bool>, rvr_recipe::Error> {
     let place = format!("[keep] {}", cut.name);
     let applies = match &cut.when {
         None => None,
@@ -39,7 +48,10 @@ fn lets_through(cut: &rvr_recipe::Cut, scope: &Scope, entries: usize) -> Result<
             value => Some(Scope::condition(value, entries).map_err(|e| e.at(&place))?),
         },
     };
-    if applies.as_ref().is_some_and(|applies| !applies.contains(&true)) {
+    if applies
+        .as_ref()
+        .is_some_and(|applies| !applies.contains(&true))
+    {
         return Ok(vec![true; entries]);
     }
     let mut pass = scope.mask(&cut.pass, entries).map_err(|e| e.at(&place))?;
@@ -50,7 +62,12 @@ fn lets_through(cut: &rvr_recipe::Cut, scope: &Scope, entries: usize) -> Result<
 }
 
 /// Apply the cuts to one run of a file's events, counting what each leaves.
-pub(crate) fn kept(recipe: &Recipe, scope: &Scope, mut keep: Vec<bool>, cutflow: &mut [u64]) -> Result<Vec<bool>, rvr_recipe::Error> {
+pub(crate) fn kept(
+    recipe: &Recipe,
+    scope: &Scope,
+    mut keep: Vec<bool>,
+    cutflow: &mut [u64],
+) -> Result<Vec<bool>, rvr_recipe::Error> {
     let entries = keep.len();
     for (index, cut) in recipe.keep.iter().enumerate() {
         for (keep, through) in keep.iter_mut().zip(lets_through(cut, scope, entries)?) {
@@ -63,17 +80,32 @@ pub(crate) fn kept(recipe: &Recipe, scope: &Scope, mut keep: Vec<bool>, cutflow:
 
 /// Add every event of `scope` to each total of `[totals]` over the tree read, one at a time in
 /// entry order, so a file's sum does not depend on its runs.
-pub(crate) fn summed(recipe: &Recipe, scope: &Scope, events: usize, totals: &mut [f64]) -> Result<(), rvr_recipe::Error> {
+pub(crate) fn summed(
+    recipe: &Recipe,
+    scope: &Scope,
+    events: usize,
+    totals: &mut [f64],
+) -> Result<(), rvr_recipe::Error> {
     let lines = recipe.totals.iter().filter(|total| total.tree.is_none());
     for (total, sum) in lines.zip(totals) {
-        add_to(sum, &total.name, scope.evaluate(&total.value).and_then(|v| rvr_recipe::per_event(v, events)))?;
+        add_to(
+            sum,
+            &total.name,
+            scope
+                .evaluate(&total.value)
+                .and_then(|v| rvr_recipe::per_event(v, events)),
+        )?;
     }
     Ok(())
 }
 
 /// Add to `sum` every value, in order: one number per entry, and a sum that stays finite (a data
 /// error at the entry whose value makes it not).
-pub(crate) fn add_to(sum: &mut f64, name: &str, array: rvr_recipe::Result<Array>) -> Result<(), rvr_recipe::Error> {
+pub(crate) fn add_to(
+    sum: &mut f64,
+    name: &str,
+    array: rvr_recipe::Result<Array>,
+) -> Result<(), rvr_recipe::Error> {
     let place = format!("[totals] {name}");
     let values = match array.map_err(|e| e.at(&place))? {
         Array::Event(values) => values,
@@ -84,8 +116,14 @@ pub(crate) fn add_to(sum: &mut f64, name: &str, array: rvr_recipe::Result<Array>
         *sum += value;
         if !sum.is_finite() {
             let (why, mend) = match value.is_finite() {
-                true => (", the values adding up past what a double holds", format!("mend [totals] {name} so that its events give smaller values")),
-                false => ("", "give such events a finite value, as if(isfinite(x), x, 0)".to_owned()),
+                true => (
+                    ", the values adding up past what a double holds",
+                    format!("mend [totals] {name} so that its events give smaller values"),
+                ),
+                false => (
+                    "",
+                    "give such events a finite value, as if(isfinite(x), x, 0)".to_owned(),
+                ),
             };
             return Err(rvr_recipe::data(index, format!("{place}: its sum is not a finite number once this entry's value, {value:?}, is added{why}, and a file holds only finite totals: {mend}")));
         }
@@ -95,19 +133,33 @@ pub(crate) fn add_to(sum: &mut f64, name: &str, array: rvr_recipe::Result<Array>
 
 /// A stored column over the events of `scope`: worked out, then given the kind the recipe asks it
 /// to be stored as, by the recipe reference's conversion rule.
-pub(crate) fn stored(recipe: &Recipe, scope: &Scope, (column, expression): &(String, rvr_recipe::Expression), events: usize) -> rvr_recipe::Result<Array> {
+pub(crate) fn stored(
+    recipe: &Recipe,
+    scope: &Scope,
+    (column, expression): &(String, rvr_recipe::Expression),
+    events: usize,
+) -> rvr_recipe::Result<Array> {
     // An error that begins with the column's name already (a branch of that name that could not be
     // read) is not named again.
     let named = |e: rvr_recipe::Error| match e.0.starts_with(&format!("{column}: ")) {
         true => e,
         false => e.at(&format!("[columns] {column}")),
     };
-    let array = scope.evaluate(expression).and_then(|value| rvr_recipe::per_event(value, events)).map_err(named)?;
+    let array = scope
+        .evaluate(expression)
+        .and_then(|value| rvr_recipe::per_event(value, events))
+        .map_err(named)?;
     let array = match recipe.stored.get(column) {
-        Some(kind) => array.convert(*kind).map_err(|e| e.at(&format!("[columns] {column}")))?,
+        Some(kind) => array
+            .convert(*kind)
+            .map_err(|e| e.at(&format!("[columns] {column}")))?,
         None => array,
     };
-    Ok(if recipe.keeps_bits(column, expression) { array } else { array.settled() })
+    Ok(if recipe.keeps_bits(column, expression) {
+        array
+    } else {
+        array.settled()
+    })
 }
 
 /// Add every event of a column's values to what the file has gathered; one of another kind than the Plan's is a bug.
@@ -115,10 +167,21 @@ pub(crate) fn gather(held: &mut Gathered, column: Array) -> Result<(), String> {
     let (values, offsets) = match &column {
         Array::Event(values) => (values, None),
         Array::Object { offsets, values } => (values, Some(offsets)),
-        Array::Constant(_) => return Err(format!("[columns] {} gave a fixed value, not a column", held.name)),
+        Array::Constant(_) => {
+            return Err(format!(
+                "[columns] {} gave a fixed value, not a column",
+                held.name
+            ))
+        }
     };
     if values.kind != held.kind || offsets.is_some() != held.counts.is_some() {
-        return Err(format!("[columns] {} gave {} {}, where the agreement check found it {}", held.name, values.kind.name(), if offsets.is_some() { "lists" } else { "values" }, held.kind.name()));
+        return Err(format!(
+            "[columns] {} gave {} {}, where the agreement check found it {}",
+            held.name,
+            values.kind.name(),
+            if offsets.is_some() { "lists" } else { "values" },
+            held.kind.name()
+        ));
     }
     let w = held.kind.width();
     let bytes = values.to_bytes();
@@ -135,7 +198,10 @@ pub(crate) fn gather(held: &mut Gathered, column: Array) -> Result<(), String> {
 
 /// How much each column has gathered: its bytes and its lists.
 pub(crate) fn held_lengths(gathered: &[Gathered]) -> Vec<(usize, usize)> {
-    gathered.iter().map(|g| (g.bytes.len(), g.counts.as_ref().map_or(0, Vec::len))).collect()
+    gathered
+        .iter()
+        .map(|g| (g.bytes.len(), g.counts.as_ref().map_or(0, Vec::len)))
+        .collect()
 }
 
 /// Put each column back to what it had gathered at `before`.
@@ -163,7 +229,14 @@ impl Columns for Run {
 
 /// Work the derived columns out over the events a run kept (`entries`, the file's entries of them),
 /// gathered since `before`: a value one cannot take stops the press naming its entry.
-pub(crate) fn derived_tried(recipe: &Recipe, kinds: &[(Kind, bool)], gathered: &[Gathered], before: &[(usize, usize)], sample: &BTreeMap<String, Constant>, entries: &[u64]) -> Result<(), Failed> {
+pub(crate) fn derived_tried(
+    recipe: &Recipe,
+    kinds: &[(Kind, bool)],
+    gathered: &[Gathered],
+    before: &[(usize, usize)],
+    sample: &BTreeMap<String, Constant>,
+    entries: &[u64],
+) -> Result<(), Failed> {
     let mut held = BTreeMap::new();
     for (column, (bytes, counts)) in gathered.iter().zip(before) {
         let values = Values::from_bytes(column.kind, &column.bytes[*bytes..]);
@@ -174,7 +247,10 @@ pub(crate) fn derived_tried(recipe: &Recipe, kinds: &[(Kind, bool)], gathered: &
                 for count in &all[*counts..] {
                     offsets.push(offsets[offsets.len() - 1] + count);
                 }
-                Array::Object { offsets: Arc::new(offsets), values }
+                Array::Object {
+                    offsets: Arc::new(offsets),
+                    values,
+                }
             }
         };
         held.insert(column.name.clone(), array);
@@ -184,16 +260,37 @@ pub(crate) fn derived_tried(recipe: &Recipe, kinds: &[(Kind, bool)], gathered: &
     let mut sample = sample.clone();
     rowver::rvr::derived::standing_in(&mut sample, recipe);
     for ((name, expression), want) in recipe.derived.iter().zip(kinds) {
-        let parsed = rvr_recipe::parse(expression).expect("the recipe validator read every derived column");
-        let array = rowver::rvr::derived::evaluate(&parsed, &run, &sample, entries.len()).map_err(|e| match e.1 {
-            Some(row) => Failed::new(Fault::Data, format!("entry {}: derived column {name}: {}", rowver::rvr::grouped(entries[row]), e.0)),
-            None => Failed::new(Fault::Bug, format!("derived column {name}: {}", e.0)),
-        })?;
+        let parsed =
+            rvr_recipe::parse(expression).expect("the recipe validator read every derived column");
+        let array =
+            rowver::rvr::derived::evaluate(&parsed, &run, &sample, entries.len()).map_err(|e| {
+                match e.1 {
+                    Some(row) => Failed::new(
+                        Fault::Data,
+                        format!(
+                            "entry {}: derived column {name}: {}",
+                            rowver::rvr::grouped(entries[row]),
+                            e.0
+                        ),
+                    ),
+                    None => Failed::new(Fault::Bug, format!("derived column {name}: {}", e.0)),
+                }
+            })?;
         let Some(found) = array.shape() else {
-            return Err(Failed::new(Fault::Bug, format!("derived column {name}: a fixed value, not a column")));
+            return Err(Failed::new(
+                Fault::Bug,
+                format!("derived column {name}: a fixed value, not a column"),
+            ));
         };
         if found != *want {
-            return Err(Failed::new(Fault::Bug, format!("derived column {name}: it gave {} where the agreement check found {}", found.0.name(), want.0.name())));
+            return Err(Failed::new(
+                Fault::Bug,
+                format!(
+                    "derived column {name}: it gave {} where the agreement check found {}",
+                    found.0.name(),
+                    want.0.name()
+                ),
+            ));
         }
         run.0.borrow_mut().insert(name.clone(), array);
     }
@@ -202,17 +299,33 @@ pub(crate) fn derived_tried(recipe: &Recipe, kinds: &[(Kind, bool)], gathered: &
 
 /// Send what a file has gathered since it last did to the spool, keeping each column's kind:
 /// its columns, then its entry numbers.
-pub(crate) fn spooled(spool: &write::Spool, gathered: &mut [Gathered], entry: &mut Vec<i64>, order: write::Order) -> Result<(), String> {
+pub(crate) fn spooled(
+    spool: &write::Spool,
+    gathered: &mut [Gathered],
+    entry: &mut Vec<i64>,
+    order: write::Order,
+) -> Result<(), String> {
     let failed = |e: rowver::Error| {
         let why = match &e {
-            rowver::Error::Io(io) | rowver::Error::File(_, io) if matches!(io.kind(), std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded) => "the disk is full".to_owned(),
+            rowver::Error::Io(io) | rowver::Error::File(_, io)
+                if matches!(
+                    io.kind(),
+                    std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
+                ) =>
+            {
+                "the disk is full".to_owned()
+            }
             rowver::Error::Io(io) => rowver::described(io),
             e => e.to_string(),
         };
-        format!("its kept values could not be held on disk ({why}): free disk space beside the output")
+        format!(
+            "its kept values could not be held on disk ({why}): free disk space beside the output"
+        )
     };
     let entries = write::array(&std::mem::take(entry));
-    spool.add(gathered.len(), order, write::Values::Flat(entries)).map_err(failed)?;
+    spool
+        .add(gathered.len(), order, write::Values::Flat(entries))
+        .map_err(failed)?;
     for (index, held) in gathered.iter_mut().enumerate() {
         let buffer = NumericBuffer {
             kind: held.kind.name().into(),
@@ -220,7 +333,10 @@ pub(crate) fn spooled(spool: &write::Spool, gathered: &mut [Gathered], entry: &m
             bytes: std::mem::take(&mut held.bytes),
         };
         let values = match &mut held.counts {
-            Some(counts) => write::Values::Jagged { counts: std::mem::take(counts), content: buffer },
+            Some(counts) => write::Values::Jagged {
+                counts: std::mem::take(counts),
+                content: buffer,
+            },
             None => write::Values::Flat(buffer),
         };
         spool.add(index, order, values).map_err(failed)?;

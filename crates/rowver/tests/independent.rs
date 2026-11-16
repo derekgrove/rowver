@@ -243,7 +243,12 @@ fn shortest(x: f64) -> String {
         } else {
             String::new()
         };
-        format!("{}{rest}e{}{:02}", &d[..1], if e < 0 { '-' } else { '+' }, e.abs())
+        format!(
+            "{}{rest}e{}{:02}",
+            &d[..1],
+            if e < 0 { '-' } else { '+' },
+            e.abs()
+        )
     };
     format!("{sign}{body}")
 }
@@ -415,7 +420,10 @@ fn stored(chunks: &[Vec<u8>], w: usize) -> (Vec<u8>, Vec<String>) {
     for chunk in chunks {
         for j in 0..w {
             let lane: Vec<u8> = chunk.iter().skip(j).step_by(w).copied().collect();
-            let f = ruzstd::encoding::compress_to_vec(&lane[..], ruzstd::encoding::CompressionLevel::Fastest);
+            let f = ruzstd::encoding::compress_to_vec(
+                &lane[..],
+                ruzstd::encoding::CompressionLevel::Fastest,
+            );
             table.extend((f.len() as u64).to_le_bytes());
             frames.extend(f);
         }
@@ -434,8 +442,19 @@ fn joined(shas: &[String]) -> String {
 
 /// An array's `sha256` and `by_sample` (§8) from its chunks' SHA-256s.
 fn sums(cut: &[(usize, usize, usize)], shas: &[String], samples: usize) -> (String, Value) {
-    let of = |s: usize| joined(&cut.iter().zip(shas).filter(|(c, _)| c.0 == s).map(|(_, h)| h.clone()).collect::<Vec<_>>());
-    (joined(shas), json!((0..samples).map(of).collect::<Vec<_>>()))
+    let of = |s: usize| {
+        joined(
+            &cut.iter()
+                .zip(shas)
+                .filter(|(c, _)| c.0 == s)
+                .map(|(_, h)| h.clone())
+                .collect::<Vec<_>>(),
+        )
+    };
+    (
+        joined(shas),
+        json!((0..samples).map(of).collect::<Vec<_>>()),
+    )
 }
 
 /// The arrays of a file, in file order, and each one's `sha256`.
@@ -453,7 +472,14 @@ struct Cut {
 impl Store {
     /// One array from its chunks' values, after the others: its record's `at`, `size` and `sha256`,
     /// and `by_sample` when `per_sample`.
-    fn put(&mut self, chunks: &[Vec<u8>], w: usize, cut: &Cut, per_sample: bool, m: &mut Map<String, Value>) {
+    fn put(
+        &mut self,
+        chunks: &[Vec<u8>],
+        w: usize,
+        cut: &Cut,
+        per_sample: bool,
+        m: &mut Map<String, Value>,
+    ) {
         let (bytes, shas) = stored(chunks, w);
         m.insert("at".into(), json!(self.bytes.len()));
         m.insert("size".into(), json!(bytes.len()));
@@ -476,7 +502,13 @@ fn measured(chunks: &[Vec<u8>], cut: &Cut, m: &mut Map<String, Value>) {
 }
 
 /// One array of the values `v` holds, or would hold, at `put` or measured.
-fn array(chunks: Vec<Vec<u8>>, w: usize, cut: &Cut, store: Option<&mut Store>, m: &mut Map<String, Value>) {
+fn array(
+    chunks: Vec<Vec<u8>>,
+    w: usize,
+    cut: &Cut,
+    store: Option<&mut Store>,
+    m: &mut Map<String, Value>,
+) {
     match store {
         Some(s) => s.put(&chunks, w, cut, true, m),
         None => measured(&chunks, cut, m),
@@ -488,19 +520,36 @@ fn record(data: &Data, cut: &Cut, mut store: Option<&mut Store>, m: &mut Map<Str
     match data {
         Data::Flat(v) => {
             m.insert("kind".into(), json!(v.kind));
-            let chunks = cut.chunks.iter().map(|&(_, a, b)| v.bytes(a, b).to_vec()).collect();
+            let chunks = cut
+                .chunks
+                .iter()
+                .map(|&(_, a, b)| v.bytes(a, b).to_vec())
+                .collect();
             array(chunks, v.width, cut, store, m);
             facts(v, m);
         }
         Data::Jagged(off, content) => {
             m.insert("kind".into(), json!("jagged"));
             let mut o = Map::new();
-            let steps = cut.chunks.iter().map(|&(_, a, b)| off[a..=b].iter().flat_map(|x| (x - off[a]).to_le_bytes()).collect()).collect();
+            let steps = cut
+                .chunks
+                .iter()
+                .map(|&(_, a, b)| {
+                    off[a..=b]
+                        .iter()
+                        .flat_map(|x| (x - off[a]).to_le_bytes())
+                        .collect()
+                })
+                .collect();
             array(steps, 8, cut, store.as_deref_mut(), &mut o);
             let mut c = Map::new();
             c.insert("kind".into(), json!(content.kind));
             c.insert("count".into(), json!(content.nums.len()));
-            let members = cut.chunks.iter().map(|&(_, a, b)| content.bytes(off[a] as usize, off[b] as usize).to_vec()).collect();
+            let members = cut
+                .chunks
+                .iter()
+                .map(|&(_, a, b)| content.bytes(off[a] as usize, off[b] as usize).to_vec())
+                .collect();
             array(members, content.width, cut, store, &mut c);
             m.insert("offsets".into(), Value::Object(o));
             m.insert("content".into(), Value::Object(c));
@@ -812,7 +861,14 @@ fn study(
 
 fn uuid(at: &str) -> String {
     let h = sha(at.as_bytes());
-    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 fn toml_string(s: &str) -> String {
@@ -902,13 +958,24 @@ impl Study {
             "# samples.lock: written by rowver's independent test writer.\n\n\
              format = \"rvr-samples-lock\"\nversion = 1\nresolved = \"2026-11-02T11:59:00Z\"\n",
         );
-        t += &format!("samples_toml_sha256 = \"{}\"\n", sha(self.samples_toml.as_bytes()));
+        t += &format!(
+            "samples_toml_sha256 = \"{}\"\n",
+            sha(self.samples_toml.as_bytes())
+        );
         for s in &self.samples {
             let entries = s.entries();
             let chosen = s.choice.chosen(&entries);
             t += "\n[[sample]]\n";
-            t += &format!("name = {}\nlabel = {}\n", toml_string(&s.name), toml_string(&s.label));
-            t += &format!("asked = {}\ntree = {}\n", toml(&json!(s.asked)), toml_string(&s.tree));
+            t += &format!(
+                "name = {}\nlabel = {}\n",
+                toml_string(&s.name),
+                toml_string(&s.label)
+            );
+            t += &format!(
+                "asked = {}\ntree = {}\n",
+                toml(&json!(s.asked)),
+                toml_string(&s.tree)
+            );
             t += &format!("branches = \"{list_sha}\"\n");
             t += &match s.choice {
                 Choice::All => "events = \"all\"\n".to_string(),
@@ -918,7 +985,10 @@ impl Study {
                 }
             };
             let read: usize = chosen.iter().map(Vec::len).sum();
-            t += &format!("events_total = {}\nevents_read = {read}\n", entries.iter().sum::<u64>());
+            t += &format!(
+                "events_total = {}\nevents_read = {read}\n",
+                entries.iter().sum::<u64>()
+            );
             t += &format!("metadata = {}\n", toml(&Value::Object(s.metadata.clone())));
             for (fi, f) in s.files.iter().enumerate() {
                 t += &format!(
@@ -956,8 +1026,16 @@ impl Study {
             bytes: Vec::new(),
             shas: Vec::new(),
         };
-        let cut = Cut { chunks: chunks_of(&ranges), samples: ranges.len() };
-        let of = |v: &Vals| cut.chunks.iter().map(|&(_, a, b)| v.bytes(a, b).to_vec()).collect::<Vec<_>>();
+        let cut = Cut {
+            chunks: chunks_of(&ranges),
+            samples: ranges.len(),
+        };
+        let of = |v: &Vals| {
+            cut.chunks
+                .iter()
+                .map(|&(_, a, b)| v.bytes(a, b).to_vec())
+                .collect::<Vec<_>>()
+        };
         let sample_vals = vals(rows.iter().map(|r| r.sample as i32));
         let mut sample_ref = Map::new();
         store.put(&of(&sample_vals), 4, &cut, false, &mut sample_ref);
@@ -966,7 +1044,12 @@ impl Study {
         store.put(&of(&entry_vals), 8, &cut, true, &mut entry_ref);
         let mut col_records = Vec::new();
         for c in cols {
-            assert_eq!(c.data_rows(), rows.len(), "column {} has the wrong number of rows", c.name);
+            assert_eq!(
+                c.data_rows(),
+                rows.len(),
+                "column {} has the wrong number of rows",
+                c.name
+            );
             let mut m = Map::new();
             m.insert("name".into(), json!(c.name));
             record(&c.data, &cut, Some(&mut store), &mut m);
@@ -1033,7 +1116,8 @@ impl Study {
                         .collect();
                     rec.insert("holes".into(), json!(holes));
                 }
-                let opened = !got.is_empty() || (f.entries == 0 && !matches!(choice, Choice::Random(..)));
+                let opened =
+                    !got.is_empty() || (f.entries == 0 && !matches!(choice, Choice::Random(..)));
                 if !self.totals.is_empty() && opened {
                     let mut t = Map::new();
                     for (i, (name, value)) in self.totals.iter().enumerate() {
@@ -1183,7 +1267,10 @@ static COUNT: AtomicUsize = AtomicUsize::new(0);
 /// What rowver's full validation says of these bytes, written to a temporary file.
 fn validate(name: &str, bytes: &[u8]) -> Result<(), String> {
     let n = COUNT.fetch_add(1, Ordering::SeqCst);
-    let path = std::env::temp_dir().join(format!("rowver-independent-{}-{n}-{name}.rvr", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "rowver-independent-{}-{n}-{name}.rvr",
+        std::process::id()
+    ));
     let temp = TempFile(path);
     std::fs::write(&temp.0, bytes).unwrap();
     rowver::rvr::validate_file(&temp.0)
@@ -1491,7 +1578,11 @@ fn two_samples(keep: fn(Row) -> bool) -> (Value, Vec<u8>) {
         .collect();
     let cols = [flat("x", vals(x.clone())), jagged("pts", &pts)];
     let derived = [
-        derived("twice", "x * 2", Data::Flat(vals(x.iter().map(|v| v * 2.0)))),
+        derived(
+            "twice",
+            "x * 2",
+            Data::Flat(vals(x.iter().map(|v| v * 2.0))),
+        ),
         derived("hard", "pts > 30", lists(&hard)),
     ];
     s.header(&cols, &derived)
@@ -1598,7 +1689,15 @@ fn a_first_n_choice_over_several_files_is_valid() {
         &recipe,
         vec![br("x", "i8", "flat")],
         vec![
-            sample("parts", "Events", &[("./part_1.root", 5), ("./part_2.root", 5), ("./part_3.root", 4)])
+            sample(
+                "parts",
+                "Events",
+                &[
+                    ("./part_1.root", 5),
+                    ("./part_2.root", 5),
+                    ("./part_3.root", 4),
+                ],
+            )
             .asked(&["./part_*.root"])
             .choice(Choice::First(7)),
             sample("exact", "Events", &[("./e1.root", 3), ("./e2.root", 4)])
@@ -1621,7 +1720,11 @@ fn random_study(press: Option<Choice>) -> (Value, Vec<u8>) {
          [[sample]]\nname = \"few\"\nfiles = [\"./f1.root\", \"./f2.root\"]\ntree = \"Events\"\nevents = 50\nchoose = \"random\"\n"
     );
     let recipe = recipe("", "branches = [\"x\"]\n", "", "");
-    let mut picked = sample("picked", "Events", &[("./r1.root", 6), ("./r2.root", 1), ("./r3.root", 6)])
+    let mut picked = sample(
+        "picked",
+        "Events",
+        &[("./r1.root", 6), ("./r2.root", 1), ("./r3.root", 6)],
+    )
     .choice(Choice::Random(4, 9876543211));
     let mut few = sample("few", "Events", &[("./f1.root", 3), ("./f2.root", 2)])
         .choice(Choice::Random(50, 1));
@@ -1629,7 +1732,13 @@ fn random_study(press: Option<Choice>) -> (Value, Vec<u8>) {
         picked = picked.press(c.clone());
         few = few.press(c);
     }
-    let s = study("random", &samples_toml, &recipe, vec![br("x", "f4", "flat")], vec![picked, few]);
+    let s = study(
+        "random",
+        &samples_toml,
+        &recipe,
+        vec![br("x", "f4", "flat")],
+        vec![picked, few],
+    );
     let x: Vec<f32> = s.rows().iter().map(|r| r.entry as f32 / 4.0).collect();
     s.header(&[flat("x", vals(x))], &[])
 }
@@ -1755,7 +1864,9 @@ fn a_file_with_holes_is_valid() {
 // FORMAT 8
 #[test]
 fn texts_that_need_escapes_in_canonical_json_are_valid() {
-    let (header, arrays) = holes_study("a \"quoted\" \\ path, a tab\there, an escape \u{1b}[0m and \u{1}\u{7f} ü ∑ 🙂");
+    let (header, arrays) = holes_study(
+        "a \"quoted\" \\ path, a tab\there, an escape \u{1b}[0m and \u{1}\u{7f} ü ∑ 🙂",
+    );
     assert_valid("escapes", &file(&header, &arrays));
 }
 
@@ -1807,7 +1918,11 @@ fn a_file_with_totals_is_valid() {
         .collect();
     let (header, arrays) = s.header(
         &[flat("genWeight", vals(w))],
-        &[derived("weight", "genWeight / sample.sumw", Data::Flat(vals(weight)))],
+        &[derived(
+            "weight",
+            "genWeight / sample.sumw",
+            Data::Flat(vals(weight)),
+        )],
     );
     let m = &header["made"]["files"];
     assert_eq!(m["a"]["metadata"]["sumw"], json!(3.625));
@@ -1819,7 +1934,9 @@ fn a_file_with_totals_is_valid() {
 // SPEC 2.3, 4.5.2; FORMAT 6
 #[test]
 fn a_total_over_another_tree_is_valid() {
-    let samples_toml = format!("{NO_DEFAULTS}\n[[sample]]\nname = \"a\"\nfiles = \"./a1.root\"\ntree = \"Events\"\n");
+    let samples_toml = format!(
+        "{NO_DEFAULTS}\n[[sample]]\nname = \"a\"\nfiles = \"./a1.root\"\ntree = \"Events\"\n"
+    );
     let recipe = recipe(
         "",
         "branches = [\"genWeight\"]\n",
@@ -1860,9 +1977,22 @@ fn a_file_with_tool_keys_is_valid() {
 /// A study of one sample `a`, of one file `./a.root` of `entries` entries, its tree's branches
 /// `branches`, its recipe storing the first.
 fn one_file(name: &str, branches: Vec<Value>, entries: u64) -> Study {
-    let samples_toml = format!("{NO_DEFAULTS}\n[[sample]]\nname = \"a\"\nfiles = \"./a.root\"\ntree = \"Events\"\n");
-    let recipe = recipe("", &format!("branches = [{}]\n", branches[0]["name"]), "", "");
-    study(name, &samples_toml, &recipe, branches, vec![sample("a", "Events", &[("./a.root", entries)])])
+    let samples_toml = format!(
+        "{NO_DEFAULTS}\n[[sample]]\nname = \"a\"\nfiles = \"./a.root\"\ntree = \"Events\"\n"
+    );
+    let recipe = recipe(
+        "",
+        &format!("branches = [{}]\n", branches[0]["name"]),
+        "",
+        "",
+    );
+    study(
+        name,
+        &samples_toml,
+        &recipe,
+        branches,
+        vec![sample("a", "Events", &[("./a.root", entries)])],
+    )
 }
 
 // FORMAT 1, 12
@@ -1946,14 +2076,15 @@ files = ["{here}/bkg_1.root", "{here}/bkg_2.root"]
 tree = "Events"
 "#;
     let recipe = recipe("", "branches = [\"x\"]\n", "", "");
-    let scan = |era: &str, n: u64, point: &str, tree: &str, entries: u64| {
-        let at = format!("./ntuples/scan_{era}.root");
-        sample(&format!("scan_{point}_{era}"), tree, &[(at.as_str(), entries)])
+    let scan =
+        |era: &str, n: u64, point: &str, tree: &str, entries: u64| {
+            let at = format!("./ntuples/scan_{era}.root");
+            sample(&format!("scan_{point}_{era}"), tree, &[(at.as_str(), entries)])
         .label(&format!("Scan {point} ({era})"))
         .meta(
             json!({"era": n, "lumi": 59.8, "kind": "signal", "source": format!("scan_{era}.root")}),
         )
-    };
+        };
     let s = study(
         "scan",
         samples_toml,
@@ -1964,7 +2095,11 @@ tree = "Events"
             scan("A", 1, "m400", "t400", 3),
             scan("B", 2, "m300", "t300", 2),
             scan("B", 2, "m400", "t400", 5),
-            sample("bkg", "Events", &[("./ntuples/bkg_1.root", 2), ("./ntuples/bkg_2.root", 2)])
+            sample(
+                "bkg",
+                "Events",
+                &[("./ntuples/bkg_1.root", 2), ("./ntuples/bkg_2.root", 2)],
+            )
             .asked(&["./ntuples/bkg_1.root", "./ntuples/bkg_2.root"])
             .meta(json!({"lumi": 59.8, "kind": "background"})),
         ],
@@ -2027,7 +2162,13 @@ fn a_flat_float_column_with_nan_and_infinities_is_valid() {
 #[test]
 fn a_jagged_float_column_with_nan_and_infinities_is_valid() {
     let s = one_file("nanj", vec![br("pts", "f4", "jagged")], 2);
-    let (header, arrays) = s.header(&[jagged("pts", &[vec![1.0f32, f32::NAN], vec![f32::INFINITY]])], &[]);
+    let (header, arrays) = s.header(
+        &[jagged(
+            "pts",
+            &[vec![1.0f32, f32::NAN], vec![f32::INFINITY]],
+        )],
+        &[],
+    );
     assert_valid("nanj", &file(&header, &arrays));
 }
 
@@ -2054,10 +2195,16 @@ fn a_b1_column_of_one_value_is_valid() {
 #[test]
 fn whole_number_facts_beyond_64_bits_are_valid() {
     let (header, arrays) = one_column_study("u8", "u8", vals([0, u64::MAX]));
-    assert_eq!(header["data"]["cols"][0]["nice"], json!([0, num("19000000000000000000")]));
+    assert_eq!(
+        header["data"]["cols"][0]["nice"],
+        json!([0, num("19000000000000000000")])
+    );
     assert_valid("u8", &file(&header, &arrays));
     let (header, arrays) = one_column_study("i8", "i8", vals([i64::MIN, i64::MAX]));
-    assert_eq!(header["data"]["cols"][0]["nice"], json!([num("-9300000000000000000"), num("9300000000000000000")]));
+    assert_eq!(
+        header["data"]["cols"][0]["nice"],
+        json!([num("-9300000000000000000"), num("9300000000000000000")])
+    );
     assert_valid("i8", &file(&header, &arrays));
 }
 
@@ -2106,9 +2253,17 @@ fn a_sample_of_two_to_the_forty_entries_is_valid() {
 fn a_sample_of_ten_thousand_files_is_valid() {
     let paths: Vec<String> = (0..10_000).map(|i| format!("./f{i:05}.root")).collect();
     let files: Vec<(&str, u64)> = paths.iter().map(|p| (p.as_str(), 1)).collect();
-    let samples_toml = format!("{NO_DEFAULTS}\n[[sample]]\nname = \"many\"\nfiles = \"./f*.root\"\ntree = \"Events\"\n");
+    let samples_toml = format!(
+        "{NO_DEFAULTS}\n[[sample]]\nname = \"many\"\nfiles = \"./f*.root\"\ntree = \"Events\"\n"
+    );
     let recipe = recipe("", "branches = [\"x\"]\n", "", "");
-    let s = study("many", &samples_toml, &recipe, vec![br("x", "u1", "flat")], vec![sample("many", "Events", &files).asked(&["./f*.root"])]);
+    let s = study(
+        "many",
+        &samples_toml,
+        &recipe,
+        vec![br("x", "u1", "flat")],
+        vec![sample("many", "Events", &files).asked(&["./f*.root"])],
+    );
     let (header, arrays) = s.header(&[flat("x", vals((0..10_000).map(|i| (i % 3) as u8)))], &[]);
     assert_eq!(header["data"]["files"].as_array().unwrap().len(), 10_000);
     assert_valid("many", &file(&header, &arrays));
@@ -2122,8 +2277,15 @@ fn metadata_at_the_ends_of_tomls_whole_numbers_and_nested_as_deep_as_the_header_
     let samples_toml = format!("{NO_DEFAULTS}\n[[sample]]\nname = \"a\"\nfiles = \"./a.root\"\ntree = \"Events\"\nmetadata = {{ low = -9223372036854775808, high = 9223372036854775807, deep = {deep} }}\n");
     let recipe = recipe("", "branches = [\"x\"]\n", "", "");
     let nested = (1..59).fold(json!([1]), |inner, _| json!([inner]));
-    let a = sample("a", "Events", &[("./a.root", 2)]).meta(json!({"low": i64::MIN, "high": i64::MAX, "deep": nested}));
-    let s = study("ends", &samples_toml, &recipe, vec![br("x", "u1", "flat")], vec![a]);
+    let a = sample("a", "Events", &[("./a.root", 2)])
+        .meta(json!({"low": i64::MIN, "high": i64::MAX, "deep": nested}));
+    let s = study(
+        "ends",
+        &samples_toml,
+        &recipe,
+        vec![br("x", "u1", "flat")],
+        vec![a],
+    );
     let (header, arrays) = s.header(&[flat("x", vals([1u8, 2]))], &[]);
     assert_valid("ends", &file(&header, &arrays));
 }

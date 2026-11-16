@@ -20,7 +20,11 @@ pub(super) fn unknown_kind(place: &str, kind: &str) -> crate::Error {
 /// Check a record's `by_sample`: one SHA-256 per sample, as 64 lowercase hexadecimal characters.
 pub(super) fn by_sample(record: &Value, place: &str, samples: usize) -> Result<()> {
     let sums = list(record, place, "by_sample")?;
-    if sums.len() != samples || !sums.iter().all(|sum| sum.as_str().is_some_and(|sum| crate::study::hex(sum, 64))) {
+    if sums.len() != samples
+        || !sums
+            .iter()
+            .all(|sum| sum.as_str().is_some_and(|sum| crate::study::hex(sum, 64)))
+    {
         return Err(invalid(format!("{place}.by_sample must hold one SHA-256 per sample of data.samples ({samples}), each 64 lowercase hexadecimal characters (docs/FORMAT.md §8): {MEND}")));
     }
     Ok(())
@@ -49,27 +53,50 @@ pub(super) fn records(data: &Value, made: &Value) -> Result<()> {
 /// Check a column's record after `head` (its name, and a derived column's expression): its kind,
 /// and for a flat column its checksums and facts, for a jagged one its offsets' and content's, each
 /// array's `at` and `size` too when the file `stores` it.
-pub(super) fn record_of(record: &Value, place: &str, head: &[&str], stores: bool, samples: usize) -> Result<()> {
-    let array: &[&str] = if stores { &["at", "size", "sha256", "by_sample"] } else { &["sha256", "by_sample"] };
+pub(super) fn record_of(
+    record: &Value,
+    place: &str,
+    head: &[&str],
+    stores: bool,
+    samples: usize,
+) -> Result<()> {
+    let array: &[&str] = if stores {
+        &["at", "size", "sha256", "by_sample"]
+    } else {
+        &["sha256", "by_sample"]
+    };
     let fields = |rest: &[&'static str]| head.iter().chain(rest).copied().collect::<Vec<&str>>();
     match text(record, place, "kind")? {
         "jagged" => {
             exactly(record, place, &fields(&["kind", "offsets", "content"]), &[])?;
             let (offsets, content) = (format!("{place}.offsets"), format!("{place}.content"));
             exactly(field(record, place, "offsets")?, &offsets, array, &[])?;
-            exactly(field(record, place, "content")?, &content, &[&["kind", "count"][..], array].concat(), &[])?;
+            exactly(
+                field(record, place, "content")?,
+                &content,
+                &[&["kind", "count"][..], array].concat(),
+                &[],
+            )?;
             let kind = text(&record["content"], &content, "kind")?;
             if !flat(kind) {
                 return Err(unknown_kind(&content, kind));
             }
             count(&record["content"], &content, "count")?;
-            for (part, place) in [(&record["offsets"], &offsets), (&record["content"], &content)] {
+            for (part, place) in [
+                (&record["offsets"], &offsets),
+                (&record["content"], &content),
+            ] {
                 checksum(part, place)?;
                 by_sample(part, place, samples)?;
             }
         }
         kind if flat(kind) => {
-            exactly(record, place, &fields(&[&["kind"][..], array, &["lim", "nice", "vals"]].concat()), &["vals"])?;
+            exactly(
+                record,
+                place,
+                &fields(&[&["kind"][..], array, &["lim", "nice", "vals"]].concat()),
+                &["vals"],
+            )?;
             checksum(record, place)?;
             by_sample(record, place, samples)?;
             facts::forms(record, kind, place)?;

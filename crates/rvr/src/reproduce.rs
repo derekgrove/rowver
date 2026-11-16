@@ -19,7 +19,11 @@ pub const USAGE: &str = "usage:
 pub(crate) fn study_texts(header: &serde_json::Value) -> (Texts, String) {
     let made = &header["made"];
     let text = |name: &str| made[name]["text"].as_str().unwrap_or_default().to_owned();
-    let texts = Texts { recipe: text("recipe"), samples: text("samples"), lock: text("lock") };
+    let texts = Texts {
+        recipe: text("recipe"),
+        samples: text("samples"),
+        lock: text("lock"),
+    };
     (texts, made["study"].as_str().unwrap_or_default().to_owned())
 }
 
@@ -30,10 +34,30 @@ pub(crate) fn base(file: &Path, study: Option<&Path>, lock: &str) -> Result<Path
     if let Some(folder) = study {
         return Ok(folder.to_path_buf());
     }
-    let own = crate::journal::parent(file).canonicalize().map_err(|e| rowver::plain_io(file, &e))?;
-    let named = file.canonicalize().ok().and_then(|real| real.parent().map(Path::to_path_buf));
-    let files = Lock::read(lock).map(|lock| lock.samples.into_iter().flat_map(|s| s.files).map(|f| f.at).collect()).unwrap_or_else(|_| Vec::new());
-    let relative: Vec<String> = files.into_iter().filter(|at| !at.contains("://") && Path::new(at).is_relative() && !crate::samples::resolve::in_home(at)).collect();
+    let own = crate::journal::parent(file)
+        .canonicalize()
+        .map_err(|e| rowver::plain_io(file, &e))?;
+    let named = file
+        .canonicalize()
+        .ok()
+        .and_then(|real| real.parent().map(Path::to_path_buf));
+    let files = Lock::read(lock)
+        .map(|lock| {
+            lock.samples
+                .into_iter()
+                .flat_map(|s| s.files)
+                .map(|f| f.at)
+                .collect()
+        })
+        .unwrap_or_else(|_| Vec::new());
+    let relative: Vec<String> = files
+        .into_iter()
+        .filter(|at| {
+            !at.contains("://")
+                && Path::new(at).is_relative()
+                && !crate::samples::resolve::in_home(at)
+        })
+        .collect();
     let holds = |folder: &Path| relative.iter().all(|at| folder.join(at).exists());
     Ok(match named {
         Some(named) if named != own && !holds(&own) && holds(&named) => named,
@@ -43,18 +67,23 @@ pub(crate) fn base(file: &Path, study: Option<&Path>, lock: &str) -> Result<Path
 
 /// Reproduce `file` into `dir`, reading relative inputs from `study` (FILE's folder when `None`);
 /// with `texts_only`, only write its texts there.
-fn run(file: &Path, dir: Option<PathBuf>, study: Option<PathBuf>, workers: usize, texts_only: bool) -> Result<u8, String> {
+fn run(
+    file: &Path,
+    dir: Option<PathBuf>,
+    study: Option<PathBuf>,
+    workers: usize,
+    texts_only: bool,
+) -> Result<u8, String> {
     let shown = file.display();
     let reader = rowver::rvr::Reader::open(file).map_err(|e| rowver::plain(file, &e))?;
     let made = &reader.header()["made"];
     let (texts, name) = study_texts(reader.header());
     let name = name.as_str();
     let base = base(file, study.as_deref(), &texts.lock)?;
-    let lock = Lock::read(&texts.lock).map_err(|p| format!("{shown}: its samples.lock does not check out: {p}"))?;
+    let lock = Lock::read(&texts.lock)
+        .map_err(|p| format!("{shown}: its samples.lock does not check out: {p}"))?;
     let local = lock.samples.iter().flat_map(|s| &s.files);
-    let local = local
-        .filter(|f| !f.at.contains("://"))
-        .map(|f| &f.at);
+    let local = local.filter(|f| !f.at.contains("://")).map(|f| &f.at);
     for missing in local.filter(|_| !texts_only) {
         let at = crate::samples::resolve::local(missing, &base)?;
         if !at.exists() {
@@ -66,7 +95,11 @@ fn run(file: &Path, dir: Option<PathBuf>, study: Option<PathBuf>, workers: usize
         }
     }
     let dir = dir.unwrap_or_else(|| file.with_extension("reproduced"));
-    let written = [("recipe.toml", &texts.recipe), ("samples.toml", &texts.samples), ("samples.lock", &texts.lock)];
+    let written = [
+        ("recipe.toml", &texts.recipe),
+        ("samples.toml", &texts.samples),
+        ("samples.lock", &texts.lock),
+    ];
     let there = in_the_way(&dir, &written);
     if !there.is_empty() {
         return Err(format!("{} already holds {}, which rvr reproduce would press over: name another folder, or move them away.", dir.display(), there.join(", ")));
@@ -83,9 +116,26 @@ fn run(file: &Path, dir: Option<PathBuf>, study: Option<PathBuf>, workers: usize
         return Ok(0);
     }
     let target = dir.join(format!("{name}.rvr"));
-    let place = Place { base, study: name.to_owned(), target: target.clone(), at: At::Missing, locked: None, found: None };
-    let asked = Asked { choose: Choose::Recorded(made["files"].clone()), on: On::Once, workers, sign: true };
-    let again = |why: String| format!("{why}\nTo press it again, remove {} and run rvr reproduce again.", dir.display());
+    let place = Place {
+        base,
+        study: name.to_owned(),
+        target: target.clone(),
+        at: At::Missing,
+        locked: None,
+        found: None,
+    };
+    let asked = Asked {
+        choose: Choose::Recorded(made["files"].clone()),
+        on: On::Once,
+        workers,
+        sign: true,
+    };
+    let again = |why: String| {
+        format!(
+            "{why}\nTo press it again, remove {} and run rvr reproduce again.",
+            dir.display()
+        )
+    };
     let plan = crate::plan::build(place, texts, asked).map_err(again)?;
     crate::core::press(plan).map_err(again)?;
     println!("Comparing the two with rvr diff:");
@@ -98,10 +148,18 @@ fn run(file: &Path, dir: Option<PathBuf>, study: Option<PathBuf>, workers: usize
 /// What in `dir` a reproduce would press over: any `.rvr` file, and any of the texts it writes
 /// that holds other than what it would write there.
 fn in_the_way(dir: &Path, written: &[(&str, &String)]) -> Vec<String> {
-    let mut there: Vec<String> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).filter(|name| name.ends_with(".rvr")).collect();
+    let mut there: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".rvr"))
+        .collect();
     there.sort();
     for (name, text) in written {
-        if dir.join(name).exists() && std::fs::read_to_string(dir.join(name)).ok().as_ref() != Some(*text) {
+        if dir.join(name).exists()
+            && std::fs::read_to_string(dir.join(name)).ok().as_ref() != Some(*text)
+        {
             there.push(format!("a {name} of its own"));
         }
     }
@@ -116,5 +174,14 @@ pub fn main(options: &Options) -> u8 {
     };
     let file = PathBuf::from(&options.words[0]);
     let dir = options.words.get(1).map(PathBuf::from);
-    crate::report("reproduce", run(&file, dir, options.value("--study").map(PathBuf::from), workers, options.has("--texts")))
+    crate::report(
+        "reproduce",
+        run(
+            &file,
+            dir,
+            options.value("--study").map(PathBuf::from),
+            workers,
+            options.has("--texts"),
+        ),
+    )
 }
