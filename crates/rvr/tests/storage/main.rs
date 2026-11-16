@@ -690,7 +690,7 @@ fn spawned_with(
 ) -> (std::process::Child, std::path::PathBuf) {
     let said = dir.join("said.txt");
     let out = std::fs::File::create(&said).unwrap();
-    let child = std::process::Command::new(env!("CARGO_BIN_EXE_rvr"))
+    let child = common::rvr_command()
         .args(args)
         .current_dir(dir)
         .env("RVR_CONFIG", dir.join(".rvr-config"))

@@ -508,6 +508,7 @@ fn peak(dir: &Path, args: &[&str]) -> (u64, String) {
     let out = std::process::Command::new("/usr/bin/time")
         .arg(flag)
         .arg(env!("CARGO_BIN_EXE_rvr"))
+        .env(common::COMMIT.0, common::COMMIT.1)
         .args(args)
         .current_dir(dir)
         .output()

@@ -77,6 +77,16 @@ fn a_build_of_no_known_commit_presses_whole_files_only() {
         let name = format!("{}.rvr", dir.file_name().unwrap().to_str().unwrap());
         let (_, said) = run(&rvr, &dir, &[], &["--version"]);
         assert!(said.contains(&format!("; commit {commit})")), "{said}");
+        // Only a build of no known commit names the commit the tests give, and only a whole one.
+        let given = |value: &str| run(&rvr, &dir, &[(common::COMMIT.0, value)], &["--version"]).1;
+        let named = match commit {
+            "unknown" => common::COMMIT.1,
+            _ => commit,
+        };
+        let said = given(common::COMMIT.1);
+        assert!(said.contains(&format!("; commit {named})")), "{said}");
+        let said = given(&common::COMMIT.1[..39]);
+        assert!(said.contains(&format!("; commit {commit})")), "{said}");
         assert_eq!(
             run(&rvr, &dir, &[], &["samples", "resolve", "samples.toml"]).0,
             0

@@ -501,7 +501,7 @@ fn bare(args: &[&str]) -> u8 {
                 "rvr {} (reads and writes rowver {}; commit {})",
                 env!("CARGO_PKG_VERSION"),
                 rowver::VERSION,
-                env!("RVR_COMMIT")
+                press::commit()
             );
             0
         }

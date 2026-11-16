@@ -132,7 +132,7 @@ fn same_samples(header: &Value, lock: &Lock) -> Result<(), String> {
 
 /// Whether this build of rvr names one build (a known commit, its changes recorded: SPEC §12.3), or why not.
 pub fn identified() -> Result<(), String> {
-    match env!("RVR_COMMIT") {
+    match crate::press::commit() {
         "unknown" => Err("this rvr was built from no known commit (its commit is unknown), so what it made cannot be told from another build's: build it from a git checkout, or install a released rvr".into()),
         commit if commit.ends_with("-dirty") => Err(format!("this rvr was built from changed code that left no record of the changes (its commit is {commit}): build it from a clean checkout, or install a released rvr")),
         _ => Ok(()),

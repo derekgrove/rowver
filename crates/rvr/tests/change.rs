@@ -847,6 +847,7 @@ fn a_journal_that_cannot_be_written_whole_is_removed_and_the_file_left_as_it_was
     let out = std::process::Command::new("sh")
         .args(["-c", &script])
         .current_dir(&*dir)
+        .env(common::COMMIT.0, common::COMMIT.1)
         .env("RVR_CONFIG", dir.join(".rvr-config"))
         .output()
         .unwrap();
@@ -1977,7 +1978,7 @@ fn holding(
 ) -> (std::process::Child, std::sync::mpsc::Receiver<String>) {
     use std::io::BufRead;
     std::fs::write(hold, "").unwrap();
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rvr"))
+    let mut child = common::rvr_command()
         .args(args)
         .current_dir(dir)
         .env("RVR_CONFIG", dir.join(".rvr-config"))

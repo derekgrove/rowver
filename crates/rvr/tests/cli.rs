@@ -7,7 +7,6 @@ use rowver::write::{
 };
 use serde_json::{json, Value};
 use std::path::Path;
-use std::process::Command;
 
 mod common;
 use common::Study as Scratch;
@@ -130,7 +129,7 @@ fn framed(header: &Value, arrays: &[u8]) -> Vec<u8> {
 
 /// Run rvr; its exit status and standard output.
 fn rvr(args: &[&str]) -> (i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
+    let out = common::rvr_command()
         .args(args)
         .env("RVR_CONFIG", std::env::temp_dir().join("rvr-cli-no-config"))
         .output()
@@ -278,10 +277,7 @@ fn new_makes_a_study_that_expands_and_never_overwrites() {
         "{said}"
     );
     std::fs::write(study.join("recipe.toml"), "mine").unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
-        .args(["new", at])
-        .output()
-        .unwrap();
+    let out = common::rvr_command().args(["new", at]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("writes nothing over a file"));
     assert_eq!(
@@ -293,10 +289,7 @@ fn new_makes_a_study_that_expands_and_never_overwrites() {
 // SPEC 5.1.1, 5.1.3
 #[test]
 fn samples_alone_says_its_commands() {
-    let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
-        .args(["samples"])
-        .output()
-        .unwrap();
+    let out = common::rvr_command().args(["samples"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("rvr samples resolve samples.toml"));
 }
@@ -307,7 +300,7 @@ fn run(
     set: &[(&str, &Path)],
     removed: &[&str],
 ) -> (i32, String, String) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
+    let mut command = common::rvr_command();
     command
         .args(args)
         .env("RVR_CONFIG", std::env::temp_dir().join("rvr-cli-no-config"));

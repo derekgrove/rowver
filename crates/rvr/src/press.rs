@@ -232,13 +232,27 @@ fn target_locked(target: &std::path::Path) -> Result<rowver::change::Locked, Str
     Ok(locked)
 }
 
+/// The commit this build names (docs/SPEC.md §12.2). A debug build of no known commit names the
+/// one `RVR_TEST_COMMIT` gives: the tests that build on a file run outside a git checkout too.
+pub fn commit() -> &'static str {
+    static GIVEN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let built = env!("RVR_COMMIT");
+    if !cfg!(debug_assertions) || built != "unknown" {
+        return built;
+    }
+    let hex =
+        |c: &String| c.len() == 40 && c.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let given = GIVEN.get_or_init(|| std::env::var("RVR_TEST_COMMIT").ok().filter(hex));
+    given.as_deref().unwrap_or(built)
+}
+
 /// What built this rvr, as `made.toolchain` records it.
 pub fn toolchain() -> Value {
     json!({
         "program": "rvr",
         "version": env!("CARGO_PKG_VERSION"),
         "rowver": rowver::VERSION.to_string(),
-        "commit": env!("RVR_COMMIT"),
+        "commit": commit(),
         "compiler": env!("RVR_RUSTC"),
         "target": env!("RVR_TARGET"),
     })

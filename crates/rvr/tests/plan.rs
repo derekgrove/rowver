@@ -6,7 +6,7 @@ mod common;
 use common::{reheadered, rvr, study, Study};
 use serde_json::Value;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// The file a press of `dir` writes.
 fn target(dir: &Path) -> String {
@@ -457,7 +457,7 @@ fn every_command_reads_its_options_one_way_and_refuses_wrong_use_with_2() {
 fn a_closed_output_pipe_ends_the_command_with_141() {
     let (reader, writer) = std::io::pipe().unwrap();
     drop(reader);
-    let status = Command::new(env!("CARGO_BIN_EXE_rvr"))
+    let status = common::rvr_command()
         .arg("help")
         .stdout(Stdio::from(writer))
         .stderr(Stdio::null())
@@ -472,7 +472,7 @@ fn new_names_the_study_after_its_folder_and_an_empty_config_variable_is_not_set(
     let dir = study("named", FLAT, "");
     let at = dir.join("higgs");
     std::fs::create_dir(&at).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
+    let out = common::rvr_command()
         .args(["new", "."])
         .current_dir(&at)
         .output()
@@ -486,7 +486,7 @@ fn new_names_the_study_after_its_folder_and_an_empty_config_variable_is_not_set(
         .unwrap()
         .contains("title = \"higgs\""));
     // RVR_CONFIG and XDG_CONFIG_HOME set but empty: the key goes to ~/.config/rvr, never here.
-    let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
+    let out = common::rvr_command()
         .args(["key", "new"])
         .current_dir(&at)
         .env("RVR_CONFIG", "")
@@ -512,7 +512,7 @@ fn header_prints_its_bytes_and_diff_and_derive_say_what_they_find() {
     let file = dir.join(target(&dir));
     let bytes = std::fs::read(&file).unwrap();
     let (text, _) = common::parts(&bytes);
-    let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
+    let out = common::rvr_command()
         .args(["header", file.to_str().unwrap()])
         .output()
         .unwrap();
@@ -525,7 +525,7 @@ fn header_prints_its_bytes_and_diff_and_derive_say_what_they_find() {
     header["made"]["study"] = "other".into();
     let broken = dir.join("broken.rvr");
     rowver::write::rewrite(&file, &broken, &header).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
+    let out = common::rvr_command()
         .args(["header", broken.to_str().unwrap()])
         .output()
         .unwrap();

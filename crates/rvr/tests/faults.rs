@@ -125,7 +125,7 @@ fn while_held<T>(
         }
         Answer::Serve
     });
-    let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
+    let mut command = common::rvr_command();
     command
         .args(args)
         .current_dir(dir)
@@ -543,7 +543,7 @@ fn two_presses_started_together_write_one_file_and_any_other_is_refused_or_finds
     let whole = full(&dir);
     for round in 0..8 {
         let start = || {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
+            let mut command = common::rvr_command();
             command
                 .args(["press", "--workers", "2"])
                 .current_dir(&*dir)

@@ -1,7 +1,7 @@
 # The tests on every push. Remote files stay out: the tests read local files they write
 # themselves, or small fixtures in the repository.
 rust:
-  image: rust:1.91  # not the slim one: rvr's build asks git for the commit, which the tests build on
+  image: rust:1.91  # not the slim one: rvr's build asks git for the commit, as in a checkout
   script:
     # Every Rust file as rustfmt lays it out, the fuzz harness's too (a workspace of its own).
     - rustup component add rustfmt

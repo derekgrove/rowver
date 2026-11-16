@@ -66,6 +66,20 @@ pub fn study(name: &str, samples: &str, recipe: &str) -> Study {
     dir
 }
 
+/// The commit a test's rvr names when it was built from none (outside a git checkout): rvr builds
+/// on a file only as the build that made it, which a build of no known commit is not (SPEC §12.3).
+pub const COMMIT: (&str, &str) = (
+    "RVR_TEST_COMMIT",
+    "7e57c0de7e57c0de7e57c0de7e57c0de7e57c0de",
+);
+
+/// rvr, for a test to run.
+pub fn rvr_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
+    command.env(COMMIT.0, COMMIT.1);
+    command
+}
+
 /// Run rvr in `dir`: its exit status, and what it printed and complained.
 pub fn rvr(dir: &Path, args: &[&str]) -> (i32, String) {
     rvr_with(dir, &[], args)
@@ -78,7 +92,7 @@ pub fn rvr_at_home(dir: &Path, home: &Path, args: &[&str]) -> (i32, String) {
 
 /// Run rvr in `dir` with these variables set.
 pub fn rvr_with(dir: &Path, set: &[(&str, &str)], args: &[&str]) -> (i32, String) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
+    let mut command = rvr_command();
     command
         .args(args)
         .current_dir(dir)
@@ -157,6 +171,7 @@ pub fn at_terminal_then(
     };
     let mut child = command
         .current_dir(dir)
+        .env(COMMIT.0, COMMIT.1)
         .env("RVR_CONFIG", dir.join(".rvr-config"))
         .env("TERM", "dumb")
         .stdin(Stdio::piped())

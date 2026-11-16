@@ -6,7 +6,6 @@ mod common;
 
 use common::{at_terminal, rvr, study, Study};
 use std::path::Path;
-use std::process::Command;
 
 const SAMPLES: &str = "format = \"rvr-samples\"\nversion = 1\n\n[places]\n\n[defaults]\n\n[eras]\n\n[[sample]]\nname = \"flat\"\nfiles = \"uproot_flat.root\"\ntree = \"analysis\"\nmetadata = { kind = \"test\" }\n";
 const RECIPE: &str = "format = \"rvr-recipe\"\nversion = 1\n\n[define]\n\n[keep]\n\n[columns]\nbranches = [\"nJet\"]\n\n[totals]\n\n[derived]\n";
@@ -85,7 +84,7 @@ fn empty_asks_at_a_terminal_naming_the_files_rows_columns_and_size() {
 fn keys_live_in_rvr_config_else_xdg_config_home_else_dot_config() {
     let dir = Study::new("config");
     let made = |set: &[(&str, &Path)]| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_rvr"));
+        let mut command = common::rvr_command();
         command
             .args(["key", "new"])
             .current_dir(&*dir)

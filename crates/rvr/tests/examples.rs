@@ -3,7 +3,6 @@
 //! `cargo test -p rvr --test examples -- --ignored`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 mod common;
 use common::Study as Scratch;
@@ -25,7 +24,7 @@ fn studies() -> Vec<PathBuf> {
 
 /// Run rvr in `dir`, and fail naming the study when it fails.
 fn rvr(dir: &Path, study: &Path, args: &[&str]) {
-    let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
+    let out = common::rvr_command()
         .args(args)
         .current_dir(dir)
         .env("RVR_CONFIG", dir.join(".rvr-config"))

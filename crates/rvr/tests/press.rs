@@ -6,7 +6,6 @@ mod common;
 use common::{rvr, rvr_at_home, rvr_with, study, Study};
 use serde_json::Value;
 use std::path::Path;
-use std::process::Command;
 
 /// Resolve and press a study, and read back the file's header.
 fn pressed(dir: &Path, flags: &[&str]) -> Value {
@@ -1801,7 +1800,7 @@ fn samples_added_keep_the_holes_of_the_others_and_are_picked_up_when_stopped() {
 
 /// `rvr press` with `flags`, one file at a time, stopped as a crash would once `n` files are done.
 fn stopped_after(dir: &Path, n: usize, flags: &[&str]) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_rvr"))
+    let out = common::rvr_command()
         .args([&["press", "--workers", "1"], flags].concat())
         .current_dir(dir)
         .env("RVR_CONFIG", dir.join(".rvr-config"))
