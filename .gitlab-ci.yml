@@ -1,9 +1,17 @@
 # The tests on every push. Remote files stay out: the tests read local files they write
 # themselves, or small fixtures in the repository.
 rust:
-  image: rust:1.91-slim
+  image: rust:1.91  # not the slim one: rvr's build asks git for the commit, which the tests build on
   script:
-    - cargo test --workspace --exclude rowver-py --locked
+    # Every Rust file as rustfmt lays it out, the fuzz harness's too (a workspace of its own).
+    - rustup component add rustfmt
+    - cargo fmt --all --check
+    - rustfmt --edition 2021 --check fuzz/src/lib.rs fuzz/fuzz_targets/*.rs
+    # The tests run as an ordinary user: root may write a file marked read-only, and the tests of
+    # what is refused need a user who may not.
+    - useradd --create-home tester
+    - chown -R tester . "$CARGO_HOME"
+    - runuser -u tester -- cargo test --workspace --exclude rowver-py --locked
 
 # The Python package: its wheel built with maturin, installed, and its tests run.
 python:

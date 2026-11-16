@@ -426,7 +426,7 @@ impl Laid {
 /// A flat column's facts (`lim`, `nice`, `vals`) from its values' little-endian bytes.
 pub fn measured(kind: &str, bytes: &[u8]) -> Result<Map<String, Value>> {
     let width = crate::numeric::width(kind)?;
-    if bytes.len() % width != 0 {
+    if !bytes.len().is_multiple_of(width) {
         return Err(invalid(format!(
             "{} bytes are not whole {kind} values of {width} bytes each: give every value's bytes",
             bytes.len()

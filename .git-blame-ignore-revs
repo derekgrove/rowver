@@ -1,0 +1,5 @@
+# Commits that change layout alone, for git blame to pass over:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# Every Rust file as rustfmt lays it out.
+96ae5934260e711116d43181f7ce2f2a1af1dada

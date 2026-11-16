@@ -47,6 +47,9 @@ pub(crate) type Whole<'a> = (&'a Value, &'a str, String, std::borrow::Cow<'a, [u
 /// array's first chunk the bytes its chunks decode to.
 pub(crate) type Chunked<'f> = dyn FnMut(usize, usize, Vec<u8>, Option<usize>) -> Result<()> + 'f;
 
+/// Offsets as read, and what a cut to the rows asked for left of them.
+type Cut = (Arc<Vec<usize>>, Option<Arc<Vec<usize>>>);
+
 /// The fewest bytes a chunk takes in the arrays: its `sample` array's table entry and four frames.
 const LEAST: u64 = 64 + 4 * crate::chunks::FRAME as u64;
 
@@ -938,7 +941,7 @@ impl Reader {
         // Rows that end within a chunk are cut from the chunks read: whole chunks are handed on as read.
         if let Some((from, to)) = rows.filter(|rows| *rows != (first, end)) {
             // Offsets shared as read stay one allocation, cut once.
-            let mut cut: Vec<(Arc<Vec<usize>>, Option<Arc<Vec<usize>>>)> = Vec::new();
+            let mut cut: Vec<Cut> = Vec::new();
             for column in held.iter_mut().flatten() {
                 let read = column.offsets.clone();
                 *column = column.rows(from - first, to - first)?;
