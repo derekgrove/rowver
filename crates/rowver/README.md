@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   meanwhile is read as it was.
 - `rowver::choice`: the random event choice a file can record.
 - `rowver::study`: the study texts a file carries, read on rails: `samples.toml`
-  (`study::samples::read`, as [docs/SPEC.md §3](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/SPEC.md#3-samplestoml)
+  (`study::samples::read`, as [docs/SPEC.md §3](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.2/docs/SPEC.md#3-samplestoml)
   says) and `samples.lock` (`study::lock::Lock::read`), and whether a lock was resolved from a
   `samples.toml` (`study::lock::agree`).
 
@@ -46,7 +46,7 @@ Arrays are cut in chunks of rows, each chunk's byte lanes compressed with Zstand
 checked against its chunk table's SHA-256 (a `Reader::trusting` leaves that to `validate_file`,
 and relies on each frame's own checksum); a column's chunks decode in parallel, and
 `Reader::slice` reads any rows of a column alone. The format is specified in
-[docs/FORMAT.md](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/FORMAT.md).
+[docs/FORMAT.md](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.2/docs/FORMAT.md).
 
 The [`rvr`](https://crates.io/crates/rvr) command makes `.rvr` files from ROOT files and
 inspects them; the Python package `rowver` reads them as NumPy and Awkward arrays.

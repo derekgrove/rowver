@@ -1,5 +1,5 @@
 //! RowVer in Rust: read, validate, and write `.rvr` files as
-//! [the format](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.1/docs/FORMAT.md) specifies them.
+//! [the format](https://gitlab.cern.ch/dgrove/rowver/-/blob/v15.0.2/docs/FORMAT.md) specifies them.
 
 #![warn(missing_docs)]
 

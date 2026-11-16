@@ -776,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "rowver"
-version = "15.0.1"
+version = "15.0.2"
 dependencies = [
  "ed25519-dalek",
  "libm",
@@ -887,7 +887,7 @@ dependencies = [
 
 [[package]]
 name = "rvr"
-version = "15.0.1"
+version = "15.0.2"
 dependencies = [
  "grid-trust",
  "hep-root",
@@ -903,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "rvr-recipe"
-version = "15.0.1"
+version = "15.0.2"
 dependencies = [
  "hep-columns",
  "libm",
