@@ -135,6 +135,21 @@ pub struct Staged {
     journal: Arc<File>,
     /// Whether the folder stays when the press ends, for the next press to pick up.
     pub keep: Cell<bool>,
+    // Written after `journal`, so dropped after it: fields go in the order written.
+    emptied: Emptied,
+}
+
+/// A folder to remove, if nothing is in it, when this is dropped.
+// NFS and AFS keep a file removed while it is open, under another name, until it is closed: the
+// folder of a journal removed while held locked is empty, and goes, only once the journal is closed.
+struct Emptied(Option<PathBuf>);
+
+impl Drop for Emptied {
+    fn drop(&mut self) {
+        if let Some(folder) = &self.0 {
+            let _ = std::fs::remove_dir(folder);
+        }
+    }
 }
 
 /// Why `target` could not be staged in `folder`, and what to do: a full disk wants space, not rights.
@@ -188,6 +203,7 @@ impl Staged {
                     folder,
                     journal: Arc::new(journal),
                     keep: Cell::new(keep),
+                    emptied: Emptied(None),
                 });
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -219,8 +235,10 @@ fn still_there(file: &File, path: &Path) -> bool {
 
 impl Drop for Staged {
     fn drop(&mut self) {
-        if !self.keep.get() {
-            let _ = remove(&self.folder);
+        // Under the lock still. A folder that did not go (see `Emptied`) is tried again once the
+        // journal is closed: every `Journal` of it is dropped before it, so this closes it.
+        if !self.keep.get() && remove(&self.folder).is_err() {
+            self.emptied.0 = Some(self.folder.clone());
         }
     }
 }
@@ -697,6 +715,31 @@ mod tests {
             ),
             "{said}"
         );
+    }
+
+    // SPEC 7.5.7
+    #[test]
+    fn a_staging_folder_goes_again_once_its_journal_is_closed_only_if_nothing_is_in_it() {
+        let dir = std::env::temp_dir().join(format!("rvr-emptied-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("study.rvr");
+        let staged = Staged::lock(&target).unwrap();
+        let folder = staged.folder.clone();
+        drop(staged);
+        assert!(!folder.exists());
+        // What NFS and AFS leave of a press that ended: the folder, with nothing in it.
+        std::fs::create_dir(&folder).unwrap();
+        drop(Emptied(None));
+        assert!(folder.is_dir());
+        // Another press's by then, its journal in it: left.
+        std::fs::write(folder.join(JOURNAL), b"").unwrap();
+        drop(Emptied(Some(folder.clone())));
+        assert!(folder.join(JOURNAL).is_file());
+        std::fs::remove_file(folder.join(JOURNAL)).unwrap();
+        drop(Emptied(Some(folder.clone())));
+        assert!(!folder.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     // SPEC 7.5.7

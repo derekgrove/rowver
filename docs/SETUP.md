@@ -21,6 +21,16 @@ only NumPy. For `rvr` alone, with no Python, download the binary for Linux x86_6
 [releases](https://gitlab.cern.ch/dgrove/rowver/-/releases).) To build from a checkout instead, see
 [Building from a checkout](#5-building-from-a-checkout).
 
+On lxplus and the LPC, `python3` is Python 3.9, and `pip` then says only that it finds no version
+of `rowver`. Take a newer Python there first, such as an LCG view, and install for yourself (or
+download the binary, which needs no Python):
+
+```sh
+source /cvmfs/sft.cern.ch/lcg/views/LCG_109a/x86_64-el9-gcc13-opt/setup.sh
+python3 -m pip install --user "rowver[all]"
+~/.local/bin/rvr --version
+```
+
 The rest of this page is for files on grid storage that needs a login.
 
 ## 2. Install your grid certificate on your laptop
